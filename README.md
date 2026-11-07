@@ -24,25 +24,25 @@ OpenSearch 3.9.0, pinning down status codes, error types, response shapes and qu
 
 ## Status
 
-Share of the suite passing (2026-10-27, `make go-score` / `make rust-score`):
+Share of the suite passing (2026-11-07, `make go-score` / `make rust-score`):
 
 | Area | Go | Rust |
 |---|---:|---:|
-| Cluster, nodes, `_cat` | 99.4% | 100% |
-| Index administration | 99.1% | 100% |
-| Documents, bulk, by-query | 99.7% | 100% |
-| Query DSL (full-text, term-level, compound, geo) | 51–100% | 100% |
-| Search API (sort, paging, highlight, scroll, PIT) | 99.4% | 100% |
-| Mappings and field types | 51% | 100% |
-| Aggregations | 100% | 100% |
-| Text analysis, languages | 4–39% | 6–40% |
+| Cluster, nodes, `_cat` | 100% | 100% |
+| Index administration | 100% | 100% |
+| Documents, bulk, by-query | 100% | 100% |
+| Query DSL (full-text, term-level, compound, geo) | 100% | 100% |
+| Search API (sort, paging, highlight, scroll, PIT) | 99.8% | 100% |
+| Mappings and field types | 90.8% | 100% |
+| Aggregations | 99.6% | 100% |
+| Text analysis, languages | 6–40% | 6–40% |
 | Ingest pipelines | 100% | 100% |
-| Scripting (Painless, search templates) | 17% | 29% |
-| **Total** | **68.3%** | **81.1%** |
+| Scripting (Painless, search templates) | 18% | 29% |
+| **Total** | **78.6%** | **81.1%** |
 
 The Rust server is the further along: everything outside text analysis and scripting
-passes. The Go server is catching up; its main gaps beyond those two are the rarer query
-types (`test_32`) and field types (`test_71`).
+passes. The Go server is close behind; beyond those two, its gaps are mostly in field
+types (`test_71`), plus a few tests in `test_33` and `test_41`.
 The remaining work is text analysis (`_analyze`, language analyzers, stemmers, token
 filters) and Painless. Both servers keep data in memory only.
 

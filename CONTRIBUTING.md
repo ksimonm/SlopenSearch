@@ -27,9 +27,8 @@ Rules:
   in the code you touch.
 
 Good areas to pick up: text analysis (`test_51`, `test_80`) and Painless (`test_43`)
-are the open work in the Rust server. In the Go server, query types (`test_32`) and
-field types (`test_71`) are open too, and the Rust server is a ready-made reference for
-how they behave.
+are the open work in the Rust server. In the Go server, field types (`test_71`) are
+open too, and the Rust server is a ready-made reference for how they behave.
 
 ## Working with an AI coding agent
 
@@ -40,7 +39,7 @@ else. Start the agent in the repository root, pick a server and a test file, and
 
 | Server | Open test files |
 |---|---|
-| Go | `test_32_queries`, `test_71_field_types`, `test_43_scripting`, `test_51_analysis`, `test_80_languages` |
+| Go | `test_71_field_types`, `test_33_search_api`, `test_41_aggs_bucket`, `test_43_scripting`, `test_51_analysis`, `test_80_languages` |
 | Rust | `test_43_scripting`, `test_51_analysis`, `test_80_languages` |
 
 `make <server>-score` shows the current numbers.
