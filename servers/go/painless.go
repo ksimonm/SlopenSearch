@@ -18,6 +18,8 @@ type scriptEnv struct {
 	ctxIndex   string
 	ctxID      string
 	ctxVersion int64
+	score      float64
+	runtimeErr error
 }
 
 func (e *scriptEnv) resolvePath(path string) any {
@@ -40,6 +42,8 @@ func (e *scriptEnv) resolvePath(path string) any {
 		return cur
 	}
 	switch path {
+	case "_score":
+		return e.score
 	case "ctx._index":
 		return e.ctxIndex
 	case "ctx._id":
@@ -56,6 +60,10 @@ func (e *scriptEnv) resolvePath(path string) any {
 		field := strings.Trim(path[4:i], "'\"")
 		vals, _ := e.c.values(field)
 		if len(vals) == 0 {
+			if strings.HasSuffix(path, ".value") && e.runtimeErr == nil {
+				e.runtimeErr = fmt.Errorf("A document doesn't have a value for a field! " +
+					"Use doc[<field>].size()==0 to check if a document is missing a field!")
+			}
 			return nil
 		}
 		return vals[0]
@@ -459,7 +467,17 @@ func (p *exprEval) parsePrimary() (any, error) {
 		return nil, nil
 	}
 	if p.pos < len(p.src) && p.src[p.pos] == '(' {
-		return p.evalCall(token)
+		if strings.HasSuffix(token, ".size") || strings.HasSuffix(token, ".length") {
+			p.pos++
+			p.skipSpace()
+			if p.pos >= len(p.src) || p.src[p.pos] != ')' {
+				return nil, fmt.Errorf("method args unsupported")
+			}
+			p.pos++
+			token += "()"
+		} else {
+			return p.evalCall(token)
+		}
 	}
 	// resolve path
 	base := token
@@ -478,8 +496,12 @@ func (p *exprEval) parsePrimary() (any, error) {
 		}
 		v = p.env.resolvePath(base)
 		switch member {
-		case "size":
-			if vals, ok := p.env.c.values(base); ok {
+		case "size", "length":
+			field := base
+			if strings.HasPrefix(field, "doc[") && strings.HasSuffix(field, "]") {
+				field = strings.Trim(field[4:len(field)-1], "'\"")
+			}
+			if vals, ok := p.env.c.values(field); ok {
 				return int64(len(vals)), nil
 			}
 			return int64(0), nil
@@ -659,18 +681,27 @@ func (c *queryCtx) evalScriptQuery(body any) (bool, float64, *apiError) {
 			}
 		}
 	}
-	env := &scriptEnv{c: c, params: scriptParamsOf(bm)}
-	if sm, ok := bm["script"].(map[string]any); ok {
-		env.params = scriptParamsOf(sm)
+	boost := 1.0
+	if b, ok := toFloat(bm["boost"]); ok {
+		boost = b
 	}
+	params := scriptParamsOf(bm)
+	if sm, ok := bm["script"].(map[string]any); ok {
+		params = scriptParamsOf(sm)
+		if b, ok := toFloat(sm["boost"]); ok {
+			boost = b
+		}
+	}
+	env := &scriptEnv{c: c, params: params}
 	v, err := env.evalScriptExpression(src)
 	if err != nil {
-		return false, 0, &apiError{Type: "search_phase_execution_exception", Status: 400,
-			Reason:    "failed to create query: " + err.Error(),
-			RootCause: &apiError{Type: "illegal_argument_exception", Reason: err.Error()}}
+		return false, 0, &apiError{Type: "script_exception", Status: 400, Reason: "compile error"}
+	}
+	if env.runtimeErr != nil {
+		return false, 0, &apiError{Type: "script_exception", Status: 400, Reason: "runtime error"}
 	}
 	if truthy(v) {
-		return true, 1, nil
+		return true, boost, nil
 	}
 	return false, 0, nil
 }
@@ -684,21 +715,32 @@ func (c *queryCtx) evalScriptScore(body any) (bool, float64, *apiError) {
 	if !ok {
 		return false, 0, errParsing("[script_score] requires 'query'")
 	}
-	matched, _, err := c.eval(inner)
+	matched, base, err := c.eval(inner)
 	if err != nil || !matched {
 		return false, 0, err
 	}
 	sm, _ := bm["script"].(map[string]any)
 	if sm == nil {
-		return true, 1, nil
+		return true, base, nil
 	}
 	src, _ := sm["source"].(string)
-	env := &scriptEnv{c: c, params: scriptParamsOf(sm)}
+	env := &scriptEnv{c: c, params: scriptParamsOf(sm), score: base}
 	v, eerr := env.evalScriptExpression(src)
 	if eerr != nil {
-		return false, 0, &apiError{Type: "search_phase_execution_exception", Status: 400,
-			Reason:    "failed to create query: " + eerr.Error(),
-			RootCause: &apiError{Type: "illegal_argument_exception", Reason: eerr.Error()}}
+		return false, 0, &apiError{Type: "script_exception", Status: 400, Reason: "compile error"}
 	}
-	return true, scriptFloat(v), nil
+	if env.runtimeErr != nil {
+		return false, 0, &apiError{Type: "script_exception", Status: 400, Reason: "runtime error"}
+	}
+	score := scriptFloat(v)
+	if score < 0 {
+		return false, 0, &apiError{Type: "search_phase_execution_exception", Status: 400,
+			Reason: "all shards failed",
+			RootCause: &apiError{Type: "illegal_argument_exception", Status: 400,
+				Reason: "script_score script returned an invalid score [" + javaDoubleString(score) + "]"}}
+	}
+	if ms, ok := toFloat(bm["min_score"]); ok && score < ms {
+		return false, 0, nil
+	}
+	return true, score, nil
 }

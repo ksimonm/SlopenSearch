@@ -469,6 +469,12 @@ func (s *Server) runBulkIndex(idx *Index, a bulkAction, id, routing, rv, urlPipe
 		}
 		return bulkErrItem(a.op, idx.Name, id, apiErr), true
 	}
+	if derr := validatePercolatorDocs(idx, src, nil); derr != nil {
+		return bulkErrItem(a.op, idx.Name, id, derr), true
+	}
+	if derr := validateJoinDoc(idx, src, routing); derr != nil {
+		return bulkErrItem(a.op, idx.Name, id, derr), true
+	}
 	props := ensureProperties(idx.Mappings)
 	if derr := mappingShapeConflict(props, src); derr != nil {
 		return bulkErrItem(a.op, idx.Name, id, derr), true

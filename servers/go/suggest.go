@@ -3,6 +3,7 @@ package main
 import (
 	"sort"
 	"strings"
+	"unicode"
 )
 
 func collectFieldTerms(idx *Index, field string) (map[string]int, []string) {
@@ -192,7 +193,46 @@ func completionInputs(v any) [][2]any {
 func completionSuggester(spec, body map[string]any, idx *Index) map[string]any {
 	field, _ := toString(body["field"])
 	prefix := suggestText(spec)
-	lowerPrefix := strings.ToLower(prefix)
+	def, _ := mappingFieldDef(idx, field)
+	preserve := true
+	if b, ok := def["preserve_separators"].(bool); ok {
+		preserve = b
+	}
+	maxLen := 50
+	if n, ok := toFloat(def["max_input_length"]); ok && int(n) > 0 {
+		maxLen = int(n)
+	}
+	fuzzy := 0.0
+	if f, ok := body["fuzzy"].(map[string]any); ok {
+		if n, ok := toFloat(f["fuzziness"]); ok {
+			fuzzy = n
+		}
+	} else if f, ok := spec["fuzzy"].(map[string]any); ok {
+		if n, ok := toFloat(f["fuzziness"]); ok {
+			fuzzy = n
+		}
+	}
+	size := 10
+	if n, ok := toFloat(body["size"]); ok {
+		size = int(n)
+		if size < 0 {
+			size = 0
+		}
+	}
+	norm := func(s string) string {
+		lower := strings.ToLower(s)
+		if preserve {
+			return lower
+		}
+		var b strings.Builder
+		for _, r := range lower {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) {
+				b.WriteRune(r)
+			}
+		}
+		return b.String()
+	}
+	want := norm(prefix)
 
 	type entry struct {
 		text   string
@@ -208,15 +248,29 @@ func completionSuggester(spec, body map[string]any, idx *Index) map[string]any {
 		for _, pair := range completionInputs(v) {
 			text, _ := pair[0].(string)
 			weight, _ := pair[1].(float64)
-			if strings.HasPrefix(strings.ToLower(text), lowerPrefix) {
-				entries = append(entries, entry{text: text, weight: weight, id: id})
+			if len([]rune(text)) > maxLen {
+				text = string([]rune(text)[:maxLen])
 			}
+			if !strings.HasPrefix(norm(text), want) {
+				continue
+			}
+			score := 1.0
+			if weight > 0 {
+				score = weight
+			}
+			if fuzzy > 0 {
+				score *= 1.0 + fuzzy*2.0
+			}
+			entries = append(entries, entry{text: text, weight: score, id: id})
 		}
 	}
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].weight > entries[j].weight })
 
 	options := []any{}
-	for _, e := range entries {
+	for i, e := range entries {
+		if i >= size {
+			break
+		}
 		options = append(options, map[string]any{"text": e.text, "_score": e.weight, "_id": e.id})
 	}
 	return map[string]any{"text": prefix, "offset": 0, "length": len(prefix), "options": options}

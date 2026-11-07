@@ -36,6 +36,38 @@ var moduleNames = []string{
 	"reindex", "search-pipeline-common",
 }
 
+var pluginNames = []string{
+	"opensearch-alerting", "opensearch-anomaly-detection", "opensearch-asynchronous-search",
+	"opensearch-cross-cluster-replication", "opensearch-custom-codecs", "opensearch-flow-framework",
+	"opensearch-geospatial", "opensearch-index-management", "opensearch-job-scheduler",
+	"opensearch-knn", "opensearch-ltr", "opensearch-ml", "opensearch-neural-search",
+	"opensearch-notifications", "opensearch-notifications-core", "opensearch-observability",
+	"opensearch-performance-analyzer", "opensearch-reports-scheduler", "opensearch-search-relevance",
+	"opensearch-security", "opensearch-security-analytics", "opensearch-skills", "opensearch-sql",
+	"opensearch-system-templates", "opensearch-ubi", "query-insights",
+}
+
+const pluginVersion = "3.9.0.0"
+
+func pluginsList() []any {
+	out := make([]any, 0, len(pluginNames))
+	for _, name := range pluginNames {
+		out = append(out, map[string]any{
+			"name":                      name,
+			"version":                   pluginVersion,
+			"opensearch_version":        nodeVersion,
+			"java_version":              "21",
+			"description":               name + " plugin",
+			"classname":                 "org.opensearch.plugin." + name,
+			"custom_foldername":         "",
+			"extended_plugins":          []any{},
+			"has_native_controller":     false,
+			"optional_extended_plugins": []any{},
+		})
+	}
+	return out
+}
+
 func nodeInfoBase() map[string]any {
 	return map[string]any{
 		"name":              nodeName,
@@ -120,7 +152,7 @@ func (s *Server) nodeInfoForMetric(metric string) map[string]any {
 			"max_content_length_in_bytes": int64(104857600),
 		}}
 	case "plugins":
-		return map[string]any{"plugins": []any{}, "modules": modulesList()}
+		return map[string]any{"plugins": pluginsList(), "modules": modulesList()}
 	case "ingest":
 		types := make([]string, 0, len(knownProcessorTypes))
 		for t := range knownProcessorTypes {

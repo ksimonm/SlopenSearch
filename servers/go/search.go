@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"go/ast"
@@ -146,7 +147,7 @@ func docValuesOutput(idx *Index, id, field string, spec fieldSpec, fallbackSourc
 				if fallbackSource {
 					res[i] = map[string]any{"type": "Point", "coordinates": []any{lon, lat}}
 				} else {
-					res[i] = strconv.FormatFloat(lat, 'f', 1, 64) + ", " + strconv.FormatFloat(lon, 'f', 1, 64)
+					res[i] = strconv.FormatFloat(lat, 'f', -1, 64) + ", " + strconv.FormatFloat(lon, 'f', -1, 64)
 				}
 			}
 		}
@@ -179,33 +180,49 @@ func formatDocValue(idx *Index, field, ftype string, v any, format string) any {
 	}
 	switch ftype {
 	case "date", "date_nanos":
-		var ms int64
+		var raw int64
 		switch t := v.(type) {
 		case int64:
-			ms = t
+			raw = t
 		case uint64:
-			ms = int64(t)
+			raw = int64(t)
 		default:
 			if n, ok := integerOf(v); ok {
-				ms = n
+				raw = n
 			} else {
 				return v
 			}
 		}
-		if ftype == "date_nanos" {
-			ms = ms / int64(1e6)
+		eff := format
+		if eff == "" || eff == "use_field_mapping" {
+			if def, ok := mappingFieldDef(idx, field); ok {
+				if mf, ok := def["format"].(string); ok && mf != "" {
+					eff = strings.TrimSpace(strings.Split(mf, "||")[0])
+				}
+			}
 		}
-		switch format {
-		case "":
-			return time.UnixMilli(ms).UTC().Format("2006-01-02T15:04:05.000Z")
-		case "strict_date_optional_time", "date_optional_time":
-			return time.UnixMilli(ms).UTC().Format("2006-01-02T15:04:05.000Z")
+		nanosValue := ftype == "date_nanos"
+		ms := raw
+		if nanosValue {
+			ms = raw / int64(1e6)
+		}
+		switch eff {
+		case "", "strict_date_optional_time", "date_optional_time":
+			return formatEpochMillis(ms)
+		case "strict_date_optional_time_nanos":
+			if nanosValue {
+				return formatEpochNanos(raw)
+			}
+			return formatEpochMillis(ms)
 		case "epoch_millis":
 			return strconv.FormatInt(ms, 10)
 		case "epoch_second":
 			return strconv.FormatInt(ms/1000, 10)
 		default:
-			if layout := javaDateFormatToGo(format); layout != "" {
+			if layout := javaDateFormatToGo(eff); layout != "" {
+				if nanosValue {
+					return time.Unix(0, raw).UTC().Format(layout)
+				}
 				return time.UnixMilli(ms).UTC().Format(layout)
 			}
 			return strconv.FormatInt(ms, 10)
@@ -221,6 +238,26 @@ func formatDocValue(idx *Index, field, ftype string, v any, format string) any {
 		}
 	}
 	return v
+}
+
+func formatEpochMillis(ms int64) string {
+	return time.UnixMilli(ms).UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+func formatEpochNanos(ns int64) string {
+	sec := ns / int64(1e9)
+	frac := ns % int64(1e9)
+	if frac < 0 {
+		sec--
+		frac += int64(1e9)
+	}
+	base := time.Unix(sec, frac).UTC().Format("2006-01-02T15:04:05")
+	s := fmt.Sprintf("%09d", frac)
+	end := len(s)
+	for end > 3 && s[end-1] == '0' {
+		end--
+	}
+	return base + "." + s[:end] + "Z"
 }
 
 func (h multiHit) sortValue(field string, desc bool, mode string) (any, bool) {
@@ -364,7 +401,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			Reason: "source and source_content_type parameters are required"})
 		return
 	}
-	body, apiErr := readJSON(r)
+	body, bodyRaw, apiErr := readJSONRaw(r)
 	if apiErr != nil {
 		writeError(w, apiErr)
 		return
@@ -491,6 +528,40 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	}
 	if query == nil {
 		query = map[string]any{"match_all": map[string]any{}}
+	}
+	var vidx *Index
+	if pitCtx != nil {
+		vidx = pitCtx.idx
+	} else if len(indices) > 0 {
+		vidx = indices[0]
+	}
+	if vidx != nil {
+		if defs, ok := body["derived"]; ok && defs != nil {
+			oldDerived, hadDerived := vidx.Mappings["derived"]
+			if derr := applyRequestDerived(vidx, defs); derr != nil {
+				writeError(w, derr)
+				return
+			}
+			defer func() {
+				if hadDerived {
+					vidx.Mappings["derived"] = oldDerived
+				} else {
+					delete(vidx.Mappings, "derived")
+				}
+				vidx.recomputeAllDocValues()
+			}()
+		}
+		if verr := validateQuery(vidx, query); verr != nil {
+			if verr.Clause != "" {
+				annotateQueryClause(verr, bodyRaw)
+				writeError(w, verr)
+			} else if verr.ForceTop {
+				writeError(w, verr)
+			} else {
+				writeQueryShardError(w, vidx, verr)
+			}
+			return
+		}
 	}
 
 	if body["size"] == nil {
@@ -621,7 +692,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			qc := newQueryCtxForDoc(h.idx, h.id, h.doc)
 			ok, score, err := qc.eval(query)
 			if err != nil {
-				writeError(w, err)
+				if isQueryShardCause(err) {
+					writeQueryShardError(w, h.idx, err)
+				} else {
+					writeError(w, err)
+				}
 				return
 			}
 			if ok {
@@ -660,7 +735,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				qc := newQueryCtxForDoc(idx, id, doc)
 				ok, score, err := qc.eval(q)
 				if err != nil {
-					writeError(w, err)
+					if isQueryShardCause(err) {
+						writeQueryShardError(w, idx, err)
+					} else {
+						writeError(w, err)
+					}
 					return
 				}
 				if ok {
@@ -782,7 +861,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			}
 			anyMapped := false
 			for _, idx := range indices {
-				if _, ok := mappingFieldDef(idx, sp.field); ok {
+				if sortFieldMapped(idx, sp.field) {
 					anyMapped = true
 					break
 				}
@@ -798,7 +877,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				continue
 			}
 			for _, idx := range indices {
-				if _, ok := mappingFieldDef(idx, sp.field); ok {
+				if sortFieldMapped(idx, sp.field) {
 					continue
 				}
 				failedShards++
@@ -928,6 +1007,22 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 						writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 400,
 							Reason: reason, Phase: "query",
 							RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason}})
+						return
+					}
+					if t == "geo_shape" {
+						reason := "can't sort on geo_shape field without using specific sorting feature, like geo_distance"
+						writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 400,
+							Reason: "all shards failed", Phase: "query",
+							RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
+							CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}})
+						return
+					}
+					if t == "rank_feature" || t == "rank_features" {
+						reason := "[rank_feature] fields do not support sorting, scripting or aggregating"
+						writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 400,
+							Reason: "all shards failed", Phase: "query",
+							RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
+							CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}})
 						return
 					}
 				}
@@ -1228,12 +1323,17 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		if storedNone {
 			delete(entry, "_id")
 		}
+		hitCtx := newQueryCtxForDoc(h.idx, h.id, h.doc)
 		if hlCfg != nil {
 			if hlErr := hlCfg.validate(h.idx); hlErr != nil {
 				writeError(w, hlErr)
 				return
 			}
-			if hl := hlCfg.render(h.idx, h.doc); len(hl) > 0 {
+			hl := percolateHighlights(hitCtx, query, hlCfg)
+			if len(hl) == 0 {
+				hl = hlCfg.render(h.idx, h.doc)
+			}
+			if len(hl) > 0 {
 				entry["highlight"] = hl
 			}
 		}
@@ -1246,8 +1346,25 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				entry["fields"] = cf
 			}
 		}
+		nestedInner := collectNestedInnerHits(hitCtx, query, omitScores)
+		if joinInner := collectJoinInnerHits(hitCtx, query, omitScores); len(joinInner) > 0 {
+			if nestedInner == nil {
+				nestedInner = map[string]any{}
+			}
+			for k, v := range joinInner {
+				nestedInner[k] = v
+			}
+		}
 		if ci, ok := collapseInner[h.id]; ok {
-			entry["inner_hits"] = ci
+			if nestedInner == nil {
+				nestedInner = map[string]any{}
+			}
+			for k, v := range ci {
+				nestedInner[k] = v
+			}
+		}
+		if len(nestedInner) > 0 {
+			entry["inner_hits"] = nestedInner
 		}
 		if len(dvFields) > 0 || len(paramFields) > 0 || len(storedNames) > 0 {
 			out := map[string]any{}
@@ -1265,16 +1382,20 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 						sort.Strings(names)
 					}
 					for _, name := range names {
-						if _, done := out[name]; done {
-							continue
-						}
 						vals, found, derr := docValuesOutput(h.idx, h.id, name, spec, fallback)
 						if derr != nil {
 							return derr
 						}
-						if found {
-							out[name] = vals
+						if !found {
+							continue
 						}
+						if existing, done := out[name]; done {
+							if list, ok := existing.([]any); ok {
+								out[name] = append(list, vals...)
+								continue
+							}
+						}
+						out[name] = vals
 					}
 				}
 				return nil
@@ -1316,6 +1437,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				}
 			} else {
 				entry["fields"] = got
+			}
+		}
+		if slots := percolateSlotsForHit(hitCtx, query); len(slots) > 0 {
+			if existing, ok := entry["fields"].(map[string]any); ok {
+				existing["_percolator_document_slot"] = slots
+			} else {
+				entry["fields"] = map[string]any{"_percolator_document_slot": slots}
 			}
 		}
 		named := map[string]float64{}
@@ -1829,7 +1957,7 @@ func searchSortSpecValueRaw(h multiHit, sp searchSortSpec) (any, bool, bool) {
 		return reduceSortValues(vals, sp.desc, sp.mode), true, false
 	}
 	if sp.unmapped != "" {
-		if _, mapped := mappingFieldDef(h.idx, sp.field); !mapped {
+		if !sortFieldMapped(h.idx, sp.field) {
 			switch sp.unmapped {
 			case "long":
 				return int64(9223372036854775807), true, false
@@ -2043,55 +2171,632 @@ func docStrings(v any) []string {
 }
 
 var knownClauses = map[string]bool{
-	"match_all": true, "match": true, "term": true, "terms": true, "range": true,
-	"bool": true, "match_phrase": true, "multi_match": true, "wildcard": true,
-	"fuzzy": true, "exists": true, "prefix": true,
+	"match_all": true, "match_none": true, "match": true, "term": true, "terms": true,
+	"ids": true, "range": true, "exists": true, "prefix": true, "wildcard": true,
+	"regexp": true, "fuzzy": true, "match_phrase": true, "match_phrase_prefix": true,
+	"match_bool_prefix": true, "multi_match": true, "bool": true, "constant_score": true,
+	"dis_max": true, "boosting": true, "nested": true, "has_child": true, "has_parent": true,
+	"parent_id":    true,
+	"geo_distance": true, "geo_bounding_box": true, "geo_polygon": true, "geo_shape": true, "script": true,
+	"script_score": true, "function_score": true, "query_string": true,
+	"simple_query_string": true, "combined_fields": true, "more_like_this": true,
+	"rank_feature": true, "distance_feature": true, "wrapper": true, "percolate": true,
+	"terms_set": true, "span_term": true, "span_near": true, "span_or": true,
+	"span_first": true, "span_not": true, "span_containing": true, "span_within": true,
+	"span_multi": true, "field_masking_span": true, "intervals": true,
+	"random_score": true, "knn": true,
 }
 
 func validateQuery(idx *Index, query map[string]any) *apiError {
 	for clause, raw := range query {
 		if !knownClauses[clause] {
-			return errParsing("unknown query [" + clause + "]")
+			return &apiError{Type: "parsing_exception", Status: 400,
+				Reason: "unknown query [" + clause + "]", Clause: clause}
 		}
 		switch clause {
+		case "term":
+			if err := validateTermQuery(idx, raw); err != nil {
+				return err
+			}
+		case "terms":
+			if err := validateTermsQuery(raw); err != nil {
+				return err
+			}
 		case "range":
-			m, ok := raw.(map[string]any)
-			if !ok {
-				return errParsing("bad range")
-			}
-			field, condRaw, ok := singleEntry(m)
-			if !ok {
-				return errParsing("empty range")
-			}
-			ft := fieldType(idx, field)
-			if cond, ok := condRaw.(map[string]any); ok {
-				for _, bound := range cond {
-					if ft == "date" {
-						if _, ok := parseDate(bound); !ok {
-							return errParsing("failed to parse date [" + field + "]")
-						}
-					} else if isNumericType(ft) {
-						if _, ok := toFloat(bound); !ok {
-							return errParsing("failed to parse number [" + field + "]")
-						}
-					}
-				}
+			if err := validateRangeQuery(idx, raw); err != nil {
+				return err
 			}
 		case "bool":
 			if bm, ok := raw.(map[string]any); ok {
 				for _, key := range []string{"must", "should", "filter", "must_not"} {
 					for _, q := range asQueryList(bm[key]) {
-						if qm, ok := q.(map[string]any); ok {
-							if err := validateQuery(idx, qm); err != nil {
-								return err
-							}
+						if err := validateNestedQuery(idx, q); err != nil {
+							return err
 						}
 					}
+				}
+			}
+		case "constant_score":
+			if bm, ok := raw.(map[string]any); ok {
+				if err := validateNestedQuery(idx, bm["filter"]); err != nil {
+					return err
+				}
+			}
+		case "dis_max":
+			if bm, ok := raw.(map[string]any); ok {
+				queries := asQueryList(bm["queries"])
+				if len(queries) == 0 {
+					return &apiError{Type: "parsing_exception", Status: 400, Clause: "queries",
+						NoCausedBy: true,
+						Reason:     "[_na] query malformed, must start with start_object"}
+				}
+				for _, q := range queries {
+					if err := validateNestedQuery(idx, q); err != nil {
+						return err
+					}
+				}
+			}
+		case "boosting":
+			if bm, ok := raw.(map[string]any); ok {
+				if _, has := bm["negative_boost"]; !has {
+					return &apiError{Type: "parsing_exception", Status: 400, Clause: "boosting",
+						NoCausedBy: true,
+						Reason:     "[boosting] query requires 'negative_boost' to be set to be a positive value'"}
+				}
+				for _, key := range []string{"positive", "negative"} {
+					if err := validateNestedQuery(idx, bm[key]); err != nil {
+						return err
+					}
+				}
+			}
+		case "more_like_this":
+			if bm, ok := raw.(map[string]any); ok {
+				if _, has := bm["like"]; !has {
+					return &apiError{Type: "parsing_exception", Status: 400,
+						Reason: "more_like_this requires 'like' to be specified",
+						Clause: "more_like_this", ClauseEnd: true, NoCausedBy: true}
+				}
+			}
+		case "function_score":
+			if err := validateFunctionScore(idx, raw); err != nil {
+				return err
+			}
+			if bm, ok := raw.(map[string]any); ok {
+				if err := validateNestedQuery(idx, bm["query"]); err != nil {
+					return err
+				}
+			}
+		case "percolate":
+			if bm, ok := raw.(map[string]any); ok {
+				field := percolateFieldName(bm)
+				def, mapped := mappingFieldDef(idx, field)
+				ftype := ""
+				if mapped {
+					ftype, _ = def["type"].(string)
+				}
+				if ftype != "percolator" {
+					if ftype == "" {
+						ftype = "object"
+					}
+					return matchShardError(
+						fmt.Sprintf("expected field [%s] to be of type [percolator], but is of type [%s]", field, ftype))
+				}
+			}
+		case "script_score", "nested", "has_child", "has_parent", "wrapper":
+			if bm, ok := raw.(map[string]any); ok {
+				if err := validateNestedQuery(idx, bm["query"]); err != nil {
+					return err
+				}
+			}
+		case "span_near", "span_or":
+			if bm, ok := raw.(map[string]any); ok {
+				for _, q := range asQueryList(bm["clauses"]) {
+					if err := validateNestedQuery(idx, q); err != nil {
+						return err
+					}
+				}
+			}
+		case "span_not", "span_containing", "span_within":
+			if bm, ok := raw.(map[string]any); ok {
+				for _, key := range []string{"include", "exclude", "little", "big"} {
+					if err := validateNestedQuery(idx, bm[key]); err != nil {
+						return err
+					}
+				}
+			}
+		case "span_multi", "field_masking_span":
+			if bm, ok := raw.(map[string]any); ok {
+				if err := validateNestedQuery(idx, bm["match"]); err != nil {
+					return err
+				}
+				if err := validateNestedQuery(idx, bm["query"]); err != nil {
+					return err
 				}
 			}
 		}
 	}
 	return nil
+}
+
+func validateNestedQuery(idx *Index, raw any) *apiError {
+	if qm, ok := raw.(map[string]any); ok {
+		return validateQuery(idx, qm)
+	}
+	return nil
+}
+
+func validateFunctionScore(idx *Index, raw any) *apiError {
+	bm, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	if sm, ok := bm["score_mode"].(string); ok {
+		switch sm {
+		case "multiply", "sum", "avg", "max", "min", "first":
+		default:
+			return &apiError{Type: "illegal_argument_exception", Status: 400, ForceTop: true,
+				Reason: "No enum constant org.opensearch.common.lucene.search.function.FunctionScoreQuery.ScoreMode." +
+					strings.ToUpper(sm)}
+		}
+	}
+	if bmMode, ok := bm["boost_mode"].(string); ok {
+		switch bmMode {
+		case "multiply", "replace", "sum", "avg", "max", "min":
+		default:
+			return &apiError{Type: "illegal_argument_exception", Status: 400, ForceTop: true,
+				Reason: "No enum constant org.opensearch.common.lucene.search.function.FunctionScoreQuery.BoostMode." +
+					strings.ToUpper(bmMode)}
+		}
+	}
+	functions := asQueryList(bm["functions"])
+	if len(functions) == 0 {
+		if f, ok := bm["function"].(map[string]any); ok {
+			functions = []any{f}
+		} else if hasScoreFunctionKey(bm) {
+			functions = []any{bm}
+		}
+	}
+	for _, fnRaw := range functions {
+		fn, ok := fnRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if w, ok := fn["weight"]; ok {
+			if f, ok := toFloat(w); ok && f < 0 {
+				return &apiError{Type: "illegal_argument_exception", Status: 400, ForceTop: true,
+					Reason: "[weight] cannot be negative for a filtering function"}
+			}
+		}
+		if fvf, ok := fn["field_value_factor"].(map[string]any); ok {
+			field, _ := fvf["field"].(string)
+			if _, mapped := mappingFieldDef(idx, field); !mapped {
+				if _, hasMissing := fvf["missing"]; !hasMissing {
+					return newFunctionScoreFailure("fvf_unmapped",
+						"Unable to find a field mapper for field ["+field+"]. No 'missing' value defined.")
+				}
+			}
+		}
+		if filter, ok := fn["filter"]; ok {
+			if err := validateNestedQuery(idx, filter); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateTermsQuery(raw any) *apiError {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	if _, ok := m["case_insensitive"]; ok {
+		return &apiError{Type: "parsing_exception", Status: 400,
+			Reason: "[terms] query does not support [case_insensitive]",
+			Clause: "case_insensitive", NoCausedBy: true}
+	}
+	field := ""
+	var val any
+	for k, v := range m {
+		if k == "boost" || k == "_name" {
+			continue
+		}
+		field, val = k, v
+		break
+	}
+	if field == "" {
+		return nil
+	}
+	if _, isArr := val.([]any); !isArr {
+		if _, isObj := val.(map[string]any); !isObj {
+			return &apiError{Type: "parsing_exception", Status: 400,
+				Reason: "[terms] query does not support [" + field + "]",
+				Clause: field, NoCausedBy: true}
+		}
+	}
+	return nil
+}
+
+func validateTermQuery(idx *Index, raw any) *apiError {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	field, val, ok := singleEntry(m)
+	if !ok {
+		return nil
+	}
+	if vm, ok := val.(map[string]any); ok {
+		for k := range vm {
+			switch k {
+			case "value", "boost", "case_insensitive", "_name", "rewrite":
+			default:
+				return &apiError{Type: "parsing_exception", Status: 400,
+					Reason: "[term] query does not support [" + k + "]",
+					Clause: k, NoCausedBy: true}
+			}
+		}
+		if ci, has := vm["case_insensitive"]; has {
+			if _, isBool := ci.(bool); !isBool {
+				return &apiError{Type: "illegal_argument_exception", Status: 400,
+					Reason:   "Failed to parse value [" + previewValue(ci) + "] as only [true] or [false] are allowed.",
+					ForceTop: true}
+			}
+		}
+	}
+	def, ok := mappingFieldDef(idx, field)
+	if !ok {
+		return nil
+	}
+	ftype, _ := def["type"].(string)
+	if ftype == "" {
+		return nil
+	}
+	if vm, ok := val.(map[string]any); ok {
+		v, has := vm["value"]
+		if !has {
+			return nil
+		}
+		val = v
+	}
+	if val == nil {
+		return nil
+	}
+	if ftype == "boolean" {
+		if _, isBool := val.(bool); !isBool {
+			s, isStr := valueScalarString(val)
+			if !isStr || (s != "true" && s != "false") {
+				reason := fmt.Sprintf("Failed to parse value [%s] as only [true] or [false] are allowed.", previewValue(val))
+				return &apiError{Type: "mapper_parsing_exception", Status: 400,
+					Reason:   reason,
+					CausedBy: &apiError{Type: "illegal_argument_exception", Status: 400, Reason: reason}}
+			}
+		}
+	}
+	_, err := parseTermValue(ftype, def, val)
+	if err != nil && (ftype == "date" || ftype == "date_nanos") {
+		return termDateParseError(err)
+	}
+	return err
+}
+
+func validateRangeQuery(idx *Index, raw any) *apiError {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	field, condRaw, ok := singleEntry(m)
+	if !ok {
+		return nil
+	}
+	def, ok := mappingFieldDef(idx, field)
+	if !ok {
+		return nil
+	}
+	ftype, _ := def["type"].(string)
+	cond, ok := condRaw.(map[string]any)
+	if !ok || ftype == "" {
+		return nil
+	}
+	tz, _ := cond["time_zone"].(string)
+	format, _ := cond["format"].(string)
+	lower, upper := rangeQueryBounds(cond)
+	bounds := []struct {
+		spec    rangeBoundSpec
+		roundUp bool
+	}{
+		{lower, !lower.incl},
+		{upper, upper.incl},
+	}
+	for _, b := range bounds {
+		if !b.spec.present {
+			continue
+		}
+		bound := b.spec.value
+		var err *apiError
+		switch ftype {
+		case "date", "date_nanos", "date_range":
+			_, err = parseRangeDateBound(def, bound, tz, format, b.roundUp)
+			if err != nil && err.RootCause != nil {
+				err = err.RootCause
+			}
+		case "ip", "ip_range":
+			ctx := &indexCtx{indexCoerce: true}
+			_, err = ctx.parseIPValue(field, bound)
+		case "integer", "long", "short", "byte", "unsigned_long":
+			ctx := &indexCtx{indexCoerce: true}
+			if isFractionalNumber(bound) {
+				_, err = ctx.parseFloatValue(field, ftype, def, bound)
+			} else {
+				_, err = ctx.parseIntValue(field, ftype, def, bound)
+			}
+		case "float", "double", "half_float", "scaled_float":
+			ctx := &indexCtx{indexCoerce: true}
+			_, err = ctx.parseFloatValue(field, ftype, def, bound)
+		case "integer_range", "long_range":
+			ctx := &indexCtx{indexCoerce: true}
+			if isFractionalNumber(bound) {
+				_, err = ctx.parseFloatValue(field, strings.TrimSuffix(ftype, "_range"), def, bound)
+			} else {
+				_, err = ctx.parseIntValue(field, strings.TrimSuffix(ftype, "_range"), def, bound)
+			}
+		case "float_range", "double_range":
+			ctx := &indexCtx{indexCoerce: true}
+			_, err = ctx.parseFloatValue(field, strings.TrimSuffix(ftype, "_range"), def, bound)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isQueryShardCause(e *apiError) bool {
+	return e.Type == "mapper_parsing_exception" || e.Type == "query_shard_exception" || e.SearchFailure != ""
+}
+
+func jsonKeyValuePos(body []byte, key string) (int, int) {
+	needle := []byte(`"` + key + `"`)
+	idx := bytes.Index(body, needle)
+	if idx < 0 {
+		return 1, 0
+	}
+	i := idx + len(needle)
+	for i < len(body) && (body[i] == ' ' || body[i] == '\t' || body[i] == '\r' || body[i] == '\n') {
+		i++
+	}
+	if i < len(body) && body[i] == ':' {
+		i++
+	}
+	for i < len(body) && (body[i] == ' ' || body[i] == '\t' || body[i] == '\r' || body[i] == '\n') {
+		i++
+	}
+	line, col := 1, 1
+	for j := 0; j < i; j++ {
+		if body[j] == '\n' {
+			line++
+			col = 1
+		} else {
+			col++
+		}
+	}
+	return line, col
+}
+
+func annotateQueryClause(err *apiError, raw []byte) {
+	if err.Clause == "" {
+		return
+	}
+	line, col := 1, 0
+	if len(raw) > 0 {
+		if err.ClauseEnd {
+			line, col = jsonClauseEndPos(raw, err.Clause)
+		} else {
+			line, col = jsonKeyValuePos(raw, err.Clause)
+		}
+	}
+	err.Fields = map[string]any{"line": line, "col": col}
+	if !err.NoCausedBy {
+		err.CausedBy = &apiError{Type: "named_object_not_found_exception",
+			Reason: fmt.Sprintf("[%d:%d] unknown field [%s]", line, col, err.Clause)}
+	}
+}
+
+func jsonClauseEndPos(body []byte, key string) (int, int) {
+	needle := []byte(`"` + key + `"`)
+	idx := bytes.Index(body, needle)
+	if idx < 0 {
+		return 1, 0
+	}
+	i := idx + len(needle)
+	for i < len(body) && body[i] != ':' {
+		i++
+	}
+	if i < len(body) {
+		i++
+	}
+	for i < len(body) && (body[i] == ' ' || body[i] == '\t' || body[i] == '\r' || body[i] == '\n') {
+		i++
+	}
+	if i >= len(body) || body[i] != '{' {
+		return jsonKeyValuePos(body, key)
+	}
+	depth := 0
+	inStr := false
+	esc := false
+	for ; i < len(body); i++ {
+		ch := body[i]
+		if inStr {
+			if esc {
+				esc = false
+			} else if ch == '\\' {
+				esc = true
+			} else if ch == '"' {
+				inStr = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inStr = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				line, col := 1, 1
+				for j := 0; j < i; j++ {
+					if body[j] == '\n' {
+						line++
+						col = 1
+					} else {
+						col++
+					}
+				}
+				return line, col
+			}
+		}
+	}
+	return jsonKeyValuePos(body, key)
+}
+
+func writeQueryShardError(w http.ResponseWriter, idx *Index, cause *apiError) {
+	if cause.SearchFailure != "" {
+		writeCustomSearchFailure(w, idx, cause)
+		return
+	}
+	innerType, innerReason := cause.Type, cause.Reason
+	if cause.CausedBy != nil {
+		innerType, innerReason = cause.CausedBy.Type, cause.CausedBy.Reason
+	}
+	if innerType == "illegal_argument_exception" && strings.HasPrefix(innerReason, "Failed to parse value [") &&
+		strings.Contains(innerReason, "as only [true] or [false] are allowed.") {
+		if i := strings.Index(innerReason, "["); i >= 0 {
+			if j := strings.Index(innerReason[i+1:], "]"); j >= 0 {
+				innerReason = "Can't parse boolean value [" + innerReason[i+1:i+1+j] + "], expected [true] or [false]"
+			}
+		}
+	}
+	rootType := "query_shard_exception"
+	rootReason := "failed to create query: " + innerReason
+	if cause.Type == "query_shard_exception" && cause.CausedBy == nil {
+		rootReason = innerReason
+	}
+	shardType := "query_shard_exception"
+	shardReasonText := rootReason
+	shardCaused := orderedJSON{{"type", innerType}, {"reason", innerReason}}
+	rootExtra := orderedJSON{{"index", idx.Name}, {"index_uuid", idx.UUID}}
+	shardExtra := orderedJSON{{"index", idx.Name}, {"index_uuid", idx.UUID}}
+	var topCaused orderedJSON
+	if cause.Type == "parse_exception" {
+		parseReason := cause.Reason
+		parseInner := cause.Reason
+		if cause.CausedBy != nil {
+			parseInner = cause.CausedBy.Reason
+		} else if !strings.Contains(parseReason, ": [") {
+			parseReason = parseReason + ": [" + parseReason + "]"
+		}
+		innerCaused := orderedJSON{
+			{"type", "illegal_argument_exception"},
+			{"reason", parseInner},
+			{"caused_by", orderedJSON{
+				{"type", "date_time_parse_exception"},
+				{"reason", "Failed to parse with all enclosed parsers"},
+			}},
+		}
+		parseCaused := orderedJSON{
+			{"type", "parse_exception"},
+			{"reason", parseReason},
+			{"caused_by", innerCaused},
+		}
+		rootType = "parse_exception"
+		rootReason = parseReason
+		rootExtra = nil
+		topCaused = parseCaused
+		if cause.CausedBy != nil {
+			// Term-level date parsing fails while creating the shard query, so
+			// the parse_exception is wrapped in a query_shard_exception.
+			shardReasonText = "failed to create query: " + parseReason
+			shardCaused = parseCaused
+		} else {
+			// Range date parsing fails at query parse time and is reported
+			// directly as a parse_exception shard failure.
+			shardType = "parse_exception"
+			shardReasonText = parseReason
+			shardCaused = innerCaused
+			shardExtra = nil
+		}
+	}
+	rootCauseObj := orderedJSON{{"type", rootType}, {"reason", rootReason}}
+	rootCauseObj = append(rootCauseObj, rootExtra...)
+	shardReasonObj := orderedJSON{{"type", shardType}, {"reason", shardReasonText}}
+	shardReasonObj = append(shardReasonObj, shardExtra...)
+	shardReasonObj = append(shardReasonObj, orderedKV{"caused_by", shardCaused})
+	if topCaused == nil {
+		topCaused = shardReasonObj
+	}
+	errObj := orderedJSON{
+		{"root_cause", []any{rootCauseObj}},
+		{"type", "search_phase_execution_exception"},
+		{"reason", "all shards failed"},
+		{"phase", "query"},
+		{"grouped", true},
+		{"failed_shards", []any{orderedJSON{
+			{"shard", 0},
+			{"index", idx.Name},
+			{"node", nodeID},
+			{"reason", shardReasonObj},
+		}}},
+		{"caused_by", topCaused},
+	}
+	writeJSON(w, 400, orderedJSON{{"error", errObj}, {"status", 400}})
+}
+
+func writeCustomSearchFailure(w http.ResponseWriter, idx *Index, e *apiError) {
+	reason := e.Reason
+	status := 400
+	rootType := "exception"
+	shardType := "exception"
+	shardReason := reason
+	var topCaused orderedJSON
+	switch e.SearchFailure {
+	case "fvf_unmapped":
+		rootType = "exception"
+		shardType = "query_shard_exception"
+		shardReason = "failed to create query: " + reason
+		topCaused = orderedJSON{{"type", "exception"}, {"reason", reason}}
+	case "fvf_log":
+		rootType = "illegal_argument_exception"
+		shardType = "illegal_argument_exception"
+		topCaused = orderedJSON{{"type", "illegal_argument_exception"}, {"reason", reason},
+			{"caused_by", orderedJSON{{"type", "illegal_argument_exception"}, {"reason", reason}}}}
+	case "fvf_missing":
+		status = 500
+		topCaused = orderedJSON{{"type", "exception"}, {"reason", reason}}
+	default:
+		topCaused = orderedJSON{{"type", e.Type}, {"reason", reason}}
+	}
+	failedReason := orderedJSON{{"type", shardType}, {"reason", shardReason}}
+	if e.SearchFailure == "fvf_unmapped" {
+		failedReason = append(failedReason,
+			orderedKV{"index", idx.Name}, orderedKV{"index_uuid", idx.UUID},
+			orderedKV{"caused_by", orderedJSON{{"type", "exception"}, {"reason", reason}}})
+	}
+	errObj := orderedJSON{
+		{"root_cause", []any{orderedJSON{{"type", rootType}, {"reason", reason}}}},
+		{"type", "search_phase_execution_exception"},
+		{"reason", "all shards failed"},
+		{"phase", "query"},
+		{"grouped", true},
+		{"failed_shards", []any{orderedJSON{
+			{"shard", 0},
+			{"index", idx.Name},
+			{"node", nodeID},
+			{"reason", failedReason},
+		}}},
+		{"caused_by", topCaused},
+	}
+	writeJSON(w, status, orderedJSON{{"error", errObj}, {"status", status}})
 }
 
 func evalQuery(idx *Index, query map[string]any, doc map[string]any) (bool, float64, *apiError) {
@@ -2523,8 +3228,16 @@ func wildcardRegex(pattern string) *regexp.Regexp {
 	}
 	var b strings.Builder
 	b.WriteString("^")
+	escaped := false
 	for _, ch := range pattern {
+		if escaped {
+			b.WriteString(regexp.QuoteMeta(string(ch)))
+			escaped = false
+			continue
+		}
 		switch ch {
+		case '\\':
+			escaped = true
 		case '*':
 			b.WriteString(".*")
 		case '?':
@@ -2811,6 +3524,8 @@ func nestedSortValues(h multiHit, sp searchSortSpec) []any {
 		if sp.nestedFilter != nil {
 			fake := map[string]any{sp.nestedPath: []any{em}}
 			qc := newQueryCtxForDoc(h.idx, h.id+"__nested_sort", fake)
+			qc.nestedPath = sp.nestedPath
+			qc.nestedRoot = em
 			ok, _, err := qc.eval(sp.nestedFilter)
 			if err != nil || !ok {
 				continue
@@ -2862,6 +3577,18 @@ func evalSearchSortScript(src string, params any, doc map[string]any) any {
 		return nil
 	}
 	return v
+}
+
+func docRawValue(doc map[string]any, field string) any {
+	var cur any = doc
+	for _, part := range strings.Split(field, ".") {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil
+		}
+		cur = m[part]
+	}
+	return cur
 }
 
 func docNestedValue(doc map[string]any, field string) any {
@@ -2979,26 +3706,7 @@ func geoUnitMeters(unit string) (float64, bool) {
 }
 
 func parseGeoPoint(v any) (float64, float64, bool) {
-	switch t := v.(type) {
-	case map[string]any:
-		lat, ok1 := toFloat(t["lat"])
-		lon, ok2 := toFloat(t["lon"])
-		return lat, lon, ok1 && ok2
-	case []any:
-		if len(t) == 2 {
-			lon, ok1 := toFloat(t[0])
-			lat, ok2 := toFloat(t[1])
-			return lat, lon, ok1 && ok2
-		}
-	case string:
-		parts := strings.Split(t, ",")
-		if len(parts) == 2 {
-			lat, err1 := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
-			lon, err2 := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
-			return lat, lon, err1 == nil && err2 == nil
-		}
-	}
-	return 0, 0, false
+	return geoPointOf(v)
 }
 
 func geoDistanceMeters(lat1, lon1, lat2, lon2 float64) float64 {
@@ -3041,13 +3749,22 @@ func geoSortDistance(h multiHit, sp searchSortSpec) any {
 	if len(origins) == 0 {
 		return math.Inf(1)
 	}
-	raw := docNestedValue(h.doc, sp.geoField)
+	raw := docRawValue(h.doc, sp.geoField)
 	if raw == nil {
 		return math.Inf(1)
 	}
 	var candidates []any
 	if arr, isArr := raw.([]any); isArr {
-		candidates = arr
+		if len(arr) == 2 {
+			if _, ok1 := toFloat(arr[0]); ok1 {
+				if _, ok2 := toFloat(arr[1]); ok2 {
+					candidates = []any{raw}
+				}
+			}
+		}
+		if candidates == nil {
+			candidates = arr
+		}
 	} else {
 		candidates = []any{raw}
 	}
@@ -3167,6 +3884,16 @@ func walkNamedClause(cm map[string]any, qc *queryCtx, out map[string]float64) {
 					if child, ok := item.(map[string]any); ok {
 						walkNamedClause(child, qc, out)
 					}
+				}
+			}
+			nm := name
+			if n, ok := bm["_name"].(string); ok {
+				nm = n
+			}
+			if nm != "" {
+				matched, score, err := qc.eval(cm)
+				if err == nil && matched {
+					out[nm] = score
 				}
 			}
 		default:

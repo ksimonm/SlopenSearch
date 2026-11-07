@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -29,6 +30,7 @@ type indexCtx struct {
 	values         map[string][]any
 	totalFields    int
 	fieldNameLimit int
+	dyn            string
 }
 
 func newIndexCtx(idx *Index, docID string) *indexCtx {
@@ -53,6 +55,7 @@ func newIndexCtx(idx *Index, docID string) *indexCtx {
 	if v, ok := settingInt(idx.Settings, "mapping.field_name_length.limit"); ok {
 		c.fieldNameLimit = v
 	}
+	c.dyn = rootDynamicString(idx)
 	return c
 }
 
@@ -93,6 +96,30 @@ func previewValue(v any) string {
 	default:
 		return fmt.Sprintf("%v", v)
 	}
+}
+
+func ignoreAboveOf(def map[string]any) (int, bool) {
+	v, ok := def["ignore_above"]
+	if !ok {
+		return 0, false
+	}
+	n, ok := toFloat(v)
+	if !ok || n < 0 {
+		return 0, false
+	}
+	return int(n), true
+}
+
+func ignoreAboveExceeded(def map[string]any, v any) bool {
+	limit, ok := ignoreAboveOf(def)
+	if !ok {
+		return false
+	}
+	s, ok := valueScalarString(v)
+	if !ok {
+		return false
+	}
+	return len([]rune(s)) > limit
 }
 
 // numericKind classifies the numeric field types.
@@ -149,14 +176,22 @@ func (c *indexCtx) parseIntValue(name, typ string, def map[string]any, v any) (a
 	}
 	switch raw := v.(type) {
 	case json.Number:
+		if !coerce {
+			f, err := raw.Float64()
+			if err != nil {
+				return nil, c.fieldValueError(name, typ, raw.String(), "number_format_exception",
+					"For input string: \""+raw.String()+"\"")
+			}
+			return c.parseIntFloat(name, typ, def, f, false)
+		}
 		s := raw.String()
 		return c.parseIntString(name, typ, def, s, coerce, false)
 	case float64:
 		return c.parseIntFloat(name, typ, def, raw, coerce)
 	case int64:
-		return c.checkIntRange(name, typ, raw, float64(raw))
+		return c.checkIntRange(name, typ, raw, float64(raw), false)
 	case int:
-		return c.checkIntRange(name, typ, int64(raw), float64(raw))
+		return c.checkIntRange(name, typ, int64(raw), float64(raw), false)
 	case bool:
 		return nil, c.fieldValueError(name, typ, v, "input_coercion_exception",
 			fmt.Sprintf("Cannot coerce value %v to %s", raw, typ))
@@ -174,10 +209,10 @@ func (c *indexCtx) parseIntFloat(name, typ string, def map[string]any, f float64
 		}
 	}
 	iv := int64(f)
-	return c.checkIntRange(name, typ, iv, f)
+	return c.checkIntRange(name, typ, iv, f, true)
 }
 
-func (c *indexCtx) checkIntRange(name, typ string, iv int64, orig float64) (any, *apiError) {
+func (c *indexCtx) checkIntRange(name, typ string, iv int64, orig float64, fromJSON bool) (any, *apiError) {
 	maxI, _, bounded := intBounds(typ)
 	switch {
 	case typ == "byte":
@@ -187,13 +222,23 @@ func (c *indexCtx) checkIntRange(name, typ string, iv int64, orig float64) (any,
 		}
 	case typ == "short":
 		if iv > math.MaxInt16 || iv < math.MinInt16 {
-			return nil, c.fieldValueError(name, typ, orig, "illegal_argument_exception",
-				fmt.Sprintf("Value [%d] is out of range for a short", iv))
+			cause := "illegal_argument_exception"
+			reason := fmt.Sprintf("Value [%d] is out of range for a short", iv)
+			if fromJSON {
+				cause = "input_coercion_exception"
+				reason = fmt.Sprintf("Numeric value (%d) out of range of `short` (-32768 - 32767)", iv)
+			}
+			return nil, c.fieldValueError(name, typ, orig, cause, reason)
 		}
 	case typ == "integer":
 		if iv > math.MaxInt32 || iv < math.MinInt32 {
-			return nil, c.fieldValueError(name, typ, orig, "illegal_argument_exception",
-				fmt.Sprintf("Value [%d] is out of range for an integer", iv))
+			cause := "illegal_argument_exception"
+			reason := fmt.Sprintf("Value [%d] is out of range for an integer", iv)
+			if fromJSON {
+				cause = "input_coercion_exception"
+				reason = fmt.Sprintf("Numeric value (%d) out of range of `int` (-2147483648 - 2147483647)", iv)
+			}
+			return nil, c.fieldValueError(name, typ, orig, cause, reason)
 		}
 	}
 	_ = maxI
@@ -230,7 +275,7 @@ func (c *indexCtx) parseIntString(name, typ string, def map[string]any, s string
 			fmt.Sprintf("%s value passed as String", word))
 	}
 	orig := s
-	if trim {
+	if trim && typ != "long" && typ != "unsigned_long" {
 		s = strings.TrimSpace(s)
 	}
 	if typ == "unsigned_long" {
@@ -240,6 +285,9 @@ func (c *indexCtx) parseIntString(name, typ string, def map[string]any, s string
 				return nil, c.fieldValueError(name, typ, orig, "illegal_argument_exception",
 					fmt.Sprintf("Value [%s] is out of range for an unsigned long", orig))
 			}
+			if f, ferr := strconv.ParseFloat(s, 64); ferr == nil {
+				return c.checkIntRange(name, typ, int64(f), f, !trim)
+			}
 			return nil, c.fieldValueError(name, typ, orig, "illegal_argument_exception",
 				fmt.Sprintf("For input string: \"%s\"", orig))
 		}
@@ -248,9 +296,9 @@ func (c *indexCtx) parseIntString(name, typ string, def map[string]any, s string
 	iv, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
 		if ne, ok := err.(*strconv.NumError); ok && ne.Err == strconv.ErrRange {
-			causeType := "input_coercion_exception"
-			if typ == "byte" {
-				causeType = "illegal_argument_exception"
+			causeType := "illegal_argument_exception"
+			if !trim {
+				causeType = "input_coercion_exception"
 			}
 			return nil, c.fieldValueError(name, typ, orig, causeType,
 				fmt.Sprintf("Value [%s] is out of range for a %s", orig, typeDisplayName(typ)))
@@ -258,7 +306,7 @@ func (c *indexCtx) parseIntString(name, typ string, def map[string]any, s string
 		// integers accept decimal-like strings with coercion; floats parse natively
 		if isIntegerKind(typ) {
 			if f, ferr := strconv.ParseFloat(s, 64); ferr == nil {
-				return c.checkIntRange(name, typ, int64(f), f)
+				return c.checkIntRange(name, typ, int64(f), f, !trim)
 			}
 			causeType := "number_format_exception"
 			if typ == "long" {
@@ -270,7 +318,7 @@ func (c *indexCtx) parseIntString(name, typ string, def map[string]any, s string
 		return nil, c.fieldValueError(name, typ, orig, "number_format_exception",
 			fmt.Sprintf("For input string: \"%s\"", orig))
 	}
-	return c.checkIntRange(name, typ, iv, float64(iv))
+	return c.checkIntRange(name, typ, iv, float64(iv), !trim)
 }
 
 // parseFloatValue implements float/double/half_float/scaled_float coercion.
@@ -282,14 +330,6 @@ func (c *indexCtx) parseFloatValue(name, typ string, def map[string]any, v any) 
 	var f float64
 	switch raw := v.(type) {
 	case json.Number:
-		if coerceFalse {
-			if !strings.ContainsAny(raw.String(), ".eE") {
-				return nil, c.fieldValueError(name, typ, raw.String(), "illegal_argument_exception",
-					"Float value passed as String")
-			}
-			return nil, c.fieldValueError(name, typ, raw.String(), "illegal_argument_exception",
-				"Float value passed as String")
-		}
 		fv, err := raw.Float64()
 		if err != nil {
 			return nil, c.fieldValueError(name, typ, raw.String(), "number_format_exception",
@@ -432,8 +472,8 @@ func (c *indexCtx) parseBooleanValue(name string, def map[string]any, v any) (an
 		if s == "" {
 			return false, nil
 		}
-		return nil, c.fieldValueError(name, "boolean", v, "illegal_argument_exception",
-			fmt.Sprintf("Failed to parse value [%s] as only [true] or [false] are allowed.", s))
+		return nil, c.fieldValueError(name, "boolean", v, "input_coercion_exception",
+			"Current token (VALUE_NUMBER_INT) not of boolean type")
 	default:
 		return nil, c.fieldValueError(name, "boolean", v, "illegal_argument_exception",
 			fmt.Sprintf("Failed to parse value [%s] as only [true] or [false] are allowed.", previewValue(v)))
@@ -442,35 +482,36 @@ func (c *indexCtx) parseBooleanValue(name string, def map[string]any, v any) (an
 
 // parseDateValue stores epoch millis (date) or epoch nanos (date_nanos).
 func (c *indexCtx) parseDateValue(name, typ string, def map[string]any, v any) (any, *apiError) {
-	if s, ok := v.(string); ok {
-		if s == "" {
-			return nil, c.fieldValueError(name, typ, v, "parse_exception", "failed to parse date field [] with format")
+	s, isStr := v.(string)
+	if isStr && s == "" {
+		return nil, c.fieldValueError(name, typ, v, "illegal_argument_exception", "cannot parse empty date")
+	}
+	if !isStr {
+		switch t := v.(type) {
+		case json.Number:
+			s = t.String()
+		case float64:
+			s = strconv.FormatFloat(t, 'f', -1, 64)
+		case bool:
+			s = strconv.FormatBool(t)
+		default:
+			s = previewValue(v)
 		}
-	}
-	if raw, ok := v.(json.Number); ok {
-		// numeric epoch millis; negative values parse as year by default format
-		f, _ := raw.Float64()
-		if typ == "date_nanos" {
-			return int64(f), nil
-		}
-		return int64(f), nil
-	}
-	s, ok := v.(string)
-	if !ok {
-		return nil, c.fieldValueError(name, typ, v, "illegal_argument_exception", "failed to parse date field")
-	}
-	ms, ok2 := parseDateAny(def, s)
-	if !ok2 {
-		return nil, c.fieldValueError(name, typ, v, "parse_exception",
-			fmt.Sprintf("failed to parse date field [%s] with format [%s]", s, dateFormatOf(def)))
 	}
 	if typ == "date_nanos" {
-		if ns, ok := parseDateNanosAny(def, s); ok {
+		if ns, rangeErr, ok := parseDateNanosAny(def, s); ok {
 			return ns, nil
+		} else if rangeErr != "" {
+			return nil, c.fieldValueError(name, typ, v, "illegal_argument_exception", rangeErr)
 		}
-		return ms * int64(1e6), nil
+	} else if ms, ok := parseDateAny(def, s); ok {
+		return ms, nil
 	}
-	return ms, nil
+	reason := fmt.Sprintf("failed to parse date field [%s] with format [%s]", s, dateFormatOf(def))
+	e := c.fieldValueError(name, typ, v, "illegal_argument_exception", reason)
+	e.CausedBy.CausedBy = &apiError{Type: "date_time_parse_exception", Status: 400,
+		Reason: "Failed to parse with all enclosed parsers"}
+	return nil, e
 }
 
 func dateFormatOf(def map[string]any) string {
@@ -480,30 +521,14 @@ func dateFormatOf(def map[string]any) string {
 	return "strict_date_optional_time||epoch_millis"
 }
 
-var defaultDateLayouts = []string{
-	time.RFC3339Nano,
-	"2006-01-02T15:04:05.000Z07:00",
-	"2006-01-02T15:04:05Z07:00",
-	"2006-01-02T15:04:05",
-	"2006-01-02 15:04:05",
-	"2006-01-02",
-	"2006-01",
-	"2006",
-}
-
 // javaDateFormatToGo converts the common subset of Java date format letters.
 func javaDateFormatToGo(f string) string {
-	if f == "epoch_millis" || f == "epoch_second" || f == "date_optional_time" ||
-		f == "strict_date_optional_time" || f == "strict_date_optional_time_nanos" ||
-		f == "date_time" || f == "basic_date_time" || f == "strict_date_optional_time||epoch_millis" {
-		return ""
-	}
 	repl := []struct{ from, to string }{
 		{"yyyy", "2006"}, {"yy", "06"},
 		{"MM", "01"},
 		{"dd", "02"},
 		{"HH", "15"}, {"mm", "04"}, {"ss", "05"},
-		{"SSS", "000"}, {"SSSSSSSSS", "000000000"},
+		{"SSSSSSSSS", "000000000"}, {"SSS", "000"},
 	}
 	out := f
 	if strings.Contains(out, "'T'") {
@@ -515,95 +540,265 @@ func javaDateFormatToGo(f string) string {
 	return out
 }
 
-func parseDateAny(def map[string]any, s string) (int64, bool) {
-	if f, ok := def["format"].(string); ok && f != "" {
-		for _, fmtPart := range strings.Split(f, "||") {
-			fmtPart = strings.TrimSpace(fmtPart)
-			switch fmtPart {
-			case "epoch_millis":
-				if n, err := strconv.ParseInt(s, 10, 64); err == nil {
-					return n, true
-				}
-				continue
-			case "epoch_second":
-				if n, err := strconv.ParseInt(s, 10, 64); err == nil {
-					return n * 1000, true
-				}
-				continue
-			case "date_optional_time", "strict_date_optional_time", "date_time",
-				"strict_date_optional_time_nanos", "basic_date_time":
-				if ms, ok := parseDateDefault(s); ok {
-					return ms, true
-				}
-				continue
-			}
-			if layout := javaDateFormatToGo(fmtPart); layout != "" {
-				if t, err := time.Parse(layout, s); err == nil {
-					return t.UnixMilli(), true
-				}
-				if t, err := time.ParseInLocation(layout, s, time.UTC); err == nil {
-					return t.UnixMilli(), true
-				}
-			}
+func parseEpochNumber(s string, seconds bool) (int64, bool) {
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0, false
+	}
+	if seconds {
+		return int64(f * 1000), true
+	}
+	return int64(f), true
+}
+
+func parseDateWithNamedFormat(name, s string) (int64, bool) {
+	switch name {
+	case "epoch_millis":
+		return parseEpochNumber(s, false)
+	case "epoch_second":
+		return parseEpochNumber(s, true)
+	case "date_optional_time", "strict_date_optional_time", "date_time",
+		"strict_date_optional_time_nanos":
+		return parseStrictDateOptionalTime(s)
+	case "strict_date":
+		if t, err := time.Parse("2006-01-02", s); err == nil {
+			return t.UnixMilli(), true
+		}
+		return 0, false
+	case "date":
+		if t, err := time.Parse("2006-1-2", s); err == nil {
+			return t.UnixMilli(), true
+		}
+		return 0, false
+	case "basic_date":
+		if t, err := time.Parse("20060102", s); err == nil {
+			return t.UnixMilli(), true
+		}
+		return 0, false
+	case "basic_date_time":
+		if t, err := time.Parse("20060102T150405.000Z0700", s); err == nil {
+			return t.UnixMilli(), true
+		}
+		if t, err := time.Parse("20060102T150405Z0700", s); err == nil {
+			return t.UnixMilli(), true
 		}
 		return 0, false
 	}
-	if ms, ok := parseDateDefault(s); ok {
-		return ms, true
-	}
-	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
-		return n, true
-	}
-	return 0, false
-}
-
-func parseDateDefault(s string) (int64, bool) {
-	for _, layout := range defaultDateLayouts {
+	if layout := javaDateFormatToGo(name); layout != "" {
 		if t, err := time.Parse(layout, s); err == nil {
+			return t.UnixMilli(), true
+		}
+		if t, err := time.ParseInLocation(layout, s, time.UTC); err == nil {
 			return t.UnixMilli(), true
 		}
 	}
 	return 0, false
 }
 
-func parseDateNanosAny(def map[string]any, s string) (int64, bool) {
+func parseDateAny(def map[string]any, s string) (int64, bool) {
+	if f, ok := def["format"].(string); ok && f != "" {
+		for _, fmtPart := range strings.Split(f, "||") {
+			if ms, ok := parseDateWithNamedFormat(strings.TrimSpace(fmtPart), s); ok {
+				return ms, true
+			}
+		}
+		return 0, false
+	}
+	if ms, ok := parseStrictDateOptionalTime(s); ok {
+		return ms, true
+	}
+	if ms, ok := parseEpochNumber(s, false); ok {
+		return ms, true
+	}
+	return 0, false
+}
+
+func parseDateDefault(s string) (int64, bool) {
+	return parseStrictDateOptionalTime(s)
+}
+
+func parseStrictDateOptionalTime(s string) (int64, bool) {
+	sec, nsec, ok := parseStrictDateOptionalTimeParts(s)
+	if !ok {
+		return 0, false
+	}
+	return sec*1000 + int64(nsec)/int64(1e6), true
+}
+
+func parseStrictDateOptionalTimeParts(s string) (int64, int, bool) {
+	i := 0
+	neg := false
+	if i < len(s) && s[i] == '-' {
+		neg = true
+		i++
+	}
+	ystart := i
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	if i == ystart {
+		return 0, 0, false
+	}
+	ydigits := s[ystart:i]
+	if !neg && len(ydigits) != 4 {
+		return 0, 0, false
+	}
+	year, err := strconv.ParseInt(ydigits, 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	if neg {
+		year = -year
+	}
+	month, day := 1, 1
+	hour, minute, second, nsec := 0, 0, 0, 0
+	loc := time.UTC
+	if i < len(s) {
+		if s[i] != '-' || i+3 > len(s) {
+			return 0, 0, false
+		}
+		m, err := strconv.Atoi(s[i+1 : i+3])
+		if err != nil {
+			return 0, 0, false
+		}
+		month = m
+		i += 3
+		if i < len(s) && s[i] == '-' {
+			if i+3 > len(s) {
+				return 0, 0, false
+			}
+			d, err := strconv.Atoi(s[i+1 : i+3])
+			if err != nil {
+				return 0, 0, false
+			}
+			day = d
+			i += 3
+		}
+	}
+	if i < len(s) {
+		if s[i] != 'T' || i+6 > len(s) {
+			return 0, 0, false
+		}
+		h, err := strconv.Atoi(s[i+1 : i+3])
+		if err != nil || s[i+3] != ':' {
+			return 0, 0, false
+		}
+		mi, err := strconv.Atoi(s[i+4 : i+6])
+		if err != nil {
+			return 0, 0, false
+		}
+		hour, minute = h, mi
+		i += 6
+		if i < len(s) && s[i] == ':' {
+			if i+3 > len(s) {
+				return 0, 0, false
+			}
+			se, err := strconv.Atoi(s[i+1 : i+3])
+			if err != nil {
+				return 0, 0, false
+			}
+			second = se
+			i += 3
+			if i < len(s) && s[i] == '.' {
+				i++
+				fstart := i
+				for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+					i++
+				}
+				if i == fstart {
+					return 0, 0, false
+				}
+				frac := s[fstart:i]
+				for len(frac) < 9 {
+					frac += "0"
+				}
+				nsec, _ = strconv.Atoi(frac[:9])
+			}
+		}
+		if i < len(s) {
+			switch s[i] {
+			case 'Z':
+				i++
+			case '+', '-':
+				sign := 1
+				if s[i] == '-' {
+					sign = -1
+				}
+				if i+6 > len(s) {
+					return 0, 0, false
+				}
+				th, err1 := strconv.Atoi(s[i+1 : i+3])
+				tm, err2 := strconv.Atoi(s[i+4 : i+6])
+				if err1 != nil || err2 != nil || s[i+3] != ':' {
+					return 0, 0, false
+				}
+				loc = time.FixedZone("", sign*(th*3600+tm*60))
+				i += 6
+			default:
+				return 0, 0, false
+			}
+		}
+	}
+	if i != len(s) {
+		return 0, 0, false
+	}
+	if month < 1 || month > 12 || day < 1 || day > 31 ||
+		hour > 23 || minute > 59 || second > 59 {
+		return 0, 0, false
+	}
+	t := time.Date(int(year), time.Month(month), day, hour, minute, second, nsec, loc)
+	if int(t.Month()) != month || t.Day() != day {
+		return 0, 0, false
+	}
+	return t.Unix(), t.Nanosecond(), true
+}
+
+func parseDateNanosAny(def map[string]any, s string) (int64, string, bool) {
+	checkMs := func(ms int64) (int64, string, bool) {
+		if ms < 0 {
+			return 0, "date[" + s + "] is before the epoch in 1970 and cannot be stored in nanosecond resolution", false
+		}
+		if ms > math.MaxInt64/int64(1e6) {
+			return 0, "date[" + s + "] is after 2262-04-11T23:47:16.854775807 and cannot be stored in nanosecond resolution", false
+		}
+		return ms * int64(1e6), "", true
+	}
 	if f, ok := def["format"].(string); ok && f != "" {
 		for _, fmtPart := range strings.Split(f, "||") {
 			fmtPart = strings.TrimSpace(fmtPart)
-			if fmtPart == "epoch_millis" {
-				if n, err := strconv.ParseInt(s, 10, 64); err == nil {
-					return n * int64(1e6), true
+			switch fmtPart {
+			case "epoch_millis":
+				if ms, ok := parseEpochNumber(s, false); ok {
+					return checkMs(ms)
 				}
-			}
-		}
-	}
-	if strings.Contains(s, ".") {
-		base := s
-		frac := ""
-		if i := strings.IndexAny(s, ".Z+-"); i > 0 {
-			base = s[:i]
-			rest := s[i:]
-			if strings.HasPrefix(rest, ".") {
-				j := 1
-				for j < len(rest) && rest[j] >= '0' && rest[j] <= '9' {
-					j++
+				continue
+			case "epoch_second":
+				if ms, ok := parseEpochNumber(s, true); ok {
+					return checkMs(ms)
 				}
-				frac = rest[1:j]
+				continue
+			}
+			if ms, ok := parseDateWithNamedFormat(fmtPart, s); ok {
+				return checkMs(ms)
 			}
 		}
-		if ms, ok := parseDateDefault(base); ok {
-			pad := frac
-			for len(pad) < 9 {
-				pad += "0"
-			}
-			ns, _ := strconv.ParseInt(pad[:9], 10, 64)
-			return ms*int64(1e6) + ns, true
+		return 0, "", false
+	}
+	if sec, nsec, ok := parseStrictDateOptionalTimeParts(s); ok {
+		if sec < 0 {
+			return 0, "date[" + s + "] is before the epoch in 1970 and cannot be stored in nanosecond resolution", false
 		}
+		maxSec := math.MaxInt64 / int64(1e9)
+		maxNsec := math.MaxInt64 % int64(1e9)
+		if sec > maxSec || (sec == maxSec && int64(nsec) > maxNsec) {
+			return 0, "date[" + s + "] is after 2262-04-11T23:47:16.854775807 and cannot be stored in nanosecond resolution", false
+		}
+		return sec*int64(1e9) + int64(nsec), "", true
 	}
-	if ms, ok := parseDateDefault(s); ok {
-		return ms * int64(1e6), true
+	if ms, ok := parseEpochNumber(s, false); ok {
+		return checkMs(ms)
 	}
-	return 0, false
+	return 0, "", false
 }
 
 // parseIPValue canonicalizes an IPv4/IPv6 string or CIDR.
@@ -645,12 +840,83 @@ func (c *indexCtx) indexRawField(path string, def map[string]any, raw any) *apiE
 			typ = "object"
 		}
 	}
-	if _, hasProps := def["properties"].(map[string]any); hasProps && (typ == "object" || typ == "nested") {
+	if typ == "object" || typ == "nested" {
 		return c.indexObject(path, def, raw)
 	}
+	if typ == "flat_object" {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			return c.fieldValueError(path, typ, raw, "illegal_argument_exception", "malformed")
+		}
+		var walk func(prefix string, v any)
+		walk = func(prefix string, v any) {
+			switch t := v.(type) {
+			case map[string]any:
+				for k, child := range t {
+					p := k
+					if prefix != "" {
+						p = prefix + "." + k
+					}
+					walk(p, child)
+				}
+			case []any:
+				for _, child := range t {
+					walk(prefix, child)
+				}
+			case nil:
+			default:
+				if s, ok := valueScalarString(v); ok {
+					c.values[path+"."+prefix] = append(c.values[path+"."+prefix], s)
+					c.values[path] = append(c.values[path], s)
+				}
+			}
+		}
+		walk("", m)
+		return nil
+	}
+	if typ == "rank_features" {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			return mapperErr("mapper_parsing_exception", "failed to parse", "illegal_argument_exception",
+				"[rank_features] fields must be json objects, expected a START_OBJECT but got: "+jsonValueKind(raw))
+		}
+		for k, fv := range m {
+			f, ok := toFloat(fv)
+			if !ok {
+				if s, ok := valueScalarString(fv); ok {
+					if fv2, err := strconv.ParseFloat(s, 64); err == nil {
+						f = fv2
+						ok = true
+					}
+				}
+			}
+			if !ok || f <= 0 || float64(float32(f)) < 1.1754944e-38 {
+				shown := f
+				if !ok {
+					shown = 0
+				} else {
+					shown = float64(float32(f))
+				}
+				return mapperErr("mapper_parsing_exception", "failed to parse", "illegal_argument_exception",
+					fmt.Sprintf("featureValue must be a positive normal float, got: %.1f for feature %s on field %s which is less than the minimum positive normal float: 1.1754944E-38", shown, k, path))
+			}
+			sub := path + "." + k
+			c.values[sub] = append(c.values[sub], f)
+		}
+		return nil
+	}
 	var values []any
+	if typ == "rank_feature" {
+		if arr, ok := raw.([]any); ok {
+			if len(arr) > 1 {
+				return c.fieldValueError(path, "rank_feature", arr[len(arr)-1], "illegal_argument_exception",
+					"[rank_feature] fields do not support indexing multiple values for the same field ["+path+"] in the same document")
+			}
+			values = arr
+		}
+	}
 	if typ == "geo_point" {
-		if arr, ok := raw.([]any); ok && len(arr) == 2 {
+		if arr, ok := raw.([]any); ok && len(arr) >= 2 {
 			if _, ok1 := toFloat(arr[0]); ok1 {
 				if _, ok2 := toFloat(arr[1]); ok2 {
 					values = []any{raw}
@@ -698,11 +964,104 @@ func (c *indexCtx) indexRawField(path string, def map[string]any, raw any) *apiE
 			return err
 		}
 		if nv != nil {
+			if ignoreAboveExceeded(def, nv) {
+				continue
+			}
 			out = append(out, nv)
 		}
 	}
 	if len(out) > 0 || hasNull {
 		c.values[path] = append(c.values[path], out...)
+	}
+	if typ == "text" {
+		var prefixes []any
+		if ip, ok := def["index_prefixes"].(map[string]any); ok {
+			minChars := 2
+			if n, ok := toFloat(ip["min_chars"]); ok {
+				minChars = int(n)
+			}
+			maxChars := 5
+			if n, ok := toFloat(ip["max_chars"]); ok {
+				maxChars = int(n)
+			}
+			for _, v := range out {
+				sv, ok := valueScalarString(v)
+				if !ok {
+					continue
+				}
+				for _, tok := range analyze(sv) {
+					chars := []rune(tok)
+					limit := maxChars
+					if limit > len(chars) {
+						limit = len(chars)
+					}
+					for n := minChars; n <= limit; n++ {
+						prefixes = append(prefixes, string(chars[:n]))
+					}
+				}
+			}
+		}
+		if len(prefixes) > 0 {
+			c.values[path+"._index_prefix"] = append(c.values[path+"._index_prefix"], prefixes...)
+		}
+		if b, ok := def["index_phrases"].(bool); ok && b {
+			var phrases []any
+			for _, v := range out {
+				sv, ok := valueScalarString(v)
+				if !ok {
+					continue
+				}
+				toks := analyze(sv)
+				for i := 0; i+1 < len(toks); i++ {
+					phrases = append(phrases, toks[i]+" "+toks[i+1])
+				}
+			}
+			if len(phrases) > 0 {
+				c.values[path+"._index_phrase"] = append(c.values[path+"._index_phrase"], phrases...)
+			}
+		}
+	}
+	if typ == "search_as_you_type" {
+		maxShingle := 3
+		if n, ok := toFloat(def["max_shingle_size"]); ok {
+			maxShingle = int(n)
+		}
+		if maxShingle < 2 {
+			maxShingle = 2
+		}
+		if maxShingle > 4 {
+			maxShingle = 4
+		}
+		grams := map[int][]any{}
+		var prefixes []any
+		for _, v := range out {
+			sv, ok := valueScalarString(v)
+			if !ok {
+				continue
+			}
+			toks := analyze(sv)
+			for n := 2; n <= maxShingle; n++ {
+				for i := 0; i+n <= len(toks); i++ {
+					grams[n] = append(grams[n], strings.Join(toks[i:i+n], " "))
+				}
+			}
+			for i := 0; i < len(toks); i++ {
+				joined := strings.Join(toks[i:], " ")
+				chars := []rune(joined)
+				for end := 1; end <= len(chars); end++ {
+					prefixes = append(prefixes, string(chars[:end]))
+				}
+			}
+		}
+		for n, list := range grams {
+			if len(list) > 0 {
+				key := fmt.Sprintf("%s._%dgram", path, n)
+				c.values[key] = append(c.values[key], list...)
+			}
+		}
+		if len(prefixes) > 0 {
+			c.values[path+"._index_prefix"] = append(c.values[path+"._index_prefix"], prefixes...)
+		}
 	}
 	// multi-fields
 	if fields, ok := def["fields"].(map[string]any); ok {
@@ -722,6 +1081,9 @@ func (c *indexCtx) indexRawField(path string, def map[string]any, raw any) *apiE
 					return err
 				}
 				if nv != nil {
+					if ignoreAboveExceeded(fdef, nv) {
+						continue
+					}
 					subVals = append(subVals, nv)
 				}
 			}
@@ -759,11 +1121,17 @@ func (c *indexCtx) addIgnored(path string) {
 func (c *indexCtx) coerce(path string, def map[string]any, typ string, v any) (any, *apiError) {
 	switch typ {
 	case "text", "match_only_text", "search_as_you_type", "wildcard":
+		if _, isMap := v.(map[string]any); isMap {
+			return nil, c.fieldValueError(path, typ, v, "illegal_state_exception", "Can't get text on a START_OBJECT at 1:6")
+		}
 		s, ok := valueScalarString(v)
 		if !ok {
 			return nil, c.fieldValueError(path, typ, v, "illegal_argument_exception", "malformed")
 		}
 		if typ == "wildcard" {
+			if norm, ok := def["normalizer"].(string); ok && norm != "" {
+				s = applyNormalizerWithIndex(c.idx, norm, s)
+			}
 			return s, nil
 		}
 		return s, nil
@@ -773,7 +1141,7 @@ func (c *indexCtx) coerce(path string, def map[string]any, typ string, v any) (a
 			return nil, c.fieldValueError(path, typ, v, "illegal_argument_exception", "malformed")
 		}
 		if norm, ok := def["normalizer"].(string); ok && norm != "" {
-			s = applyNormalizer(norm, s)
+			s = applyNormalizerWithIndex(c.idx, norm, s)
 		}
 		return s, nil
 	case "integer", "long", "short", "byte", "unsigned_long":
@@ -809,7 +1177,9 @@ func (c *indexCtx) coerce(path string, def map[string]any, typ string, v any) (a
 	case "integer_range", "float_range", "long_range", "double_range", "date_range", "ip_range":
 		return c.parseRangeValue(path, typ, def, v)
 	case "geo_point":
-		return c.parseGeoPoint(path, v)
+		return c.parseGeoPoint(path, def, v)
+	case "geo_shape":
+		return c.parseGeoShape(path, v)
 	case "completion":
 		return c.parseCompletion(path, def, v)
 	case "rank_feature":
@@ -882,6 +1252,16 @@ func (c *indexCtx) flattenScalars(path string, raw any) ([]any, *apiError) {
 
 func (c *indexCtx) indexObject(path string, def map[string]any, raw any) *apiError {
 	props, _ := def["properties"].(map[string]any)
+	attachProps := false
+	if props == nil {
+		props = map[string]any{}
+		attachProps = true
+	}
+	if d, ok := def["dynamic"]; ok {
+		saved := c.dyn
+		c.dyn = dynamicString(d)
+		defer func() { c.dyn = saved }()
+	}
 	enabled := true
 	if b, ok := def["enabled"].(bool); ok {
 		enabled = b
@@ -901,15 +1281,25 @@ func (c *indexCtx) indexObject(path string, def map[string]any, raw any) *apiErr
 		}
 		return nil
 	case map[string]any:
-		return c.indexObjectMap(path, props, t)
+		if err := c.indexObjectMap(path, props, t); err != nil {
+			return err
+		}
+		if attachProps && len(props) > 0 {
+			def["properties"] = props
+		}
+		return nil
 	default:
 		return nil
 	}
 }
 
 func (c *indexCtx) indexObjectMap(path string, props map[string]any, src map[string]any) *apiError {
-	for k, v := range src {
-		if strings.HasPrefix(k, "_") {
+	for rawK, v := range src {
+		k := strings.TrimRight(rawK, ".")
+		if k == "" {
+			k = rawK
+		}
+		if isDocumentMetadataField(k) {
 			if err := c.rejectMetadataField(k); err != nil {
 				return err
 			}
@@ -921,40 +1311,72 @@ func (c *indexCtx) indexObjectMap(path string, props map[string]any, src map[str
 		}
 		def, declared := props[k].(map[string]any)
 		if !declared {
-			// dynamic
-			dyn := "true"
-			switch d := c.idx.Mappings["dynamic"].(type) {
-			case string:
-				dyn = d
-			case bool:
-				if !d {
-					dyn = "false"
-				}
+			nd, matched, derr := dynamicDefFor(c.idx, childPath, k, v)
+			if derr != nil {
+				return derr
 			}
-			if dyn == "strict" {
-				name := "root"
+			allow := true
+			switch c.dyn {
+			case "false", "strict":
+				allow = false
+			case "strict_allow_templates", "false_allow_templates":
+				allow = matched
+			}
+			if !allow {
+				if c.dyn == "false" || c.dyn == "false_allow_templates" {
+					continue
+				}
+				name := "_doc"
 				if path != "" {
 					name = path
 				}
 				return &apiError{Type: "strict_dynamic_mapping_exception", Status: 400,
-					Reason: fmt.Sprintf("mapping set to strict, dynamic introduction of [%s] within [%s] is not allowed", k, name)}
+					Reason: fmt.Sprintf("mapping set to %s, dynamic introduction of [%s] within [%s] is not allowed", c.dyn, k, name)}
 			}
-			if dyn == "false" {
+			if nd == nil {
 				continue
 			}
-			inferred := inferType(v)
-			if inferred == nil {
-				continue
-			}
-			def = inferred
+			def = nd
 			props[k] = def
 			c.bumpTotalFields()
 		}
 		if err := c.indexRawField(childPath, def, v); err != nil {
 			return err
 		}
+		if cts, ok := def["copy_to"]; ok {
+			var targets []string
+			switch t := cts.(type) {
+			case string:
+				targets = []string{t}
+			case []any:
+				for _, e := range t {
+					if s, ok := e.(string); ok {
+						targets = append(targets, s)
+					}
+				}
+			}
+			for _, target := range targets {
+				if _, exists := props[target]; exists {
+					continue
+				}
+				if c.dyn == "strict" || c.dyn == "strict_allow_templates" {
+					return &apiError{Type: "strict_dynamic_mapping_exception", Status: 400,
+						Reason: "mapping set to strict, dynamic introduction of [" + target + "] within [_doc] is not allowed"}
+				}
+				props[target] = map[string]any{"type": "text"}
+				c.bumpTotalFields()
+			}
+		}
 	}
 	return nil
+}
+
+func isDocumentMetadataField(name string) bool {
+	switch name {
+	case "_id", "_index", "_source", "_routing", "_field_names", "_ignored":
+		return true
+	}
+	return false
 }
 
 func (c *indexCtx) rejectMetadataField(name string) *apiError {
@@ -1003,14 +1425,211 @@ func (c *indexCtx) buildDocValues() *apiError {
 	return nil
 }
 
+func invalidDocFieldName(v any) string {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, child := range t {
+			if k == "" {
+				return "field name cannot be an empty string"
+			}
+			if k == "." {
+				return "field name cannot contain only the character [.]"
+			}
+			if strings.HasPrefix(k, ".") || strings.Contains(k, "..") {
+				return "object field starting or ending with a [.] makes object resolution ambiguous: [" + k + "]"
+			}
+			if r := invalidDocFieldName(child); r != "" {
+				return r
+			}
+		}
+	case []any:
+		for _, e := range t {
+			if r := invalidDocFieldName(e); r != "" {
+				return r
+			}
+		}
+	}
+	return ""
+}
+
+func quotedKey(src, marker string) (string, bool) {
+	i := strings.Index(src, marker)
+	if i < 0 {
+		return "", false
+	}
+	rest := strings.TrimLeft(src[i+len(marker):], " \t\r\n")
+	if rest == "" {
+		return "", false
+	}
+	q := rest[0]
+	if q != '\'' && q != '"' {
+		return "", false
+	}
+	end := strings.IndexByte(rest[1:], q)
+	if end < 0 {
+		return "", false
+	}
+	return rest[1 : 1+end], true
+}
+
+func evalDerived(def map[string]any, doc map[string]any) (any, bool) {
+	script, _ := def["script"].(map[string]any)
+	src := ""
+	if script != nil {
+		src, _ = script["source"].(string)
+	} else if s, ok := def["script"].(string); ok {
+		src = s
+	}
+	if src == "" {
+		return nil, false
+	}
+	body := src
+	if i := strings.Index(src, "emit("); i >= 0 {
+		body = src[i+len("emit("):]
+	}
+	if strings.Contains(body, "toUpperCase") {
+		key, ok := quotedKey(body, "params._source[")
+		if !ok {
+			return nil, false
+		}
+		v, ok := fieldValue(doc, key)
+		if !ok {
+			return nil, false
+		}
+		s, ok := v.(string)
+		if !ok {
+			return nil, false
+		}
+		return strings.ToUpper(s), true
+	}
+	key, ok := quotedKey(body, "doc[")
+	if !ok {
+		key, ok = quotedKey(body, "params._source[")
+	}
+	if !ok {
+		return nil, false
+	}
+	base, ok := fieldValue(doc, key)
+	if !ok {
+		return nil, false
+	}
+	if strings.Contains(body, ".value") {
+		rest := ""
+		if i := strings.Index(body, ".value"); i >= 0 {
+			rest = body[i+len(".value"):]
+		}
+		rest = strings.TrimRight(strings.TrimSpace(rest), ")")
+		rest = strings.TrimSpace(rest)
+		if rest != "" {
+			op := rest[0]
+			if op == '*' || op == '+' || op == '-' || op == '/' {
+				rhs, ok := strconv.ParseFloat(strings.TrimSpace(rest[1:]), 64)
+				if ok == nil {
+					lhs, lok := toFloat(base)
+					if !lok {
+						if s, sok := base.(string); sok {
+							if f, ferr := strconv.ParseFloat(s, 64); ferr == nil {
+								lhs, lok = f, true
+							}
+						}
+					}
+					if lok {
+						var out float64
+						switch op {
+						case '*':
+							out = lhs * rhs
+						case '+':
+							out = lhs + rhs
+						case '-':
+							out = lhs - rhs
+						case '/':
+							out = lhs / rhs
+						}
+						if out == math.Trunc(out) {
+							return int64(out), true
+						}
+						return out, true
+					}
+				}
+			}
+		}
+	}
+	return base, true
+}
+
+func addDerivedValues(idx *Index, c *indexCtx) {
+	defs, _ := idx.Mappings["derived"].(map[string]any)
+	for name, raw := range defs {
+		def, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if v, ok := evalDerived(def, c.doc); ok {
+			c.values[name] = []any{v}
+		}
+	}
+}
+
+// normalizeDerivedMappings gives derived scripts their default lang.
+func normalizeDerivedMappings(mappings map[string]any) {
+	derived, ok := mappings["derived"].(map[string]any)
+	if !ok {
+		return
+	}
+	for _, raw := range derived {
+		def, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch s := def["script"].(type) {
+		case string:
+			def["script"] = map[string]any{"source": s, "lang": "painless"}
+		case map[string]any:
+			if _, has := s["lang"]; !has {
+				s["lang"] = "painless"
+			}
+		}
+	}
+}
+
+// applyRequestDerived installs request-level derived field definitions.
+func applyRequestDerived(idx *Index, defs any) *apiError {
+	src, ok := defs.(map[string]any)
+	if !ok {
+		return &apiError{Type: "parsing_exception", Status: 400, Reason: "expected derived to be an object"}
+	}
+	norm := map[string]any{}
+	for name, raw := range src {
+		def, _ := raw.(map[string]any)
+		if def == nil {
+			def = map[string]any{}
+		}
+		cp := map[string]any{}
+		for k, v := range def {
+			cp[k] = v
+		}
+		if s, ok := cp["script"].(string); ok {
+			cp["script"] = map[string]any{"source": s, "lang": "painless"}
+		}
+		norm[name] = cp
+	}
+	idx.Mappings["derived"] = norm
+	idx.recomputeAllDocValues()
+	return nil
+}
+
 // computeDocValues validates and indexes a document, storing normalized field
 // values used by search, sort, aggregations and docvalue_fields.
 func (idx *Index) computeDocValues(id string, doc map[string]any) *apiError {
+	if reason := invalidDocFieldName(doc); reason != "" {
+		return mapperErr("mapper_parsing_exception", reason, "illegal_argument_exception", reason)
+	}
 	c := newIndexCtx(idx, id)
 	c.doc = doc
 	if err := c.buildDocValues(); err != nil {
 		return err
 	}
+	addDerivedValues(idx, c)
 	if idx.DocValues == nil {
 		idx.DocValues = map[string]map[string][]any{}
 	}
@@ -1063,6 +1682,47 @@ func applyNormalizer(name, s string) string {
 	return s
 }
 
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i := range b {
+		if b[i] >= 'A' && b[i] <= 'Z' {
+			b[i] += 'a' - 'A'
+		}
+	}
+	return string(b)
+}
+
+func applyNormalizerWithIndex(idx *Index, name, s string) string {
+	if idx != nil {
+		if rawFilters, ok := findSetting(idx.Settings, "analysis.normalizer."+name+".filter"); ok {
+			for _, f := range filterNames(rawFilters) {
+				switch f {
+				case "lowercase":
+					s = strings.ToLower(s)
+				case "uppercase":
+					s = strings.ToUpper(s)
+				case "asciifolding":
+					s = asciiFoldReplacer.Replace(s)
+				}
+			}
+			return s
+		}
+	}
+	return applyNormalizer(name, s)
+}
+
+func normalizeQueryValue(idx *Index, field, s string) string {
+	def, ok := mappingFieldDef(idx, field)
+	if !ok {
+		return s
+	}
+	norm, _ := def["normalizer"].(string)
+	if norm == "" {
+		return s
+	}
+	return applyNormalizerWithIndex(idx, norm, s)
+}
+
 func (c *indexCtx) parseTokenCount(path string, def map[string]any, v any) (any, *apiError) {
 	s, ok := valueScalarString(v)
 	if !ok {
@@ -1072,73 +1732,378 @@ func (c *indexCtx) parseTokenCount(path string, def map[string]any, v any) (any,
 	return int64(len(tokens)), nil
 }
 
-func (c *indexCtx) parseGeoPoint(path string, v any) (any, *apiError) {
+const geohashBase32 = "0123456789bcdefghjkmnpqrstuvwxyz"
+
+func decodeGeohash(s string) (float64, float64, bool) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return 0, 0, false
+	}
+	latMin, latMax := -90.0, 90.0
+	lonMin, lonMax := -180.0, 180.0
+	even := true
+	for _, c := range s {
+		idx := strings.IndexRune(geohashBase32, c)
+		if idx < 0 {
+			return 0, 0, false
+		}
+		for bit := 4; bit >= 0; bit-- {
+			b := (idx >> uint(bit)) & 1
+			if even {
+				mid := (lonMin + lonMax) / 2
+				if b == 1 {
+					lonMin = mid
+				} else {
+					lonMax = mid
+				}
+			} else {
+				mid := (latMin + latMax) / 2
+				if b == 1 {
+					latMin = mid
+				} else {
+					latMax = mid
+				}
+			}
+			even = !even
+		}
+	}
+	return (latMin + latMax) / 2, (lonMin + lonMax) / 2, true
+}
+
+func (c *indexCtx) parseGeoPoint(path string, def map[string]any, v any) (any, *apiError) {
+	ignoreZ := true
+	if b, ok := def["ignore_z_value"].(bool); ok {
+		ignoreZ = b
+	}
+	ignoreMal := c.indexIgnoreMal
+	if b, ok := def["ignore_malformed"].(bool); ok {
+		ignoreMal = b
+	}
+	errf := func(cause, reason string) *apiError {
+		return mapperErr("mapper_parsing_exception", "failed to parse field ["+path+"] of type [geo_point]", cause, reason)
+	}
+	normalize := func(lat, lon float64) (float64, float64) {
+		if !ignoreMal {
+			return lat, lon
+		}
+		la, lo := lat, lon
+		for la > 90 {
+			la = 180 - la
+			lo += 180
+		}
+		for la < -90 {
+			la = -180 - la
+			lo += 180
+		}
+		lo = math.Mod(lo, 360)
+		if lo > 180 {
+			lo -= 360
+		} else if lo < -180 {
+			lo += 360
+		}
+		return la, lo
+	}
+	check := func(lat, lon float64) (any, *apiError) {
+		lat, lon = normalize(lat, lon)
+		if !ignoreMal && (lat > 90 || lat < -90) {
+			return nil, errf("illegal_argument_exception", fmt.Sprintf("illegal latitude value [%.1f] for %s", lat, path))
+		}
+		if !ignoreMal && (lon > 180 || lon < -180) {
+			return nil, errf("illegal_argument_exception", fmt.Sprintf("illegal longitude value [%.1f] for %s", lon, path))
+		}
+		return map[string]any{"lat": lat, "lon": lon}, nil
+	}
 	switch t := v.(type) {
 	case string:
-		parts := strings.Split(t, ",")
-		if len(parts) == 2 {
-			lat, err1 := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
-			lon, err2 := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
-			if err1 == nil && err2 == nil {
-				return map[string]any{"lat": lat, "lon": lon}, nil
+		trimmed := strings.TrimSpace(t)
+		up := strings.ToUpper(trimmed)
+		if strings.HasPrefix(up, "POINT") {
+			body := trimmed
+			if i := strings.Index(body, "("); i >= 0 {
+				body = body[i+1:]
+			}
+			if j := strings.LastIndex(body, ")"); j >= 0 {
+				body = body[:j]
+			}
+			fs := strings.Fields(body)
+			nums := []float64{}
+			for _, f := range fs {
+				if n, err := strconv.ParseFloat(f, 64); err == nil {
+					nums = append(nums, n)
+				}
+			}
+			if len(nums) >= 3 && !ignoreZ {
+				return nil, errf("parse_exception", "Invalid WKT format")
+			}
+			if len(nums) >= 2 {
+				return check(nums[1], nums[0])
+			}
+			return nil, errf("parse_exception", "Invalid WKT format")
+		}
+		parts := strings.Split(trimmed, ",")
+		if len(parts) >= 2 {
+			nums := []float64{}
+			allNums := true
+			for _, p := range parts {
+				n, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
+				if err != nil {
+					allNums = false
+					break
+				}
+				nums = append(nums, n)
+			}
+			if allNums && len(nums) >= 2 {
+				if len(nums) >= 3 && !ignoreZ {
+					return nil, errf("parse_exception", fmt.Sprintf("Exception parsing coordinates: found Z value [%.1f] but [ignore_z_value] parameter is [false]", nums[2]))
+				}
+				return check(nums[0], nums[1])
 			}
 		}
-		u := strings.ToUpper(strings.TrimSpace(t))
-		if strings.HasPrefix(u, "POINT") {
-			body := strings.TrimSpace(strings.TrimPrefix(u, "POINT"))
-			body = strings.TrimPrefix(body, "(")
-			body = strings.TrimSuffix(body, ")")
-			fs := strings.Fields(body)
-			if len(fs) == 2 {
-				lon, e1 := strconv.ParseFloat(fs[0], 64)
-				lat, e2 := strconv.ParseFloat(fs[1], 64)
-				if e1 == nil && e2 == nil {
-					return map[string]any{"lat": lat, "lon": lon}, nil
+		if lat, lon, ok := decodeGeohash(trimmed); ok {
+			return check(lat, lon)
+		}
+		bad := ' '
+		for _, ch := range trimmed {
+			if !strings.ContainsRune("0123456789bcdefghjkmnpqrstuvwxyzBCDEFGHJKMNPQRSTUVWXYZ", ch) {
+				bad = ch
+				break
+			}
+		}
+		return nil, errf("parse_exception", fmt.Sprintf("unsupported symbol [%c] in geohash [%s]", bad, trimmed))
+	case map[string]any:
+		_, hasLat := t["lat"]
+		_, hasLon := t["lon"]
+		if hasLat || hasLon {
+			for k := range t {
+				if k != "lat" && k != "lon" {
+					return nil, errf("parse_exception", "field must be either [lon|lat], [type|coordinates], or [geohash]")
+				}
+			}
+			lat, ok := toFloat(t["lat"])
+			if !ok {
+				return nil, errf("parse_exception", "field [lat] missing")
+			}
+			lon, ok := toFloat(t["lon"])
+			if !ok {
+				return nil, errf("parse_exception", "field [lon] missing")
+			}
+			return check(lat, lon)
+		}
+		typ, _ := t["type"].(string)
+		if strings.EqualFold(typ, "point") {
+			if coords, ok := t["coordinates"].([]any); ok && len(coords) >= 2 {
+				lon, ok1 := toFloat(coords[0])
+				lat, ok2 := toFloat(coords[1])
+				if ok1 && ok2 {
+					return check(lat, lon)
 				}
 			}
 		}
-		return nil, c.fieldValueError(path, "geo_point", v, "illegal_argument_exception", "failed to parse geo_point")
-	case map[string]any:
-		if lat, ok := toFloat(t["lat"]); ok {
-			if lon, ok := toFloat(t["lon"]); ok {
-				return map[string]any{"lat": lat, "lon": lon}, nil
-			}
-		}
-		return nil, c.fieldValueError(path, "geo_point", v, "illegal_argument_exception", "failed to parse geo_point")
+		return nil, errf("parse_exception", "field must be either [lon|lat], [type|coordinates], or [geohash]")
 	case []any:
-		if len(t) == 2 {
+		if len(t) >= 3 && !ignoreZ {
+			z, _ := toFloat(t[2])
+			return nil, errf("parse_exception", fmt.Sprintf("Exception parsing coordinates: found Z value [%.1f] but [ignore_z_value] parameter is [false]", z))
+		}
+		if len(t) >= 2 {
 			lon, ok1 := toFloat(t[0])
 			lat, ok2 := toFloat(t[1])
 			if ok1 && ok2 {
-				return map[string]any{"lat": lat, "lon": lon}, nil
+				return check(lat, lon)
 			}
 		}
-		return nil, c.fieldValueError(path, "geo_point", v, "illegal_argument_exception", "failed to parse geo_point")
+		return nil, errf("parse_exception", "field must be either [lon|lat], [type|coordinates], or [geohash]")
 	}
-	if s, ok := valueScalarString(v); ok {
-		return c.parseGeoPoint(path, s)
+	return nil, errf("parse_exception", "failed to parse geo_point")
+}
+
+func (c *indexCtx) parseGeoShape(path string, v any) (any, *apiError) {
+	errf := func(cause, reason string) *apiError {
+		return mapperErr("mapper_parsing_exception", "failed to parse field ["+path+"] of type [geo_shape]", cause, reason)
 	}
-	return nil, c.fieldValueError(path, "geo_point", v, "illegal_argument_exception", "failed to parse geo_point")
+	knownTypes := map[string]bool{
+		"point": true, "multipoint": true, "linestring": true,
+		"multilinestring": true, "polygon": true, "multipolygon": true,
+		"envelope": true, "geometrycollection": true,
+	}
+	switch t := v.(type) {
+	case string:
+		up := strings.ToUpper(strings.TrimSpace(t))
+		for _, k := range []string{"POINT", "POLYGON", "LINESTRING", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON", "BBOX", "ENVELOPE", "GEOMETRYCOLLECTION"} {
+			if strings.HasPrefix(up, k) {
+				if _, ok := parseWktGeoShape(t); ok {
+					return v, nil
+				}
+				return nil, errf("parse_exception", "Invalid WKT format")
+			}
+		}
+		return nil, errf("illegal_argument_exception", "Unknown geometry type ["+t+"]")
+	case map[string]any:
+		typ, _ := t["type"].(string)
+		typ = strings.ToLower(typ)
+		if typ == "circle" {
+			return nil, errf("unsupported_operation_exception", "circle is not supported")
+		}
+		if !knownTypes[typ] {
+			return nil, errf("x_content_parse_exception", "Unknown geometry type ["+typ+"]")
+		}
+		if typ == "polygon" {
+			rings, ok := t["coordinates"].([]any)
+			if !ok {
+				return nil, errf("x_content_parse_exception", "Invalid polygon")
+			}
+			for _, ring := range rings {
+				pts, ok := ring.([]any)
+				if !ok {
+					return nil, errf("x_content_parse_exception", "Invalid polygon")
+				}
+				if len(pts) < 4 {
+					return nil, errf("x_content_parse_exception", "Invalid polygon: ring has fewer than 4 points")
+				}
+				if !reflect.DeepEqual(pts[0], pts[len(pts)-1]) {
+					return nil, errf("x_content_parse_exception", "Invalid polygon: ring is not closed")
+				}
+			}
+		}
+		if typ == "geometrycollection" {
+			if _, ok := t["geometries"].([]any); !ok {
+				return nil, errf("x_content_parse_exception", "Invalid geometry collection")
+			}
+		}
+		return v, nil
+	default:
+		return nil, errf("x_content_parse_exception", "Invalid shape")
+	}
 }
 
 func (c *indexCtx) parseCompletion(path string, def map[string]any, v any) (any, *apiError) {
-	if m, ok := v.(map[string]any); ok {
-		in, _ := m["input"].([]any)
-		out := []any{}
-		for _, e := range in {
-			if s, ok := valueScalarString(e); ok {
-				out = append(out, s)
+	checkReserved := func(s string) *apiError {
+		pos := 0
+		for _, ch := range s {
+			cp := int(ch)
+			if cp < 0x20 || cp == 0x7f {
+				return c.fieldValueError(path, "completion", v, "illegal_argument_exception",
+					fmt.Sprintf("Illegal input [%s] UTF-16 codepoint [0x%x] at position %d is a reserved character", s, cp, pos))
+			}
+			if ch > 0xffff {
+				pos += 2
+			} else {
+				pos++
 			}
 		}
-		if len(out) == 0 {
-			out = append(out, m)
+		return nil
+	}
+	var out []any
+	var parseOne func(v any) *apiError
+	parseOne = func(v any) *apiError {
+		switch t := v.(type) {
+		case string:
+			if err := checkReserved(t); err != nil {
+				return err
+			}
+			out = append(out, t)
+			return nil
+		case map[string]any:
+			for k := range t {
+				if k != "input" && k != "weight" && k != "contexts" {
+					return c.fieldValueError(path, "completion", v, "illegal_argument_exception",
+						"unknown field name ["+k+"], must be one of [input, weight, contexts]")
+				}
+			}
+			if w, has := t["weight"]; has {
+				wi, ok := int64(0), false
+				switch wt := w.(type) {
+				case json.Number:
+					if n, err := wt.Int64(); err == nil {
+						wi, ok = n, true
+					}
+				case float64:
+					if wt == float64(int64(wt)) {
+						wi, ok = int64(wt), true
+					}
+				case string:
+					if n, err := strconv.ParseInt(wt, 10, 64); err == nil && strings.TrimSpace(wt) == wt {
+						wi, ok = n, true
+					}
+				}
+				if !ok {
+					return c.fieldValueError(path, "completion", v, "illegal_argument_exception",
+						"weight must be an integer, but was ["+previewValue(w)+"]")
+				}
+				if wi < 0 || wi > 2147483647 {
+					return c.fieldValueError(path, "completion", v, "illegal_argument_exception",
+						fmt.Sprintf("weight must be in the interval [0..2147483647], but was [%d]", wi))
+				}
+			}
+			if inp, has := t["input"]; has {
+				switch it := inp.(type) {
+				case string:
+					if err := checkReserved(it); err != nil {
+						return err
+					}
+					out = append(out, it)
+				case []any:
+					for _, e := range it {
+						switch et := e.(type) {
+						case string:
+							if err := checkReserved(et); err != nil {
+								return err
+							}
+							out = append(out, et)
+						case map[string]any:
+							iv, hasIv := et["input"]
+							if !hasIv {
+								iv = e
+							}
+							switch ivt := iv.(type) {
+							case string:
+								if err := checkReserved(ivt); err != nil {
+									return err
+								}
+								out = append(out, ivt)
+							case []any:
+								for _, e2 := range ivt {
+									if s, ok := valueScalarString(e2); ok {
+										if err := checkReserved(s); err != nil {
+											return err
+										}
+										out = append(out, s)
+									}
+								}
+							default:
+								return c.fieldValueError(path, "completion", iv, "parsing_exception",
+									fmt.Sprintf("failed to parse [%s]: expected text or object, but got %s", path, jsonValueKind(iv)))
+							}
+						default:
+							return c.fieldValueError(path, "completion", e, "parsing_exception",
+								fmt.Sprintf("failed to parse [%s]: expected text or object, but got %s", path, jsonValueKind(e)))
+						}
+					}
+				default:
+					return c.fieldValueError(path, "completion", inp, "parsing_exception",
+						fmt.Sprintf("failed to parse [%s]: expected text or object, but got %s", path, jsonValueKind(inp)))
+				}
+			}
+			if len(out) == 0 {
+				out = append(out, v)
+			}
+			return nil
+		case []any:
+			for _, e := range t {
+				if err := parseOne(e); err != nil {
+					return err
+				}
+			}
+			return nil
+		default:
+			return c.fieldValueError(path, "completion", v, "parsing_exception",
+				fmt.Sprintf("failed to parse [%s]: expected text or object, but got %s", path, jsonValueKind(v)))
 		}
-		return out, nil
 	}
-	if s, ok := valueScalarString(v); ok {
-		return s, nil
+	if err := parseOne(v); err != nil {
+		return nil, err
 	}
-	return nil, c.fieldValueError(path, "completion", v, "illegal_argument_exception", "failed to parse completion")
+	return out, nil
 }
 
 func (c *indexCtx) parseRankFeature(path string, v any) (any, *apiError) {
@@ -1154,11 +2119,31 @@ func (c *indexCtx) parseRankFeature(path string, v any) (any, *apiError) {
 	if !ok {
 		return nil, c.fieldValueError(path, "rank_feature", v, "illegal_argument_exception", "failed to parse rank_feature")
 	}
-	if f < 0 {
+	shown := float64(float32(f))
+	if shown <= 0 || shown < 1.1754944e-38 {
 		return nil, c.fieldValueError(path, "rank_feature", v, "illegal_argument_exception",
-			"Field value must be >= 0")
+			fmt.Sprintf("featureValue must be a positive normal float, got: %.1f for feature %s on field %s which is less than the minimum positive normal float: 1.1754944E-38", shown, path, path))
 	}
 	return f, nil
+}
+
+func jsonValueKind(v any) string {
+	switch v.(type) {
+	case nil:
+		return "VALUE_NULL"
+	case bool:
+		return "VALUE_BOOLEAN"
+	case json.Number, float64, float32, int, int64, uint64:
+		return "VALUE_NUMBER"
+	case string:
+		return "VALUE_STRING"
+	case []any:
+		return "START_ARRAY"
+	case map[string]any:
+		return "START_OBJECT"
+	default:
+		return "VALUE_NULL"
+	}
 }
 
 func (c *indexCtx) parseJoin(path string, def map[string]any, v any) (any, *apiError) {

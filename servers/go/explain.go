@@ -152,9 +152,13 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request, name, id 
 	if matched {
 		explanation = qc.bm25Explain(field, term, score)
 	} else {
+		description := "no matching term"
+		if _, isTerm := qmap["term"]; isTerm {
+			description = "ConstantScore(" + field + ":" + term + ") doesn't match id 0"
+		}
 		explanation = map[string]any{
 			"value":       0.0,
-			"description": "no matching term",
+			"description": description,
 			"details":     []any{},
 		}
 	}

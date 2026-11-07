@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math"
 	"regexp"
 	"sort"
@@ -136,7 +137,7 @@ func (c *queryCtx) bm25FieldScore(field string, qtokens []string, operator strin
 		}
 		d := float64(df[qt])
 		idf := math.Log(1 + (float64(N)-d+0.5)/(d+0.5))
-		score += idf * (f * (k1 + 1)) / (f + k1*(1-b+b*dl/avgdl))
+		score += idf * f / (f + k1*(1-b+b*dl/avgdl))
 	}
 	return score * boost
 }
@@ -479,18 +480,346 @@ func (c *queryCtx) evalNested(body any) (bool, float64, *apiError) {
 	if scoreMode == "" {
 		scoreMode = "avg"
 	}
-	_ = path
-	matched, sc, err := c.eval(inner)
-	if err != nil {
-		return false, 0, err
+	ignoreUnmapped, _ := bm["ignore_unmapped"].(bool)
+	def, mapped := mappingFieldDef(c.idx, path)
+	if !mapped {
+		if ignoreUnmapped {
+			return false, 0, nil
+		}
+		return false, 0, matchSearchError("query_shard_exception",
+			"[nested] failed to find nested object under path ["+path+"]")
 	}
-	if !matched {
+	if t, _ := def["type"].(string); t != "nested" {
+		return false, 0, matchSearchError("query_shard_exception",
+			"[nested] nested object under path ["+path+"] is not of nested type")
+	}
+	objects, ok := nestedObjectsForCtx(c, path)
+	if !ok || len(objects) == 0 {
 		return false, 0, nil
 	}
-	if scoreMode == "none" {
-		return true, 0, nil
+	found := false
+	total := 0.0
+	count := 0
+	best := 0.0
+	worst := 0.0
+	parentMeta := c.nestedMeta()
+	var parentNested any
+	if parentMeta != nil {
+		parentNested = parentMeta
 	}
-	return true, sc, nil
+	for i, obj := range objects {
+		child := &queryCtx{idx: c.idx, id: c.id, doc: c.doc, vals: c.vals,
+			nestedPath: path, nestedRoot: obj, nestedOffset: i, nestedParent: parentNested}
+		matched, sc, err := child.eval(inner)
+		if err != nil {
+			return false, 0, err
+		}
+		if !matched {
+			continue
+		}
+		if !found {
+			best, worst = sc, sc
+		} else {
+			if sc > best {
+				best = sc
+			}
+			if sc < worst {
+				worst = sc
+			}
+		}
+		found = true
+		total += sc
+		count++
+	}
+	if !found {
+		return false, 0, nil
+	}
+	switch scoreMode {
+	case "none":
+		return true, 0, nil
+	case "max":
+		return true, best, nil
+	case "min":
+		return true, worst, nil
+	case "sum":
+		return true, total, nil
+	case "avg":
+		return true, total / float64(count), nil
+	}
+	return true, total / float64(count), nil
+}
+
+func nestedObjectsForCtx(c *queryCtx, path string) ([]map[string]any, bool) {
+	if c.nestedRoot != nil {
+		lookup := path
+		if path == c.nestedPath {
+			lookup = ""
+		} else if strings.HasPrefix(path, c.nestedPath+".") {
+			lookup = strings.TrimPrefix(path, c.nestedPath+".")
+		} else {
+			return nil, false
+		}
+		return nestedObjectsAt(c.nestedRoot, lookup), true
+	}
+	return nestedObjectsAt(c.doc, path), true
+}
+
+func nestedSourceFilter(obj map[string]any, path string, spec any) any {
+	if spec == nil {
+		return obj
+	}
+	if b, ok := spec.(bool); ok {
+		if b {
+			return obj
+		}
+		return nil
+	}
+	var includes []string
+	switch t := spec.(type) {
+	case string:
+		includes = append(includes, t)
+	case []any:
+		for _, e := range t {
+			if s, ok := e.(string); ok {
+				includes = append(includes, s)
+			}
+		}
+	}
+	if len(includes) == 0 {
+		return obj
+	}
+	res := map[string]any{}
+	for _, inc := range includes {
+		rel := inc
+		if strings.HasPrefix(rel, path+".") {
+			rel = strings.TrimPrefix(rel, path+".")
+		}
+		vals, ok := nestedObjectValues(obj, rel)
+		if !ok || len(vals) == 0 {
+			continue
+		}
+		parts := strings.Split(rel, ".")
+		cur := res
+		for i, part := range parts {
+			if i == len(parts)-1 {
+				cur[part] = vals[0]
+			} else {
+				next, ok := cur[part].(map[string]any)
+				if !ok {
+					next = map[string]any{}
+					cur[part] = next
+				}
+				cur = next
+			}
+		}
+	}
+	return res
+}
+
+func nestedSortCompare(a, b any) int {
+	af, aok := toFloat(a)
+	bf, bok := toFloat(b)
+	if aok && bok {
+		switch {
+		case af < bf:
+			return -1
+		case af > bf:
+			return 1
+		default:
+			return 0
+		}
+	}
+	as, _ := valueScalarString(a)
+	bs, _ := valueScalarString(b)
+	return strings.Compare(as, bs)
+}
+
+func nestedSortOutput(obj map[string]any, path string, sp searchSortSpec) any {
+	if sp.field == "_score" {
+		return nil
+	}
+	rel := sp.field
+	if strings.HasPrefix(rel, path+".") {
+		rel = strings.TrimPrefix(rel, path+".")
+	}
+	vals, ok := nestedObjectValues(obj, rel)
+	if !ok || len(vals) == 0 {
+		return nil
+	}
+	return vals[0]
+}
+
+func collectNestedInnerHits(c *queryCtx, query map[string]any, omitScores bool) map[string]any {
+	out := map[string]any{}
+	collectNestedInnerHitsClause(c, query, omitScores, out)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func collectNestedInnerHitsClause(c *queryCtx, query map[string]any, omitScores bool, out map[string]any) {
+	for clause, raw := range query {
+		bm, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch clause {
+		case "nested":
+			path, _ := bm["path"].(string)
+			inner, _ := bm["query"].(map[string]any)
+			if inner == nil {
+				continue
+			}
+			spec, has := bm["inner_hits"]
+			if has {
+				collectOneNestedInnerHits(c, path, inner, spec, omitScores, out)
+			}
+		case "bool":
+			for _, key := range []string{"must", "should", "filter", "must_not"} {
+				for _, q := range asQueryList(bm[key]) {
+					if qm, ok := q.(map[string]any); ok {
+						collectNestedInnerHitsClause(c, qm, omitScores, out)
+					}
+				}
+			}
+		case "constant_score":
+			if qm, ok := bm["filter"].(map[string]any); ok {
+				collectNestedInnerHitsClause(c, qm, omitScores, out)
+			}
+		case "dis_max":
+			for _, q := range asQueryList(bm["queries"]) {
+				if qm, ok := q.(map[string]any); ok {
+					collectNestedInnerHitsClause(c, qm, omitScores, out)
+				}
+			}
+		case "boosting":
+			for _, key := range []string{"positive", "negative"} {
+				if qm, ok := bm[key].(map[string]any); ok {
+					collectNestedInnerHitsClause(c, qm, omitScores, out)
+				}
+			}
+		case "function_score", "script_score":
+			if qm, ok := bm["query"].(map[string]any); ok {
+				collectNestedInnerHitsClause(c, qm, omitScores, out)
+			}
+		}
+	}
+}
+
+func collectOneNestedInnerHits(c *queryCtx, path string, inner map[string]any, spec any, omitScores bool, out map[string]any) {
+	objects, ok := nestedObjectsForCtx(c, path)
+	if !ok {
+		return
+	}
+	name := path
+	specMap, _ := spec.(map[string]any)
+	if specMap == nil {
+		specMap = map[string]any{}
+	}
+	if n, _ := specMap["name"].(string); n != "" {
+		name = n
+	}
+	from := 0
+	if n, ok := toFloat(specMap["from"]); ok {
+		from = int(n)
+	}
+	size := 3
+	if n, ok := toFloat(specMap["size"]); ok {
+		size = int(n)
+	}
+	type nestedInnerHit struct {
+		score    float64
+		entry    map[string]any
+		obj      map[string]any
+		sortVals []any
+	}
+	var matched []nestedInnerHit
+	parentMeta := c.nestedMeta()
+	var parentNested any
+	if parentMeta != nil {
+		parentNested = parentMeta
+	}
+	for i, obj := range objects {
+		child := &queryCtx{idx: c.idx, id: c.id, doc: c.doc, vals: c.vals,
+			nestedPath: path, nestedRoot: obj, nestedOffset: i, nestedParent: parentNested}
+		ok, sc, err := child.eval(inner)
+		if err != nil || !ok {
+			continue
+		}
+		entry := map[string]any{
+			"_index":  c.idx.Name,
+			"_id":     c.id,
+			"_nested": child.nestedMeta(),
+		}
+		src := nestedSourceFilter(obj, path, specMap["_source"])
+		if src != nil {
+			entry["_source"] = src
+		}
+		if omitScores {
+			entry["_score"] = nil
+		} else {
+			entry["_score"] = scoreJSON(sc)
+		}
+		if deeper := collectNestedInnerHits(child, inner, omitScores); len(deeper) > 0 {
+			entry["inner_hits"] = deeper
+		}
+		matched = append(matched, nestedInnerHit{score: sc, entry: entry, obj: obj})
+	}
+	if rawSort, has := specMap["sort"]; has {
+		if specs, err := parseSortSpecs(rawSort, ""); err == nil && len(specs) > 0 {
+			for i := range matched {
+				vals := make([]any, 0, len(specs))
+				for _, sp := range specs {
+					vals = append(vals, nestedSortOutput(matched[i].obj, path, sp))
+				}
+				matched[i].sortVals = vals
+				matched[i].entry["sort"] = vals
+			}
+			sort.SliceStable(matched, func(i, j int) bool {
+				for k, sp := range specs {
+					cmp := nestedSortCompare(matched[i].sortVals[k], matched[j].sortVals[k])
+					if cmp != 0 {
+						if sp.desc {
+							return cmp > 0
+						}
+						return cmp < 0
+					}
+				}
+				return false
+			})
+		}
+	}
+	total := len(matched)
+	if from > len(matched) {
+		from = len(matched)
+	}
+	end := from + size
+	if size < 0 || end > len(matched) {
+		end = len(matched)
+	}
+	if end < from {
+		end = from
+	}
+	hits := make([]any, 0, end-from)
+	for _, m := range matched[from:end] {
+		hits = append(hits, m.entry)
+	}
+	var maxScore any
+	if !omitScores && len(matched) > 0 {
+		m := matched[0].score
+		for _, x := range matched[1:] {
+			if x.score > m {
+				m = x.score
+			}
+		}
+		maxScore = scoreJSON(m)
+	}
+	out[name] = map[string]any{"hits": map[string]any{
+		"total":     map[string]any{"value": total, "relation": "eq"},
+		"max_score": maxScore,
+		"hits":      hits,
+	}}
 }
 
 func findJoinField(idx *Index) (string, map[string]any, bool) {
@@ -520,6 +849,84 @@ func joinParts(v any) (string, string) {
 	return "", ""
 }
 
+func joinRelationChildren(relations map[string]any, parent string) []string {
+	switch t := relations[parent].(type) {
+	case string:
+		return []string{t}
+	case []any:
+		var out []string
+		for _, e := range t {
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+func joinValidName(relations map[string]any, name string) bool {
+	if _, ok := relations[name]; ok {
+		return true
+	}
+	for parent := range relations {
+		for _, child := range joinRelationChildren(relations, parent) {
+			if child == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func joinParentRelation(relations map[string]any, child string) string {
+	for parent := range relations {
+		for _, c := range joinRelationChildren(relations, parent) {
+			if c == child {
+				return parent
+			}
+		}
+	}
+	return ""
+}
+
+func joinError(clause, reason string) *apiError {
+	return matchSearchError("query_shard_exception", "["+clause+"] "+reason)
+}
+
+func (c *queryCtx) joinChildContexts(childType string, inner map[string]any) ([]*queryCtx, []float64, *apiError) {
+	var ctxs []*queryCtx
+	var scores []float64
+	for _, id := range c.idx.Order {
+		doc, live := c.idx.Docs[id]
+		if !live {
+			continue
+		}
+		name, parent := joinParts(doc[fieldOfJoin(c.idx)])
+		if parent != c.id {
+			continue
+		}
+		if childType != "" && name != childType {
+			continue
+		}
+		cc := newQueryCtxForDoc(c.idx, id, doc)
+		ok, sc, err := cc.eval(inner)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ok {
+			ctxs = append(ctxs, cc)
+			scores = append(scores, sc)
+		}
+	}
+	return ctxs, scores, nil
+}
+
+func fieldOfJoin(idx *Index) string {
+	field, _, _ := findJoinField(idx)
+	return field
+}
+
 func (c *queryCtx) evalHasChild(body any) (bool, float64, *apiError) {
 	bm, ok := body.(map[string]any)
 	if !ok {
@@ -530,43 +937,67 @@ func (c *queryCtx) evalHasChild(body any) (bool, float64, *apiError) {
 	if !ok {
 		return false, 0, errParsing("[has_child] requires 'query'")
 	}
-	field, _, hasJoin := findJoinField(c.idx)
+	ignoreUnmapped, _ := bm["ignore_unmapped"].(bool)
+	field, relations, hasJoin := findJoinField(c.idx)
 	if !hasJoin {
-		return false, 0, errParsing("failed to create query: join field is not configured in mappings")
+		if ignoreUnmapped {
+			return false, 0, nil
+		}
+		return false, 0, joinError("has_child", "no join field has been configured")
 	}
-	best := 0.0
-	found := false
-	for _, id := range c.idx.Order {
-		doc, live := c.idx.Docs[id]
-		if !live {
-			continue
-		}
-		name, parent := joinParts(doc[field])
-		if parent != c.id {
-			continue
-		}
-		if childType != "" && name != childType {
-			continue
-		}
-		cc := newQueryCtxForDoc(c.idx, id, doc)
-		ok, sc, err := cc.eval(inner)
-		if err != nil {
-			return false, 0, err
-		}
-		if ok {
-			found = true
-			if sc > best {
-				best = sc
+	if childType != "" && !joinValidName(relations, childType) {
+		return false, 0, joinError("has_child",
+			"join field ["+field+"] doesn't hold ["+childType+"] as a child")
+	}
+	ctxs, scores, err := c.joinChildContexts(childType, inner)
+	if err != nil {
+		return false, 0, err
+	}
+	count := len(ctxs)
+	if minRaw, ok := toFloat(bm["min_children"]); ok && count < int(minRaw) {
+		return false, 0, nil
+	}
+	if maxRaw, ok := toFloat(bm["max_children"]); ok && count > int(maxRaw) {
+		return false, 0, nil
+	}
+	if count == 0 {
+		return false, 0, nil
+	}
+	scoreMode, _ := bm["score_mode"].(string)
+	if scoreMode == "" {
+		scoreMode = "none"
+	}
+	switch scoreMode {
+	case "max":
+		best := scores[0]
+		for _, s := range scores[1:] {
+			if s > best {
+				best = s
 			}
 		}
-	}
-	if found {
-		if _, ok := bm["score_mode"]; ok {
-			return true, best, nil
+		return true, best, nil
+	case "min":
+		worst := scores[0]
+		for _, s := range scores[1:] {
+			if s < worst {
+				worst = s
+			}
 		}
-		return true, 0, nil
+		return true, worst, nil
+	case "sum":
+		total := 0.0
+		for _, s := range scores {
+			total += s
+		}
+		return true, total, nil
+	case "avg":
+		total := 0.0
+		for _, s := range scores {
+			total += s
+		}
+		return true, total / float64(count), nil
 	}
-	return false, 0, nil
+	return true, 1, nil
 }
 
 func (c *queryCtx) evalHasParent(body any) (bool, float64, *apiError) {
@@ -582,11 +1013,22 @@ func (c *queryCtx) evalHasParent(body any) (bool, float64, *apiError) {
 	if !ok {
 		return false, 0, errParsing("[has_parent] requires 'query'")
 	}
-	field, _, hasJoin := findJoinField(c.idx)
+	ignoreUnmapped, _ := bm["ignore_unmapped"].(bool)
+	field, relations, hasJoin := findJoinField(c.idx)
 	if !hasJoin {
-		return false, 0, errParsing("failed to create query: join field is not configured in mappings")
+		if ignoreUnmapped {
+			return false, 0, nil
+		}
+		return false, 0, joinError("has_parent", "no join field has been configured")
+	}
+	if parentType != "" && !joinValidName(relations, parentType) {
+		return false, 0, joinError("has_parent",
+			"join field ["+field+"] doesn't hold ["+parentType+"] as a parent")
 	}
 	parentID := c.idx.Routing[c.id]
+	if parentID == "" {
+		_, parentID = joinParts(c.doc[field])
+	}
 	if parentID == "" {
 		return false, 0, nil
 	}
@@ -599,14 +1041,310 @@ func (c *queryCtx) evalHasParent(body any) (bool, float64, *apiError) {
 		return false, 0, nil
 	}
 	cc := newQueryCtxForDoc(c.idx, parentID, doc)
-	ok, _, err := cc.eval(inner)
+	ok, sc, err := cc.eval(inner)
 	if err != nil {
 		return false, 0, err
 	}
-	if ok {
-		return true, 1, nil
+	if !ok {
+		return false, 0, nil
 	}
-	return false, 0, nil
+	if scoreFlag, _ := bm["score"].(bool); scoreFlag {
+		return true, sc, nil
+	}
+	return true, 1, nil
+}
+
+func (c *queryCtx) evalParentId(body any) (bool, float64, *apiError) {
+	bm, ok := body.(map[string]any)
+	if !ok {
+		return false, 0, errParsing("[parent_id] query malformed")
+	}
+	childType, _ := bm["type"].(string)
+	parentID, _ := bm["id"].(string)
+	ignoreUnmapped, _ := bm["ignore_unmapped"].(bool)
+	field, relations, hasJoin := findJoinField(c.idx)
+	if !hasJoin {
+		if ignoreUnmapped {
+			return false, 0, nil
+		}
+		return false, 0, joinError("parent_id", "no join field has been configured")
+	}
+	name, parent := joinParts(c.doc[field])
+	if name != childType || parent != parentID {
+		return false, 0, nil
+	}
+	parentType := joinParentRelation(relations, childType)
+	df := 0
+	total := 0
+	for _, id := range c.idx.Order {
+		doc, live := c.idx.Docs[id]
+		if !live {
+			continue
+		}
+		n, p := joinParts(doc[field])
+		if n == "" {
+			continue
+		}
+		total++
+		if n == parentType && id == parentID {
+			df++
+		}
+		if p == parentID && n != "" {
+			df++
+		}
+	}
+	score := 1.0
+	if total > 0 && df > 0 {
+		idf := math.Log(1 + (float64(total)-float64(df)+0.5)/(float64(df)+0.5))
+		score = idf / (1 + 1.2)
+	}
+	return true, score, nil
+}
+
+func joinInnerSource(doc map[string]any, spec any) map[string]any {
+	body := map[string]any{"_source": spec}
+	inc, exc, omit, ok := sourceFilterFromBody(body)
+	if !ok || omit {
+		if omit {
+			return nil
+		}
+		return doc
+	}
+	return filterSourceDoc(doc, inc, exc)
+}
+
+func joinSortOutput(ctx *queryCtx, sp searchSortSpec) any {
+	if sp.field == "_score" {
+		return nil
+	}
+	vals, ok := ctx.values(sp.field)
+	if !ok || len(vals) == 0 {
+		return nil
+	}
+	return vals[0]
+}
+
+func joinInnerHitEntry(c *queryCtx, ctx *queryCtx, doc map[string]any, spec map[string]any, sortSpecs []searchSortSpec, score float64, includeRouting bool) (map[string]any, []any) {
+	entry := map[string]any{
+		"_index": c.idx.Name,
+		"_id":    ctx.id,
+	}
+	if includeRouting {
+		if rv := c.idx.Routing[ctx.id]; rv != "" {
+			entry["_routing"] = rv
+		}
+	}
+	var sortVals []any
+	if len(sortSpecs) > 0 {
+		sortVals = make([]any, 0, len(sortSpecs))
+		for _, sp := range sortSpecs {
+			sortVals = append(sortVals, joinSortOutput(ctx, sp))
+		}
+		entry["_score"] = nil
+	} else {
+		entry["_score"] = scoreJSON(score)
+	}
+	src := joinInnerSource(doc, spec["_source"])
+	if src != nil {
+		entry["_source"] = src
+	}
+	if len(sortVals) > 0 {
+		entry["sort"] = sortVals
+	}
+	return entry, sortVals
+}
+
+func joinInnerHitsSortAndPage(matched []map[string]any, sortVals [][]any, specs []searchSortSpec, from, size int) []any {
+	if len(specs) > 0 {
+		idx := make([]int, len(matched))
+		for i := range idx {
+			idx[i] = i
+		}
+		sort.SliceStable(idx, func(i, j int) bool {
+			a, b := idx[i], idx[j]
+			for k, sp := range specs {
+				cmp := nestedSortCompare(sortVals[a][k], sortVals[b][k])
+				if cmp != 0 {
+					if sp.desc {
+						return cmp > 0
+					}
+					return cmp < 0
+				}
+			}
+			return false
+		})
+		sortedHits := make([]map[string]any, len(matched))
+		sortedVals := make([][]any, len(sortVals))
+		for i, j := range idx {
+			sortedHits[i] = matched[j]
+			sortedVals[i] = sortVals[j]
+		}
+		matched, sortVals = sortedHits, sortedVals
+	}
+	if from > len(matched) {
+		from = len(matched)
+	}
+	end := from + size
+	if size < 0 || end > len(matched) {
+		end = len(matched)
+	}
+	if end < from {
+		end = from
+	}
+	hits := make([]any, 0, end-from)
+	for _, h := range matched[from:end] {
+		hits = append(hits, h)
+	}
+	return hits
+}
+
+func joinInnerHitsMaxScore(scores []float64, sorted bool) any {
+	if sorted || len(scores) == 0 {
+		return nil
+	}
+	m := scores[0]
+	for _, s := range scores[1:] {
+		if s > m {
+			m = s
+		}
+	}
+	return scoreJSON(m)
+}
+
+func collectJoinInnerHits(c *queryCtx, query map[string]any, omitScores bool) map[string]any {
+	out := map[string]any{}
+	collectJoinInnerHitsClause(c, query, omitScores, out)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func collectJoinInnerHitsClause(c *queryCtx, query map[string]any, omitScores bool, out map[string]any) {
+	for clause, raw := range query {
+		bm, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch clause {
+		case "has_child", "has_parent":
+			if spec, has := bm["inner_hits"]; has {
+				collectOneJoinInnerHits(c, clause, bm, spec, out)
+			}
+		case "bool":
+			for _, key := range []string{"must", "should", "filter", "must_not"} {
+				for _, q := range asQueryList(bm[key]) {
+					if qm, ok := q.(map[string]any); ok {
+						collectJoinInnerHitsClause(c, qm, omitScores, out)
+					}
+				}
+			}
+		case "constant_score":
+			if qm, ok := bm["filter"].(map[string]any); ok {
+				collectJoinInnerHitsClause(c, qm, omitScores, out)
+			}
+		case "dis_max":
+			for _, q := range asQueryList(bm["queries"]) {
+				if qm, ok := q.(map[string]any); ok {
+					collectJoinInnerHitsClause(c, qm, omitScores, out)
+				}
+			}
+		case "boosting":
+			for _, key := range []string{"positive", "negative"} {
+				if qm, ok := bm[key].(map[string]any); ok {
+					collectJoinInnerHitsClause(c, qm, omitScores, out)
+				}
+			}
+		case "function_score", "script_score":
+			if qm, ok := bm["query"].(map[string]any); ok {
+				collectJoinInnerHitsClause(c, qm, omitScores, out)
+			}
+		}
+	}
+}
+
+func collectOneJoinInnerHits(c *queryCtx, clause string, bm map[string]any, spec any, out map[string]any) {
+	specMap, _ := spec.(map[string]any)
+	if specMap == nil {
+		specMap = map[string]any{}
+	}
+	sortSpecs, _ := parseSortSpecs(specMap["sort"], "")
+	from := 0
+	if n, ok := toFloat(specMap["from"]); ok {
+		from = int(n)
+	}
+	size := 3
+	if n, ok := toFloat(specMap["size"]); ok {
+		size = int(n)
+	}
+	var name string
+	var hits []map[string]any
+	var sortVals [][]any
+	var scores []float64
+	if clause == "has_child" {
+		childType, _ := bm["type"].(string)
+		inner, _ := bm["query"].(map[string]any)
+		name = childType
+		ctxs, cscores, err := c.joinChildContexts(childType, inner)
+		if err != nil {
+			return
+		}
+		for i, ctx := range ctxs {
+			entry, sv := joinInnerHitEntry(c, ctx, ctx.doc, specMap, sortSpecs, cscores[i], true)
+			hits = append(hits, entry)
+			sortVals = append(sortVals, sv)
+			scores = append(scores, cscores[i])
+		}
+	} else {
+		parentType, _ := bm["parent_type"].(string)
+		if parentType == "" {
+			parentType, _ = bm["type"].(string)
+		}
+		inner, _ := bm["query"].(map[string]any)
+		name = parentType
+		field, _, hasJoin := findJoinField(c.idx)
+		if !hasJoin {
+			return
+		}
+		parentID := c.idx.Routing[c.id]
+		if parentID == "" {
+			_, parentID = joinParts(c.doc[field])
+		}
+		if parentID == "" {
+			return
+		}
+		doc, live := c.idx.Docs[parentID]
+		if !live {
+			return
+		}
+		pctx := newQueryCtxForDoc(c.idx, parentID, doc)
+		ok, sc, err := pctx.eval(inner)
+		if err != nil || !ok {
+			return
+		}
+		entry, sv := joinInnerHitEntry(c, pctx, doc, specMap, sortSpecs, sc, false)
+		hits = append(hits, entry)
+		sortVals = append(sortVals, sv)
+		scores = append(scores, sc)
+	}
+	if n, _ := specMap["name"].(string); n != "" {
+		name = n
+	}
+	total := len(hits)
+	page := joinInnerHitsSortAndPage(hits, sortVals, sortSpecs, from, size)
+	var maxScore any
+	if clause == "has_child" {
+		maxScore = joinInnerHitsMaxScore(scores, len(sortSpecs) > 0)
+	} else if len(sortSpecs) > 0 {
+		maxScore = nil
+	} else {
+		maxScore = joinInnerHitsMaxScore(scores, false)
+	}
+	out[name] = map[string]any{"hits": map[string]any{
+		"total":     map[string]any{"value": total, "relation": "eq"},
+		"max_score": maxScore,
+		"hits":      page,
+	}}
 }
 
 // ---------------------------------------------------------------------------
@@ -620,6 +1358,15 @@ func geoPointOf(v any) (float64, float64, bool) {
 		lon, ok2 := toFloat(t["lon"])
 		if ok1 && ok2 {
 			return lat, lon, true
+		}
+		if typ, _ := t["type"].(string); strings.EqualFold(typ, "point") {
+			if coords, ok := t["coordinates"].([]any); ok && len(coords) >= 2 {
+				lon, ok1 := toFloat(coords[0])
+				lat, ok2 := toFloat(coords[1])
+				if ok1 && ok2 {
+					return lat, lon, true
+				}
+			}
 		}
 	case []any:
 		if len(t) == 2 {
@@ -651,6 +1398,9 @@ func geoPointOf(v any) (float64, float64, bool) {
 					return lat, lon, true
 				}
 			}
+		}
+		if lat, lon, ok := decodeGeohash(t); ok {
+			return lat, lon, true
 		}
 	}
 	return 0, 0, false
@@ -712,6 +1462,27 @@ func haversineMeters(lat1, lon1, lat2, lon2 float64) float64 {
 	return 2 * r * math.Asin(math.Sqrt(a))
 }
 
+func geoFieldTypeOf(idx *Index, field string) (string, bool) {
+	def, ok := mappingFieldDef(idx, field)
+	if !ok {
+		return "", false
+	}
+	t, _ := def["type"].(string)
+	return t, true
+}
+
+func geoQueryShardError(reason string) *apiError {
+	return matchSearchError("query_shard_exception", reason)
+}
+
+func geoFloatString(f float64) string {
+	s := strconv.FormatFloat(f, 'f', -1, 64)
+	if !strings.Contains(s, ".") {
+		s += ".0"
+	}
+	return s
+}
+
 func (c *queryCtx) evalGeoDistance(body any) (bool, float64, *apiError) {
 	bm, ok := body.(map[string]any)
 	if !ok {
@@ -722,22 +1493,53 @@ func (c *queryCtx) evalGeoDistance(body any) (bool, float64, *apiError) {
 		return false, 0, errParsing("[geo_distance] requires 'distance'")
 	}
 	field := ""
-	var point map[string]any
+	var pointRaw any
 	for k, v := range bm {
 		if k == "distance" || k == "distance_type" || k == "boost" || k == "_name" ||
 			k == "validation_method" || k == "ignore_unmapped" {
 			continue
 		}
 		field = k
-		point, _ = v.(map[string]any)
+		pointRaw = v
 		break
 	}
 	if field == "" {
 		return false, 0, errParsing("[geo_distance] requires a field")
 	}
-	plat, plon, ok := geoPointOf(point)
+	ignoreUnmapped, _ := bm["ignore_unmapped"].(bool)
+	ftype, mapped := geoFieldTypeOf(c.idx, field)
+	if !mapped {
+		if ignoreUnmapped {
+			return false, 0, nil
+		}
+		return false, 0, geoQueryShardError("failed to find geo field [" + field + "]")
+	}
+	if ftype != "geo_point" && ftype != "geo_shape" {
+		return false, 0, geoQueryShardError("type [" + ftype + "] for field [" + field +
+			"] is not supported for [geo_distance] queries. Must be one of [geo_point] or [geo_shape]")
+	}
+	plat, plon, ok := geoPointOf(pointRaw)
 	if !ok {
 		return false, 0, errParsing("failed to parse geo_distance point")
+	}
+	validationMethod, _ := bm["validation_method"].(string)
+	if plat < -90 || plat > 90 {
+		latText := geoFloatString(plat)
+		if strings.EqualFold(validationMethod, "IGNORE_MALFORMED") {
+			reason := "failed to create query: invalid latitude " + latText +
+				"; must be between -90.0 and 90.0"
+			e := geoQueryShardError(reason)
+			e.CausedBy = &apiError{Type: "illegal_argument_exception", Status: 400,
+				Reason: "invalid latitude " + latText + "; must be between -90.0 and 90.0"}
+			return false, 0, e
+		}
+		e := geoQueryShardError("couldn't validate latitude/ longitude values")
+		e.CausedBy = &apiError{Type: "query_shard_exception", Status: 400,
+			Reason: "couldn't validate latitude/ longitude values",
+			CausedBy: &apiError{Type: "query_validation_exception", Status: 400,
+				Reason: "Validation Failed: 1: [geo_distance] center point latitude is invalid: " +
+					latText + ";"}}
+		return false, 0, e
 	}
 	boost := 1.0
 	if b, ok := toFloat(bm["boost"]); ok {
@@ -759,6 +1561,29 @@ func (c *queryCtx) evalGeoDistance(body any) (bool, float64, *apiError) {
 	return false, 0, nil
 }
 
+func parseWktBBox(s string) (top, left, bottom, right float64, ok bool) {
+	u := strings.ToUpper(strings.TrimSpace(s))
+	if !strings.HasPrefix(u, "BBOX") {
+		return 0, 0, 0, 0, false
+	}
+	body := strings.TrimSpace(strings.TrimPrefix(u, "BBOX"))
+	body = strings.TrimPrefix(body, "(")
+	body = strings.TrimSuffix(body, ")")
+	parts := strings.Split(body, ",")
+	if len(parts) != 4 {
+		return 0, 0, 0, 0, false
+	}
+	nums := make([]float64, 4)
+	for i, p := range parts {
+		f, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
+		if err != nil {
+			return 0, 0, 0, 0, false
+		}
+		nums[i] = f
+	}
+	return nums[2], nums[0], nums[3], nums[1], true
+}
+
 func (c *queryCtx) evalGeoBoundingBox(body any) (bool, float64, *apiError) {
 	bm, ok := body.(map[string]any)
 	if !ok {
@@ -777,23 +1602,119 @@ func (c *queryCtx) evalGeoBoundingBox(body any) (bool, float64, *apiError) {
 	if field == "" || spec == nil {
 		return false, 0, errParsing("[geo_bounding_box] requires a field")
 	}
+	ignoreUnmapped, _ := bm["ignore_unmapped"].(bool)
+	ftype, mapped := geoFieldTypeOf(c.idx, field)
+	if !mapped {
+		if ignoreUnmapped {
+			return false, 0, nil
+		}
+		return false, 0, geoQueryShardError("failed to find geo field [" + field + "]")
+	}
+	if ftype != "geo_point" && ftype != "geo_shape" {
+		return false, 0, geoQueryShardError("type [" + ftype + "] for field [" + field +
+			"] is not supported for [geo_bounding_box] queries. Must be one of [geo_point] or [geo_shape]")
+	}
 	var top, left, bottom, right float64
 	have := false
-	if tl, ok := spec["top_left"].(map[string]any); ok {
-		top, _ = toFloat(tl["lat"])
-		left, _ = toFloat(tl["lon"])
-		have = true
+	corner := func(key string) (float64, float64, bool) {
+		v, ok := spec[key]
+		if !ok {
+			return 0, 0, false
+		}
+		return geoPointOf(v)
 	}
-	if br, ok := spec["bottom_right"].(map[string]any); ok {
-		bottom, _ = toFloat(br["lat"])
-		right, _ = toFloat(br["lon"])
-		have = true
+	if lat, lon, ok := corner("top_left"); ok {
+		top, left, have = lat, lon, true
+	}
+	if lat, lon, ok := corner("bottom_right"); ok {
+		bottom, right = lat, lon
+	}
+	if lat, lon, ok := corner("top_right"); ok {
+		top, right, have = lat, lon, true
+	}
+	if lat, lon, ok := corner("bottom_left"); ok {
+		bottom, left = lat, lon
+	}
+	if !have {
+		if w, ok := spec["wkt"].(string); ok {
+			t, l, b, r, ok2 := parseWktBBox(w)
+			if ok2 {
+				top, left, bottom, right, have = t, l, b, r, true
+			}
+		}
 	}
 	if !have {
 		top, _ = toFloat(spec["top"])
 		left, _ = toFloat(spec["left"])
 		bottom, _ = toFloat(spec["bottom"])
 		right, _ = toFloat(spec["right"])
+	}
+	if top < bottom {
+		return false, 0, &apiError{Type: "illegal_argument_exception", Status: 400,
+			Reason: "top is below bottom corner: " + formatNumber(top) + " vs. " + formatNumber(bottom)}
+	}
+	boost := 1.0
+	if b, ok := toFloat(bm["boost"]); ok {
+		boost = b
+	}
+	vals, present := c.values(field)
+	if !present {
+		return false, 0, nil
+	}
+	wrap := left > right
+	for _, v := range vals {
+		lat, lon, ok := geoPointOf(v)
+		if !ok {
+			continue
+		}
+		if lat <= top && lat >= bottom && (wrap && (lon >= left || lon <= right) || !wrap && lon >= left && lon <= right) {
+			return true, boost, nil
+		}
+	}
+	return false, 0, nil
+}
+
+func (c *queryCtx) evalGeoPolygon(body any) (bool, float64, *apiError) {
+	bm, ok := body.(map[string]any)
+	if !ok {
+		return false, 0, errParsing("[geo_polygon] query malformed")
+	}
+	field := ""
+	var spec map[string]any
+	for k, v := range bm {
+		if k == "boost" || k == "_name" || k == "validation_method" || k == "ignore_unmapped" {
+			continue
+		}
+		field = k
+		spec, _ = v.(map[string]any)
+		break
+	}
+	if field == "" || spec == nil {
+		return false, 0, errParsing("[geo_polygon] requires a field")
+	}
+	ignoreUnmapped, _ := bm["ignore_unmapped"].(bool)
+	ftype, mapped := geoFieldTypeOf(c.idx, field)
+	if !mapped {
+		if ignoreUnmapped {
+			return false, 0, nil
+		}
+		return false, 0, geoQueryShardError("failed to find geo field [" + field + "]")
+	}
+	if ftype != "geo_point" && ftype != "geo_shape" {
+		return false, 0, geoQueryShardError("type [" + ftype + "] for field [" + field +
+			"] is not supported for [geo_polygon] queries. Must be one of [geo_point] or [geo_shape]")
+	}
+	pts, _ := spec["points"].([]any)
+	ring := make([][2]float64, 0, len(pts))
+	for _, p := range pts {
+		lat, lon, ok := geoPointOf(p)
+		if !ok {
+			return false, 0, errParsing("failed to parse geo_polygon point")
+		}
+		ring = append(ring, [2]float64{lon, lat})
+	}
+	if len(ring) < 3 {
+		return false, 0, errParsing("failed to parse geo_polygon")
 	}
 	boost := 1.0
 	if b, ok := toFloat(bm["boost"]); ok {
@@ -808,11 +1729,24 @@ func (c *queryCtx) evalGeoBoundingBox(body any) (bool, float64, *apiError) {
 		if !ok {
 			continue
 		}
-		if lat <= top && lat >= bottom && lon >= left && lon <= right {
+		if pointInRing(lon, lat, ring) {
 			return true, boost, nil
 		}
 	}
 	return false, 0, nil
+}
+
+func pointInRing(lon, lat float64, ring [][2]float64) bool {
+	inside := false
+	n := len(ring)
+	for i, j := 0, n-1; i < n; j, i = i, i+1 {
+		xi, yi := ring[i][0], ring[i][1]
+		xj, yj := ring[j][0], ring[j][1]
+		if (yi > lat) != (yj > lat) && lon < (xj-xi)*(lat-yi)/(yj-yi)+xi {
+			inside = !inside
+		}
+	}
+	return inside
 }
 
 type geoShape struct {
@@ -821,30 +1755,58 @@ type geoShape struct {
 	radiusM    float64
 	top, left  float64
 	bot, right float64
-	points     [][2]float64 // lat, lon
+	points     [][2]float64 // lon, lat
+}
+
+func shapeCoordPair(v any) (float64, float64, bool) {
+	arr, ok := v.([]any)
+	if !ok || len(arr) < 2 {
+		return 0, 0, false
+	}
+	lon, ok1 := toFloat(arr[0])
+	lat, ok2 := toFloat(arr[1])
+	return lon, lat, ok1 && ok2
+}
+
+func parseWktNumbers(s string) []float64 {
+	repl := strings.NewReplacer("(", " ", ")", " ", ",", " ")
+	fields := strings.Fields(repl.Replace(s))
+	out := make([]float64, 0, len(fields))
+	for _, f := range fields {
+		n, err := strconv.ParseFloat(f, 64)
+		if err != nil {
+			return nil
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 func parseGeoShape(v any) (*geoShape, bool) {
+	if s, ok := v.(string); ok {
+		return parseWktGeoShape(s)
+	}
 	m, ok := v.(map[string]any)
 	if !ok {
 		return nil, false
 	}
 	typ, _ := m["type"].(string)
-	gs := &geoShape{typ: typ}
-	switch typ {
+	gs := &geoShape{typ: strings.ToLower(typ)}
+	switch gs.typ {
 	case "point":
-		var coords []any
-		switch c := m["coordinates"].(type) {
-		case []any:
-			coords = c
-		case string:
-			gs.lat, gs.lon, _ = geoPointOf(c)
+		if c, ok := m["coordinates"].(string); ok {
+			lat, lon, ok := geoPointOf(c)
+			if !ok {
+				return nil, false
+			}
+			gs.lat, gs.lon = lat, lon
 			return gs, true
 		}
-		if len(coords) >= 2 {
-			gs.lon, _ = toFloat(coords[0])
-			gs.lat, _ = toFloat(coords[1])
+		lon, lat, ok := shapeCoordPair(m["coordinates"])
+		if !ok {
+			return nil, false
 		}
+		gs.lon, gs.lat = lon, lat
 		return gs, true
 	case "circle":
 		if r, ok := m["radius"].(string); ok {
@@ -852,73 +1814,286 @@ func parseGeoShape(v any) (*geoShape, bool) {
 		} else if r, ok := toFloat(m["radius"]); ok {
 			gs.radiusM = r
 		}
-		if coords, ok := m["coordinates"].([]any); ok && len(coords) >= 2 {
-			gs.lon, _ = toFloat(coords[0])
-			gs.lat, _ = toFloat(coords[1])
+		lon, lat, ok := shapeCoordPair(m["coordinates"])
+		if !ok {
+			return nil, false
 		}
+		gs.lon, gs.lat = lon, lat
 		return gs, true
 	case "envelope":
-		if coords, ok := m["coordinates"].([]any); ok {
-			if len(coords) >= 2 {
-				if tl, ok := coords[0].([]any); ok && len(tl) >= 2 {
-					gs.left, _ = toFloat(tl[0])
-					gs.top, _ = toFloat(tl[1])
-				}
-				if br, ok := coords[1].([]any); ok && len(br) >= 2 {
-					gs.right, _ = toFloat(br[0])
-					gs.bot, _ = toFloat(br[1])
-				}
-			}
+		coords, _ := m["coordinates"].([]any)
+		if len(coords) < 2 {
+			return nil, false
 		}
+		left, top, ok1 := shapeCoordPair(coords[0])
+		right, bot, ok2 := shapeCoordPair(coords[1])
+		if !ok1 || !ok2 {
+			return nil, false
+		}
+		gs.left, gs.top, gs.right, gs.bot = left, top, right, bot
 		return gs, true
 	case "polygon":
-		if rings, ok := m["coordinates"].([]any); ok && len(rings) > 0 {
-			if ring, ok := rings[0].([]any); ok {
-				for _, pt := range ring {
-					if arr, ok := pt.([]any); ok && len(arr) >= 2 {
-						lon, _ := toFloat(arr[0])
-						lat, _ := toFloat(arr[1])
-						gs.points = append(gs.points, [2]float64{lat, lon})
-					}
-				}
+		rings, _ := m["coordinates"].([]any)
+		if len(rings) == 0 {
+			return nil, false
+		}
+		ring, _ := rings[0].([]any)
+		for _, pt := range ring {
+			lon, lat, ok := shapeCoordPair(pt)
+			if ok {
+				gs.points = append(gs.points, [2]float64{lon, lat})
 			}
 		}
-		return gs, true
+		return gs, len(gs.points) >= 3
+	case "linestring":
+		coords, _ := m["coordinates"].([]any)
+		for _, pt := range coords {
+			lon, lat, ok := shapeCoordPair(pt)
+			if ok {
+				gs.points = append(gs.points, [2]float64{lon, lat})
+			}
+		}
+		return gs, len(gs.points) >= 2
+	case "multipoint":
+		coords, _ := m["coordinates"].([]any)
+		for _, pt := range coords {
+			lon, lat, ok := shapeCoordPair(pt)
+			if ok {
+				gs.points = append(gs.points, [2]float64{lon, lat})
+			}
+		}
+		return gs, len(gs.points) > 0
+	case "geometrycollection":
+		geoms, _ := m["geometries"].([]any)
+		if len(geoms) == 0 {
+			return nil, false
+		}
+		gs.typ = "multipoint"
+		for _, g := range geoms {
+			sub, ok := parseGeoShape(g)
+			if !ok {
+				return nil, false
+			}
+			gs.points = append(gs.points, shapeVertices(sub)...)
+		}
+		return gs, len(gs.points) > 0
 	}
 	return nil, false
 }
 
-func shapeContains(gs *geoShape, lat, lon float64) bool {
-	switch gs.typ {
-	case "point", "envelope", "circle", "polygon":
-	default:
-		return false
+func parseWktGeoShape(s string) (*geoShape, bool) {
+	u := strings.ToUpper(strings.TrimSpace(s))
+	switch {
+	case strings.HasPrefix(u, "POINT"):
+		nums := parseWktNumbers(strings.TrimSpace(s[len("POINT"):]))
+		if len(nums) < 2 {
+			return nil, false
+		}
+		return &geoShape{typ: "point", lon: nums[0], lat: nums[1]}, true
+	case strings.HasPrefix(u, "BBOX"):
+		top, left, bottom, right, ok := parseWktBBox(s)
+		if !ok {
+			return nil, false
+		}
+		return &geoShape{typ: "envelope", top: top, left: left, bot: bottom, right: right}, true
+	case strings.HasPrefix(u, "MULTIPOINT"):
+		body := strings.TrimSpace(s[len("MULTIPOINT"):])
+		body = strings.TrimSpace(strings.TrimPrefix(body, "("))
+		body = strings.TrimSpace(strings.TrimSuffix(body, ")"))
+		gs := &geoShape{typ: "multipoint"}
+		for _, pt := range strings.Split(body, ",") {
+			nums := parseWktNumbers(pt)
+			if len(nums) >= 2 {
+				gs.points = append(gs.points, [2]float64{nums[0], nums[1]})
+			}
+		}
+		return gs, len(gs.points) > 0
+	case strings.HasPrefix(u, "POLYGON"):
+		nums := parseWktNumbers(strings.TrimSpace(s[len("POLYGON"):]))
+		gs := &geoShape{typ: "polygon"}
+		for i := 0; i+1 < len(nums); i += 2 {
+			gs.points = append(gs.points, [2]float64{nums[i], nums[i+1]})
+		}
+		return gs, len(gs.points) >= 3
+	case strings.HasPrefix(u, "LINESTRING"):
+		nums := parseWktNumbers(strings.TrimSpace(s[len("LINESTRING"):]))
+		gs := &geoShape{typ: "linestring"}
+		for i := 0; i+1 < len(nums); i += 2 {
+			gs.points = append(gs.points, [2]float64{nums[i], nums[i+1]})
+		}
+		return gs, len(gs.points) >= 2
 	}
-	return false
+	return nil, false
 }
 
-func shapeIntersects(gs *geoShape, lat, lon float64) bool {
+func shapeContainsPoint(gs *geoShape, lon, lat float64) bool {
 	switch gs.typ {
 	case "point":
-		return lat == gs.lat && lon == gs.lon
+		return math.Abs(gs.lon-lon) < 1e-9 && math.Abs(gs.lat-lat) < 1e-9
 	case "envelope":
 		return lat <= gs.top && lat >= gs.bot && lon >= gs.left && lon <= gs.right
 	case "circle":
 		return haversineMeters(gs.lat, gs.lon, lat, lon) <= gs.radiusM
 	case "polygon":
-		inside := false
-		n := len(gs.points)
-		for i, j := 0, n-1; i < n; j, i = i, i+1 {
-			yi, xi := gs.points[i][0], gs.points[i][1]
-			yj, xj := gs.points[j][0], gs.points[j][1]
-			if (yi > lat) != (yj > lat) &&
-				lon < (xj-xi)*(lat-yi)/(yj-yi)+xi {
-				inside = !inside
+		return pointInRing(lon, lat, gs.points)
+	case "linestring":
+		for i := 0; i+1 < len(gs.points); i++ {
+			if pointOnSegment(lon, lat, gs.points[i], gs.points[i+1]) {
+				return true
 			}
 		}
-		return inside
+		return false
+	case "multipoint":
+		for _, p := range gs.points {
+			if math.Abs(p[0]-lon) < 1e-9 && math.Abs(p[1]-lat) < 1e-9 {
+				return true
+			}
+		}
 	}
 	return false
+}
+
+func pointOnSegment(px, py float64, a, b [2]float64) bool {
+	cross := (b[0]-a[0])*(py-a[1]) - (b[1]-a[1])*(px-a[0])
+	if math.Abs(cross) > 1e-9 {
+		return false
+	}
+	if px < math.Min(a[0], b[0])-1e-9 || px > math.Max(a[0], b[0])+1e-9 {
+		return false
+	}
+	if py < math.Min(a[1], b[1])-1e-9 || py > math.Max(a[1], b[1])+1e-9 {
+		return false
+	}
+	return true
+}
+
+func shapeVertices(gs *geoShape) [][2]float64 {
+	switch gs.typ {
+	case "point":
+		return [][2]float64{{gs.lon, gs.lat}}
+	case "envelope":
+		return [][2]float64{{gs.left, gs.top}, {gs.right, gs.top}, {gs.right, gs.bot}, {gs.left, gs.bot}}
+	case "circle":
+		return [][2]float64{{gs.lon, gs.lat}}
+	case "polygon", "linestring", "multipoint":
+		return gs.points
+	}
+	return nil
+}
+
+func shapeEdges(gs *geoShape) [][2][2]float64 {
+	pts := shapeVertices(gs)
+	if gs.typ == "envelope" || gs.typ == "polygon" || gs.typ == "circle" {
+		if len(pts) >= 3 {
+			pts = append(append([][2]float64{}, pts...), pts[0])
+		}
+	}
+	var out [][2][2]float64
+	for i := 0; i+1 < len(pts); i++ {
+		out = append(out, [2][2]float64{pts[i], pts[i+1]})
+	}
+	return out
+}
+
+func segmentsIntersect(a, b, c, d [2]float64) bool {
+	orient := func(p, q, r [2]float64) float64 {
+		return (q[0]-p[0])*(r[1]-p[1]) - (q[1]-p[1])*(r[0]-p[0])
+	}
+	o1 := orient(a, b, c)
+	o2 := orient(a, b, d)
+	o3 := orient(c, d, a)
+	o4 := orient(c, d, b)
+	if (o1 > 0 && o2 < 0 || o1 < 0 && o2 > 0) && (o3 > 0 && o4 < 0 || o3 < 0 && o4 > 0) {
+		return true
+	}
+	if math.Abs(o1) < 1e-9 && pointOnSegment(c[0], c[1], a, b) {
+		return true
+	}
+	if math.Abs(o2) < 1e-9 && pointOnSegment(d[0], d[1], a, b) {
+		return true
+	}
+	if math.Abs(o3) < 1e-9 && pointOnSegment(a[0], a[1], c, d) {
+		return true
+	}
+	if math.Abs(o4) < 1e-9 && pointOnSegment(b[0], b[1], c, d) {
+		return true
+	}
+	return false
+}
+
+func shapeIntersectsShape(a, b *geoShape) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	if a.typ == "point" {
+		return shapeContainsPoint(b, a.lon, a.lat)
+	}
+	if b.typ == "point" {
+		return shapeContainsPoint(a, b.lon, b.lat)
+	}
+	for _, p := range shapeVertices(a) {
+		if shapeContainsPoint(b, p[0], p[1]) {
+			return true
+		}
+	}
+	for _, p := range shapeVertices(b) {
+		if shapeContainsPoint(a, p[0], p[1]) {
+			return true
+		}
+	}
+	ae := shapeEdges(a)
+	be := shapeEdges(b)
+	for _, e1 := range ae {
+		for _, e2 := range be {
+			if segmentsIntersect(e1[0], e1[1], e2[0], e2[1]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func shapeContainsShape(outer, inner *geoShape) bool {
+	if outer == nil || inner == nil {
+		return false
+	}
+	if inner.typ == "point" {
+		return shapeContainsPoint(outer, inner.lon, inner.lat)
+	}
+	for _, p := range shapeVertices(inner) {
+		if !shapeContainsPoint(outer, p[0], p[1]) {
+			return false
+		}
+	}
+	return true
+}
+
+func lookupIndexedShape(spec map[string]any) (any, bool) {
+	idxName, _ := spec["index"].(string)
+	id, _ := spec["id"].(string)
+	path, _ := spec["path"].(string)
+	if globalServer == nil || idxName == "" || id == "" {
+		return nil, false
+	}
+	globalServer.mu.RLock()
+	defer globalServer.mu.RUnlock()
+	idx, ok := globalServer.indices[idxName]
+	if !ok {
+		return nil, false
+	}
+	doc, ok := idx.Docs[id]
+	if !ok {
+		return nil, false
+	}
+	var cur any = doc
+	for _, part := range strings.Split(path, ".") {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		cur = m[part]
+	}
+	return cur, cur != nil
 }
 
 func (c *queryCtx) evalGeoShape(body any) (bool, float64, *apiError) {
@@ -927,26 +2102,54 @@ func (c *queryCtx) evalGeoShape(body any) (bool, float64, *apiError) {
 		return false, 0, errParsing("[geo_shape] query malformed")
 	}
 	field := ""
-	var shapeRaw any
+	var spec map[string]any
 	for k, v := range bm {
 		if k == "boost" || k == "_name" || k == "ignore_unmapped" || k == "relation" {
 			continue
 		}
 		field = k
-		shapeRaw = v
+		spec, _ = v.(map[string]any)
 		break
 	}
-	if field == "" {
+	if field == "" || spec == nil {
 		return false, 0, errParsing("[geo_shape] requires a field")
+	}
+	ignoreUnmapped, _ := bm["ignore_unmapped"].(bool)
+	ftype, mapped := geoFieldTypeOf(c.idx, field)
+	if !mapped {
+		if ignoreUnmapped {
+			return false, 0, nil
+		}
+		return false, 0, geoQueryShardError("failed to find type for field [" + field + "]")
+	}
+	if ftype != "geo_point" && ftype != "geo_shape" {
+		return false, 0, geoQueryShardError("type [" + ftype + "] for field [" + field +
+			"] is not supported for [geo_shape] queries. Must be one of [geo_point] or [geo_shape]")
+	}
+	var shapeRaw any
+	if s, has := spec["shape"]; has {
+		shapeRaw = s
+	} else if is, has := spec["indexed_shape"].(map[string]any); has {
+		v, ok := lookupIndexedShape(is)
+		if !ok {
+			return false, 0, errParsing("failed to load indexed shape")
+		}
+		shapeRaw = v
+	} else {
+		shapeRaw = spec
 	}
 	qs, ok := parseGeoShape(shapeRaw)
 	if !ok {
 		return false, 0, errParsing("failed to parse geo_shape")
 	}
-	relation, _ := bm["relation"].(string)
+	relation, _ := spec["relation"].(string)
+	if relation == "" {
+		relation, _ = bm["relation"].(string)
+	}
 	if relation == "" {
 		relation = "INTERSECTS"
 	}
+	relation = strings.ToUpper(relation)
 	boost := 1.0
 	if b, ok := toFloat(bm["boost"]); ok {
 		boost = b
@@ -956,59 +2159,61 @@ func (c *queryCtx) evalGeoShape(body any) (bool, float64, *apiError) {
 		return false, 0, nil
 	}
 	for _, v := range vals {
-		// doc stores a shape or a point
-		var lat, lon float64
-		valid := false
-		if ds, ok := parseGeoShape(v); ok {
-			switch ds.typ {
-			case "point":
-				lat, lon, valid = ds.lat, ds.lon, true
-			case "envelope", "polygon", "circle":
-				// approximate: compare against representative points
-				pts := shapePoints(ds)
-				for _, p := range pts {
-					if shapeIntersects(qs, p[0], p[1]) {
-						if strings.ToUpper(relation) != "DISJOINT" && strings.ToUpper(relation) != "WITHIN" {
-							return true, boost, nil
-						}
-					}
-				}
+		var ds *geoShape
+		if ftype == "geo_point" {
+			lat, lon, ok := geoPointOf(v)
+			if !ok {
 				continue
 			}
-		} else if lat, lon, valid = geoPointOf(v); !valid {
-			continue
+			ds = &geoShape{typ: "point", lat: lat, lon: lon}
+		} else {
+			var ok bool
+			ds, ok = parseGeoShape(v)
+			if !ok {
+				continue
+			}
 		}
-		switch strings.ToUpper(relation) {
+		matched := false
+		switch relation {
 		case "DISJOINT":
-			if !shapeIntersects(qs, lat, lon) {
-				return true, boost, nil
-			}
+			matched = !shapeIntersectsShape(qs, ds)
+		case "WITHIN":
+			matched = shapeContainsShape(qs, ds)
+		case "CONTAINS":
+			matched = shapeContainsShape(ds, qs)
 		default:
-			if shapeIntersects(qs, lat, lon) {
-				return true, boost, nil
-			}
+			matched = shapeIntersectsShape(qs, ds)
+		}
+		if matched {
+			return true, boost, nil
 		}
 	}
 	return false, 0, nil
 }
 
-func shapePoints(gs *geoShape) [][2]float64 {
-	switch gs.typ {
-	case "point":
-		return [][2]float64{{gs.lat, gs.lon}}
-	case "envelope":
-		return [][2]float64{{gs.top, gs.left}, {gs.bot, gs.right}}
-	case "circle":
-		return [][2]float64{{gs.lat, gs.lon}}
-	case "polygon":
-		return gs.points
-	}
-	return nil
-}
-
 // ---------------------------------------------------------------------------
 // rank_feature / distance_feature
 // ---------------------------------------------------------------------------
+
+func rankFeatureFieldDef(idx *Index, field string) (map[string]any, string) {
+	if def, ok := mappingFieldDef(idx, field); ok {
+		t, _ := def["type"].(string)
+		if t == "rank_feature" || t == "rank_features" {
+			return def, t
+		}
+		return def, t
+	}
+	for i := strings.LastIndex(field, "."); i > 0; i = strings.LastIndex(field[:i], ".") {
+		parent := field[:i]
+		if def, ok := mappingFieldDef(idx, parent); ok {
+			t, _ := def["type"].(string)
+			if t == "rank_features" {
+				return def, t
+			}
+		}
+	}
+	return nil, ""
+}
 
 func (c *queryCtx) evalRankFeature(body any) (bool, float64, *apiError) {
 	bm, ok := body.(map[string]any)
@@ -1020,6 +2225,29 @@ func (c *queryCtx) evalRankFeature(body any) (bool, float64, *apiError) {
 	if b, ok := toFloat(bm["boost"]); ok {
 		boost = b
 	}
+	fnCount := 0
+	for _, k := range []string{"saturation", "log", "sigmoid", "linear"} {
+		if _, has := bm[k]; has {
+			fnCount++
+		}
+	}
+	if fnCount > 1 {
+		return false, 0, &apiError{Type: "x_content_parse_exception", Status: 400,
+			Reason: "Failed to build [feature] after last required field arrived",
+			CausedBy: &apiError{Type: "illegal_argument_exception", Status: 400,
+				Reason: "Can only specify one of [log], [saturation], [sigmoid] and [linear]"}}
+	}
+	def, ftype := rankFeatureFieldDef(c.idx, field)
+	if ftype != "rank_feature" && ftype != "rank_features" {
+		if ftype == "" {
+			ftype = "unmapped"
+		}
+		reason := "[rank_feature] query only works on [rank_feature] fields and features of " +
+			"[rank_features] fields, not [" + ftype + "]"
+		e := geoQueryShardError("failed to create query: " + reason)
+		e.CausedBy = &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "failed to create query: " + reason}
+		return false, 0, e
+	}
 	vals, present := c.values(field)
 	if !present {
 		return false, 0, nil
@@ -1028,9 +2256,16 @@ func (c *queryCtx) evalRankFeature(body any) (bool, float64, *apiError) {
 	if !ok {
 		return false, 0, nil
 	}
+	if def != nil {
+		if pos, has := def["positive_score_impact"].(bool); has && !pos {
+			if f > 0 {
+				f = 1 / f
+			}
+		}
+	}
 	sc := f
 	if sat, ok := bm["saturation"].(map[string]any); ok {
-		pivot := 1.0
+		pivot := 3.0
 		if p, ok := toFloat(sat["pivot"]); ok {
 			pivot = p
 		}
@@ -1040,13 +2275,65 @@ func (c *queryCtx) evalRankFeature(body any) (bool, float64, *apiError) {
 		if s, ok := toFloat(lg["scaling_factor"]); ok {
 			sc *= s
 		}
+	} else if sg, ok := bm["sigmoid"].(map[string]any); ok {
+		pivot := 1.0
+		exponent := 1.0
+		if p, ok := toFloat(sg["pivot"]); ok {
+			pivot = p
+		}
+		if e, ok := toFloat(sg["exponent"]); ok {
+			exponent = e
+		}
+		fe := math.Pow(f, exponent)
+		pe := math.Pow(pivot, exponent)
+		sc = fe / (fe + pe)
 	} else if ln, ok := bm["linear"].(map[string]any); ok {
 		sc = f
 		if s, ok := toFloat(ln["scaling_factor"]); ok {
 			sc *= s
 		}
+	} else if ftype == "rank_features" {
+		sc = f / (f + 5)
+	} else {
+		sc = f / (f + 1)
 	}
 	return true, boost * sc, nil
+}
+
+func datePivotMillis(v any) (float64, bool) {
+	if f, ok := toFloat(v); ok {
+		return f, true
+	}
+	s, ok := v.(string)
+	if !ok {
+		return 0, false
+	}
+	s = strings.TrimSpace(strings.ToLower(s))
+	i := 0
+	for i < len(s) && (s[i] >= '0' && s[i] <= '9' || s[i] == '.' || s[i] == '-' || s[i] == '+') {
+		i++
+	}
+	num, err := strconv.ParseFloat(strings.TrimSpace(s[:i]), 64)
+	if err != nil {
+		return 0, false
+	}
+	unit := strings.TrimSpace(s[i:])
+	mult := 0.0
+	switch unit {
+	case "", "ms":
+		mult = 1
+	case "s":
+		mult = 1000
+	case "m":
+		mult = 60000
+	case "h":
+		mult = 3600000
+	case "d":
+		mult = 86400000
+	default:
+		return 0, false
+	}
+	return num * mult, true
 }
 
 func (c *queryCtx) evalDistanceFeature(body any) (bool, float64, *apiError) {
@@ -1059,22 +2346,28 @@ func (c *queryCtx) evalDistanceFeature(body any) (bool, float64, *apiError) {
 	if b, ok := toFloat(bm["boost"]); ok {
 		boost = b
 	}
-	pivot := 1.0
-	if p, ok := parseDistanceMeters(bm["pivot"]); ok {
-		pivot = p
+	def, _ := mappingFieldDef(c.idx, field)
+	ftype, _ := def["type"].(string)
+	if ftype != "date" && ftype != "date_nanos" && ftype != "geo_point" {
+		shown := ftype
+		if shown == "" {
+			shown = "unmapped"
+		}
+		reason := "Illegal data type of [" + shown + "]![distance_feature] query can only be run on " +
+			"a date, date_nanos or geo_point field type!"
+		e := geoQueryShardError("failed to create query: " + reason)
+		e.CausedBy = &apiError{Type: "illegal_argument_exception", Status: 400, Reason: reason}
+		return false, 0, e
 	}
 	vals, present := c.values(field)
 	if !present {
 		return false, 0, nil
 	}
-	v, ok := toFloat(vals[0])
-	if !ok {
-		return false, 0, nil
-	}
-	var origin float64
-	def, _ := mappingFieldDef(c.idx, field)
-	ftype, _ := def["type"].(string)
 	if ftype == "geo_point" {
+		pivot, ok := parseDistanceMeters(bm["pivot"])
+		if !ok {
+			return false, 0, nil
+		}
 		olat, olon, ok := geoPointOf(bm["origin"])
 		if !ok {
 			return false, 0, nil
@@ -1086,8 +2379,24 @@ func (c *queryCtx) evalDistanceFeature(body any) (bool, float64, *apiError) {
 		dist := haversineMeters(olat, olon, lat, lon)
 		return true, boost * pivot / (pivot + dist), nil
 	}
-	if o, ok := parseQueryDate(def, bm["origin"], ""); ok == nil {
-		origin, _ = toFloat(o)
+	v, ok := toFloat(vals[0])
+	if !ok {
+		return false, 0, nil
+	}
+	pivot, ok := datePivotMillis(bm["pivot"])
+	if !ok {
+		return false, 0, nil
+	}
+	var origin float64
+	if o, ok := toFloat(bm["origin"]); ok {
+		origin = o
+	} else if s, isStr := bm["origin"].(string); isStr {
+		if o, err := parseQueryDate(def, bm["origin"], ""); err == nil {
+			origin, _ = toFloat(o)
+			if !strings.Contains(s, "T") {
+				origin += 86399999
+			}
+		}
 	}
 	dist := math.Abs(v - origin)
 	if dist == 0 {
@@ -1166,59 +2475,221 @@ func (c *queryCtx) evalPinned(body any) (bool, float64, *apiError) {
 	return false, 0, nil
 }
 
+func percolateFieldName(bm map[string]any) string {
+	field, _ := bm["field"].(string)
+	if field == "" {
+		field = "query"
+	}
+	return field
+}
+
+func percolateInputDocs(idx *Index, bm map[string]any) ([]map[string]any, *apiError) {
+	if d, ok := bm["document"].(map[string]any); ok {
+		return []map[string]any{d}, nil
+	}
+	if raw, ok := bm["documents"].([]any); ok {
+		var docs []map[string]any
+		for _, e := range raw {
+			if m, ok := e.(map[string]any); ok {
+				docs = append(docs, m)
+			}
+		}
+		return docs, nil
+	}
+	if idv, has := bm["id"]; has {
+		id, _ := toString(idv)
+		idxName, _ := bm["index"].(string)
+		if idxName == "" {
+			idxName = idx.Name
+		}
+		var target *Index
+		if idxName == idx.Name {
+			target = idx
+		}
+		var doc map[string]any
+		if target != nil {
+			doc = target.Docs[id]
+		}
+		if doc == nil {
+			return nil, &apiError{Type: "resource_not_found_exception", Status: 404,
+				Reason: "indexed document [" + idxName + "/" + id + "] couldn't be found"}
+		}
+		return []map[string]any{doc}, nil
+	}
+	return nil, errParsing("[percolate] requires 'document'")
+}
+
+func percolateInputCtx(idx *Index, doc map[string]any) *queryCtx {
+	inputCtx := newIndexCtx(idx, "_percolate")
+	inputCtx.doc = doc
+	if err := inputCtx.buildDocValues(); err != nil {
+		return &queryCtx{idx: idx, id: "_percolate", doc: doc}
+	}
+	return &queryCtx{idx: idx, id: "_percolate", doc: doc, vals: inputCtx.values}
+}
+
 func (c *queryCtx) evalPercolate(body any) (bool, float64, *apiError) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("[percolate] query malformed")
 	}
-	docRaw, ok := bm["document"].(map[string]any)
+	field := percolateFieldName(bm)
+	def, mapped := mappingFieldDef(c.idx, field)
+	ftype := ""
+	if mapped {
+		ftype, _ = def["type"].(string)
+	}
+	if ftype != "percolator" {
+		if ftype == "" {
+			ftype = "object"
+		}
+		return false, 0, matchShardError(
+			fmt.Sprintf("expected field [%s] to be of type [percolator], but is of type [%s]", field, ftype))
+	}
+	docs, derr := percolateInputDocs(c.idx, bm)
+	if derr != nil {
+		return false, 0, derr
+	}
+	stored, ok := c.doc[field].(map[string]any)
 	if !ok {
-		if _, hasID := bm["id"]; hasID {
-			return false, 0, errParsing("percolate by id is not supported")
+		return false, 0, nil
+	}
+	best := 0.0
+	found := false
+	for _, docRaw := range docs {
+		inputQC := percolateInputCtx(c.idx, docRaw)
+		matched, sc, err := inputQC.eval(stored)
+		if err != nil {
+			return false, 0, err
 		}
-		return false, 0, errParsing("[percolate] requires 'document'")
-	}
-	field, _ := bm["field"].(string)
-	if field == "" {
-		field = "query"
-	}
-	inputCtx := newIndexCtx(c.idx, "_percolate")
-	inputCtx.doc = docRaw
-	if err := inputCtx.buildDocValues(); err != nil {
-		return true, 0, nil
-	}
-	inputQC := &queryCtx{idx: c.idx, id: "_percolate", doc: docRaw, vals: inputCtx.values}
-	score := 0.0
-	for _, id := range c.idx.Order {
-		doc, live := c.idx.Docs[id]
-		if !live {
-			continue
+		if matched {
+			found = true
+			if !found || sc > best {
+				best = sc
+			}
 		}
-		stored, ok := doc[field]
+	}
+	if !found {
+		return false, 0, nil
+	}
+	return true, best, nil
+}
+
+func collectPercolateClauses(q map[string]any, out *[]map[string]any) {
+	for clause, raw := range q {
+		bm, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
-		if id == c.id {
-			continue
+		switch clause {
+		case "percolate":
+			*out = append(*out, bm)
+		case "bool":
+			for _, key := range []string{"must", "should", "filter", "must_not"} {
+				for _, item := range asQueryList(bm[key]) {
+					if child, ok := item.(map[string]any); ok {
+						collectPercolateClauses(child, out)
+					}
+				}
+			}
+		case "constant_score":
+			if child, ok := bm["filter"].(map[string]any); ok {
+				collectPercolateClauses(child, out)
+			}
+		case "dis_max":
+			for _, item := range asQueryList(bm["queries"]) {
+				if child, ok := item.(map[string]any); ok {
+					collectPercolateClauses(child, out)
+				}
+			}
+		case "boosting":
+			for _, key := range []string{"positive", "negative"} {
+				if child, ok := bm[key].(map[string]any); ok {
+					collectPercolateClauses(child, out)
+				}
+			}
+		case "function_score", "script_score":
+			if child, ok := bm["query"].(map[string]any); ok {
+				collectPercolateClauses(child, out)
+			}
 		}
-		qm, ok := stored.(map[string]any)
-		if !ok {
-			continue
-		}
-		matched, sc, err := inputQC.eval(qm)
+	}
+}
+
+func percolateSlotsForHit(c *queryCtx, query map[string]any) []any {
+	var clauses []map[string]any
+	collectPercolateClauses(query, &clauses)
+	if len(clauses) == 0 {
+		return nil
+	}
+	slotSet := map[int]bool{}
+	for _, bm := range clauses {
+		field := percolateFieldName(bm)
+		docs, err := percolateInputDocs(c.idx, bm)
 		if err != nil {
 			continue
 		}
-		if matched {
-			if sc > score {
-				score = sc
-			}
-			if id == c.id {
-				return true, sc, nil
+		stored, ok := c.doc[field].(map[string]any)
+		if !ok {
+			continue
+		}
+		for slot, docRaw := range docs {
+			inputQC := percolateInputCtx(c.idx, docRaw)
+			matched, _, err := inputQC.eval(stored)
+			if err == nil && matched {
+				slotSet[slot] = true
 			}
 		}
 	}
-	return false, 0, nil
+	if len(slotSet) == 0 {
+		return nil
+	}
+	slots := make([]int, 0, len(slotSet))
+	for s := range slotSet {
+		slots = append(slots, s)
+	}
+	sort.Ints(slots)
+	out := make([]any, 0, len(slots))
+	for _, s := range slots {
+		out = append(out, int64(s))
+	}
+	return out
+}
+
+func percolateHighlights(c *queryCtx, query map[string]any, cfg *highlightConfig) map[string]any {
+	var clauses []map[string]any
+	collectPercolateClauses(query, &clauses)
+	if len(clauses) == 0 {
+		return nil
+	}
+	bm := clauses[0]
+	field := percolateFieldName(bm)
+	stored, ok := c.doc[field].(map[string]any)
+	if !ok {
+		return nil
+	}
+	docs, err := percolateInputDocs(c.idx, bm)
+	if err != nil || len(docs) == 0 {
+		return nil
+	}
+	terms, qfields, qpatterns := queryHighlightInfo(stored)
+	out := map[string]any{}
+	for slot, docRaw := range docs {
+		local := *cfg
+		local.terms, local.queryFields, local.queryPatterns = terms, qfields, qpatterns
+		rendered := local.render(c.idx, docRaw)
+		for name, val := range rendered {
+			if len(docs) == 1 {
+				out[name] = val
+			} else {
+				out[fmt.Sprintf("%d_%s", slot, name)] = val
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (c *queryCtx) evalTermsSet(body any) (bool, float64, *apiError) {
@@ -1227,17 +2698,22 @@ func (c *queryCtx) evalTermsSet(body any) (bool, float64, *apiError) {
 		return false, 0, errParsing("[terms_set] query malformed")
 	}
 	field := ""
-	var terms []any
+	var spec map[string]any
 	for k, v := range bm {
 		if k == "boost" || k == "_name" {
 			continue
 		}
 		field = k
-		terms, _ = v.([]any)
+		spec, _ = v.(map[string]any)
 		break
 	}
-	if field == "" {
+	if field == "" || spec == nil {
 		return false, 0, errParsing("[terms_set] requires a field")
+	}
+	terms, _ := spec["terms"].([]any)
+	boost := 1.0
+	if b, ok := toFloat(bm["boost"]); ok {
+		boost = b
 	}
 	vals, present := c.values(field)
 	if !present {
@@ -1246,6 +2722,9 @@ func (c *queryCtx) evalTermsSet(body any) (bool, float64, *apiError) {
 	matched := 0
 	for _, item := range terms {
 		for _, v := range vals {
+			if v == nil {
+				continue
+			}
 			vs, _ := valueScalarString(v)
 			is, _ := valueScalarString(item)
 			if vs == is || numericEqual(v, item) {
@@ -1255,20 +2734,20 @@ func (c *queryCtx) evalTermsSet(body any) (bool, float64, *apiError) {
 		}
 	}
 	required := 1
-	if name, ok := bm["minimum_should_match_field"].(string); ok {
+	if name, ok := spec["minimum_should_match_field"].(string); ok {
 		if reqVals, ok := c.values(name); ok && len(reqVals) > 0 {
 			required, _ = numericInt(reqVals[0])
 		}
 	}
-	if scriptSpec, ok := bm["minimum_should_match_script"].(map[string]any); ok {
+	if scriptSpec, ok := spec["minimum_should_match_script"].(map[string]any); ok {
 		if src, ok := scriptSpec["source"].(string); ok {
-			if n, ok := scriptMinimumShouldMatch(src, len(terms), matched); ok {
+			if n, ok := scriptMinimumShouldMatch(src, len(terms)); ok {
 				required = n
 			}
 		}
 	}
 	if matched >= required {
-		return true, 1, nil
+		return true, float64(matched) * boost, nil
 	}
 	return false, 0, nil
 }
@@ -1283,22 +2762,31 @@ func numericInt(v any) (int, bool) {
 	return 0, false
 }
 
-func scriptMinimumShouldMatch(src string, count, matched int) (int, bool) {
-	src = strings.ReplaceAll(src, " ", "")
-	switch {
-	case strings.Contains(src, "Math.min"):
+func scriptMinimumShouldMatch(src string, count int) (int, bool) {
+	s := strings.ReplaceAll(src, " ", "")
+	if s == "params.num_terms" {
 		return count, true
-	case strings.Contains(src, "Math.max"):
-		lower := 1
-		if i := strings.Index(src, "Math.max("); i >= 0 {
-			rest := src[i+len("Math.max("):]
-			if j := strings.Index(rest, ","); j > 0 {
-				if n, err := strconv.Atoi(strings.TrimSpace(rest[:j])); err == nil {
-					lower = n
-				}
+	}
+	if strings.HasPrefix(s, "Math.min(params.num_terms,") {
+		inner := strings.TrimSuffix(strings.TrimPrefix(s, "Math.min(params.num_terms,"), ")")
+		if n, err := strconv.Atoi(inner); err == nil {
+			if n < count {
+				return n, true
 			}
+			return count, true
 		}
-		return lower, true
+	}
+	if strings.HasPrefix(s, "Math.max(params.num_terms,") {
+		inner := strings.TrimSuffix(strings.TrimPrefix(s, "Math.max(params.num_terms,"), ")")
+		if n, err := strconv.Atoi(inner); err == nil {
+			if n > count {
+				return n, true
+			}
+			return count, true
+		}
+	}
+	if n, err := strconv.Atoi(s); err == nil {
+		return n, true
 	}
 	return 0, false
 }
@@ -2150,6 +3638,98 @@ func (c *queryCtx) evalIntervalsSimple(pred func(field string, tokens []string) 
 // more_like_this
 // ---------------------------------------------------------------------------
 
+func mltFieldTokens(idx *Index, field, text string) []string {
+	if def, ok := mappingFieldDef(idx, field); ok {
+		switch t, _ := def["type"].(string); t {
+		case "keyword", "constant_keyword", "wildcard":
+			return []string{text}
+		}
+	}
+	return analyze(text)
+}
+
+func mltLikeTexts(c *queryCtx, raw any, fields []string, include bool, excluded map[string]bool) []string {
+	var texts []string
+	add := func(v any) {
+		switch t := v.(type) {
+		case string:
+			texts = append(texts, t)
+		case map[string]any:
+			if doc, ok := t["doc"].(map[string]any); ok {
+				texts = append(texts, collectDocTexts(doc, fields)...)
+				return
+			}
+			if id, ok := toString(t["_id"]); ok {
+				if sd, live := c.idx.Docs[id]; live {
+					texts = append(texts, collectDocTexts(sd, fields)...)
+					if !include {
+						excluded[id] = true
+					}
+				}
+				return
+			}
+			texts = append(texts, collectDocTexts(t, fields)...)
+		}
+	}
+	switch t := raw.(type) {
+	case []any:
+		for _, e := range t {
+			add(e)
+		}
+	default:
+		add(raw)
+	}
+	return texts
+}
+
+func mltTermSet(c *queryCtx, raw any, fields []string) map[string]bool {
+	out := map[string]bool{}
+	for _, text := range mltLikeTexts(c, raw, fields, true, map[string]bool{}) {
+		if len(fields) == 0 {
+			for _, tok := range analyze(text) {
+				out[tok] = true
+			}
+			continue
+		}
+		for _, f := range fields {
+			for _, tok := range mltFieldTokens(c.idx, f, text) {
+				out[tok] = true
+			}
+		}
+	}
+	return out
+}
+
+func mltDocHasTerm(idx *Index, doc map[string]any, fields []string, term string) bool {
+	found := false
+	for _, f := range fields {
+		v, ok := fieldValue(doc, f)
+		if !ok {
+			continue
+		}
+		var walk func(any)
+		walk = func(x any) {
+			switch t := x.(type) {
+			case string:
+				for _, tok := range mltFieldTokens(idx, f, t) {
+					if tok == term {
+						found = true
+					}
+				}
+			case []any:
+				for _, e := range t {
+					walk(e)
+				}
+			}
+		}
+		walk(v)
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *queryCtx) evalMoreLikeThis(bm map[string]any) (bool, float64, *apiError) {
 	var fields []string
 	switch t := bm["fields"].(type) {
@@ -2162,37 +3742,14 @@ func (c *queryCtx) evalMoreLikeThis(bm map[string]any) (bool, float64, *apiError
 	case string:
 		fields = []string{t}
 	}
-	var texts []string
-	switch t := bm["like"].(type) {
-	case string:
-		texts = append(texts, t)
-	case map[string]any:
-		texts = append(texts, collectDocTexts(t, nil)...)
-	case []any:
-		for _, e := range t {
-			switch v := e.(type) {
-			case string:
-				texts = append(texts, v)
-			case map[string]any:
-				if doc, ok := v["doc"].(map[string]any); ok {
-					texts = append(texts, collectDocTexts(doc, fields)...)
-				} else if id, ok := toString(v["_id"]); ok {
-					if sd, live := c.idx.Docs[id]; live {
-						texts = append(texts, collectDocTexts(sd, fields)...)
-					}
-				} else {
-					texts = append(texts, collectDocTexts(v, fields)...)
-				}
-			}
-		}
+	likeRaw, hasLike := bm["like"]
+	if !hasLike {
+		return false, 0, errParsing("more_like_this requires 'like' to be specified")
 	}
-	terms := map[string]int{}
-	for _, t := range texts {
-		for _, tok := range analyze(t) {
-			terms[tok]++
-		}
-	}
-	if len(terms) == 0 {
+	excluded := map[string]bool{}
+	include, _ := bm["include"].(bool)
+	texts := mltLikeTexts(c, likeRaw, fields, include, excluded)
+	if excluded[c.id] || len(texts) == 0 {
 		return false, 0, nil
 	}
 	targets := fields
@@ -2201,36 +3758,104 @@ func (c *queryCtx) evalMoreLikeThis(bm map[string]any) (bool, float64, *apiError
 			targets = append(targets, f)
 		}
 	}
-	minMatch := 1
-	if msm, ok := bm["minimum_should_match"]; ok {
-		minMatch = minimumShouldMatch(msm, len(terms), 0)
-	}
-	score := 0.0
-	for _, f := range targets {
-		for _, v := range c.mustValues(f) {
-			s, ok := valueScalarString(v)
-			if !ok {
-				continue
+	stop := map[string]bool{}
+	switch t := bm["stop_words"].(type) {
+	case []any:
+		for _, e := range t {
+			if s, ok := e.(string); ok {
+				stop[s] = true
 			}
-			docTerms := map[string]bool{}
-			for _, tok := range analyze(s) {
-				docTerms[tok] = true
-			}
-			matched := 0
-			for t := range terms {
-				if docTerms[t] {
-					matched++
-				}
-			}
-			if matched >= minMatch {
-				score += float64(matched)
+		}
+	case string:
+		if t != "" && t != "none" && t != "_none_" {
+			for _, s := range strings.Split(t, ",") {
+				stop[strings.TrimSpace(s)] = true
 			}
 		}
 	}
-	if score > 0 {
-		return true, score, nil
+	unlike := map[string]bool{}
+	if raw, ok := bm["unlike"]; ok {
+		unlike = mltTermSet(c, raw, fields)
 	}
-	return false, 0, nil
+	tf := map[string]int{}
+	for _, text := range texts {
+		var toks []string
+		if len(fields) == 0 {
+			toks = analyze(text)
+		} else {
+			for _, f := range fields {
+				toks = append(toks, mltFieldTokens(c.idx, f, text)...)
+			}
+		}
+		for _, tok := range toks {
+			if stop[tok] || unlike[tok] {
+				continue
+			}
+			tf[tok]++
+		}
+	}
+	minTermFreq := 2
+	if n, ok := toFloat(bm["min_term_freq"]); ok {
+		minTermFreq = int(n)
+	}
+	maxTermFreq := math.MaxInt32
+	if n, ok := toFloat(bm["max_term_freq"]); ok {
+		maxTermFreq = int(n)
+	}
+	minDocFreq := 5
+	if n, ok := toFloat(bm["min_doc_freq"]); ok {
+		minDocFreq = int(n)
+	}
+	maxDocFreq := math.MaxInt32
+	if n, ok := toFloat(bm["max_doc_freq"]); ok {
+		maxDocFreq = int(n)
+	}
+	terms := map[string]bool{}
+	for term, freq := range tf {
+		if freq < minTermFreq || freq > maxTermFreq {
+			continue
+		}
+		df := 0
+		for _, id := range c.idx.Order {
+			doc, live := c.idx.Docs[id]
+			if !live {
+				continue
+			}
+			if mltDocHasTerm(c.idx, doc, targets, term) {
+				df++
+			}
+		}
+		if df < minDocFreq || df > maxDocFreq {
+			continue
+		}
+		terms[term] = true
+	}
+	if len(terms) == 0 {
+		return false, 0, nil
+	}
+	minMatch := 0
+	if msm, ok := bm["minimum_should_match"]; ok {
+		minMatch = minimumShouldMatch(msm, len(terms), 0)
+	} else {
+		minMatch = minimumShouldMatch("30%", len(terms), 0)
+		if minMatch < 1 {
+			minMatch = 1
+		}
+	}
+	matched := 0
+	for term := range terms {
+		if mltDocHasTerm(c.idx, c.doc, targets, term) {
+			matched++
+		}
+	}
+	if matched < minMatch {
+		return false, 0, nil
+	}
+	boost := 1.0
+	if b, ok := toFloat(bm["boost"]); ok {
+		boost = b
+	}
+	return true, float64(matched) * boost, nil
 }
 
 func collectDocTexts(doc map[string]any, fields []string) []string {
@@ -2329,6 +3954,80 @@ func (c *queryCtx) valuesMap() map[string][]any {
 // function_score
 // ---------------------------------------------------------------------------
 
+func hasScoreFunctionKey(bm map[string]any) bool {
+	for _, k := range []string{"weight", "field_value_factor", "random_score", "script_score",
+		"gauss", "exp", "linear"} {
+		if _, ok := bm[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func javaDoubleString(f float64) string {
+	if math.IsInf(f, 1) {
+		return "Infinity"
+	}
+	if math.IsInf(f, -1) {
+		return "-Infinity"
+	}
+	if math.IsNaN(f) {
+		return "NaN"
+	}
+	s := strconv.FormatFloat(f, 'f', -1, 64)
+	if !strings.ContainsAny(s, ".eE") {
+		s += ".0"
+	}
+	return s
+}
+
+func newFunctionScoreFailure(marker, reason string) *apiError {
+	return &apiError{Type: "search_phase_execution_exception", Status: 400,
+		Reason: reason, SearchFailure: marker}
+}
+
+func parseDecayDurationMillis(v any) (float64, bool) {
+	switch t := v.(type) {
+	case string:
+		s := strings.TrimSpace(strings.ToLower(t))
+		i := 0
+		for i < len(s) && (s[i] >= '0' && s[i] <= '9' || s[i] == '.' || s[i] == '-' || s[i] == '+') {
+			i++
+		}
+		num, err := strconv.ParseFloat(strings.TrimSpace(s[:i]), 64)
+		if err != nil {
+			return 0, false
+		}
+		mult := 1.0
+		switch strings.TrimSpace(s[i:]) {
+		case "d":
+			mult = 86400000
+		case "h":
+			mult = 3600000
+		case "m":
+			mult = 60000
+		case "s":
+			mult = 1000
+		case "ms":
+			mult = 1
+		case "micros":
+			mult = 0.001
+		case "nanos":
+			mult = 0.000001
+		}
+		return num * mult, true
+	default:
+		return toFloat(v)
+	}
+}
+
+func decayDateMillis(def map[string]any, v any) (int64, bool) {
+	if s, ok := v.(string); ok {
+		return parseDateAny(def, s)
+	}
+	return integerOf(v)
+}
+
 func (c *queryCtx) evalFunctionScore(body any) (bool, float64, *apiError) {
 	bm, ok := body.(map[string]any)
 	if !ok {
@@ -2345,57 +4044,91 @@ func (c *queryCtx) evalFunctionScore(body any) (bool, float64, *apiError) {
 	if !matched {
 		return false, 0, nil
 	}
+	if b, ok := toFloat(bm["boost"]); ok {
+		base *= b
+	}
 	functions := asQueryList(bm["functions"])
 	if len(functions) == 0 {
 		if f, ok := bm["function"].(map[string]any); ok {
 			functions = []any{f}
+		} else if hasScoreFunctionKey(bm) {
+			functions = []any{bm}
 		}
 	}
 	scoreMode, _ := bm["score_mode"].(string)
 	if scoreMode == "" {
 		scoreMode = "multiply"
 	}
-	finalScore := 0.0
-	first := true
+	type appliedFunction struct {
+		value  float64
+		weight float64
+	}
+	var applied []appliedFunction
 	for _, fnRaw := range functions {
 		fn, ok := fnRaw.(map[string]any)
 		if !ok {
 			continue
 		}
-		fv := c.applyScoreFunction(fn)
-		if b, ok := toFloat(fn["weight"]); ok {
-			fv *= b
-		}
-		switch scoreMode {
-		case "first", "":
-			if first {
-				finalScore = fv
+		if filter, ok := fn["filter"].(map[string]any); ok {
+			fm, _, ferr := c.eval(filter)
+			if ferr != nil {
+				return false, 0, ferr
 			}
+			if !fm {
+				continue
+			}
+		}
+		weight := 1.0
+		if w, ok := toFloat(fn["weight"]); ok {
+			weight = w
+		}
+		fv, ferr := c.applyScoreFunction(fn, base)
+		if ferr != nil {
+			return false, 0, ferr
+		}
+		applied = append(applied, appliedFunction{value: fv, weight: weight})
+	}
+	finalScore := 1.0
+	if len(applied) > 0 {
+		switch scoreMode {
+		case "first":
+			finalScore = applied[0].value * applied[0].weight
 		case "max":
-			if first || fv > finalScore {
-				finalScore = fv
+			finalScore = applied[0].value * applied[0].weight
+			for _, a := range applied[1:] {
+				if v := a.value * a.weight; v > finalScore {
+					finalScore = v
+				}
 			}
 		case "min":
-			if first || fv < finalScore {
-				finalScore = fv
+			finalScore = applied[0].value * applied[0].weight
+			for _, a := range applied[1:] {
+				if v := a.value * a.weight; v < finalScore {
+					finalScore = v
+				}
 			}
 		case "sum":
-			finalScore += fv
+			finalScore = 0
+			for _, a := range applied {
+				finalScore += a.value * a.weight
+			}
 		case "avg":
-			finalScore += fv
-		case "replace":
-			finalScore = fv
-		default:
-			if first {
-				finalScore = fv
+			weighted, totalWeight := 0.0, 0.0
+			for _, a := range applied {
+				weighted += a.value * a.weight
+				totalWeight += a.weight
+			}
+			if totalWeight != 0 {
+				finalScore = weighted / totalWeight
 			} else {
-				finalScore *= fv
+				finalScore = 0
+			}
+		default:
+			finalScore = 1
+			for _, a := range applied {
+				finalScore *= a.value * a.weight
 			}
 		}
-		first = false
-	}
-	if len(functions) == 0 {
-		finalScore = 1
 	}
 	boostMode, _ := bm["boost_mode"].(string)
 	var combined float64
@@ -2422,10 +4155,7 @@ func (c *queryCtx) evalFunctionScore(body any) (bool, float64, *apiError) {
 	return true, combined, nil
 }
 
-func (c *queryCtx) applyScoreFunction(fn map[string]any) float64 {
-	if v, ok := toFloat(fn["weight"]); ok {
-		return v
-	}
+func (c *queryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (float64, *apiError) {
 	if fvf, ok := fn["field_value_factor"].(map[string]any); ok {
 		field, _ := fvf["field"].(string)
 		factor := 1.0
@@ -2433,32 +4163,58 @@ func (c *queryCtx) applyScoreFunction(fn map[string]any) float64 {
 			factor = v
 		}
 		modifier, _ := fvf["modifier"].(string)
-		var val float64
-		if vals, ok := c.values(field); ok && len(vals) > 0 {
-			val, _ = toFloat(vals[0])
-		} else if mv, ok := toFloat(fvf["missing"]); ok {
-			val = mv
+		missingRaw, hasMissing := fvf["missing"]
+		var value float64
+		vals, present := c.values(field)
+		if present && len(vals) > 0 {
+			n, ok := toFloat(vals[0])
+			if !ok {
+				return 0, newFunctionScoreFailure("fvf_unmapped",
+					"Unable to find a field mapper for field ["+field+"]. No 'missing' value defined.")
+			}
+			value = n
+		} else if hasMissing {
+			n, ok := toFloat(missingRaw)
+			if !ok {
+				return 0, newFunctionScoreFailure("fvf_missing",
+					"Missing value for field ["+field+"]")
+			}
+			value = n
+		} else if _, mapped := mappingFieldDef(c.idx, field); !mapped {
+			return 0, newFunctionScoreFailure("fvf_unmapped",
+				"Unable to find a field mapper for field ["+field+"]. No 'missing' value defined.")
+		} else {
+			return 0, newFunctionScoreFailure("fvf_missing",
+				"Missing value for field ["+field+"]")
 		}
-		val *= factor
+		result := value * factor
 		switch modifier {
+		case "log":
+			result = math.Log10(result)
 		case "log1p":
-			val = math.Log1p(val)
+			result = math.Log10(1 + result)
 		case "log2p":
-			val = math.Log2(1 + val)
+			result = math.Log10(2 + result)
 		case "ln":
-			val = math.Log(val)
+			result = math.Log(result)
 		case "ln1p":
-			val = math.Log1p(val)
+			result = math.Log(1 + result)
 		case "ln2p":
-			val = math.Log(1+val) / math.Log(2)
+			result = math.Log(2 + result)
 		case "square":
-			val = val * val
+			result = result * result
 		case "sqrt":
-			val = math.Sqrt(val)
+			result = math.Sqrt(result)
 		case "reciprocal":
-			val = 1 / val
+			result = 1 / result
 		}
-		return val
+		if result < 0 || math.IsNaN(result) {
+			reason := "field value function must not produce negative scores, but got: [" +
+				javaDoubleString(result) + "] for field value: [" + javaDoubleString(value) +
+				"]; consider using log1p or log2p instead of log to avoid negative scores"
+			return 0, newFunctionScoreFailure("fvf_log", reason)
+		}
+		return result, nil
 	}
 	if rs, ok := fn["random_score"].(map[string]any); ok {
 		seed := int64(0)
@@ -2468,60 +4224,120 @@ func (c *queryCtx) applyScoreFunction(fn map[string]any) float64 {
 		if seed == 0 {
 			seed = 42
 		}
-		return pseudoRandom(c.id, seed)
+		return pseudoRandom(c.id, seed), nil
 	}
 	if ss, ok := fn["script_score"].(map[string]any); ok {
 		sm, _ := ss["script"].(map[string]any)
 		src, _ := sm["source"].(string)
-		env := &scriptEnv{c: c, params: scriptParamsOf(sm)}
+		env := &scriptEnv{c: c, params: scriptParamsOf(sm), score: baseScore}
 		if v, err := env.evalScriptExpression(src); err == nil {
-			return scriptFloat(v)
+			return scriptFloat(v), nil
 		}
-		return 1
+		return 1, nil
 	}
 	for _, fnName := range []string{"gauss", "linear", "exp"} {
-		if dec, ok := fn[fnName].(map[string]any); ok {
-			field, _ := dec["field"].(string)
-			vals, _ := c.values(field)
-			if len(vals) == 0 {
-				return 1
+		decRaw, ok := fn[fnName].(map[string]any)
+		if !ok {
+			continue
+		}
+		field := ""
+		var spec map[string]any
+		for k, v := range decRaw {
+			if k == "boost" || k == "_name" {
+				continue
 			}
-			val, _ := toFloat(vals[0])
-			origin := 0.0
-			if o, ok := toFloat(dec["origin"]); ok {
-				origin = o
-			}
-			scale := 1.0
-			if s, ok := toFloat(dec["scale"]); ok {
-				scale = s
-			}
-			offset := 0.0
-			if o, ok := toFloat(dec["offset"]); ok {
-				offset = o
-			}
-			decayV := 0.5
-			if d, ok := toFloat(dec["decay"]); ok {
-				decayV = d
-			}
-			dist := math.Abs(val - origin)
-			if dist <= offset {
-				return 1
-			}
-			x := (dist - offset) / scale
-			switch fnName {
-			case "gauss":
-				return math.Exp(-0.5 * x * x * math.Log(decayV) / math.Log(0.5) * -1)
-			case "exp":
-				return math.Pow(decayV, x)
-			case "linear":
-				if 1-x < 0 {
-					return 0
-				}
-				return 1 - x
+			field = k
+			spec, _ = v.(map[string]any)
+			break
+		}
+		if field == "" || spec == nil {
+			return 1, nil
+		}
+		vals, present := c.values(field)
+		if !present || len(vals) == 0 {
+			return 1, nil
+		}
+		def, _ := mappingFieldDef(c.idx, field)
+		ftype, _ := def["type"].(string)
+		decayV := 0.5
+		if d, ok := toFloat(spec["decay"]); ok {
+			decayV = d
+		}
+		geo := ftype == "geo_point" || ftype == "geo_shape"
+		if !geo {
+			switch spec["origin"].(type) {
+			case map[string]any, []any:
+				geo = true
 			}
 		}
+		var dist, scale, offset float64
+		if geo {
+			olat, olon, ok := geoPointOf(spec["origin"])
+			if !ok {
+				return 1, nil
+			}
+			lat, lon, ok := geoPointOf(vals[0])
+			if !ok {
+				return 1, nil
+			}
+			dist = haversineMeters(olat, olon, lat, lon)
+			if s, ok := parseDistanceMeters(spec["scale"]); ok {
+				scale = s
+			}
+			if o, ok := parseDistanceMeters(spec["offset"]); ok {
+				offset = o
+			}
+		} else if ftype == "date" || ftype == "date_nanos" {
+			origin, ok := decayDateMillis(def, spec["origin"])
+			if !ok {
+				origin = 0
+			}
+			val, ok := decayDateMillis(def, vals[0])
+			if !ok {
+				return 1, nil
+			}
+			dist = math.Abs(float64(val - origin))
+			if s, ok := parseDecayDurationMillis(spec["scale"]); ok {
+				scale = s
+			}
+			if o, ok := parseDecayDurationMillis(spec["offset"]); ok {
+				offset = o
+			}
+		} else {
+			val, _ := toFloat(vals[0])
+			origin := 0.0
+			if o, ok := toFloat(spec["origin"]); ok {
+				origin = o
+			}
+			if s, ok := toFloat(spec["scale"]); ok {
+				scale = s
+			}
+			if o, ok := toFloat(spec["offset"]); ok {
+				offset = o
+			}
+			dist = math.Abs(val - origin)
+		}
+		if dist <= offset {
+			return 1, nil
+		}
+		if scale <= 0 {
+			return 1, nil
+		}
+		x := (dist - offset) / scale
+		switch fnName {
+		case "gauss":
+			return math.Pow(decayV, x*x), nil
+		case "exp":
+			return math.Pow(decayV, x), nil
+		case "linear":
+			v := 1 - (1-decayV)*x
+			if v < 0 {
+				return 0, nil
+			}
+			return v, nil
+		}
 	}
-	return 1
+	return 1, nil
 }
 
 func pseudoRandom(id string, seed int64) float64 {

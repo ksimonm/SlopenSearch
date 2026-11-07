@@ -1026,7 +1026,13 @@ func catPlugins(r *http.Request) ([]catCol, []catRow) {
 		{key: "component", aliases: []string{"c"}, desc: "component"},
 		{key: "version", aliases: []string{"v"}, desc: "version"},
 	}
-	return cols, nil
+	rows := make([]catRow, 0, len(pluginNames))
+	for _, name := range pluginNames {
+		rows = append(rows, catRow{values: map[string]any{
+			"name": nodeName, "component": name, "version": pluginVersion,
+		}})
+	}
+	return cols, rows
 }
 
 func catPendingTasks(r *http.Request) ([]catCol, []catRow) {

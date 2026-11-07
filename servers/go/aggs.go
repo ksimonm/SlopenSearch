@@ -56,6 +56,26 @@ func aggDocs(hits []aggHit) []map[string]any {
 		if len(h.terms) > 0 {
 			d["__slop_query_terms"] = h.terms
 		}
+		if derived, ok := h.idx.Mappings["derived"].(map[string]any); ok && len(derived) > 0 && h.id != "" {
+			if dv := h.idx.DocValues[h.id]; dv != nil {
+				for name := range derived {
+					vals, ok := dv[name]
+					if !ok || len(vals) == 0 {
+						continue
+					}
+					if _, present := fieldValue(d, name); present {
+						continue
+					}
+					if len(vals) == 1 {
+						d[name] = vals[0]
+					} else {
+						cp := make([]any, len(vals))
+						copy(cp, vals)
+						d[name] = cp
+					}
+				}
+			}
+		}
 		out = append(out, d)
 	}
 	return out
@@ -512,18 +532,21 @@ func termKeyFor(v any, ft, valueType, format string, idx *Index, field string) (
 			return f, "", false, canonicalTermKey(f), true
 		}
 	case "boolean":
-		if b, ok := v.(bool); ok {
-			if b {
-				return int64(1), "true", true, "b:1", true
+		b := false
+		switch tv := v.(type) {
+		case bool:
+			b = tv
+		case string:
+			b = tv == "true"
+		default:
+			if f, ok := toFloat(v); ok {
+				b = f != 0
 			}
-			return int64(0), "false", true, "b:0", true
 		}
-		if f, ok := toFloat(v); ok {
-			if f != 0 {
-				return int64(1), "true", true, "b:1", true
-			}
-			return int64(0), "false", true, "b:0", true
+		if b {
+			return int64(1), "true", true, "b:1", true
 		}
+		return int64(0), "false", true, "b:0", true
 	case "date", "date_nanos":
 		ms, ok := dateMillisFor(idx, field, ft, v)
 		if !ok {
@@ -570,9 +593,28 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *Inde
 	if !mapped {
 		ft = ""
 	}
+	if field == "_ignored" && !mapped {
+		reason := "Fielddata is not supported on field [_ignored] of type [_ignored]"
+		return nil, &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
+			RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
+			CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}}
+	}
+	if ft == "search_as_you_type" {
+		reason := "Fielddata is not supported on field [" + field + "] of type [search_as_you_type]"
+		return nil, &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
+			RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
+			CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}}
+	}
 	if ft == "text" {
 		return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
 			Reason: "Text fields are not optimised for operations that require per-document field data like aggregations and sorting, so these operations are disabled by default. Please use a keyword field instead. Alternatively, set fielddata=true on [" + field + "] in order to load field data by uninverting the inverted index."}
+	}
+	if def, ok := mappingFieldDef(idx, resolved); ok {
+		if dv, ok := def["doc_values"].(bool); ok && !dv {
+			if err := checkDocValuesLoadable(idx, resolved); err != nil {
+				return nil, err
+			}
+		}
 	}
 	size := intField(spec, "size", 10)
 	if size <= 0 {
@@ -672,6 +714,25 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *Inde
 		var vals []any
 		if ok {
 			vals = flattenTermValues(raw)
+		}
+		if !mapped && !isJoinField && !hasScript {
+			// Values of unmapped fields (e.g. hidden by dynamic:false) are
+			// not searchable, so aggregations must not see them.
+			vals = nil
+		}
+		if mapped && len(vals) > 0 {
+			if def, ok := mappingFieldDef(idx, resolved); ok {
+				if limit, ok := ignoreAboveOf(def); ok {
+					filtered := vals[:0]
+					for _, v := range vals {
+						if s, ok := valueScalarString(v); ok && len([]rune(s)) > limit {
+							continue
+						}
+						filtered = append(filtered, v)
+					}
+					vals = filtered
+				}
+			}
 		}
 		if hasScript {
 			if field != "" && len(vals) > 0 {

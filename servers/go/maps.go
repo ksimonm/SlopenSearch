@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -149,19 +151,56 @@ func (s *Server) putMappingAPI(w http.ResponseWriter, r *http.Request, spec stri
 			return
 		}
 	}
+	if v, ok := body["dynamic"]; ok {
+		s, valid := parseDynamicSetting(v)
+		if !valid {
+			writeError(w, dynamicConvertError("dynamic", v))
+			return
+		}
+		body["dynamic"] = s
+	}
 	if props, ok := body["properties"].(map[string]any); ok {
 		if err := validateProps(props); err != nil {
-			reason := err.Error()
-			writeError(w, &apiError{Type: "mapper_parsing_exception", Status: 400,
-				Reason:   "Failed to parse mapping [_doc]: " + reason,
-				CausedBy: &apiError{Type: "mapper_parsing_exception", Reason: reason}})
+			writeError(w, &apiError{Type: "mapper_parsing_exception", Status: 400, Reason: err.Reason})
 			return
+		}
+		normalizeKnnVectors(props)
+		if err := normalizeDynamicProps(props, ""); err != nil {
+			writeError(w, err)
+			return
+		}
+	}
+	if src, ok := body["_source"].(map[string]any); ok {
+		for _, k := range sortedAnyKeys(src) {
+			switch k {
+			case "enabled", "includes", "excludes", "include", "exclude":
+			default:
+				writeError(w, &apiError{Type: "mapper_parsing_exception", Status: 400,
+					Reason: fmt.Sprintf("unknown parameter [%s] on mapper [_source] of type [null]", k)})
+				return
+			}
 		}
 	}
 	for _, idx := range indices {
 		if err := metaReadBlock(idx); err != nil {
 			writeError(w, err)
 			return
+		}
+		if rv, ok := body["_routing"].(map[string]any); ok {
+			if reqRaw, has := rv["required"]; has {
+				oldReq := false
+				if old, ok := idx.Mappings["_routing"].(map[string]any); ok {
+					if v, ok := old["required"].(bool); ok {
+						oldReq = v
+					}
+				}
+				newReq, _ := reqRaw.(bool)
+				if oldReq != newReq {
+					writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+						Reason: "Mapper for [_routing] conflicts with existing mapper:\n\tCannot update parameter [required] from [" + strconv.FormatBool(oldReq) + "] to [" + strconv.FormatBool(newReq) + "]"})
+					return
+				}
+			}
 		}
 		existingProps := ensureProperties(idx.Mappings)
 		if props, ok := body["properties"].(map[string]any); ok {
@@ -173,11 +212,35 @@ func (s *Server) putMappingAPI(w http.ResponseWriter, r *http.Request, spec stri
 		if d, ok := body["dynamic"]; ok {
 			idx.Mappings["dynamic"] = d
 		}
+		if src, ok := body["_source"].(map[string]any); ok {
+			if newEnabled, has := src["enabled"]; has {
+				oldEnabled := true
+				if old, ok := idx.Mappings["_source"].(map[string]any); ok {
+					if v, ok := old["enabled"].(bool); ok {
+						oldEnabled = v
+					}
+				}
+				newBool, _ := newEnabled.(bool)
+				if oldEnabled != newBool {
+					writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+						Reason: "Mapper for [_source] conflicts with existing mapper:\n\tCannot update parameter [enabled] from [" + strconv.FormatBool(oldEnabled) + "] to [" + strconv.FormatBool(newBool) + "]"})
+					return
+				}
+			}
+		}
 		for k, v := range body {
 			if k == "properties" || k == "dynamic" {
 				continue
 			}
 			idx.Mappings[k] = v
+		}
+		if derr := checkTotalFields(idx); derr != nil {
+			writeError(w, derr)
+			return
+		}
+		if derr := checkNestedFields(idx); derr != nil {
+			writeError(w, derr)
+			return
 		}
 		idx.MappingVersion++
 		ensureFieldTypes(idx)
@@ -204,56 +267,137 @@ func mergeMappingChecked(existing, incoming map[string]any) *apiError {
 			existing[name] = newDef
 			continue
 		}
-		newType, _ := newDef["type"].(string)
-		oldType, _ := oldDef["type"].(string)
-		oldProps, oldIsObject := oldDef["properties"].(map[string]any)
-		newProps, newIsObject := newDef["properties"].(map[string]any)
-		if oldIsObject && newType != "" && !newIsObject {
-			return errBad("can't merge a non object mapping [" + name + "] with an object mapping")
+		if err := mergeFieldDef(name, oldDef, newDef); err != nil {
+			return err
 		}
-		if !oldIsObject && newIsObject {
-			return errBad("can't merge a non object mapping [" + name + "] with an object mapping")
+	}
+	return nil
+}
+
+func fieldObjectShape(def map[string]any) (objectLike, nested bool) {
+	t, _ := def["type"].(string)
+	_, hasProps := def["properties"].(map[string]any)
+	return hasProps || t == "object" || t == "nested", t == "nested"
+}
+
+func mapperParamDefault(typ, param string) (any, bool) {
+	switch param {
+	case "analyzer":
+		if typ == "text" || typ == "match_only_text" || typ == "search_as_you_type" {
+			return "default", true
 		}
-		if oldIsObject && newIsObject {
+	case "normalizer":
+		if typ == "keyword" || typ == "constant_keyword" || typ == "wildcard" {
+			return "default", true
+		}
+	case "index":
+		return true, true
+	case "doc_values":
+		return true, true
+	case "index_options":
+		if typ == "text" {
+			return "positions", true
+		}
+	case "null_value":
+		return nil, true
+	case "enabled":
+		return true, true
+	}
+	return nil, false
+}
+
+func mergeFieldDef(name string, oldDef, newDef map[string]any) *apiError {
+	oldType, _ := oldDef["type"].(string)
+	newType, _ := newDef["type"].(string)
+	if oldType == "alias" && newType != "alias" {
+		return errBad("Cannot merge a field alias mapping [" + name + "] with a mapping that is not for a field alias.")
+	}
+	if newType == "alias" && oldType != "alias" {
+		return errBad("Cannot merge a field mapping [" + name + "] with a mapping that is not for a field alias.")
+	}
+	oldObj, oldNested := fieldObjectShape(oldDef)
+	newObj, newNested := fieldObjectShape(newDef)
+	if oldObj && newObj {
+		if oldNested != newNested {
+			if oldNested {
+				return errBad("cannot change object mapping from nested to non-nested")
+			}
+			return errBad("cannot change object mapping from non-nested to nested")
+		}
+		if oe, hasOld := oldDef["enabled"].(bool); hasOld {
+			ne, hasNew := newDef["enabled"].(bool)
+			if hasNew && oe != ne {
+				return &apiError{Type: "mapper_exception", Status: 500,
+					Reason: "the [enabled] parameter can't be updated for the object mapping [" + name + "]"}
+			}
+		}
+		oldProps, _ := oldDef["properties"].(map[string]any)
+		newProps, _ := newDef["properties"].(map[string]any)
+		if oldProps != nil && newProps != nil {
 			if err := mergeMappingChecked(oldProps, newProps); err != nil {
 				return err
 			}
 		}
-		if newType != "" && oldType != "" && newType != oldType {
-			return errBad("mapper [" + name + "] cannot be changed from type [" + oldType + "] to [" + newType + "]")
+	} else if oldObj != newObj {
+		return errBad("can't merge a non object mapping [" + name + "] with an object mapping")
+	}
+	if newType != "" && oldType != "" && newType != oldType {
+		return errBad("mapper [" + name + "] cannot be changed from type [" + oldType + "] to [" + newType + "]")
+	}
+	effType := oldType
+	if effType == "" {
+		effType = newType
+	}
+	for _, param := range []string{"analyzer", "normalizer", "index", "doc_values", "index_options", "null_value", "enabled", "value"} {
+		oldVal, oldHas := oldDef[param]
+		newVal, newHas := newDef[param]
+		if !oldHas && !newHas {
+			continue
 		}
-		for pk, pv := range newDef {
-			switch pk {
-			case "type", "properties":
-				continue
-			case "fields":
-				oldFields, _ := oldDef["fields"].(map[string]any)
-				if oldFields == nil {
-					oldFields = map[string]any{}
-					oldDef["fields"] = oldFields
-				}
-				newFields, _ := pv.(map[string]any)
-				for fk, fv := range newFields {
-					oldFields[fk] = fv
-				}
+		if !oldHas {
+			def, ok := mapperParamDefault(effType, param)
+			if !ok {
 				continue
 			}
-			oldVal, has := oldDef[pk]
-			if !has {
-				if pk == "analyzer" && oldType == "text" {
-					if pv != "default" && pv != "standard" {
-						return &apiError{Type: "illegal_argument_exception", Status: 400,
-							Reason: "Mapper for [" + name + "] conflicts with existing mapper:\n\tCannot update parameter [analyzer] from [default] to [" + settingsValueString(pv) + "]"}
+			oldVal = def
+		}
+		if !newHas {
+			def, ok := mapperParamDefault(effType, param)
+			if !ok {
+				continue
+			}
+			newVal = def
+		}
+		if settingsValueString(oldVal) != settingsValueString(newVal) {
+			return &apiError{Type: "illegal_argument_exception", Status: 400,
+				Reason: "Mapper for [" + name + "] conflicts with existing mapper:\n\tCannot update parameter [" + param + "] from [" + settingsValueString(oldVal) + "] to [" + settingsValueString(newVal) + "]"}
+		}
+	}
+	for pk, pv := range newDef {
+		switch pk {
+		case "type", "properties":
+			continue
+		case "fields":
+			oldFields, _ := oldDef["fields"].(map[string]any)
+			if oldFields == nil {
+				oldFields = map[string]any{}
+				oldDef["fields"] = oldFields
+			}
+			newFields, _ := pv.(map[string]any)
+			for fk, fv := range newFields {
+				newF, okNew := fv.(map[string]any)
+				oldF, okOld := oldFields[fk].(map[string]any)
+				if okNew && okOld {
+					if err := mergeFieldDef(name+"."+fk, oldF, newF); err != nil {
+						return err
 					}
+					continue
 				}
-				oldDef[pk] = pv
-				continue
+				oldFields[fk] = fv
 			}
-			if settingsValueString(oldVal) != settingsValueString(pv) {
-				return &apiError{Type: "illegal_argument_exception", Status: 400,
-					Reason: "Mapper for [" + name + "] conflicts with existing mapper:\n\tCannot update parameter [" + pk + "] from [" + settingsValueString(oldVal) + "] to [" + settingsValueString(pv) + "]"}
-			}
+			continue
 		}
+		oldDef[pk] = pv
 	}
 	return nil
 }

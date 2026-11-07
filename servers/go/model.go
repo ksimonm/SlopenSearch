@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ var validTypes = map[string]bool{
 	"percolator": true, "join": true, "alias": true, "version": true,
 	"integer_range": true, "float_range": true, "long_range": true,
 	"double_range": true, "date_range": true, "ip_range": true,
+	"xy_point": true, "knn_vector": true,
 }
 
 type Index struct {
@@ -169,17 +171,21 @@ func findSetting(settings map[string]any, key string) (any, bool) {
 }
 
 type apiError struct {
-	Type      string
-	Reason    string
-	Status    int
-	Extra     any
-	Fields    map[string]any
-	CausedBy  *apiError
-	TopType   string
-	TopReason string
-	RootCause *apiError
-	ForceTop  bool
-	Phase     string
+	Type          string
+	Reason        string
+	Status        int
+	Extra         any
+	Fields        map[string]any
+	CausedBy      *apiError
+	TopType       string
+	TopReason     string
+	RootCause     *apiError
+	ForceTop      bool
+	Phase         string
+	Clause        string
+	ClauseEnd     bool
+	NoCausedBy    bool
+	SearchFailure string
 }
 
 func (e *apiError) Error() string { return e.Type + ": " + e.Reason }
@@ -228,8 +234,10 @@ type dataStreamInfo struct {
 	Template       string
 }
 
+var globalServer *Server
+
 func NewServer() *Server {
-	return &Server{
+	s := &Server{
 		indices:             map[string]*Index{},
 		stateVersion:        1,
 		clusterPersistent:   map[string]any{},
@@ -244,6 +252,8 @@ func NewServer() *Server {
 		scrolls:             map[string]*scrollContext{},
 		pits:                map[string]*pitContext{},
 	}
+	globalServer = s
+	return s
 }
 
 func (s *Server) bumpState() { s.stateVersion++ }
@@ -430,28 +440,33 @@ func validateMapping(mappings map[string]any) error {
 	return validateProps(props)
 }
 
-func validateProps(props map[string]any) error {
-	for name, raw := range props {
-		def, ok := raw.(map[string]any)
-		if !ok {
-			continue
+// javaMapDebug renders a mapping value the way Java's Map.toString does.
+func javaMapDebug(v any) string {
+	switch t := v.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
 		}
-		t, _ := def["type"].(string)
-		if t != "" && !validTypes[t] {
-			return fmt.Errorf("No handler for type [%s] declared on field [%s]", t, name)
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, k+"="+javaMapDebug(t[k]))
 		}
-		if sub, ok := def["properties"].(map[string]any); ok {
-			if err := validateProps(sub); err != nil {
-				return err
-			}
+		return "{" + strings.Join(parts, ", ") + "}"
+	case []any:
+		parts := make([]string, 0, len(t))
+		for _, e := range t {
+			parts = append(parts, javaMapDebug(e))
 		}
-		if fields, ok := def["fields"].(map[string]any); ok {
-			if err := validateProps(fields); err != nil {
-				return err
-			}
-		}
+		return "[" + strings.Join(parts, ", ") + "]"
+	case string:
+		return t
+	case nil:
+		return "null"
+	default:
+		return fmt.Sprintf("%v", t)
 	}
-	return nil
 }
 
 func validateDoc(props map[string]any, src map[string]any) error {
@@ -636,40 +651,488 @@ func ensureProperties(mappings map[string]any) map[string]any {
 	return props
 }
 
-func mergeMappingForIndex(idx *Index, props, src map[string]any) {
-	switch d := idx.Mappings["dynamic"].(type) {
+func dynamicString(v any) string {
+	switch d := v.(type) {
 	case bool:
-		if !d {
-			return
+		if d {
+			return "true"
 		}
+		return "false"
 	case string:
-		if d == "false" {
-			return
+		if d == "" {
+			return "true"
 		}
+		return d
 	}
-	mergeMapping(props, src)
+	return "true"
 }
 
-func mergeMapping(props map[string]any, src map[string]any) {
+func rootDynamicString(idx *Index) string {
+	return dynamicString(idx.Mappings["dynamic"])
+}
+
+func inferDynamicValue(idx *Index, v any) map[string]any {
+	switch t := v.(type) {
+	case bool:
+		return map[string]any{"type": "boolean"}
+	case json.Number:
+		if f, err := t.Float64(); err == nil {
+			if f == math.Trunc(f) {
+				return map[string]any{"type": "long"}
+			}
+			return map[string]any{"type": "float"}
+		}
+	case float64:
+		if t == math.Trunc(t) {
+			return map[string]any{"type": "long"}
+		}
+		return map[string]any{"type": "float"}
+	case string:
+		return inferDynamicString(idx, t)
+	case []any:
+		for _, e := range t {
+			if e == nil {
+				continue
+			}
+			if d := inferDynamicValue(idx, e); d != nil {
+				return d
+			}
+		}
+		return nil
+	case map[string]any:
+		props := map[string]any{}
+		for k, val := range t {
+			if d := inferDynamicValue(idx, val); d != nil {
+				props[k] = d
+			}
+		}
+		if len(props) == 0 {
+			return map[string]any{"type": "object"}
+		}
+		return map[string]any{"properties": props}
+	}
+	return nil
+}
+
+func inferDynamicString(idx *Index, s string) map[string]any {
+	if nd, _ := idx.Mappings["numeric_detection"].(bool); nd {
+		if _, err := strconv.ParseInt(s, 10, 64); err == nil {
+			return map[string]any{"type": "long"}
+		}
+		if _, err := strconv.ParseFloat(s, 64); err == nil {
+			return map[string]any{"type": "float"}
+		}
+	}
+	dateDetection := true
+	if b, ok := idx.Mappings["date_detection"].(bool); ok {
+		dateDetection = b
+	}
+	if dateDetection {
+		if fmts, ok := idx.Mappings["dynamic_date_formats"].([]any); ok && len(fmts) > 0 {
+			for _, f := range fmts {
+				fs, _ := f.(string)
+				if fs != "" && dateFormatMatches(fs, s) {
+					print := fs
+					if i := strings.Index(fs, "||"); i >= 0 {
+						print = fs[:i]
+					}
+					return map[string]any{"type": "date", "format": fs, "print_format": print}
+				}
+			}
+		} else if isISODateLike(s) {
+			return map[string]any{"type": "date"}
+		} else if isSlashDateLike(s) {
+			return map[string]any{"type": "date",
+				"format":       "yyyy/MM/dd HH:mm:ss||yyyy/MM/dd||epoch_millis",
+				"print_format": "yyyy/MM/dd HH:mm:ss"}
+		}
+	}
+	return map[string]any{
+		"type": "text",
+		"fields": map[string]any{
+			"keyword": map[string]any{"type": "keyword", "ignore_above": 256},
+		},
+	}
+}
+
+func isISODateLike(s string) bool {
+	b := []byte(s)
+	if len(b) < 7 || len(b) > 30 {
+		return false
+	}
+	for _, c := range b[0:4] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	if b[4] != '-' {
+		return false
+	}
+	for _, c := range b[5:7] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	if len(b) == 7 {
+		return true
+	}
+	if b[7] != '-' || len(b) < 10 {
+		return false
+	}
+	for _, c := range b[8:10] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	if len(b) == 10 {
+		return true
+	}
+	if b[10] != 'T' {
+		return false
+	}
+	for _, c := range b[11:] {
+		if (c >= '0' && c <= '9') || c == ':' || c == '.' || c == 'Z' || c == '+' || c == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func isSlashDateLike(s string) bool {
+	b := []byte(s)
+	if len(b) < 8 {
+		return false
+	}
+	for _, c := range b[0:4] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return b[4] == '/' && b[5] >= '0' && b[5] <= '9' && b[6] >= '0' && b[6] <= '9' && b[7] == '/'
+}
+
+func dateFormatMatches(format, s string) bool {
+	for _, alt := range strings.Split(format, "||") {
+		var pat strings.Builder
+		pat.WriteString("^")
+		runes := []rune(alt)
+		for i := 0; i < len(runes); {
+			c := runes[i]
+			tok := string(c)
+			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+				j := i + 1
+				for j < len(runes) {
+					n := runes[j]
+					if (n >= 'a' && n <= 'z') || (n >= 'A' && n <= 'Z') {
+						j++
+						continue
+					}
+					break
+				}
+				tok = string(runes[i:j])
+				i = j
+			} else {
+				i++
+			}
+			switch tok {
+			case "yyyy":
+				pat.WriteString(`\d{4}`)
+			case "MM", "dd", "HH", "mm", "ss":
+				pat.WriteString(`\d{2}`)
+			case "epoch_millis", "epoch_second":
+				pat.WriteString(`\d+`)
+			case "T":
+				pat.WriteString("T")
+			default:
+				for _, ch := range tok {
+					if strings.ContainsRune(`\.+*?()|[]{}^$`, ch) {
+						pat.WriteByte('\\')
+					}
+					pat.WriteRune(ch)
+				}
+			}
+		}
+		pat.WriteString("$")
+		if re, err := regexp.Compile(pat.String()); err == nil && re.MatchString(s) {
+			return true
+		}
+	}
+	return false
+}
+
+func dynamicTypeNameOf(def map[string]any) string {
+	switch t, _ := def["type"].(string); t {
+	case "boolean":
+		return "boolean"
+	case "long", "integer":
+		return "long"
+	case "float", "double":
+		return "float"
+	case "date":
+		return "date"
+	case "object", "nested":
+		return "object"
+	}
+	if _, ok := def["properties"]; ok {
+		return "object"
+	}
+	return "string"
+}
+
+func mappingTypePlaceholderOf(def map[string]any) string {
+	switch t, _ := def["type"].(string); t {
+	case "text":
+		return "text"
+	case "keyword":
+		return "keyword"
+	case "boolean":
+		return "boolean"
+	case "long", "integer":
+		return "long"
+	case "float", "double":
+		return "float"
+	case "date":
+		return "date"
+	case "object", "nested":
+		return "object"
+	}
+	if _, ok := def["properties"]; ok {
+		return "object"
+	}
+	return "string"
+}
+
+func substitutePlaceholders(v any, name, dynType string) any {
+	switch t := v.(type) {
+	case string:
+		s := strings.ReplaceAll(t, "{name}", name)
+		return strings.ReplaceAll(s, "{dynamic_type}", dynType)
+	case []any:
+		for i := range t {
+			t[i] = substitutePlaceholders(t[i], name, dynType)
+		}
+	case map[string]any:
+		for k := range t {
+			t[k] = substitutePlaceholders(t[k], name, dynType)
+		}
+	}
+	return v
+}
+
+func containsDynamicTypePlaceholder(v any) bool {
+	switch t := v.(type) {
+	case string:
+		return strings.Contains(t, "{dynamic_type}")
+	case []any:
+		for _, e := range t {
+			if containsDynamicTypePlaceholder(e) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, e := range t {
+			if containsDynamicTypePlaceholder(e) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func matchDynamicTemplate(idx *Index, path, name, dynType string) (map[string]any, bool) {
+	templates, _ := idx.Mappings["dynamic_templates"].([]any)
+	for _, t := range templates {
+		obj, ok := t.(map[string]any)
+		if !ok {
+			continue
+		}
+		var spec map[string]any
+		for _, v := range obj {
+			spec, _ = v.(map[string]any)
+			break
+		}
+		if spec == nil {
+			continue
+		}
+		regex := false
+		if mp, ok := spec["match_pattern"].(string); ok && mp == "regex" {
+			regex = true
+		}
+		matchOne := func(p, s string) bool {
+			if regex {
+				re, err := regexp.Compile(p)
+				return err == nil && re.MatchString(s)
+			}
+			return globMatch(p, s)
+		}
+		if p, ok := spec["match"].(string); ok && !matchOne(p, name) {
+			continue
+		}
+		if p, ok := spec["unmatch"].(string); ok && matchOne(p, name) {
+			continue
+		}
+		if p, ok := spec["path_match"].(string); ok && !globMatch(p, path) {
+			continue
+		}
+		if p, ok := spec["path_unmatch"].(string); ok && globMatch(p, path) {
+			continue
+		}
+		if mt, ok := spec["match_mapping_type"].(string); ok && mt != dynType {
+			continue
+		}
+		if m, ok := spec["mapping"].(map[string]any); ok {
+			return m, true
+		}
+	}
+	return nil, false
+}
+
+// dynamicDefFor resolves the mapping for an undeclared field, applying dynamic
+// templates and dynamic type detection.
+func dynamicDefFor(idx *Index, path, name string, raw any) (map[string]any, bool, *apiError) {
+	if arr, ok := raw.([]any); ok {
+		firstKind := ""
+		firstObj := false
+		for _, el := range arr {
+			if el == nil {
+				continue
+			}
+			inf := inferDynamicValue(idx, el)
+			if inf == nil {
+				continue
+			}
+			kind := mappingTypePlaceholderOf(inf)
+			isObj := kind == "object"
+			if firstKind == "" {
+				firstKind, firstObj = kind, isObj
+				continue
+			}
+			if isObj != firstObj {
+				return nil, false, &apiError{Type: "illegal_argument_exception", Status: 400,
+					Reason: "can't merge a non object mapping [" + name + "] with an object mapping"}
+			}
+			if !isObj && kind != firstKind {
+				from, to := firstKind, kind
+				if from == "string" {
+					from = "text"
+				}
+				if to == "string" {
+					to = "text"
+				}
+				return nil, false, &apiError{Type: "illegal_argument_exception", Status: 400,
+					Reason: fmt.Sprintf("mapper [%s] cannot be changed from type [%s] to [%s]", name, from, to)}
+			}
+		}
+	}
+	inferred := inferDynamicValue(idx, raw)
+	if inferred == nil {
+		return nil, false, nil
+	}
+	dynType := dynamicTypeNameOf(inferred)
+	placeholder := mappingTypePlaceholderOf(inferred)
+	tmpl, matched := matchDynamicTemplate(idx, path, name, dynType)
+	var def map[string]any
+	if tmpl != nil {
+		def, _ = deepCopyJSON(tmpl).(map[string]any)
+		if def == nil {
+			def = map[string]any{}
+		}
+		for k := range def {
+			def[k] = substitutePlaceholders(def[k], name, placeholder)
+		}
+		if _, has := def["type"]; !has {
+			for k, v := range inferred {
+				if _, ok := def[k]; !ok {
+					def[k] = v
+				}
+			}
+		}
+	} else {
+		def = inferred
+	}
+	if t, _ := def["type"].(string); t == "text" && tmpl != nil && containsDynamicTypePlaceholder(tmpl) {
+		delete(def, "doc_values")
+	}
+	if a, ok := def["analyzer"].(string); ok && a != "" && !matchAnalyzerExists(idx, a) {
+		return nil, matched, &apiError{Type: "mapper_parsing_exception", Status: 400,
+			Reason:   "failed to parse",
+			CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "analyzer [" + a + "] has not been configured in mappings"}}
+	}
+	if ct, ok := def["copy_to"].(string); ok {
+		def["copy_to"] = []any{ct}
+	}
+	typ, _ := def["type"].(string)
+	if m, ok := raw.(map[string]any); ok && (typ == "object" || typ == "nested" || typ == "") {
+		props := map[string]any{}
+		for k, v := range m {
+			cp := k
+			if path != "" {
+				cp = path + "." + k
+			}
+			cd, _, err := dynamicDefFor(idx, cp, k, v)
+			if err != nil {
+				return nil, matched, err
+			}
+			if cd != nil {
+				props[k] = cd
+			}
+		}
+		if len(props) > 0 {
+			def["properties"] = props
+		}
+	}
+	return def, matched, nil
+}
+
+func mergeMappingForIndex(idx *Index, props, src map[string]any) {
+	dyn := rootDynamicString(idx)
+	if dyn == "false" || dyn == "false_allow_templates" {
+		return
+	}
+	mergeMapping(idx, props, "", dyn, src)
+}
+
+func mergeMapping(idx *Index, props map[string]any, path, dyn string, src map[string]any) {
+	if dyn == "false" {
+		return
+	}
 	for k, v := range src {
 		if strings.HasPrefix(k, "_") {
 			continue
 		}
+		childPath := k
+		if path != "" {
+			childPath = path + "." + k
+		}
 		existing, declared := props[k].(map[string]any)
 		if !declared {
-			if inferred := inferType(v); inferred != nil {
-				props[k] = inferred
+			def, matched, _ := dynamicDefFor(idx, childPath, k, v)
+			allow := true
+			switch dyn {
+			case "false", "strict":
+				allow = false
+			case "strict_allow_templates", "false_allow_templates":
+				allow = matched
 			}
+			if !allow || def == nil {
+				continue
+			}
+			props[k] = def
 			continue
+		}
+		childDyn := dyn
+		if d, ok := existing["dynamic"]; ok {
+			childDyn = dynamicString(d)
 		}
 		if sub, ok := existing["properties"].(map[string]any); ok {
 			switch t := v.(type) {
 			case map[string]any:
-				mergeMapping(sub, t)
+				mergeMapping(idx, sub, childPath, childDyn, t)
 			case []any:
 				for _, e := range t {
 					if m, ok := e.(map[string]any); ok {
-						mergeMapping(sub, m)
+						mergeMapping(idx, sub, childPath, childDyn, m)
 					}
 				}
 			}

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -17,10 +16,43 @@ import (
 // ---------------------------------------------------------------------------
 
 type queryCtx struct {
-	idx  *Index
-	id   string
-	doc  map[string]any
-	vals map[string][]any
+	idx          *Index
+	id           string
+	doc          map[string]any
+	vals         map[string][]any
+	nestedPath   string
+	nestedRoot   map[string]any
+	nestedOffset int
+	nestedParent any
+}
+
+func (c *queryCtx) nestedMeta() map[string]any {
+	if c.nestedRoot == nil {
+		return nil
+	}
+	field := c.nestedPath
+	if i := strings.LastIndex(field, "."); i >= 0 {
+		field = field[i+1:]
+	}
+	meta := map[string]any{"field": field, "offset": int64(c.nestedOffset)}
+	parent, ok := c.nestedParent.(map[string]any)
+	if !ok || parent == nil {
+		return meta
+	}
+	out := map[string]any{}
+	for k, v := range parent {
+		out[k] = v
+	}
+	cur := out
+	for {
+		next, ok := cur["_nested"].(map[string]any)
+		if !ok {
+			break
+		}
+		cur = next
+	}
+	cur["_nested"] = meta
+	return out
 }
 
 func newQueryCtxForDoc(idx *Index, id string, doc map[string]any) *queryCtx {
@@ -56,6 +88,19 @@ func (c *queryCtx) values(field string) ([]any, bool) {
 		}
 		return nil, false
 	}
+	if c.nestedRoot != nil {
+		if resolved == c.nestedPath {
+			return []any{c.nestedRoot}, true
+		}
+		prefix := c.nestedPath + "."
+		if strings.HasPrefix(resolved, prefix) {
+			return nestedObjectValues(c.nestedRoot, strings.TrimPrefix(resolved, prefix))
+		}
+		return nil, false
+	}
+	if _, nested := nestedAncestorPath(c.idx, resolved); nested {
+		return nil, false
+	}
 	if dv, ok := c.rawValues(); ok {
 		if vals, ok := dv[resolved]; ok {
 			return vals, len(vals) > 0
@@ -69,10 +114,133 @@ func (c *queryCtx) values(field string) ([]any, bool) {
 	return nil, false
 }
 
+func expandNestedValue(v any) []any {
+	if arr, ok := v.([]any); ok {
+		var out []any
+		for _, e := range arr {
+			out = append(out, expandNestedValue(e)...)
+		}
+		return out
+	}
+	return []any{v}
+}
+
+func nestedObjectValues(root map[string]any, path string) ([]any, bool) {
+	if path == "" {
+		return []any{root}, true
+	}
+	cur := []any{root}
+	for _, part := range strings.Split(path, ".") {
+		var next []any
+		for _, v := range cur {
+			for _, item := range expandNestedValue(v) {
+				m, ok := item.(map[string]any)
+				if !ok {
+					continue
+				}
+				if nv, ok := m[part]; ok {
+					next = append(next, expandNestedValue(nv)...)
+				}
+			}
+		}
+		cur = next
+		if len(cur) == 0 {
+			return nil, false
+		}
+	}
+	return cur, len(cur) > 0
+}
+
+func nestedObjectsAt(root map[string]any, path string) []map[string]any {
+	if path == "" {
+		return []map[string]any{root}
+	}
+	cur := []any{root}
+	for _, part := range strings.Split(path, ".") {
+		var next []any
+		for _, v := range cur {
+			for _, item := range expandNestedValue(v) {
+				m, ok := item.(map[string]any)
+				if !ok {
+					continue
+				}
+				if nv, ok := m[part]; ok {
+					next = append(next, expandNestedValue(nv)...)
+				}
+			}
+		}
+		cur = next
+		if len(cur) == 0 {
+			return nil
+		}
+	}
+	var out []map[string]any
+	for _, v := range cur {
+		if m, ok := v.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func nestedAncestorPath(idx *Index, field string) (string, bool) {
+	props, _ := idx.Mappings["properties"].(map[string]any)
+	cur := props
+	prefix := ""
+	parts := strings.Split(field, ".")
+	for i := 0; i < len(parts)-1; i++ {
+		def, ok := cur[parts[i]].(map[string]any)
+		if !ok {
+			return "", false
+		}
+		if prefix == "" {
+			prefix = parts[i]
+		} else {
+			prefix += "." + parts[i]
+		}
+		if t, _ := def["type"].(string); t == "nested" {
+			return prefix, true
+		}
+		sub, _ := def["properties"].(map[string]any)
+		if sub == nil {
+			return "", false
+		}
+		cur = sub
+	}
+	return "", false
+}
+
 func (c *queryCtx) hasField(field string) bool {
 	resolved := resolveAliasField(c.idx, field)
 	if resolved == "_id" {
 		return true
+	}
+	if def, ok := mappingFieldDef(c.idx, resolved); ok {
+		notIndexed := false
+		if iv, ok := def["index"].(bool); ok && !iv {
+			notIndexed = true
+		}
+		noDocValues := false
+		if dv, ok := def["doc_values"].(bool); ok && !dv {
+			noDocValues = true
+		}
+		if notIndexed && noDocValues {
+			return false
+		}
+	}
+	if c.nestedRoot != nil {
+		if resolved == c.nestedPath {
+			return true
+		}
+		prefix := c.nestedPath + "."
+		if strings.HasPrefix(resolved, prefix) {
+			_, ok := nestedObjectValues(c.nestedRoot, strings.TrimPrefix(resolved, prefix))
+			return ok
+		}
+		return false
+	}
+	if _, nested := nestedAncestorPath(c.idx, resolved); nested {
+		return false
 	}
 	if dv, ok := c.rawValues(); ok {
 		if vals, ok := dv[resolved]; ok && len(vals) > 0 {
@@ -108,6 +276,11 @@ func resolveAliasField(idx *Index, field string) string {
 
 // mappingFieldDef looks up a field definition by dotted path.
 func mappingFieldDef(idx *Index, field string) (map[string]any, bool) {
+	if derived, ok := idx.Mappings["derived"].(map[string]any); ok {
+		if d, ok := derived[field].(map[string]any); ok {
+			return d, true
+		}
+	}
 	props, _ := idx.Mappings["properties"].(map[string]any)
 	if props == nil {
 		return nil, false
@@ -141,6 +314,28 @@ func mappingFieldDef(idx *Index, field string) (map[string]any, bool) {
 		cur = sub
 	}
 	return nil, false
+}
+
+// flatObjectRoot returns the nearest ancestor mapped as flat_object, if any.
+func flatObjectRoot(idx *Index, field string) (string, bool) {
+	parts := strings.Split(field, ".")
+	for i := len(parts) - 1; i >= 1; i-- {
+		prefix := strings.Join(parts[:i], ".")
+		if def, ok := mappingFieldDef(idx, prefix); ok {
+			if t, _ := def["type"].(string); t == "flat_object" {
+				return prefix, true
+			}
+		}
+	}
+	return "", false
+}
+
+func sortFieldMapped(idx *Index, field string) bool {
+	if _, ok := mappingFieldDef(idx, field); ok {
+		return true
+	}
+	_, ok := flatObjectRoot(idx, field)
+	return ok
 }
 
 func (idx *Index) objectPaths() map[string]bool {
@@ -301,22 +496,34 @@ func numberKey(v any) string {
 
 // parseTermValue converts a term query value into the indexed representation
 // for the field type.
+// termDateParseError reshapes a date parse failure from a term-level query
+// into the parse_exception wrapper OpenSearch reports for it.
+func termDateParseError(err *apiError) *apiError {
+	inner := err.Reason
+	if err.CausedBy != nil && err.CausedBy.Reason != "" {
+		inner = err.CausedBy.Reason
+	}
+	return &apiError{Type: "parse_exception", Status: 400,
+		Reason: inner + ": [" + inner + "]",
+		CausedBy: &apiError{Type: "illegal_argument_exception", Reason: inner,
+			CausedBy: &apiError{Type: "date_time_parse_exception",
+				Reason: "Failed to parse with all enclosed parsers"}}}
+}
+
 func parseTermValue(ftype string, def map[string]any, v any) ([]any, *apiError) {
 	switch ftype {
 	case "integer", "long", "short", "byte", "unsigned_long":
 		ctx := &indexCtx{idx: nil, indexCoerce: true}
 		parsed, err := ctx.parseIntValue("_value", ftype, def, v)
 		if err != nil {
-			return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
-				Reason: fmt.Sprintf("failed to parse value [%s] as %s", previewValue(v), ftype)}
+			return nil, err
 		}
 		return []any{parsed}, nil
 	case "float", "double", "half_float", "scaled_float":
 		ctx := &indexCtx{idx: nil, indexCoerce: true}
 		parsed, err := ctx.parseFloatValue("_value", ftype, def, v)
 		if err != nil {
-			return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
-				Reason: fmt.Sprintf("failed to parse value [%s] as %s", previewValue(v), ftype)}
+			return nil, err
 		}
 		return []any{parsed}, nil
 	case "boolean":
@@ -461,59 +668,86 @@ func compareAny(a, b any) int {
 }
 
 // rangeRelation evaluates the relation between a query range and a stored range.
-func rangeRelation(relation string, qLower, qUpper any, hasLower, hasUpper bool, stored map[string]any) bool {
+func rangeRelation(relation string, qLower, qUpper any, hasLower, lowerIncl, hasUpper, upperIncl bool, stored map[string]any) bool {
 	sLower, sHasLower := stored["gte"]
-	sUpper, sHasUpper := stored["lte"]
+	sLowerIncl := sHasLower
 	if !sHasLower {
 		if v, ok := stored["gt"]; ok {
-			sLower, sHasLower = v, true
+			sLower, sHasLower, sLowerIncl = v, true, false
 		}
 	}
+	sUpper, sHasUpper := stored["lte"]
+	sUpperIncl := sHasUpper
 	if !sHasUpper {
 		if v, ok := stored["lt"]; ok {
-			sUpper, sHasUpper = v, true
-		}
-	}
-	intersects := true
-	if hasUpper && sHasLower {
-		if compareAny(sLower, qUpper) > 0 {
-			intersects = false
-		}
-	}
-	if hasLower && sHasUpper {
-		if compareAny(sUpper, qLower) < 0 {
-			intersects = false
+			sUpper, sHasUpper, sUpperIncl = v, true, false
 		}
 	}
 	switch strings.ToUpper(relation) {
-	case "", "INTERSECTS":
-		return intersects
 	case "CONTAINS":
-		// query range contains stored range
-		if (!hasLower && sHasLower) || (!hasUpper && sHasUpper) {
-			return false
-		}
-		if hasLower && sHasLower && compareAny(qLower, sLower) > 0 {
-			return false
-		}
-		if hasUpper && sHasUpper && compareAny(qUpper, sUpper) < 0 {
-			return false
-		}
-		return true
+		return rangeContainsRange(sLower, sLowerIncl, sHasLower, sUpper, sUpperIncl, sHasUpper,
+			qLower, lowerIncl, hasLower, qUpper, upperIncl, hasUpper)
 	case "WITHIN":
-		// query range within stored range
-		if (hasLower && !sHasLower) || (hasUpper && !sHasUpper) {
+		return rangeContainsRange(qLower, lowerIncl, hasLower, qUpper, upperIncl, hasUpper,
+			sLower, sLowerIncl, sHasLower, sUpper, sUpperIncl, sHasUpper)
+	}
+	if hasLower && sHasUpper {
+		c := compareAny(sUpper, qLower)
+		if c < 0 || c == 0 && (!sUpperIncl || !lowerIncl) {
 			return false
 		}
-		if hasLower && sHasLower && compareAny(sLower, qLower) > 0 {
+	}
+	if hasUpper && sHasLower {
+		c := compareAny(qUpper, sLower)
+		if c < 0 || c == 0 && (!upperIncl || !sLowerIncl) {
 			return false
 		}
-		if hasUpper && sHasUpper && compareAny(sUpper, qUpper) < 0 {
-			return false
-		}
+	}
+	return true
+}
+
+func rangeContainsRange(outerLower any, outerLowerIncl, outerHasLower bool,
+	outerUpper any, outerUpperIncl, outerHasUpper bool,
+	innerLower any, innerLowerIncl, innerHasLower bool,
+	innerUpper any, innerUpperIncl, innerHasUpper bool) bool {
+	if !rangeLowerWithin(outerLower, outerLowerIncl, outerHasLower, innerLower, innerLowerIncl, innerHasLower) {
+		return false
+	}
+	return rangeUpperWithin(outerUpper, outerUpperIncl, outerHasUpper, innerUpper, innerUpperIncl, innerHasUpper)
+}
+
+func rangeLowerWithin(outer any, outerIncl, outerHas bool, inner any, innerIncl, innerHas bool) bool {
+	if !innerHas {
+		return !outerHas
+	}
+	if !outerHas {
 		return true
 	}
-	return intersects
+	c := compareAny(inner, outer)
+	if c > 0 {
+		return true
+	}
+	if c < 0 {
+		return false
+	}
+	return !innerIncl || outerIncl
+}
+
+func rangeUpperWithin(outer any, outerIncl, outerHas bool, inner any, innerIncl, innerHas bool) bool {
+	if !innerHas {
+		return !outerHas
+	}
+	if !outerHas {
+		return true
+	}
+	c := compareAny(inner, outer)
+	if c < 0 {
+		return true
+	}
+	if c > 0 {
+		return false
+	}
+	return !innerIncl || outerIncl
 }
 
 // ---------------------------------------------------------------------------
@@ -534,8 +768,30 @@ func (c *queryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 		}
 		return false, 0, nil
 	}
+	if def, ok := mappingFieldDef(c.idx, field); ok {
+		t, _ := def["type"].(string)
+		if t == "rank_feature" || t == "rank_features" {
+			return false, 0, matchSearchError("query_shard_exception", "failed to create query: Queries on [rank_feature] fields are not supported")
+		}
+		if t == "completion" {
+			return false, 0, nil
+		}
+		notIndexed := false
+		if iv, ok := def["index"].(bool); ok && !iv {
+			notIndexed = true
+		}
+		noDocValues := false
+		if dv, ok := def["doc_values"].(bool); ok && !dv {
+			noDocValues = true
+		}
+		if notIndexed && noDocValues {
+			return false, 0, matchSearchError("query_shard_exception",
+				"failed to create query: Cannot search on field ["+field+"] since it is both not indexed, and does not have doc_values enabled.")
+		}
+	}
 	val := raw
 	fuzz := 0
+	caseInsensitive := false
 	if m, ok := raw.(map[string]any); ok {
 		if v, ok := m["value"]; ok {
 			val = v
@@ -546,6 +802,38 @@ func (c *queryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 		if f, ok := m["fuzziness"]; ok {
 			if n, ok2 := fuzzinessValue(f, previewValue(val)); ok2 {
 				fuzz = n
+			}
+		}
+		if ci, ok := m["case_insensitive"].(bool); ok {
+			caseInsensitive = ci
+		}
+	}
+	if i := strings.Index(field, "#"); i >= 0 {
+		if baseDef, ok := mappingFieldDef(c.idx, field[:i]); ok {
+			if bt, _ := baseDef["type"].(string); bt == "join" {
+				term, _ := valueScalarString(val)
+				rel := field[i+1:]
+				if c.id == term {
+					vals, present := c.values(field[:i])
+					if present {
+						for _, v := range vals {
+							if s, ok := v.(string); ok && s == rel {
+								return true, boost, nil
+							}
+						}
+					}
+				}
+				vals, present := c.values(field[:i])
+				if present {
+					for _, v := range vals {
+						if jm, ok := v.(map[string]any); ok {
+							if p, _ := jm["parent"].(string); p == term {
+								return true, boost, nil
+							}
+						}
+					}
+				}
+				return false, 0, nil
 			}
 		}
 	}
@@ -573,9 +861,15 @@ func (c *queryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 		if !ok {
 			return false, 0, errParsing("failed to parse term value")
 		}
+		if caseInsensitive {
+			term = strings.ToLower(term)
+		}
 		for _, v := range vals {
 			s, _ := valueScalarString(v)
 			for _, tok := range analyze(s) {
+				if caseInsensitive {
+					tok = strings.ToLower(tok)
+				}
 				if tok == term {
 					return true, boost, nil
 				}
@@ -587,6 +881,10 @@ func (c *queryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 		if !ok {
 			return false, 0, nil
 		}
+		term = normalizeQueryValue(c.idx, field, term)
+		if caseInsensitive {
+			term = asciiLower(term)
+		}
 		if stored, isObj := valsAsObject(vals); isObj {
 			_ = stored
 		}
@@ -594,6 +892,9 @@ func (c *queryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 			s, ok := valueScalarString(v)
 			if !ok {
 				continue
+			}
+			if caseInsensitive {
+				s = asciiLower(s)
 			}
 			if s == term {
 				return true, boost, nil
@@ -680,6 +981,15 @@ func (c *queryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 		}
 		return false, 0, nil
 	case "boolean":
+		if _, isBool := val.(bool); !isBool {
+			s, isStr := valueScalarString(val)
+			if !isStr || (s != "true" && s != "false") {
+				reason := fmt.Sprintf("Failed to parse value [%s] as only [true] or [false] are allowed.", previewValue(val))
+				return false, 0, &apiError{Type: "mapper_parsing_exception", Status: 400,
+					Reason:   reason,
+					CausedBy: &apiError{Type: "illegal_argument_exception", Status: 400, Reason: reason}}
+			}
+		}
 		parsed, err := parseTermValue(ftype, def, val)
 		if err != nil {
 			return false, 0, &apiError{Type: "illegal_argument_exception", Status: 400,
@@ -691,7 +1001,23 @@ func (c *queryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 			}
 		}
 		return false, 0, nil
+	case "date", "date_nanos":
+		parsed, err := parseTermValue(ftype, def, val)
+		if err != nil {
+			return false, 0, termDateParseError(err)
+		}
+		for _, v := range vals {
+			for _, p := range parsed {
+				if numericEqual(v, p) {
+					return true, boost, nil
+				}
+			}
+		}
+		return false, 0, nil
 	default:
+		if isIntegerKind(ftype) && hasFractionalNumericValue(val) {
+			return false, 0, nil
+		}
 		parsed, err := parseTermValue(ftype, def, val)
 		if err != nil {
 			return false, 0, err
@@ -758,9 +1084,30 @@ func (c *queryCtx) evalTerms(field string, raw map[string]any, boost float64) (b
 	if b, ok := toFloat(raw["boost"]); ok {
 		boost *= b
 	}
-	list, ok := listRaw.([]any)
-	if !ok {
-		return false, 0, errParsing("[terms] query does not support [" + previewValue(listRaw) + "] as field value, must be an array")
+	var list []any
+	if lookup, isLookup := listRaw.(map[string]any); isLookup {
+		resolved, err := resolveTermsLookup(lookup)
+		if err != nil {
+			return false, 0, err
+		}
+		list = resolved
+	} else {
+		var ok bool
+		list, ok = listRaw.([]any)
+		if !ok {
+			return false, 0, errParsing("[terms] query does not support [" + previewValue(listRaw) + "] as field value, must be an array")
+		}
+	}
+	maxTerms := 65536
+	if v, ok := findSetting(c.idx.Settings, "max_terms_count"); ok {
+		if n, err := strconv.Atoi(settingsValueString(v)); err == nil {
+			maxTerms = n
+		}
+	}
+	if len(list) > maxTerms {
+		reason := fmt.Sprintf("The number of terms [%d] used in the Terms Query request has exceeded the allowed maximum of [%d]. This maximum can be set by changing the [index.max_terms_count] index level setting.", len(list), maxTerms)
+		return false, 0, &apiError{Type: "query_shard_exception", Status: 400, Reason: reason,
+			CausedBy: &apiError{Type: "illegal_argument_exception", Status: 400, Reason: reason}}
 	}
 	def, _ := mappingFieldDef(c.idx, field)
 	ftype, _ := def["type"].(string)
@@ -790,6 +1137,7 @@ func (c *queryCtx) evalTerms(field string, raw map[string]any, boost float64) (b
 			}
 		case "keyword", "constant_keyword", "wildcard", "flat_object", "binary", "":
 			term, _ := valueScalarString(item)
+			term = normalizeQueryValue(c.idx, field, term)
 			for _, v := range vals {
 				if s, _ := valueScalarString(v); s == term {
 					ok2 = true
@@ -797,6 +1145,9 @@ func (c *queryCtx) evalTerms(field string, raw map[string]any, boost float64) (b
 				}
 			}
 		default:
+			if isIntegerKind(ftype) && hasFractionalNumericValue(item) {
+				continue
+			}
 			parsed, err := parseTermValue(ftype, def, item)
 			if err != nil {
 				return false, 0, err
@@ -831,6 +1182,59 @@ func (c *queryCtx) evalTerms(field string, raw map[string]any, boost float64) (b
 	return false, 0, nil
 }
 
+func collectPathValues(cur any, parts []string) []any {
+	if len(parts) == 0 {
+		if arr, ok := cur.([]any); ok {
+			return arr
+		}
+		if cur == nil {
+			return nil
+		}
+		return []any{cur}
+	}
+	switch t := cur.(type) {
+	case map[string]any:
+		return collectPathValues(t[parts[0]], parts[1:])
+	case []any:
+		var out []any
+		for _, e := range t {
+			out = append(out, collectPathValues(e, parts)...)
+		}
+		return out
+	}
+	return nil
+}
+
+func resolveTermsLookup(spec map[string]any) ([]any, *apiError) {
+	index, _ := spec["index"].(string)
+	id, _ := spec["id"].(string)
+	path, _ := spec["path"].(string)
+	if index == "" || id == "" || path == "" {
+		return nil, errParsing("[terms] query lookup requires index, id and path")
+	}
+	if globalServer == nil {
+		return nil, nil
+	}
+	globalServer.mu.RLock()
+	defer globalServer.mu.RUnlock()
+	idx, ok := globalServer.indices[index]
+	if !ok {
+		return nil, &apiError{Type: "index_not_found_exception", Status: 404,
+			Reason: "no such index [" + index + "]",
+			Fields: map[string]any{
+				"index":         index,
+				"resource.id":   index,
+				"resource.type": "index_expression",
+				"index_uuid":    "_na_",
+			}}
+	}
+	doc, ok := idx.Docs[id]
+	if !ok {
+		return nil, nil
+	}
+	return collectPathValues(doc, strings.Split(path, ".")), nil
+}
+
 func (c *queryCtx) evalIds(raw map[string]any, boost float64) (bool, float64, *apiError) {
 	if b, ok := toFloat(raw["boost"]); ok {
 		boost *= b
@@ -863,137 +1267,206 @@ func (c *queryCtx) evalIds(raw map[string]any, boost float64) (bool, float64, *a
 // range query
 // ---------------------------------------------------------------------------
 
+type rangeBoundSpec struct {
+	value   any
+	present bool
+	incl    bool
+}
+
+func rangeQueryBounds(cond map[string]any) (rangeBoundSpec, rangeBoundSpec) {
+	var lower, upper rangeBoundSpec
+	if v, ok := cond["gte"]; ok && v != nil {
+		lower = rangeBoundSpec{value: v, present: true, incl: true}
+	} else if v, ok := cond["gt"]; ok && v != nil {
+		lower = rangeBoundSpec{value: v, present: true, incl: false}
+	} else if v, ok := cond["from"]; ok && v != nil {
+		incl := true
+		if b, ok := cond["include_lower"].(bool); ok {
+			incl = b
+		}
+		lower = rangeBoundSpec{value: v, present: true, incl: incl}
+	}
+	if v, ok := cond["lte"]; ok && v != nil {
+		upper = rangeBoundSpec{value: v, present: true, incl: true}
+	} else if v, ok := cond["lt"]; ok && v != nil {
+		upper = rangeBoundSpec{value: v, present: true, incl: false}
+	} else if v, ok := cond["to"]; ok && v != nil {
+		incl := true
+		if b, ok := cond["include_upper"].(bool); ok {
+			incl = b
+		}
+		upper = rangeBoundSpec{value: v, present: true, incl: incl}
+	}
+	return lower, upper
+}
+
+func isRangeFieldType(ftype string) bool {
+	switch ftype {
+	case "integer_range", "long_range", "float_range", "double_range", "date_range", "ip_range":
+		return true
+	}
+	return false
+}
+
+func isTextRangeType(ftype string) bool {
+	switch ftype {
+	case "text", "match_only_text", "search_as_you_type":
+		return true
+	}
+	return false
+}
+
+func isFractionalNumber(v any) bool {
+	switch t := v.(type) {
+	case json.Number:
+		return strings.ContainsAny(t.String(), ".eE")
+	case float64:
+		return t != math.Trunc(t)
+	}
+	return false
+}
+
+func hasFractionalNumericValue(v any) bool {
+	f, ok := toFloat(v)
+	return ok && f != math.Trunc(f)
+}
+
+func rangeBoundValue(def map[string]any, ftype, field string, v any, tz, format string, roundUp bool) (any, *apiError) {
+	switch ftype {
+	case "date", "date_nanos", "date_range":
+		return parseRangeDateBound(def, v, tz, format, roundUp)
+	case "ip", "ip_range":
+		ctx := &indexCtx{indexCoerce: true}
+		if _, isRange := v.(map[string]any); isRange {
+			return v, nil
+		}
+		return ctx.parseIPValue(field, v)
+	case "integer", "long", "short", "byte", "unsigned_long", "integer_range", "long_range",
+		"float", "double", "half_float", "scaled_float", "float_range", "double_range", "token_count":
+		base := strings.TrimSuffix(ftype, "_range")
+		ctx := &indexCtx{indexCoerce: true}
+		if isIntegerKind(base) {
+			if isFractionalNumber(v) {
+				return ctx.parseFloatValue(field, base, def, v)
+			}
+			return ctx.parseIntValue(field, base, def, v)
+		}
+		return ctx.parseFloatValue(field, base, def, v)
+	}
+	return v, nil
+}
+
+func rangeCompareValue(ftype string, candidate, bound any) int {
+	switch {
+	case ftype == "ip":
+		cs, _ := toString(candidate)
+		bs, _ := toString(bound)
+		return compareIPLiteral(cs, bs)
+	case isTextRangeType(ftype), ftype == "keyword", ftype == "constant_keyword", ftype == "wildcard", ftype == "":
+		cs, _ := toString(candidate)
+		bs, _ := toString(bound)
+		return strings.Compare(cs, bs)
+	}
+	return numericLess(candidate, bound)
+}
+
 func (c *queryCtx) evalRange(field string, cond map[string]any, boost float64) (bool, float64, *apiError) {
 	def, _ := mappingFieldDef(c.idx, field)
 	ftype, _ := def["type"].(string)
+	if ftype == "wildcard" {
+		reason := "failed to create query: TODO"
+		return false, 0, &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
+			RootCause: &apiError{Type: "query_shard_exception", Reason: reason},
+			CausedBy: &apiError{Type: "query_shard_exception", Reason: reason,
+				CausedBy: &apiError{Type: "unsupported_operation_exception", Reason: "TODO"}}}
+	}
 	vals, present := c.values(field)
 	if !present {
 		return false, 0, nil
 	}
-	relation := ""
-	timeZone := ""
-	if r, ok := cond["relation"].(string); ok {
-		relation = r
-	}
-	if tz, ok := cond["time_zone"].(string); ok {
-		timeZone = tz
-	}
+	relation, _ := cond["relation"].(string)
+	timeZone, _ := cond["time_zone"].(string)
+	format, _ := cond["format"].(string)
 	if b, ok := toFloat(cond["boost"]); ok {
 		boost *= b
 	}
-	parseBound := func(v any) (any, *apiError) {
-		switch ftype {
-		case "date", "date_nanos", "date_range":
-			return parseQueryDate(def, v, timeZone)
-		case "ip", "ip_range":
-			ctx := &indexCtx{indexCoerce: true}
-			if _, isRange := v.(map[string]any); isRange {
-				return v, nil
+	lower, upper := rangeQueryBounds(cond)
+	var qLower, qUpper any
+	if lower.present {
+		v, err := rangeBoundValue(def, ftype, field, lower.value, timeZone, format, !lower.incl)
+		if err != nil {
+			return false, 0, err
+		}
+		qLower = v
+	}
+	if upper.present {
+		v, err := rangeBoundValue(def, ftype, field, upper.value, timeZone, format, upper.incl)
+		if err != nil {
+			return false, 0, err
+		}
+		qUpper = v
+	}
+	switch ftype {
+	case "keyword", "constant_keyword", "wildcard":
+		if lower.present {
+			if s, ok := valueScalarString(qLower); ok {
+				qLower = normalizeQueryValue(c.idx, field, s)
 			}
-			return ctx.parseIPValue(field, v)
-		case "integer", "long", "short", "byte", "unsigned_long", "integer_range", "long_range",
-			"float", "double", "half_float", "scaled_float", "float_range", "double_range", "token_count":
-			base := strings.TrimSuffix(ftype, "_range")
-			if isIntegerKind(base) {
-				ctx := &indexCtx{indexCoerce: true}
-				return ctx.parseIntValue(field, base, def, v)
+		}
+		if upper.present {
+			if s, ok := valueScalarString(qUpper); ok {
+				qUpper = normalizeQueryValue(c.idx, field, s)
 			}
-			ctx := &indexCtx{indexCoerce: true}
-			return ctx.parseFloatValue(field, base, def, v)
-		default:
-			return v, nil
 		}
 	}
-	if _, isRangeField := map[string]bool{
-		"integer_range": true, "long_range": true, "float_range": true, "double_range": true,
-		"date_range": true, "ip_range": true,
-	}[ftype]; isRangeField {
-		lower, hasLower := cond["gte"]
-		if !hasLower {
-			lower, hasLower = cond["gt"]
-		}
-		upper, hasUpper := cond["lte"]
-		if !hasUpper {
-			upper, hasUpper = cond["lt"]
-		}
-		var qLower, qUpper any
-		if hasLower {
-			v, err := parseBound(lower)
-			if err != nil {
-				return false, 0, err
-			}
-			qLower = v
-		}
-		if hasUpper {
-			v, err := parseBound(upper)
-			if err != nil {
-				return false, 0, err
-			}
-			qUpper = v
-		}
+	if isRangeFieldType(ftype) {
 		for _, v := range vals {
 			rng, ok := v.(map[string]any)
 			if !ok {
 				continue
 			}
-			if rangeRelation(relation, qLower, qUpper, hasLower, hasUpper, rng) {
+			if rangeRelation(relation, qLower, qUpper, lower.present, lower.incl,
+				upper.present, upper.incl, rng) {
 				return true, boost, nil
 			}
 		}
 		return false, 0, nil
 	}
-	for _, v := range vals {
-		ok := true
-		for op, bound := range cond {
-			switch op {
-			case "boost", "relation", "time_zone", "format", "_name":
-				continue
+	check := func(candidate any) bool {
+		if lower.present {
+			cmp := rangeCompareValue(ftype, candidate, qLower)
+			if lower.incl && cmp < 0 {
+				return false
 			}
-			bv, err := parseBound(bound)
-			if err != nil {
-				return false, 0, err
-			}
-			var cmp int
-			if ftype == "ip" {
-				vs, _ := toString(v)
-				bs, _ := toString(bv)
-				cmp = compareIPLiteral(vs, bs)
-			} else if ftype == "text" || ftype == "keyword" || ftype == "match_only_text" || ftype == "wildcard" || ftype == "" {
-				vs, _ := toString(v)
-				bs, _ := toString(bv)
-				cmp = strings.Compare(vs, bs)
-			} else {
-				if rng, isRange := v.(map[string]any); isRange {
-					if !inRangeField(rng, bv) {
-						ok = false
-					}
-					continue
-				}
-				cmp = numericLess(v, bv)
-			}
-			switch op {
-			case "gt":
-				if !(cmp > 0) {
-					ok = false
-				}
-			case "gte":
-				if !(cmp >= 0) {
-					ok = false
-				}
-			case "lt":
-				if !(cmp < 0) {
-					ok = false
-				}
-			case "lte":
-				if !(cmp <= 0) {
-					ok = false
-				}
-			}
-			if !ok {
-				break
+			if !lower.incl && cmp <= 0 {
+				return false
 			}
 		}
-		if ok {
+		if upper.present {
+			cmp := rangeCompareValue(ftype, candidate, qUpper)
+			if upper.incl && cmp > 0 {
+				return false
+			}
+			if !upper.incl && cmp >= 0 {
+				return false
+			}
+		}
+		return true
+	}
+	for _, v := range vals {
+		if v == nil {
+			continue
+		}
+		if isTextRangeType(ftype) {
+			s, _ := valueScalarString(v)
+			for _, tok := range analyze(s) {
+				if check(tok) {
+					return true, boost, nil
+				}
+			}
+			continue
+		}
+		if check(v) {
 			return true, boost, nil
 		}
 	}
@@ -1091,6 +1564,14 @@ func (c *queryCtx) evalExists(raw map[string]any) (bool, float64, *apiError) {
 	if field == "" {
 		return false, 0, errParsing("[exists] query requires 'field'")
 	}
+	if derived, ok := c.idx.Mappings["derived"].(map[string]any); ok {
+		if _, isDerived := derived[field]; isDerived {
+			reason := "Field [" + field + "] of type [derived] does not support exist queries"
+			return false, 0, &apiError{Type: "query_shard_exception", Status: 400,
+				Reason:   "failed to create query: " + reason,
+				CausedBy: &apiError{Type: "unsupported_operation_exception", Status: 400, Reason: reason}}
+		}
+	}
 	boost := 1.0
 	if b, ok := toFloat(raw["boost"]); ok {
 		boost = b
@@ -1115,8 +1596,24 @@ func (c *queryCtx) evalExists(raw map[string]any) (bool, float64, *apiError) {
 	return false, 0, nil
 }
 
+func multitermFieldSupported(ftype string) bool {
+	switch ftype {
+	case "", "keyword", "constant_keyword", "wildcard", "text", "match_only_text",
+		"search_as_you_type", "flat_object":
+		return true
+	}
+	return false
+}
+
+func multitermFieldError(kind, field, ftype string) *apiError {
+	return &apiError{Type: "query_shard_exception", Status: 400,
+		Reason: fmt.Sprintf("Can only use %s queries on keyword and text fields - not on [%s] which is of type [%s]",
+			kind, field, ftype)}
+}
+
 func (c *queryCtx) evalPrefix(field string, raw any, boost float64) (bool, float64, *apiError) {
 	val := raw
+	caseInsensitive := false
 	if m, ok := raw.(map[string]any); ok {
 		if v, ok := m["value"]; ok {
 			val = v
@@ -1124,14 +1621,23 @@ func (c *queryCtx) evalPrefix(field string, raw any, boost float64) (bool, float
 		if b, ok := toFloat(m["boost"]); ok {
 			boost *= b
 		}
+		if ci, ok := m["case_insensitive"].(bool); ok {
+			caseInsensitive = ci
+		}
 	}
 	prefix, ok := valueScalarString(val)
 	if !ok {
 		return false, 0, nil
 	}
-	_ = prefix
 	def, _ := mappingFieldDef(c.idx, field)
 	ftype, _ := def["type"].(string)
+	if !multitermFieldSupported(ftype) {
+		return false, 0, multitermFieldError("prefix", field, ftype)
+	}
+	prefix = normalizeQueryValue(c.idx, field, prefix)
+	if caseInsensitive {
+		prefix = asciiLower(prefix)
+	}
 	vals, present := c.values(field)
 	if !present {
 		return false, 0, nil
@@ -1140,12 +1646,20 @@ func (c *queryCtx) evalPrefix(field string, raw any, boost float64) (bool, float
 		s, _ := valueScalarString(v)
 		if ftype == "text" || ftype == "match_only_text" || ftype == "search_as_you_type" {
 			for _, tok := range analyze(s) {
+				if caseInsensitive {
+					tok = asciiLower(tok)
+				}
 				if strings.HasPrefix(tok, prefix) {
 					return true, boost, nil
 				}
 			}
-		} else if strings.HasPrefix(s, prefix) {
-			return true, boost, nil
+		} else {
+			if caseInsensitive {
+				s = asciiLower(s)
+			}
+			if strings.HasPrefix(s, prefix) {
+				return true, boost, nil
+			}
 		}
 	}
 	return false, 0, nil
@@ -1153,22 +1667,34 @@ func (c *queryCtx) evalPrefix(field string, raw any, boost float64) (bool, float
 
 func (c *queryCtx) evalWildcard(field string, raw any, boost float64) (bool, float64, *apiError) {
 	val := raw
+	caseInsensitive := false
 	if m, ok := raw.(map[string]any); ok {
 		if v, ok := m["value"]; ok {
+			val = v
+		} else if v, ok := m["wildcard"]; ok {
 			val = v
 		}
 		if b, ok := toFloat(m["boost"]); ok {
 			boost *= b
+		}
+		if ci, ok := m["case_insensitive"].(bool); ok {
+			caseInsensitive = ci
 		}
 	}
 	pattern, ok := valueScalarString(val)
 	if !ok {
 		return false, 0, nil
 	}
-	pattern = strings.ToLower(pattern)
-	re := wildcardRegex(pattern)
 	def, _ := mappingFieldDef(c.idx, field)
 	ftype, _ := def["type"].(string)
+	if !multitermFieldSupported(ftype) {
+		return false, 0, multitermFieldError("wildcard", field, ftype)
+	}
+	pattern = normalizeQueryValue(c.idx, field, pattern)
+	if caseInsensitive {
+		pattern = asciiLower(pattern)
+	}
+	re := wildcardRegex(pattern)
 	vals, present := c.values(field)
 	if !present {
 		return false, 0, nil
@@ -1180,7 +1706,10 @@ func (c *queryCtx) evalWildcard(field string, raw any, boost float64) (bool, flo
 			candidates = analyze(s)
 		}
 		for _, cand := range candidates {
-			if re.MatchString(strings.ToLower(cand)) {
+			if caseInsensitive {
+				cand = asciiLower(cand)
+			}
+			if re.MatchString(cand) {
 				return true, boost, nil
 			}
 		}
@@ -1188,36 +1717,230 @@ func (c *queryCtx) evalWildcard(field string, raw any, boost float64) (bool, flo
 	return false, 0, nil
 }
 
+type regexpMatcher struct {
+	parts      []*regexp.Regexp
+	complement bool
+	empty      bool
+}
+
+func (m *regexpMatcher) matches(s string) bool {
+	if m.empty {
+		return false
+	}
+	ok := true
+	for _, re := range m.parts {
+		if !re.MatchString(s) {
+			ok = false
+			break
+		}
+	}
+	if m.complement {
+		return !ok
+	}
+	return ok
+}
+
+func splitRegexpParts(pattern string, intersection bool) []string {
+	if !intersection {
+		return []string{pattern}
+	}
+	var parts []string
+	var cur strings.Builder
+	escaped := false
+	for _, ch := range pattern {
+		if escaped {
+			cur.WriteRune('\\')
+			cur.WriteRune(ch)
+			escaped = false
+			continue
+		}
+		if ch == '\\' {
+			escaped = true
+			continue
+		}
+		if ch == '&' {
+			parts = append(parts, cur.String())
+			cur.Reset()
+			continue
+		}
+		cur.WriteRune(ch)
+	}
+	parts = append(parts, cur.String())
+	return parts
+}
+
+func luceneIntervalToRegexp(pattern string) string {
+	var out strings.Builder
+	for i := 0; i < len(pattern); i++ {
+		if pattern[i] != '<' {
+			out.WriteByte(pattern[i])
+			continue
+		}
+		j := i + 1
+		for j < len(pattern) && pattern[j] != '>' {
+			j++
+		}
+		if j >= len(pattern) {
+			out.WriteString("<")
+			continue
+		}
+		body := pattern[i+1 : j]
+		lo, hi := 0, 0
+		var err error
+		if k := strings.Index(body, "-"); k >= 0 {
+			lo, err = strconv.Atoi(body[:k])
+			if err != nil {
+				out.WriteString(pattern[i : j+1])
+				i = j
+				continue
+			}
+			hi, err = strconv.Atoi(body[k+1:])
+			if err != nil {
+				out.WriteString(pattern[i : j+1])
+				i = j
+				continue
+			}
+		} else {
+			lo, err = strconv.Atoi(body)
+			if err != nil {
+				out.WriteString(pattern[i : j+1])
+				i = j
+				continue
+			}
+			hi = lo
+		}
+		if lo < 0 || hi < lo || hi-lo > 1000 {
+			out.WriteString(pattern[i : j+1])
+			i = j
+			continue
+		}
+		out.WriteString("(?:")
+		for n := lo; n <= hi; n++ {
+			if n > lo {
+				out.WriteString("|")
+			}
+			out.WriteString(strconv.Itoa(n))
+		}
+		out.WriteString(")")
+		i = j
+	}
+	return out.String()
+}
+
+func buildRegexpMatcher(pattern, flags string, caseInsensitive bool) (*regexpMatcher, error) {
+	upper := strings.ToUpper(flags)
+	has := func(name string) bool {
+		for _, part := range strings.FieldsFunc(upper, func(r rune) bool { return r == ',' || r == '|' }) {
+			if strings.TrimSpace(part) == name {
+				return true
+			}
+		}
+		return false
+	}
+	all := has("ALL")
+	none := has("NONE")
+	intersection := !none && (all || has("INTERSECTION"))
+	anystring := !none && (all || has("ANYSTRING"))
+	interval := !none && (all || has("INTERVAL"))
+	complementEnabled := has("COMPLEMENT")
+	m := &regexpMatcher{}
+	if strings.HasPrefix(pattern, "~") && complementEnabled {
+		m.complement = true
+		pattern = pattern[1:]
+	}
+	for _, part := range splitRegexpParts(pattern, intersection) {
+		if anystring {
+			part = strings.ReplaceAll(part, "@", ".*")
+		}
+		if interval {
+			part = luceneIntervalToRegexp(part)
+		}
+		whole := "^(?:" + part + ")$"
+		if caseInsensitive {
+			whole = "(?i)" + whole
+		}
+		re, err := regexp.Compile(whole)
+		if err != nil {
+			return nil, err
+		}
+		m.parts = append(m.parts, re)
+	}
+	return m, nil
+}
+
+func regexpStateEstimate(pattern string) int {
+	states := 1
+	for i := 0; i < len(pattern); i++ {
+		if pattern[i] == '{' {
+			j := i + 1
+			for j < len(pattern) && pattern[j] != '}' {
+				j++
+			}
+			if j < len(pattern) {
+				body := pattern[i+1 : j]
+				if k := strings.LastIndex(body, ","); k >= 0 {
+					if n, err := strconv.Atoi(strings.TrimSpace(body[k+1:])); err == nil && n > 0 {
+						states += n
+						i = j
+						continue
+					}
+				} else if n, err := strconv.Atoi(strings.TrimSpace(body)); err == nil && n > 0 {
+					states += n
+					i = j
+					continue
+				}
+			}
+		}
+		states++
+	}
+	return states
+}
+
 func (c *queryCtx) evalRegexp(field string, raw any, boost float64) (bool, float64, *apiError) {
 	val := raw
+	flags := ""
+	caseInsensitive := false
+	maxStates := 10000
 	if m, ok := raw.(map[string]any); ok {
 		if v, ok := m["value"]; ok {
+			val = v
+		} else if v, ok := m["regexp"]; ok {
 			val = v
 		}
 		if b, ok := toFloat(m["boost"]); ok {
 			boost *= b
 		}
-		if states, ok := toFloat(m["max_determinized_states"]); ok && states <= 10 {
-			return false, 0, &apiError{Type: "search_phase_execution_exception", Status: 400,
-				Reason: "failed to create query: [regexp] parsing failed. would require more than 10 effort",
-				RootCause: &apiError{Type: "query_shard_exception",
-					Reason: "failed to create query: [regexp] parsing failed. would require more than 10 effort"}}
+		if f, ok := m["flags"].(string); ok {
+			flags = f
+		}
+		if ci, ok := m["case_insensitive"].(bool); ok {
+			caseInsensitive = ci
+		}
+		if states, ok := toFloat(m["max_determinized_states"]); ok {
+			maxStates = int(states)
 		}
 	}
 	pattern, ok := valueScalarString(val)
 	if !ok {
 		return false, 0, nil
 	}
-	whole := "^(?:" + pattern + ")$"
-	re, err := regexp.Compile(whole)
-	if err != nil {
-		msg := "unexpected end-of-string"
-		return false, 0, &apiError{Type: "search_phase_execution_exception", Status: 400,
-			Reason:    "failed to create query: " + msg,
-			RootCause: &apiError{Type: "query_shard_exception", Reason: msg}}
-	}
 	def, _ := mappingFieldDef(c.idx, field)
 	ftype, _ := def["type"].(string)
+	if !multitermFieldSupported(ftype) {
+		return false, 0, multitermFieldError("regexp", field, ftype)
+	}
+	if estimate := regexpStateEstimate(pattern); estimate > maxStates {
+		reason := fmt.Sprintf("Determinizing automaton with %d states and %d transitions would require more than %d effort.",
+			estimate, estimate*2, maxStates)
+		return false, 0, &apiError{Type: "query_shard_exception", Status: 400, Reason: reason,
+			CausedBy: &apiError{Type: "too_complex_to_determinize_exception", Status: 400, Reason: reason}}
+	}
+	matcher, err := buildRegexpMatcher(pattern, flags, caseInsensitive)
+	if err != nil {
+		msg := "unexpected end-of-string"
+		return false, 0, &apiError{Type: "query_shard_exception", Status: 400, Reason: msg,
+			CausedBy: &apiError{Type: "illegal_argument_exception", Status: 400, Reason: msg}}
+	}
 	vals, present := c.values(field)
 	if !present {
 		return false, 0, nil
@@ -1229,7 +1952,7 @@ func (c *queryCtx) evalRegexp(field string, raw any, boost float64) (bool, float
 			candidates = analyze(s)
 		}
 		for _, cand := range candidates {
-			if re.MatchString(cand) {
+			if matcher.matches(cand) {
 				return true, boost, nil
 			}
 		}
@@ -1270,11 +1993,58 @@ func (c *queryCtx) evalFuzzy(field string, raw any, boost float64) (bool, float6
 	}
 	def, _ := mappingFieldDef(c.idx, field)
 	ftype, _ := def["type"].(string)
+	if !multitermFieldSupported(ftype) || ftype == "wildcard" {
+		reason := fmt.Sprintf("Can only use fuzzy queries on keyword and text fields - not on [%s] which is of type [%s]",
+			field, ftype)
+		return false, 0, matchSearchError("query_shard_exception", "failed to create query: "+reason)
+	}
 	vals, present := c.values(field)
 	if !present {
 		return false, 0, nil
 	}
-	matched := 0
+	var expansionSet map[string]bool
+	if maxExpansions > 0 {
+		resolved := resolveAliasField(c.idx, field)
+		termSet := map[string]bool{}
+		for _, dv := range c.idx.DocValues {
+			for _, v := range dv[resolved] {
+				s, ok := valueScalarString(v)
+				if !ok {
+					continue
+				}
+				if ftype == "text" || ftype == "match_only_text" {
+					for _, tok := range analyze(s) {
+						termSet[tok] = true
+					}
+				} else {
+					termSet[s] = true
+				}
+			}
+		}
+		terms := make([]string, 0, len(termSet))
+		for t := range termSet {
+			terms = append(terms, t)
+		}
+		sort.Strings(terms)
+		expansionSet = map[string]bool{}
+		for _, cand := range terms {
+			if cand != term {
+				if len(cand) <= prefixLength || len(term) <= prefixLength {
+					continue
+				}
+				if cand[:prefixLength] != term[:prefixLength] {
+					continue
+				}
+				if fuzzyDistance(cand, term, transpositions) > fuzz {
+					continue
+				}
+			}
+			expansionSet[cand] = true
+			if len(expansionSet) >= maxExpansions {
+				break
+			}
+		}
+	}
 	for _, v := range vals {
 		s, _ := valueScalarString(v)
 		candidates := []string{s}
@@ -1282,6 +2052,15 @@ func (c *queryCtx) evalFuzzy(field string, raw any, boost float64) (bool, float6
 			candidates = analyze(s)
 		}
 		for _, cand := range candidates {
+			if expansionSet != nil {
+				if !expansionSet[cand] {
+					continue
+				}
+				if cand == term {
+					return true, boost * 2, nil
+				}
+				return true, boost, nil
+			}
 			if cand == term {
 				return true, boost * 2, nil
 			}
@@ -1292,10 +2071,6 @@ func (c *queryCtx) evalFuzzy(field string, raw any, boost float64) (bool, float6
 				continue
 			}
 			if fuzzyDistance(cand, term, transpositions) <= fuzz {
-				if maxExpansions > 0 && matched >= maxExpansions {
-					continue
-				}
-				matched++
 				return true, boost, nil
 			}
 		}
@@ -1361,6 +2136,10 @@ func (c *queryCtx) analyzerName(field string, opts any) string {
 func (c *queryCtx) analyzeField(field string, opts any, text string) []string {
 	a := c.analyzerName(field, opts)
 	return analyzeWithIndex(c.idx, a, text)
+}
+
+func matchShardError(reason string) *apiError {
+	return &apiError{Type: "query_shard_exception", Status: 400, Reason: reason}
 }
 
 func matchSearchError(rootType, reason string) *apiError {
@@ -1609,7 +2388,7 @@ func (c *queryCtx) evalMatch(field string, raw any, boost float64) (bool, float6
 			"minimum_should_match": true, "fuzziness": true, "fuzzy_transpositions": true,
 			"prefix_length": true, "max_expansions": true, "lenient": true, "zero_terms_query": true,
 			"boost": true, "auto_generate_synonyms_phrase_query": true, "fuzzy_rewrite": true,
-			"cutoff_frequency": true}
+			"cutoff_frequency": true, "_name": true}
 		for k := range m {
 			if !allowed[k] {
 				return false, 0, errParsing("[match] query does not support [" + k + "]")
@@ -1701,11 +2480,14 @@ func (c *queryCtx) evalMatch(field string, raw any, boost float64) (bool, float6
 		}
 		return false, 0, nil
 	}
-	if ftype == "keyword" || ftype == "constant_keyword" || ftype == "wildcard" || ftype == "flat_object" {
+	_, flatSub := flatObjectRoot(c.idx, field)
+	if ftype == "keyword" || ftype == "constant_keyword" || ftype == "wildcard" || ftype == "flat_object" ||
+		(ftype == "" && flatSub) {
 		vals, present := c.values(field)
 		if !present {
 			return false, 0, nil
 		}
+		text = normalizeQueryValue(c.idx, field, text)
 		for _, v := range vals {
 			s, _ := valueScalarString(v)
 			if s == text {
@@ -1747,16 +2529,6 @@ func (c *queryCtx) evalMatch(field string, raw any, boost float64) (bool, float6
 		return false, 0, nil
 	}
 	qtokens := c.analyzeField(field, opts, text)
-	if strings.Contains(text, "3") {
-		fmt.Fprintf(os.Stderr, "DBG evalMatch field=%q text=%q analyzer=%q qtokens=%v doc=%v\n", field, text, c.analyzerName(field, opts), qtokens, func() []string {
-			out := []string{}
-			for _, v := range c.mustValues(field) {
-				s, _ := valueScalarString(v)
-				out = append(out, c.analyzeField(field, nil, s)...)
-			}
-			return out
-		}())
-	}
 	if len(qtokens) == 0 {
 		ztq := "none"
 		if m != nil {
@@ -2058,43 +2830,67 @@ func (c *queryCtx) evalMatchBoolPrefix(field string, raw any, boost float64) (bo
 // bool / compound
 // ---------------------------------------------------------------------------
 
+func calculateMinimumShouldMatch(spec string, clauseCount int) (int, bool) {
+	if i := strings.Index(spec, "<"); i >= 0 {
+		threshold, err := strconv.Atoi(spec[:i])
+		if err != nil {
+			return 0, false
+		}
+		if clauseCount <= threshold {
+			return clauseCount, true
+		}
+		return calculateMinimumShouldMatch(spec[i+1:], clauseCount)
+	}
+	if strings.HasSuffix(spec, "%") {
+		body := strings.TrimSuffix(spec, "%")
+		neg := strings.HasPrefix(body, "-")
+		body = strings.TrimPrefix(body, "-")
+		pct, err := strconv.ParseFloat(body, 64)
+		if err != nil {
+			return 0, false
+		}
+		v := int(math.Floor(pct / 100 * float64(clauseCount)))
+		if neg {
+			return clauseCount - v, true
+		}
+		return v, true
+	}
+	n, err := strconv.Atoi(spec)
+	if err != nil {
+		return 0, false
+	}
+	if n < 0 {
+		return clauseCount + n, true
+	}
+	return n, true
+}
+
 func minimumShouldMatch(spec any, clauseCount, matched int) int {
 	required := 1
 	switch t := spec.(type) {
 	case json.Number:
 		if n, err := t.Int64(); err == nil {
-			required = int(n)
+			if n < 0 {
+				required = clauseCount + int(n)
+			} else {
+				required = int(n)
+			}
 		}
 	case float64:
-		required = int(t)
-	case string:
-		s := strings.TrimSpace(t)
-		if strings.HasSuffix(s, "%") {
-			neg := strings.HasPrefix(s, "-")
-			s = strings.TrimPrefix(s, "-")
-			pct, _ := strconv.ParseFloat(strings.TrimSuffix(s, "%"), 64)
-			v := int(pct / 100 * float64(clauseCount))
-			if neg {
-				required = clauseCount - v
-			} else {
-				required = v
-			}
+		if t < 0 {
+			required = clauseCount + int(t)
 		} else {
-			n, err := strconv.Atoi(s)
-			if err == nil {
-				if n < 0 {
-					required = clauseCount + n
-				} else {
-					required = n
-				}
+			required = int(t)
+		}
+	case string:
+		for _, part := range strings.Fields(strings.TrimSpace(t)) {
+			if n, ok := calculateMinimumShouldMatch(part, clauseCount); ok {
+				required = n
 			}
 		}
 	}
 	if required < 0 {
 		required = 0
-	}
-	if required > clauseCount {
-		required = clauseCount
 	}
 	return required
 }
@@ -2199,6 +2995,9 @@ func (c *queryCtx) evalBool(raw map[string]any, boost float64) (bool, float64, *
 		}
 	}
 	if len(must) == 0 && len(filter) == 0 && len(should) == 0 {
+		if len(mustNot) > 0 {
+			return true, 0, nil
+		}
 		return true, boost * 1.0, nil
 	}
 	return true, boost * score, nil
@@ -2602,10 +3401,14 @@ func (c *queryCtx) eval(raw map[string]any) (bool, float64, *apiError) {
 			return c.evalHasChild(body)
 		case "has_parent":
 			return c.evalHasParent(body)
+		case "parent_id":
+			return c.evalParentId(body)
 		case "geo_distance":
 			return c.evalGeoDistance(body)
 		case "geo_bounding_box":
 			return c.evalGeoBoundingBox(body)
+		case "geo_polygon":
+			return c.evalGeoPolygon(body)
 		case "geo_shape":
 			return c.evalGeoShape(body)
 		case "script":

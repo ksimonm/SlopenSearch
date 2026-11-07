@@ -724,6 +724,21 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 	if err := validateMappingFull(mergedMappings); err != nil {
 		return nil, err
 	}
+	fieldLimit := 1000
+	if v, ok := settingInt(canonical, "mapping.total_fields.limit"); ok {
+		fieldLimit = v
+	}
+	if countMappedFields(mergedMappings) > fieldLimit {
+		return nil, totalFieldsError(fieldLimit)
+	}
+	nestedLimit := 50
+	if v, ok := settingInt(canonical, "mapping.nested_fields.limit"); ok {
+		nestedLimit = v
+	}
+	if countNestedFields(mergedMappings) > nestedLimit {
+		return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+			Reason: fmt.Sprintf("Limit of nested fields [%d] has been exceeded", nestedLimit)}
+	}
 
 	aliasesRaw, _ := body["aliases"].(map[string]any)
 	aliases := map[string]map[string]any{}
@@ -799,17 +814,189 @@ func normalizeAliasDef(def map[string]any) map[string]any {
 	return out
 }
 
+func parseDynamicSetting(v any) (string, bool) {
+	switch t := v.(type) {
+	case bool:
+		if t {
+			return "true", true
+		}
+		return "false", true
+	case string:
+		switch t {
+		case "true", "false", "strict", "strict_allow_templates", "false_allow_templates":
+			return t, true
+		}
+	}
+	return "", false
+}
+
+func dynamicConvertError(path string, v any) *apiError {
+	reason := "Could not convert [" + path + ".dynamic] to boolean"
+	return &apiError{Type: "mapper_parsing_exception", Status: 400,
+		Reason: "Failed to parse mapping [_doc]: " + reason,
+		CausedBy: &apiError{Type: "illegal_argument_exception", Reason: reason,
+			CausedBy: &apiError{Type: "illegal_argument_exception",
+				Reason: "Failed to parse value [" + previewValue(v) + "] as only [true] or [false] are allowed."}}}
+}
+
+// normalizeDynamicMapping converts the accepted "dynamic" spellings to the
+// canonical strings OpenSearch renders back in the mapping, and rejects any
+// other value.
+func normalizeDynamicMapping(mappings map[string]any) *apiError {
+	if v, ok := mappings["dynamic"]; ok {
+		s, valid := parseDynamicSetting(v)
+		if !valid {
+			return dynamicConvertError("dynamic", v)
+		}
+		mappings["dynamic"] = s
+	}
+	if props, ok := mappings["properties"].(map[string]any); ok {
+		if err := normalizeDynamicProps(props, ""); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeDynamicProps(props map[string]any, prefix string) *apiError {
+	for name, raw := range props {
+		def, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		path := name
+		if prefix != "" {
+			path = prefix + "." + name
+		}
+		if v, ok := def["dynamic"]; ok {
+			s, valid := parseDynamicSetting(v)
+			if !valid {
+				return dynamicConvertError(path, v)
+			}
+			def["dynamic"] = s
+		}
+		if sub, ok := def["properties"].(map[string]any); ok {
+			if err := normalizeDynamicProps(sub, path); err != nil {
+				return err
+			}
+		}
+		if fields, ok := def["fields"].(map[string]any); ok {
+			if err := normalizeDynamicProps(fields, path); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// countMappedFields counts every object, leaf and multi-field in a mapping.
+func countMappedFields(mappings map[string]any) int {
+	var walk func(props map[string]any) int
+	walk = func(props map[string]any) int {
+		n := 0
+		for _, raw := range props {
+			n++
+			def, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if sub, ok := def["properties"].(map[string]any); ok {
+				n += walk(sub)
+			}
+			if fields, ok := def["fields"].(map[string]any); ok {
+				n += len(fields)
+			}
+		}
+		return n
+	}
+	props, _ := mappings["properties"].(map[string]any)
+	return walk(props)
+}
+
+func totalFieldsLimit(idx *Index) int {
+	if v, ok := settingInt(idx.Settings, "mapping.total_fields.limit"); ok {
+		return v
+	}
+	return 1000
+}
+
+func totalFieldsError(limit int) *apiError {
+	return &apiError{Type: "illegal_argument_exception", Status: 400,
+		Reason: fmt.Sprintf("Limit of total fields [%d] has been exceeded", limit)}
+}
+
+func checkTotalFields(idx *Index) *apiError {
+	limit := totalFieldsLimit(idx)
+	if countMappedFields(idx.Mappings) > limit {
+		return totalFieldsError(limit)
+	}
+	return nil
+}
+
+func countNestedFields(mappings map[string]any) int {
+	var walk func(props map[string]any) int
+	walk = func(props map[string]any) int {
+		n := 0
+		for _, raw := range props {
+			def, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if t, _ := def["type"].(string); t == "nested" {
+				n++
+			}
+			if sub, ok := def["properties"].(map[string]any); ok {
+				n += walk(sub)
+			}
+		}
+		return n
+	}
+	props, _ := mappings["properties"].(map[string]any)
+	return walk(props)
+}
+
+func checkNestedFields(idx *Index) *apiError {
+	limit := 50
+	if v, ok := settingInt(idx.Settings, "mapping.nested_fields.limit"); ok {
+		limit = v
+	}
+	if countNestedFields(idx.Mappings) > limit {
+		return &apiError{Type: "illegal_argument_exception", Status: 400,
+			Reason: fmt.Sprintf("Limit of nested fields [%d] has been exceeded", limit)}
+	}
+	return nil
+}
+
 func validateMappingFull(mappings map[string]any) *apiError {
+	normalizeDerivedMappings(mappings)
+	if err := normalizeDynamicMapping(mappings); err != nil {
+		return err
+	}
+	if err := validateMappingSource(mappings); err != nil {
+		return err
+	}
 	props, ok := mappings["properties"].(map[string]any)
 	if !ok {
 		return nil
 	}
-	if err := validateProps(props); err != nil {
-		reason := err.Error()
-		return &apiError{Type: "mapper_parsing_exception", Status: 400,
-			Reason:   "Failed to parse mapping [_doc]: " + reason,
-			CausedBy: &apiError{Type: "mapper_parsing_exception", Reason: reason}}
+	if err := validatePropsMeta(props); err != nil {
+		return err
 	}
+	if err := validateProps(props); err != nil {
+		return &apiError{Type: "mapper_parsing_exception", Status: 400,
+			Reason:   "Failed to parse mapping [_doc]: " + err.Reason,
+			CausedBy: &apiError{Type: err.Cause, Reason: err.Reason}}
+	}
+	if err := validateAliasMappings(props); err != nil {
+		return err
+	}
+	if err := validateCopyToTargets(props); err != nil {
+		return err
+	}
+	if err := validateJoinPlacement(props, ""); err != nil {
+		return err
+	}
+	normalizeKnnVectors(props)
 	return nil
 }
 

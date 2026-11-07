@@ -130,31 +130,36 @@ func unmarshalJSON(b []byte, v any) error {
 }
 
 func readJSON(r *http.Request) (map[string]any, *apiError) {
+	out, _, apiErr := readJSONRaw(r)
+	return out, apiErr
+}
+
+func readJSONRaw(r *http.Request) (map[string]any, []byte, *apiError) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		return nil, errBad("failed to read body")
+		return nil, nil, errBad("failed to read body")
 	}
 	if len(strings.TrimSpace(string(body))) == 0 {
 		if src := r.URL.Query().Get("source"); src != "" {
 			body = []byte(src)
 		} else {
-			return map[string]any{}, nil
+			return map[string]any{}, body, nil
 		}
 	}
 	if err := checkDuplicateJSONKeys(body); err != nil {
-		return nil, &apiError{Type: "json_parse_exception", Status: 400, Reason: err.Error()}
+		return nil, body, &apiError{Type: "json_parse_exception", Status: 400, Reason: err.Error()}
 	}
 	trimmed := strings.TrimSpace(string(body))
 	if strings.HasPrefix(trimmed, "[") {
-		return nil, &apiError{Type: "parsing_exception", Status: 400,
+		return nil, body, &apiError{Type: "parsing_exception", Status: 400,
 			Reason: "Expected [START_OBJECT] but found [START_ARRAY]"}
 	}
 	var out map[string]any
 	if err := unmarshalJSON(body, &out); err != nil {
-		return nil, &apiError{Type: "json_parse_exception", Status: 400,
+		return nil, body, &apiError{Type: "json_parse_exception", Status: 400,
 			Reason: "Failed to parse request body: " + err.Error()}
 	}
-	return out, nil
+	return out, body, nil
 }
 
 func checkDuplicateJSONKeys(body []byte) error {
@@ -1422,7 +1427,7 @@ func parseQParamOpts(q, df, op string) (map[string]any, *apiError) {
 }
 
 func (s *Server) handleCount(w http.ResponseWriter, r *http.Request, name string) {
-	body, apiErr := readJSON(r)
+	body, bodyRaw, apiErr := readJSONRaw(r)
 	if apiErr != nil {
 		writeError(w, apiErr)
 		return
@@ -1470,6 +1475,19 @@ func (s *Server) handleCount(w http.ResponseWriter, r *http.Request, name string
 	if _, ok := query["match_all"]; ok {
 		matchAll = true
 	}
+	if len(indices) > 0 {
+		if verr := validateQuery(indices[0], query); verr != nil {
+			if verr.Clause != "" {
+				annotateQueryClause(verr, bodyRaw)
+				writeError(w, verr)
+			} else if verr.ForceTop {
+				writeError(w, verr)
+			} else {
+				writeQueryShardError(w, indices[0], verr)
+			}
+			return
+		}
+	}
 	total := 0
 	shards := 0
 	sf := newShardFilter(r, indices)
@@ -1497,19 +1515,11 @@ func (s *Server) handleCount(w http.ResponseWriter, r *http.Request, name string
 			qc := newQueryCtxForDoc(idx, id, doc)
 			matched, _, err := qc.eval(q)
 			if err != nil {
-				if err.Type == "illegal_argument_exception" && strings.Contains(err.Reason, "failed to parse value [") {
-					val := err.Reason
-					if i := strings.Index(val, "["); i >= 0 {
-						if j := strings.Index(val[i+1:], "]"); j >= 0 {
-							val = val[i+1 : i+1+j]
-						}
-					}
-					reason := "failed to create query: For input string: \"" + val + "\""
-					writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: reason,
-						RootCause: &apiError{Type: "query_shard_exception", Reason: reason}})
-					return
+				if isQueryShardCause(err) {
+					writeQueryShardError(w, idx, err)
+				} else {
+					writeError(w, err)
 				}
-				writeError(w, err)
 				return
 			}
 			if matched {
@@ -1763,15 +1773,24 @@ func bulkErrAPI(op, index, id string, e *apiError) map[string]any {
 
 // checkDynamicStrict enforces a mapping-level "dynamic":"strict" setting.
 func checkDynamicStrict(idx *Index, props map[string]any, source map[string]any) *apiError {
-	dyn, ok := idx.Mappings["dynamic"].(string)
-	if !ok || dyn != "strict" {
+	dyn := rootDynamicString(idx)
+	if dyn != "strict" && dyn != "strict_allow_templates" {
 		return nil
 	}
-	for k := range source {
-		if _, known := props[k]; !known {
-			return &apiError{Type: "strict_dynamic_mapping_exception", Status: 400,
-				Reason: "dynamic introduction of [" + k + "] within [_doc] is not allowed"}
+	for k, v := range source {
+		if strings.HasPrefix(k, "_") {
+			continue
 		}
+		if _, known := props[k]; known {
+			continue
+		}
+		if dyn == "strict_allow_templates" {
+			if _, matched, _ := dynamicDefFor(idx, k, k, v); matched {
+				continue
+			}
+		}
+		return &apiError{Type: "strict_dynamic_mapping_exception", Status: 400,
+			Reason: "mapping set to " + dyn + ", dynamic introduction of [" + k + "] within [_doc] is not allowed"}
 	}
 	return nil
 }
