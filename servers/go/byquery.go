@@ -222,9 +222,11 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 			failures = append(failures, byQueryFailure(idx.Name, id, derr))
 			continue
 		}
-		mergeMappingForIndex(idx, props, newDoc)
-		idx.FieldTypes = map[string]string{}
-		buildFieldTypes(idx.Mappings, "", idx.FieldTypes)
+		if derr := mergeMappingForIndex(idx, props, newDoc); derr != nil {
+			failures = append(failures, byQueryFailure(idx.Name, id, derr))
+			continue
+		}
+		ensureFieldTypes(idx)
 		if derr := idx.computeDocValues(id, newDoc); derr != nil {
 			failures = append(failures, byQueryFailure(idx.Name, id, derr))
 			continue

@@ -482,9 +482,10 @@ func (s *Server) runBulkIndex(idx *Index, a bulkAction, id, routing, rv, urlPipe
 	if derr := checkDynamicStrict(idx, props, src); derr != nil {
 		return bulkErrItem(a.op, idx.Name, id, derr), true
 	}
-	mergeMappingForIndex(idx, props, src)
-	idx.FieldTypes = map[string]string{}
-	buildFieldTypes(idx.Mappings, "", idx.FieldTypes)
+	if derr := mergeMappingForIndex(idx, props, src); derr != nil {
+		return bulkErrItem(a.op, idx.Name, id, derr), true
+	}
+	ensureFieldTypes(idx)
 	if derr := idx.computeDocValues(id, src); derr != nil {
 		return bulkErrItem(a.op, idx.Name, id, derr), true
 	}
@@ -559,9 +560,10 @@ func (s *Server) runBulkUpdate(idx *Index, a bulkAction, id, routing, rv, urlSou
 		if derr := mappingShapeConflict(props, src); derr != nil {
 			return bulkErrItem("update", idx.Name, id, derr), true
 		}
-		mergeMappingForIndex(idx, props, src)
-		idx.FieldTypes = map[string]string{}
-		buildFieldTypes(idx.Mappings, "", idx.FieldTypes)
+		if derr := mergeMappingForIndex(idx, props, src); derr != nil {
+			return bulkErrItem(a.op, idx.Name, id, derr), true
+		}
+		ensureFieldTypes(idx)
 		if derr := idx.computeDocValues(id, src); derr != nil {
 			return bulkErrItem("update", idx.Name, id, derr), true
 		}
@@ -621,9 +623,10 @@ func (s *Server) runBulkUpdate(idx *Index, a bulkAction, id, routing, rv, urlSou
 	if derr := mappingShapeConflict(props, newDoc); derr != nil {
 		return bulkErrItem("update", idx.Name, id, derr), true
 	}
-	mergeMappingForIndex(idx, props, newDoc)
-	idx.FieldTypes = map[string]string{}
-	buildFieldTypes(idx.Mappings, "", idx.FieldTypes)
+	if derr := mergeMappingForIndex(idx, props, newDoc); derr != nil {
+		return bulkErrItem("update", idx.Name, id, derr), true
+	}
+	ensureFieldTypes(idx)
 	if derr := idx.computeDocValues(id, newDoc); derr != nil {
 		return bulkErrItem("update", idx.Name, id, derr), true
 	}

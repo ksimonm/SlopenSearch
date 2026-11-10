@@ -1177,9 +1177,11 @@ func (s *Server) handleIndexDoc(w http.ResponseWriter, r *http.Request, name, id
 		writeError(w, derr)
 		return
 	}
-	mergeMappingForIndex(idx, props, body)
-	idx.FieldTypes = map[string]string{}
-	buildFieldTypes(idx.Mappings, "", idx.FieldTypes)
+	if derr := mergeMappingForIndex(idx, props, body); derr != nil {
+		writeError(w, derr)
+		return
+	}
+	ensureFieldTypes(idx)
 	if id == "" {
 		id = s.nextID()
 	}
@@ -1343,9 +1345,11 @@ func (s *Server) handleUpdateDoc(w http.ResponseWriter, r *http.Request, name, i
 	}
 	if patch, ok := body["doc"].(map[string]any); ok {
 		props := ensureProperties(idx.Mappings)
-		mergeMappingForIndex(idx, props, patch)
-		idx.FieldTypes = map[string]string{}
-		buildFieldTypes(idx.Mappings, "", idx.FieldTypes)
+		if derr := mergeMappingForIndex(idx, props, patch); derr != nil {
+			writeError(w, derr)
+			return
+		}
+		ensureFieldTypes(idx)
 		for k, v := range patch {
 			doc[k] = v
 		}
@@ -1657,9 +1661,12 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, name string)
 				continue
 			}
 			props := ensureProperties(idx.Mappings)
-			mergeMappingForIndex(idx, props, source)
-			idx.FieldTypes = map[string]string{}
-			buildFieldTypes(idx.Mappings, "", idx.FieldTypes)
+			if derr := mergeMappingForIndex(idx, props, source); derr != nil {
+				hasErrors = true
+				items = append(items, bulkErrAPI("update", idx.Name, docID, derr))
+				continue
+			}
+			ensureFieldTypes(idx)
 			for k, v := range source {
 				doc[k] = v
 			}
@@ -1705,9 +1712,12 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, name string)
 			items = append(items, bulkErrAPI(op, idx.Name, docID, derr))
 			continue
 		}
-		mergeMappingForIndex(idx, props, source)
-		idx.FieldTypes = map[string]string{}
-		buildFieldTypes(idx.Mappings, "", idx.FieldTypes)
+		if derr := mergeMappingForIndex(idx, props, source); derr != nil {
+			hasErrors = true
+			items = append(items, bulkErrAPI(op, idx.Name, docID, derr))
+			continue
+		}
+		ensureFieldTypes(idx)
 		if docID == "" {
 			docID = s.nextID()
 		}

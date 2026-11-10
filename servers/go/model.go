@@ -403,6 +403,17 @@ func toString(v any) (string, bool) {
 }
 
 func buildFieldTypes(mappings map[string]any, prefix string, out map[string]string) {
+	if prefix == "" {
+		if derived, ok := mappings["derived"].(map[string]any); ok {
+			for name, raw := range derived {
+				if def, ok := raw.(map[string]any); ok {
+					if t, ok := def["type"].(string); ok {
+						out[name] = t
+					}
+				}
+			}
+		}
+	}
 	props, ok := mappings["properties"].(map[string]any)
 	if !ok {
 		return
@@ -1085,20 +1096,31 @@ func dynamicDefFor(idx *Index, path, name string, raw any) (map[string]any, bool
 	return def, matched, nil
 }
 
-func mergeMappingForIndex(idx *Index, props, src map[string]any) {
+func mergeMappingForIndex(idx *Index, props, src map[string]any) *apiError {
+	if enabled, ok := idx.Mappings["enabled"].(bool); ok && !enabled {
+		return nil
+	}
 	dyn := rootDynamicString(idx)
 	if dyn == "false" || dyn == "false_allow_templates" {
-		return
+		return nil
 	}
-	mergeMapping(idx, props, "", dyn, src)
+	return mergeMapping(idx, props, "", dyn, src)
 }
 
-func mergeMapping(idx *Index, props map[string]any, path, dyn string, src map[string]any) {
+func mergeMapping(idx *Index, props map[string]any, path, dyn string, src map[string]any) *apiError {
 	if dyn == "false" {
-		return
+		return nil
 	}
-	for k, v := range src {
-		if strings.HasPrefix(k, "_") {
+	expanded, derr := expandDottedObject(src)
+	if derr != nil {
+		return derr
+	}
+	for rawK, v := range expanded {
+		k := strings.TrimRight(rawK, ".")
+		if k == "" {
+			k = rawK
+		}
+		if isDocumentMetadataField(k) {
 			continue
 		}
 		childPath := k
@@ -1107,7 +1129,10 @@ func mergeMapping(idx *Index, props map[string]any, path, dyn string, src map[st
 		}
 		existing, declared := props[k].(map[string]any)
 		if !declared {
-			def, matched, _ := dynamicDefFor(idx, childPath, k, v)
+			def, matched, err := dynamicDefFor(idx, childPath, k, v)
+			if err != nil {
+				return err
+			}
 			allow := true
 			switch dyn {
 			case "false", "strict":
@@ -1128,21 +1153,35 @@ func mergeMapping(idx *Index, props map[string]any, path, dyn string, src map[st
 		if sub, ok := existing["properties"].(map[string]any); ok {
 			switch t := v.(type) {
 			case map[string]any:
-				mergeMapping(idx, sub, childPath, childDyn, t)
+				if err := mergeMapping(idx, sub, childPath, childDyn, t); err != nil {
+					return err
+				}
 			case []any:
 				for _, e := range t {
 					if m, ok := e.(map[string]any); ok {
-						mergeMapping(idx, sub, childPath, childDyn, m)
+						if err := mergeMapping(idx, sub, childPath, childDyn, m); err != nil {
+							return err
+						}
 					}
 				}
 			}
 		}
 	}
+	return nil
 }
 
 func ensureFieldTypes(idx *Index) {
 	fresh := map[string]string{}
 	buildFieldTypes(idx.Mappings, "", fresh)
+	for path, t := range fresh {
+		if t == "alias" {
+			if target := resolveAliasField(idx, path); target != path {
+				if tt, ok := fresh[target]; ok {
+					fresh[path] = tt
+				}
+			}
+		}
+	}
 	idx.FieldTypes = fresh
 }
 

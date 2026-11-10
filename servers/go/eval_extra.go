@@ -127,7 +127,14 @@ func (c *queryCtx) bm25FieldScore(field string, qtokens []string, operator strin
 		avgdl = 1
 	}
 	const k1 = 1.2
-	const b = 0.75
+	bParam := 0.75
+	if v, ok := def["norms"].(bool); ok && !v {
+		bParam = 0
+	}
+	docsOnly := false
+	if io, _ := def["index_options"].(string); io == "docs" {
+		docsOnly = true
+	}
 	dl := float64(len(myTokens))
 	score := 0.0
 	for _, qt := range qtokens {
@@ -135,9 +142,12 @@ func (c *queryCtx) bm25FieldScore(field string, qtokens []string, operator strin
 		if f == 0 {
 			continue
 		}
+		if docsOnly {
+			f = 1
+		}
 		d := float64(df[qt])
 		idf := math.Log(1 + (float64(N)-d+0.5)/(d+0.5))
-		score += idf * f / (f + k1*(1-b+b*dl/avgdl))
+		score += idf * f / (f + k1*(1-bParam+bParam*dl/avgdl))
 	}
 	return score * boost
 }
@@ -487,11 +497,11 @@ func (c *queryCtx) evalNested(body any) (bool, float64, *apiError) {
 			return false, 0, nil
 		}
 		return false, 0, matchSearchError("query_shard_exception",
-			"[nested] failed to find nested object under path ["+path+"]")
+			"failed to create query: [nested] failed to find nested object under path ["+path+"]")
 	}
 	if t, _ := def["type"].(string); t != "nested" {
 		return false, 0, matchSearchError("query_shard_exception",
-			"[nested] nested object under path ["+path+"] is not of nested type")
+			"failed to create query: [nested] nested object under path ["+path+"] is not of nested type")
 	}
 	objects, ok := nestedObjectsForCtx(c, path)
 	if !ok || len(objects) == 0 {
@@ -2075,8 +2085,8 @@ func lookupIndexedShape(spec map[string]any) (any, bool) {
 	if globalServer == nil || idxName == "" || id == "" {
 		return nil, false
 	}
-	globalServer.mu.RLock()
-	defer globalServer.mu.RUnlock()
+	// Callers already hold globalServer.mu (read or write); taking it again
+	// here deadlocks once a writer is queued.
 	idx, ok := globalServer.indices[idxName]
 	if !ok {
 		return nil, false
@@ -2864,6 +2874,12 @@ func (c *queryCtx) spanTermSpans(bm map[string]any) ([]intervalSpan, string, *ap
 		return nil, field, nil
 	}
 	ftype, _ := def["type"].(string)
+	if ftype == "match_only_text" {
+		reason := "field \"" + field + "\" was indexed without position data; cannot run SpanTermQuery (term=" + term + ")"
+		e := matchSearchError("illegal_state_exception", reason)
+		e.Status = 500
+		return nil, field, e
+	}
 	if ftype == "integer" || ftype == "long" || ftype == "short" || ftype == "byte" || ftype == "double" ||
 		ftype == "float" || ftype == "half_float" || ftype == "scaled_float" || ftype == "unsigned_long" ||
 		ftype == "date" || ftype == "date_nanos" || ftype == "boolean" || ftype == "ip" {
@@ -3241,6 +3257,10 @@ func (c *queryCtx) evalIntervals(body any) (bool, float64, *apiError) {
 		return false, 0, nil
 	}
 	ftype, _ := def["type"].(string)
+	if ftype == "match_only_text" {
+		return false, 0, matchSearchError("query_shard_exception",
+			"failed to create query: Cannot create intervals over field ["+field+"] with no positions indexed")
+	}
 	if ftype != "" && ftype != "text" && ftype != "match_only_text" && ftype != "search_as_you_type" {
 		return false, 0, matchSearchError("query_shard_exception",
 			"Can only use interval queries on text fields - not on ["+field+"] which is of type ["+ftype+"]")
@@ -5023,6 +5043,20 @@ func (p *qsParser) valueQuery(field, value string) (map[string]any, *apiError) {
 	}
 	def, ok := mappingFieldDef(p.c.idx, field)
 	ftype, _ := def["type"].(string)
+	if (ftype == "keyword" || ftype == "constant_keyword") && def != nil {
+		if split, _ := def["split_queries_on_whitespace"].(bool); split && len(strings.Fields(value)) > 1 {
+			toks := strings.Fields(value)
+			clauses := make([]any, 0, len(toks))
+			for _, t := range toks {
+				clauses = append(clauses, map[string]any{"term": map[string]any{field: lintValue(t)}})
+			}
+			kind := "should"
+			if p.operator == "AND" {
+				kind = "must"
+			}
+			return boolQuery(kind, clauses, 0), nil
+		}
+	}
 	if !ok || ftype == "text" || ftype == "match_only_text" || ftype == "search_as_you_type" || ftype == "" {
 		return map[string]any{"match": map[string]any{field: value}}, nil
 	}
@@ -5231,6 +5265,16 @@ func (c *queryCtx) evalQueryString(body any, simple bool) (bool, float64, *apiEr
 			}
 		}
 		fields = expanded
+	}
+	if !simple && len(fields) == 0 && defaultField != "*" &&
+		!strings.ContainsAny(query, ":\"()[]{}^~*?\\+-!&|") && len(strings.Fields(query)) > 1 {
+		if def, ok := mappingFieldDef(c.idx, defaultField); ok {
+			ftype, _ := def["type"].(string)
+			split, _ := def["split_queries_on_whitespace"].(bool)
+			if (ftype == "keyword" || ftype == "constant_keyword" || ftype == "wildcard") && !split {
+				return c.eval(map[string]any{"term": map[string]any{defaultField: query}})
+			}
+		}
 	}
 	if t, _ := bm["type"].(string); t == "phrase" {
 		var q map[string]any

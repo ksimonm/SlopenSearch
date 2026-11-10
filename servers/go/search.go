@@ -8,6 +8,7 @@ import (
 	"go/parser"
 	"go/token"
 	"math"
+	"net"
 	"net/http"
 	"regexp"
 	"sort"
@@ -34,6 +35,14 @@ func checkDocValuesLoadable(idx *Index, field string) *apiError {
 		return &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
 			RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
 			CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}}
+	}
+	if ftype == "binary" {
+		if dv, ok := def["doc_values"].(bool); !ok || !dv {
+			reason := "Can't load fielddata on [" + field + "] because fielddata is unsupported on fields of type [binary]. Use doc values instead."
+			return &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
+				RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
+				CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}}
+		}
 	}
 	if ftype == "text" {
 		if fd, ok := def["fielddata"].(bool); !ok || !fd {
@@ -80,6 +89,20 @@ var textLikeTypes = map[string]bool{
 
 // docValuesOutput returns the values to render for docvalue_fields / fields.
 func docValuesOutput(idx *Index, id, field string, spec fieldSpec, fallbackSource bool) ([]any, bool, *apiError) {
+	field = resolveAliasField(idx, field)
+	if i := strings.Index(field, "#"); i > 0 {
+		base := field[:i]
+		if bdef, ok := mappingFieldDef(idx, base); ok {
+			if bt, _ := bdef["type"].(string); bt == "join" {
+				name, parent := joinParts(idx.Docs[id][base])
+				relations, _ := bdef["relations"].(map[string]any)
+				if name != "" && parent != "" && joinParentRelation(relations, name) == field[i+1:] {
+					return []any{parent}, true, nil
+				}
+				return nil, false, nil
+			}
+		}
+	}
 	def, hasDef := mappingFieldDef(idx, field)
 	if !hasDef {
 		return nil, false, nil
@@ -90,6 +113,11 @@ func docValuesOutput(idx *Index, id, field string, spec fieldSpec, fallbackSourc
 		ftype, _ = def["type"].(string)
 		if dv, ok := def["doc_values"].(bool); ok && !dv {
 			hasDV = false
+		}
+		if ftype == "binary" {
+			if dv, ok := def["doc_values"].(bool); !ok || !dv {
+				hasDV = false
+			}
 		}
 	}
 	if spec.format != "" && spec.format != "use_field_mapping" {
@@ -104,6 +132,23 @@ func docValuesOutput(idx *Index, id, field string, spec fieldSpec, fallbackSourc
 	var vals []any
 	if dv := idx.DocValues[id]; dv != nil {
 		vals = dv[field]
+	}
+	if ftype == "join" {
+		out := []any{}
+		for _, v := range vals {
+			switch t := v.(type) {
+			case map[string]any:
+				if n, _ := t["name"].(string); n != "" {
+					out = append(out, n)
+				}
+			case string:
+				out = append(out, t)
+			}
+		}
+		if len(out) == 0 {
+			return nil, false, nil
+		}
+		return out, true, nil
 	}
 	formatted := func(list []any) []any {
 		out := make([]any, 0, len(list))
@@ -120,7 +165,7 @@ func docValuesOutput(idx *Index, id, field string, spec fieldSpec, fallbackSourc
 					RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
 					CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}}
 			}
-			if !hasDV && len(vals) > 0 {
+			if !hasDV && (len(vals) > 0 || ftype == "binary") {
 				reason := "Can't load fielddata on [" + field + "] because fielddata is unsupported on fields of type [" + ftype + "]. Use doc values instead."
 				return nil, false, &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
 					RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
@@ -267,9 +312,11 @@ func (h multiHit) sortValue(field string, desc bool, mode string) (any, bool) {
 	case "_id":
 		return h.id, true
 	}
-	if def, ok := mappingFieldDef(h.idx, field); ok {
+	def, mapped := mappingFieldDef(h.idx, field)
+	if mapped {
 		if t, _ := def["type"].(string); t == "alias" {
 			field = resolveAliasField(h.idx, field)
+			def, mapped = mappingFieldDef(h.idx, field)
 		}
 	}
 	vals := h.idx.DocValues[h.id]
@@ -280,13 +327,55 @@ func (h multiHit) sortValue(field string, desc bool, mode string) (any, bool) {
 	if !ok || len(list) == 0 {
 		return nil, false
 	}
+	if mapped {
+		ft, _ := def["type"].(string)
+		if ft == "ip" {
+			if len(list) == 1 {
+				if s, ok := valueScalarString(list[0]); ok {
+					if ip := net.ParseIP(s); ip != nil {
+						return ipSortKey{key: string(ip.To16()), out: canonicalIP(s)}, true
+					}
+				}
+			}
+		}
+		if textLikeTypes[ft] {
+			if fd, _ := def["fielddata"].(bool); fd {
+				analyzer, _ := def["analyzer"].(string)
+				toks := []string{}
+				for _, v := range list {
+					s, _ := valueScalarString(v)
+					for _, t := range analyzeTokensWithIndex(h.idx, analyzer, s) {
+						toks = append(toks, t.term)
+					}
+				}
+				if len(toks) == 0 {
+					return nil, false
+				}
+				sort.Strings(toks)
+				if desc {
+					return toks[len(toks)-1], true
+				}
+				return toks[0], true
+			}
+		}
+	}
 	if len(list) == 1 {
 		return list[0], true
 	}
 	return reduceSortValues(list, desc, mode), true
 }
 
+type ipSortKey struct {
+	key string
+	out string
+}
+
 func compareSortValues(a, b any) int {
+	if aip, ok := a.(ipSortKey); ok {
+		if bip, ok2 := b.(ipSortKey); ok2 {
+			return strings.Compare(aip.key, bip.key)
+		}
+	}
 	if as, ok := a.(string); ok {
 		bs, _ := toString(b)
 		if _, bok := b.(string); bok {
@@ -318,7 +407,8 @@ var searchBodyKeys = map[string]bool{
 	"stored_fields": true, "collapse": true, "slice": true, "pit": true,
 	"search_after": true, "runtime_mappings": true, "indices_boost": true,
 	"stats": true, "track_total_hits": true, "rescore": true, "ext": true,
-	"scroll": true, "allow_no_indices": true, "allow_partial_search_results": true,
+	"derived": true,
+	"scroll":  true, "allow_no_indices": true, "allow_partial_search_results": true,
 	"ignore_unavailable": true, "expand_wildcards": true, "batched_reduce_size": true,
 	"ccs_minimize_roundtrips": true, "max_concurrent_shard_requests": true,
 	"pre_filter_shard_size": true, "request_cache": true, "routing": true,
@@ -549,6 +639,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 					delete(vidx.Mappings, "derived")
 				}
 				vidx.recomputeAllDocValues()
+				ensureFieldTypes(vidx)
 			}()
 		}
 		if verr := validateQuery(vidx, query); verr != nil {
@@ -1005,8 +1096,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 					if (t == "text" || t == "match_only_text") && !fd {
 						reason := "Text fields are not optimised for operations that require per-document field data like aggregations and sorting, so these operations are disabled by default. Please use a keyword field instead. Alternatively, set fielddata=true on [" + sp.field + "] in order to load field data by uninverting the inverted index. Note that this can use significant memory."
 						writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 400,
-							Reason: reason, Phase: "query",
-							RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason}})
+							Reason: "all shards failed", Phase: "query",
+							RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
+							CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}})
 						return
 					}
 					if t == "geo_shape" {
@@ -1071,11 +1163,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		scrollID = sid
 	}
 
-	srcIncludes, srcExcludes, omitSource, _ := sourceFilterFromBody(body)
+	srcIncludes, srcExcludes, omitSource, bodyHasSource := sourceFilterFromBody(body)
 	qIncludes, qExcludes, qOmit, qHas := sourceFilterFromQuery(r.URL.Query())
 	if qHas || qOmit {
 		srcIncludes, srcExcludes, omitSource = qIncludes, qExcludes, qOmit
 	}
+	requestSourceExplicit := bodyHasSource || qHas || qOmit
 	if _, hasSF := body["script_fields"].(map[string]any); hasSF {
 		if _, hasSrc := body["_source"]; !hasSrc && r.URL.Query().Get("_source") == "" {
 			omitSource = true
@@ -1106,7 +1199,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				storedNames = append(storedNames, name)
 			}
 		}
-		omitSource = true
+		if _, hasSrc := body["_source"]; !hasSrc && r.URL.Query().Get("_source") == "" {
+			omitSource = true
+		}
 	}
 	if storedNone {
 		srcTrue := false
@@ -1281,7 +1376,15 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	}
 	hits := make([]any, 0, len(page))
 	for _, h := range page {
-		src := filterSourceDoc(h.doc, srcIncludes, srcExcludes)
+		hitIncludes, hitExcludes, hitOmit := srcIncludes, srcExcludes, omitSource
+		if !requestSourceExplicit {
+			mInc, mExc, mEnabled := mappingSourceSpec(h.idx)
+			hitIncludes, hitExcludes = mInc, mExc
+			if !mEnabled {
+				hitOmit = true
+			}
+		}
+		src := filterSourceDoc(h.doc, hitIncludes, hitExcludes)
 		var scoreVal any = h.score
 		if omitScores {
 			scoreVal = nil
@@ -1301,6 +1404,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			entry["_seq_no"] = h.idx.SeqNos[h.id]
 			entry["_primary_term"] = int64(1)
 		}
+		if ign := h.idx.DocIgnored[h.id]; len(ign) > 0 {
+			vals := make([]any, 0, len(ign))
+			for _, f := range ign {
+				vals = append(vals, f)
+			}
+			entry["_ignored"] = vals
+		}
 		if explainFlag {
 			entry["_shard"] = "[" + h.idx.Name + "][0]"
 			entry["_node"] = "slopensearch-node-1"
@@ -1317,14 +1427,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			}
 			entry["sort"] = sortVals
 		}
-		if !omitSource {
+		if !hitOmit {
 			entry["_source"] = src
 		}
 		if storedNone {
 			delete(entry, "_id")
 		}
 		hitCtx := newQueryCtxForDoc(h.idx, h.id, h.doc)
-		if hlCfg != nil {
+		if hlCfg != nil && !hitOmit {
 			if hlErr := hlCfg.validate(h.idx); hlErr != nil {
 				writeError(w, hlErr)
 				return
@@ -1409,16 +1519,34 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				return
 			}
 			for _, name := range storedNames {
-				def, ok := mappingFieldDef(h.idx, name)
-				if !ok {
-					continue
+				names := []string{name}
+				if strings.ContainsAny(name, "*?") {
+					names = nil
+					re := wildcardRegex(name)
+					for _, f := range mappedLeafFields(h.idx) {
+						if re.MatchString(f) {
+							names = append(names, f)
+						}
+					}
+					sort.Strings(names)
 				}
-				stored, _ := def["store"].(bool)
-				if !stored {
-					continue
-				}
-				if v, ok := fieldValue(h.doc, name); ok {
-					out[name] = []any{v}
+				for _, n := range names {
+					def, ok := mappingFieldDef(h.idx, n)
+					if !ok {
+						continue
+					}
+					stored, _ := def["store"].(bool)
+					if !stored {
+						continue
+					}
+					vals, found, derr := docValuesOutput(h.idx, h.id, n, fieldSpec{name: n}, true)
+					if derr != nil {
+						writeError(w, derr)
+						return
+					}
+					if found {
+						out[n] = vals
+					}
 				}
 			}
 			if len(out) > 0 {
@@ -2034,6 +2162,9 @@ func compareSortSpec(a, b multiHit, sp searchSortSpec) int {
 
 func sortOutputValue(h multiHit, sp searchSortSpec) any {
 	v, ok, missing := searchSortSpecValue(h, sp)
+	if ik, isIP := v.(ipSortKey); isIP {
+		return ik.out
+	}
 	if f, isF := v.(float64); isF && math.IsInf(f, 0) {
 		if f > 0 {
 			return "Infinity"

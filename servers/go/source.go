@@ -63,6 +63,36 @@ func sourceFilterFromBody(body map[string]any) (includes, excludes []string, omi
 	return nil, nil, false, false
 }
 
+// mappingSourceSpec returns the index-level _source filter and whether source
+// storage is enabled.
+func mappingSourceSpec(idx *Index) (includes, excludes []string, enabled bool) {
+	enabled = true
+	raw, ok := idx.Mappings["_source"]
+	if !ok {
+		return nil, nil, true
+	}
+	switch t := raw.(type) {
+	case bool:
+		return nil, nil, t
+	case string:
+		return nil, nil, t != "false"
+	case map[string]any:
+		if b, ok := t["enabled"].(bool); ok {
+			enabled = b
+		}
+		includes = anyStringList(t["includes"])
+		if len(includes) == 0 {
+			includes = anyStringList(t["include"])
+		}
+		excludes = anyStringList(t["excludes"])
+		if len(excludes) == 0 {
+			excludes = anyStringList(t["exclude"])
+		}
+		return includes, excludes, enabled
+	}
+	return nil, nil, true
+}
+
 func sourceFilterFromQuery(q url.Values) (includes, excludes []string, omit bool, ok bool) {
 	if v := q.Get("_source"); v != "" {
 		if v == "false" {

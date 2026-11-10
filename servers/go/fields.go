@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math"
 	"net"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -56,6 +58,9 @@ func newIndexCtx(idx *Index, docID string) *indexCtx {
 		c.fieldNameLimit = v
 	}
 	c.dyn = rootDynamicString(idx)
+	if enabled, ok := idx.Mappings["enabled"].(bool); ok && !enabled {
+		c.dyn = "false"
+	}
 	return c
 }
 
@@ -90,7 +95,7 @@ func previewValue(v any) string {
 	case json.Number:
 		return t.String()
 	case map[string]any:
-		return fmt.Sprintf("{...}")
+		return javaMapDebug(v)
 	case []any:
 		return "[...]"
 	default:
@@ -259,12 +264,9 @@ func (c *indexCtx) checkIntRange(name, typ string, iv int64, orig float64, fromJ
 }
 
 func (c *indexCtx) parseIntString(name, typ string, def map[string]any, s string, coerce, trim bool) (any, *apiError) {
-	coerceFalse := false
+	coerceFalse := !coerce
 	if b, ok := def["coerce"].(bool); ok {
 		coerceFalse = !b
-	}
-	if !coerce && !coerceFalse {
-		coerce = false
 	}
 	if coerceFalse {
 		word := "Integer"
@@ -323,7 +325,7 @@ func (c *indexCtx) parseIntString(name, typ string, def map[string]any, s string
 
 // parseFloatValue implements float/double/half_float/scaled_float coercion.
 func (c *indexCtx) parseFloatValue(name, typ string, def map[string]any, v any) (any, *apiError) {
-	coerceFalse := false
+	coerceFalse := !c.indexCoerce
 	if b, ok := def["coerce"].(bool); ok {
 		coerceFalse = !b
 	}
@@ -808,16 +810,8 @@ func (c *indexCtx) parseIPValue(name string, v any) (any, *apiError) {
 		return nil, c.fieldValueError(name, "ip", v, "illegal_argument_exception", "failed to parse ip")
 	}
 	if strings.Contains(s, "/") {
-		_, ipnet, err := net.ParseCIDR(s)
-		if err != nil {
-			ones := 0
-			if i := strings.Index(s, "/"); i >= 0 {
-				ones, _ = strconv.Atoi(s[i+1:])
-			}
-			return nil, c.fieldValueError(name, "ip", s, "illegal_argument_exception",
-				fmt.Sprintf("Illegal prefix length [%d] in [%s]. Must be 0-32 for IPv4 ranges, 0-128 for IPv6 ranges", ones, s))
-		}
-		return ipnet.String(), nil
+		return nil, c.fieldValueError(name, "ip", s, "illegal_argument_exception",
+			fmt.Sprintf("'%s' is not an IP string literal.", s))
 	}
 	ip := net.ParseIP(s)
 	if ip == nil {
@@ -828,6 +822,33 @@ func (c *indexCtx) parseIPValue(name string, v any) (any, *apiError) {
 		return v4.String(), nil
 	}
 	return ip.String(), nil
+}
+
+// parseIPRangeString expands a CIDR (e.g. 192.168.0.0/24) into the network
+// and broadcast addresses, canonicalized for storage.
+func (c *indexCtx) parseIPRangeString(name, s string) (string, string, *apiError) {
+	_, ipnet, err := net.ParseCIDR(s)
+	if err != nil {
+		ones := 0
+		if i := strings.Index(s, "/"); i >= 0 {
+			ones, _ = strconv.Atoi(s[i+1:])
+		}
+		return "", "", c.fieldValueError(name, "ip_range", s, "illegal_argument_exception",
+			fmt.Sprintf("Illegal prefix length [%d] in [%s]. Must be 0-32 for IPv4 ranges, 0-128 for IPv6 ranges", ones, s))
+	}
+	lower := ipnet.IP
+	upper := make(net.IP, len(lower))
+	copy(upper, lower)
+	for i := range upper {
+		upper[i] |= ^ipnet.Mask[i]
+	}
+	canon := func(ip net.IP) string {
+		if v4 := ip.To4(); v4 != nil {
+			return v4.String()
+		}
+		return ip.String()
+	}
+	return canon(lower), canon(upper), nil
 }
 
 // indexRawField handles a single declared field definition with raw values.
@@ -842,6 +863,13 @@ func (c *indexCtx) indexRawField(path string, def map[string]any, raw any) *apiE
 	}
 	if typ == "object" || typ == "nested" {
 		return c.indexObject(path, def, raw)
+	}
+	if typ == "alias" {
+		if raw == nil {
+			return nil
+		}
+		return mapperErr("mapper_parsing_exception", "failed to parse", "illegal_argument_exception",
+			"Cannot write to a field alias ["+path+"].")
 	}
 	if typ == "flat_object" {
 		m, ok := raw.(map[string]any)
@@ -1094,21 +1122,45 @@ func (c *indexCtx) indexRawField(path string, def map[string]any, raw any) *apiE
 	}
 	// copy_to
 	if ct, ok := def["copy_to"].(string); ok && ct != "" {
-		c.copyTo(ct, c.values[path])
+		if err := c.copyToField(ct, values); err != nil {
+			return err
+		}
 	} else if cts, ok := def["copy_to"].([]any); ok {
 		for _, e := range cts {
 			if s, ok := e.(string); ok {
-				c.copyTo(s, c.values[path])
+				if err := c.copyToField(s, values); err != nil {
+					return err
+				}
 			}
 		}
 	}
 	return nil
 }
 
-func (c *indexCtx) copyTo(target string, vals []any) {
+func (c *indexCtx) copyToField(target string, vals []any) *apiError {
+	tdef, mapped := mappingFieldDef(c.idx, target)
+	ttype := ""
+	if mapped {
+		ttype, _ = tdef["type"].(string)
+	}
 	for _, v := range vals {
+		if v == nil {
+			continue
+		}
+		if mapped && ttype != "" {
+			nv, err := c.coerce(target, tdef, ttype, v)
+			if err != nil {
+				return err
+			}
+			if nv == nil {
+				continue
+			}
+			c.values[target] = append(c.values[target], nv)
+			continue
+		}
 		c.values[target] = append(c.values[target], v)
 	}
+	return nil
 }
 
 func (c *indexCtx) addIgnored(path string) {
@@ -1136,9 +1188,21 @@ func (c *indexCtx) coerce(path string, def map[string]any, typ string, v any) (a
 		}
 		return s, nil
 	case "keyword", "constant_keyword":
+		if _, isMap := v.(map[string]any); isMap {
+			return nil, c.fieldValueError(path, typ, v, "illegal_state_exception", "Can't get text on a START_OBJECT at 1:6")
+		}
 		s, ok := valueScalarString(v)
 		if !ok {
 			return nil, c.fieldValueError(path, typ, v, "illegal_argument_exception", "malformed")
+		}
+		if typ == "constant_keyword" {
+			if cv, has := def["value"]; has {
+				cs, _ := valueScalarString(cv)
+				if s != cs {
+					return nil, c.fieldValueError(path, typ, v, "illegal_argument_exception",
+						"constant keyword field ["+path+"] must have a value of ["+cs+"]")
+				}
+			}
 		}
 		if norm, ok := def["normalizer"].(string); ok && norm != "" {
 			s = applyNormalizerWithIndex(c.idx, norm, s)
@@ -1159,11 +1223,18 @@ func (c *indexCtx) coerce(path string, def map[string]any, typ string, v any) (a
 		if !ok {
 			return nil, c.fieldValueError(path, typ, v, "illegal_argument_exception", "malformed")
 		}
-		if _, present := def["store"]; present {
-			if _, err := base64DecodeLenient(s); err != nil {
-				return nil, c.fieldValueError(path, typ, v, "illegal_argument_exception",
-					"failed to parse [binary] field")
+		dv, _ := def["doc_values"].(bool)
+		store, _ := def["store"].(bool)
+		if store || dv {
+			if _, err := base64.StdEncoding.DecodeString(s); err != nil {
+				reason := "Unexpected end of base64-encoded String: base64 variant 'MIME-NO-LINEFEEDS' expects padding (one or more '=' characters) at the end. This Base64Variant might have been incorrectly configured"
+				return nil, mapperErr("mapper_parsing_exception",
+					fmt.Sprintf("failed to parse field [%s] of type [binary] in document with id '%s'. Preview of field's value: '%s'", path, c.docID, previewValue(v)),
+					"json_parse_exception", reason)
 			}
+		}
+		if !dv {
+			return nil, nil
 		}
 		return s, nil
 	case "token_count":
@@ -1417,6 +1488,7 @@ func (c *indexCtx) buildDocValues() *apiError {
 	}
 	c.fillConstants(props, c.doc)
 	if len(c.ignored) > 0 {
+		sort.Strings(c.ignored)
 		c.values["_ignored"] = []any{}
 		for _, f := range c.ignored {
 			c.values["_ignored"] = append(c.values["_ignored"], f)
@@ -1615,6 +1687,7 @@ func applyRequestDerived(idx *Index, defs any) *apiError {
 	}
 	idx.Mappings["derived"] = norm
 	idx.recomputeAllDocValues()
+	ensureFieldTypes(idx)
 	return nil
 }
 
@@ -1623,6 +1696,18 @@ func applyRequestDerived(idx *Index, defs any) *apiError {
 func (idx *Index) computeDocValues(id string, doc map[string]any) *apiError {
 	if reason := invalidDocFieldName(doc); reason != "" {
 		return mapperErr("mapper_parsing_exception", reason, "illegal_argument_exception", reason)
+	}
+	if derr := checkObjectDepth(doc, 0, mappingIntSetting(idx, "mapping.depth.limit", 20)); derr != nil {
+		return derr
+	}
+	if derr := checkDocFieldNameLengths(doc, mappingIntSetting(idx, "mapping.field_name_length.limit", 1000)); derr != nil {
+		return derr
+	}
+	if props, ok := idx.Mappings["properties"].(map[string]any); ok {
+		limit := mappingIntSetting(idx, "mapping.nested_objects.limit", 10000)
+		if countNestedDocuments(props, doc) > limit {
+			return nestedObjectsLimitError(limit)
+		}
 	}
 	c := newIndexCtx(idx, id)
 	c.doc = doc
@@ -1728,7 +1813,18 @@ func (c *indexCtx) parseTokenCount(path string, def map[string]any, v any) (any,
 	if !ok {
 		return nil, c.fieldValueError(path, "token_count", v, "illegal_argument_exception", "malformed")
 	}
-	tokens := analyze(s)
+	analyzer, _ := def["analyzer"].(string)
+	tokens := analyzeTokensWithIndex(c.idx, analyzer, s)
+	epi := true
+	if b, ok := def["enable_position_increments"].(bool); ok {
+		epi = b
+	}
+	if epi {
+		if len(tokens) == 0 {
+			return int64(0), nil
+		}
+		return int64(tokens[len(tokens)-1].pos + 1), nil
+	}
 	return int64(len(tokens)), nil
 }
 
@@ -2199,6 +2295,13 @@ func (c *indexCtx) parseJoin(path string, def map[string]any, v any) (any, *apiE
 func (c *indexCtx) parseRangeValue(path, typ string, def map[string]any, v any) (any, *apiError) {
 	if s, ok := v.(string); ok {
 		if typ == "ip_range" {
+			if strings.Contains(s, "/") {
+				lower, upper, err := c.parseIPRangeString(path, s)
+				if err != nil {
+					return nil, err
+				}
+				return map[string]any{"gte": lower, "lte": upper}, nil
+			}
 			vals, err := c.parseIPValue(path, s)
 			if err != nil {
 				return nil, err
@@ -2211,7 +2314,7 @@ func (c *indexCtx) parseRangeValue(path, typ string, def map[string]any, v any) 
 	m, ok := v.(map[string]any)
 	if !ok {
 		return nil, c.fieldValueError(path, typ, v, "mapper_parsing_exception",
-			fmt.Sprintf("error parsing field [%s], expected an object but got %v", path, previewValue(v)))
+			fmt.Sprintf("error parsing field [%s], expected an object but got %s", path, path))
 	}
 	hasGt, hasGte := m["gt"] != nil, m["gte"] != nil
 	if hasGt && hasGte {
@@ -2228,7 +2331,11 @@ func (c *indexCtx) parseRangeValue(path, typ string, def map[string]any, v any) 
 		case "date_range":
 			rv, err := c.parseDateValue(path, "date", def, raw)
 			if err != nil {
-				return nil, false, err
+				reason := fmt.Sprintf("failed to parse date field [%s] with format [%s]", previewValue(raw), dateFormatOf(def))
+				if err.CausedBy != nil && err.CausedBy.Reason != "" {
+					reason += ": [" + err.CausedBy.Reason + "]"
+				}
+				return nil, false, c.fieldValueError(path, typ, v, "parse_exception", reason)
 			}
 			return rv, true, nil
 		case "ip_range":

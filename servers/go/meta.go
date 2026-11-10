@@ -1462,7 +1462,10 @@ func (s *Server) handlePutMapping(w http.ResponseWriter, r *http.Request, indexS
 	}
 	for _, idx := range indices {
 		props := ensureProperties(idx.Mappings)
-		mergeMappingForIndex(idx, props, body)
+		if err := mergeMappingForIndex(idx, props, body); err != nil {
+			writeError(w, err)
+			return
+		}
 		idx.MappingVersion++
 		ensureFieldTypes(idx)
 	}

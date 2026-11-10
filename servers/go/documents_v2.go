@@ -477,24 +477,24 @@ func sourceSpecFromValue(v any) ([]string, []string, bool) {
 	return nil, nil, false
 }
 
-func checkObjectDepth(v any, depth int) *apiError {
-	if depth > 20 {
+func checkObjectDepth(v any, depth, limit int) *apiError {
+	if depth > limit {
+		reason := "The depth of the field has exceeded the allowed limit of [" + strconv.Itoa(limit) + "]. This limit can be set by changing the [index.mapping.depth.limit] index level setting."
 		return &apiError{Type: "mapper_parsing_exception", Status: 400,
 			Reason:    "failed to parse",
-			RootCause: &apiError{Type: "parse_exception", Reason: "The depth of the object is too large"},
-			CausedBy: &apiError{Type: "parse_exception",
-				Reason: "The depth of the object is too large, exceeded the allowed limit of [20]. This limit can be set by changing the [index.mapping.depth.limit] index level setting."}}
+			RootCause: &apiError{Type: "parse_exception", Reason: reason},
+			CausedBy:  &apiError{Type: "parse_exception", Reason: reason}}
 	}
 	switch t := v.(type) {
 	case map[string]any:
 		for _, e := range t {
-			if err := checkObjectDepth(e, depth+1); err != nil {
+			if err := checkObjectDepth(e, depth+1, limit); err != nil {
 				return err
 			}
 		}
 	case []any:
 		for _, e := range t {
-			if err := checkObjectDepth(e, depth+1); err != nil {
+			if err := checkObjectDepth(e, depth+1, limit); err != nil {
 				return err
 			}
 		}
@@ -502,7 +502,10 @@ func checkObjectDepth(v any, depth int) *apiError {
 	return nil
 }
 
-func checkMixedArray(v any, path string) *apiError {
+func checkMixedArray(idx *Index, v any, path string) *apiError {
+	if enabled, ok := idx.Mappings["enabled"].(bool); ok && !enabled {
+		return nil
+	}
 	switch t := v.(type) {
 	case map[string]any:
 		for k, e := range t {
@@ -510,7 +513,12 @@ func checkMixedArray(v any, path string) *apiError {
 			if path != "" {
 				p = path + "." + k
 			}
-			if err := checkMixedArray(e, p); err != nil {
+			if def, ok := mappingFieldDef(idx, p); ok {
+				if b, ok := def["enabled"].(bool); ok && !b {
+					continue
+				}
+			}
+			if err := checkMixedArray(idx, e, p); err != nil {
 				return err
 			}
 		}
@@ -524,7 +532,7 @@ func checkMixedArray(v any, path string) *apiError {
 			default:
 				hasScalar = true
 			}
-			if err := checkMixedArray(e, path); err != nil {
+			if err := checkMixedArray(idx, e, path); err != nil {
 				return err
 			}
 		}
@@ -975,10 +983,15 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 	if routing == "" {
 		routing = aliasRoutingFor(idx, name)
 	}
+	autoID := id == ""
 	if id == "" {
 		id = randomID20(s)
 	}
 	if mappingRoutingRequired(idx) && routing == "" {
+		if autoID {
+			writeError(w, &apiError{Type: "null_pointer_exception", Status: 500, Reason: "id must not be null"})
+			return
+		}
 		writeError(w, routingMissing(idx, id))
 		return
 	}
@@ -1001,11 +1014,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 		}
 	}
 	ensureDocState(idx)
-	if derr := checkObjectDepth(body, 1); derr != nil {
-		writeError(w, derr)
-		return
-	}
-	if derr := checkMixedArray(body, ""); derr != nil {
+	if derr := checkMixedArray(idx, body, ""); derr != nil {
 		writeError(w, derr)
 		return
 	}
@@ -1083,9 +1092,11 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 		writeError(w, derr)
 		return
 	}
-	mergeMappingForIndex(idx, props, body)
-	idx.FieldTypes = map[string]string{}
-	buildFieldTypes(idx.Mappings, "", idx.FieldTypes)
+	if derr := mergeMappingForIndex(idx, props, body); derr != nil {
+		writeError(w, derr)
+		return
+	}
+	ensureFieldTypes(idx)
 	if derr := checkTotalFields(idx); derr != nil {
 		writeError(w, derr)
 		return
@@ -1207,6 +1218,10 @@ func (s *Server) handleGetDocV2(w http.ResponseWriter, r *http.Request, name, id
 	if !sourceEnabled {
 		omit = true
 	}
+	if len(includes) == 0 && len(excludes) == 0 {
+		mInc, mExc, _ := mappingSourceSpec(idx)
+		includes, excludes = mInc, mExc
+	}
 	storedSpecRaw := r.URL.Query().Get("stored_fields")
 	if storedSpecRaw != "" {
 		_, _, _, explicitSource := sourceFilterFromQuery(r.URL.Query())
@@ -1216,8 +1231,16 @@ func (s *Server) handleGetDocV2(w http.ResponseWriter, r *http.Request, name, id
 	}
 	resp := orderedJSON{
 		{"_index", idx.Name}, {"_id", id}, {"_version", ver}, {"_seq_no", seq},
-		{"_primary_term", term}, {"found", true},
+		{"_primary_term", term},
 	}
+	if ign := idx.DocIgnored[id]; len(ign) > 0 {
+		vals := make([]any, 0, len(ign))
+		for _, f := range ign {
+			vals = append(vals, f)
+		}
+		resp = append(resp, orderedKV{"_ignored", vals})
+	}
+	resp = append(resp, orderedKV{"found", true})
 	if !omit {
 		if len(includes) == 0 && len(excludes) == 0 {
 			if raw, ok := idx.RawDocs[id]; ok && len(raw) > 0 {
@@ -1281,6 +1304,10 @@ func (s *Server) handleGetSourceV2(w http.ResponseWriter, r *http.Request, name,
 		return
 	}
 	includes, excludes, _, _ := sourceFilterFromQuery(r.URL.Query())
+	mInc, mExc, _ := mappingSourceSpec(idx)
+	if len(includes) == 0 && len(excludes) == 0 {
+		includes, excludes = mInc, mExc
+	}
 	if raw, ok := idx.RawDocs[id]; ok && len(raw) > 0 {
 		if len(includes) == 0 && len(excludes) == 0 {
 			writeJSON(w, 200, verbatimJSON(raw))
@@ -1517,9 +1544,11 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 			writeError(w, derr)
 			return
 		}
-		mergeMappingForIndex(idx, props, src)
-		idx.FieldTypes = map[string]string{}
-		buildFieldTypes(idx.Mappings, "", idx.FieldTypes)
+		if derr := mergeMappingForIndex(idx, props, src); derr != nil {
+			writeError(w, derr)
+			return
+		}
+		ensureFieldTypes(idx)
 		if derr := idx.computeDocValues(id, src); derr != nil {
 			writeError(w, derr)
 			return
@@ -1614,9 +1643,11 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		writeError(w, derr)
 		return
 	}
-	mergeMappingForIndex(idx, props, newDoc)
-	idx.FieldTypes = map[string]string{}
-	buildFieldTypes(idx.Mappings, "", idx.FieldTypes)
+	if derr := mergeMappingForIndex(idx, props, newDoc); derr != nil {
+		writeError(w, derr)
+		return
+	}
+	ensureFieldTypes(idx)
 	if derr := idx.computeDocValues(id, newDoc); derr != nil {
 		writeError(w, derr)
 		return

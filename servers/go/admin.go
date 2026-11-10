@@ -721,7 +721,21 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 	if mappingsRaw != nil {
 		mergeMappingsDeep(mergedMappings, mappingsRaw)
 	}
+	if err := expandDottedMapping(mergedMappings); err != nil {
+		reason := err.Reason
+		return nil, &apiError{Type: "mapper_parsing_exception", Status: 400,
+			Reason:   "Failed to parse mapping [_doc]: " + reason,
+			CausedBy: &apiError{Type: "illegal_argument_exception", Reason: reason}}
+	}
 	if err := validateMappingFull(mergedMappings); err != nil {
+		return nil, err
+	}
+	if props, ok := mergedMappings["properties"].(map[string]any); ok {
+		if err := validateMappingAnalyzers(props, canonical); err != nil {
+			return nil, err
+		}
+	}
+	if err := validateBuiltinFieldNameLength(canonical); err != nil {
 		return nil, err
 	}
 	fieldLimit := 1000

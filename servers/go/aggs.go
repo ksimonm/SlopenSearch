@@ -23,6 +23,39 @@ func aggFieldValue(doc map[string]any, field, pathPrefix string) (any, bool) {
 	return fieldValue(doc, resolveField(field, pathPrefix))
 }
 
+// injectAliasValues copies field-alias values into the aggregation document
+// copy so aggregations can read them by the alias name.
+func injectAliasValues(mappings map[string]any, prefix string, doc map[string]any) {
+	props, ok := mappings["properties"].(map[string]any)
+	if !ok {
+		return
+	}
+	for name, raw := range props {
+		def, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		path := name
+		if prefix != "" {
+			path = prefix + "." + name
+		}
+		if t, _ := def["type"].(string); t == "alias" {
+			target, _ := def["path"].(string)
+			if target == "" {
+				continue
+			}
+			if _, present := fieldValue(doc, path); present {
+				continue
+			}
+			if v, ok := fieldValue(doc, target); ok {
+				doc[path] = deepCopySource(v)
+			}
+			continue
+		}
+		injectAliasValues(def, path, doc)
+	}
+}
+
 func numericValues(docs []map[string]any, field, pathPrefix string) []float64 {
 	out := []float64{}
 	for _, d := range docs {
@@ -45,10 +78,60 @@ type aggHit struct {
 	terms []string
 }
 
+// injectAggDocValues replaces source values with indexed doc values so that
+// aggregations see the same normalized values as OpenSearch. Text fields are
+// only usable when fielddata is enabled, in which case analyzed terms are used.
+func injectAggDocValues(h aggHit, doc map[string]any) {
+	dv := h.idx.DocValues[h.id]
+	if dv == nil {
+		return
+	}
+	for field, vals := range dv {
+		def, ok := mappingFieldDef(h.idx, field)
+		if !ok {
+			continue
+		}
+		ft, _ := def["type"].(string)
+		if textLikeTypes[ft] {
+			fd, _ := def["fielddata"].(bool)
+			if !fd {
+				continue
+			}
+			analyzer, _ := def["analyzer"].(string)
+			toks := []any{}
+			for _, v := range vals {
+				s, _ := valueScalarString(v)
+				for _, t := range analyzeTokensWithIndex(h.idx, analyzer, s) {
+					toks = append(toks, t.term)
+				}
+			}
+			if len(toks) > 0 {
+				doc[field] = toks
+			} else {
+				delete(doc, field)
+			}
+			continue
+		}
+		if len(vals) == 0 {
+			delete(doc, field)
+			continue
+		}
+		if len(vals) == 1 {
+			doc[field] = vals[0]
+		} else {
+			cp := make([]any, len(vals))
+			copy(cp, vals)
+			doc[field] = cp
+		}
+	}
+}
+
 func aggDocs(hits []aggHit) []map[string]any {
 	out := make([]map[string]any, 0, len(hits))
 	for _, h := range hits {
 		d := deepCopySource(h.doc).(map[string]any)
+		injectAliasValues(h.idx.Mappings, "", d)
+		injectAggDocValues(h, d)
 		if h.id != "" {
 			d["__slop_id"] = h.id
 			d["__slop_score"] = h.score
@@ -504,6 +587,8 @@ func canonicalTermKey(v any) string {
 	switch t := v.(type) {
 	case int64:
 		return "i:" + strconv.FormatInt(t, 10)
+	case uint64:
+		return "u:" + strconv.FormatUint(t, 10)
 	case float64:
 		return "f:" + strconv.FormatFloat(t, 'g', -1, 64)
 	case string:
@@ -520,6 +605,20 @@ func canonicalTermKey(v any) string {
 func termKeyFor(v any, ft, valueType, format string, idx *Index, field string) (any, string, bool, string, bool) {
 	switch ft {
 	case "integer", "long", "short", "byte", "unsigned_long":
+		if ft == "unsigned_long" {
+			switch t := v.(type) {
+			case uint64:
+				return t, "", false, canonicalTermKey(t), true
+			case json.Number:
+				if u, err := strconv.ParseUint(t.String(), 10, 64); err == nil {
+					return u, "", false, canonicalTermKey(u), true
+				}
+			case string:
+				if u, err := strconv.ParseUint(t, 10, 64); err == nil {
+					return u, "", false, canonicalTermKey(u), true
+				}
+			}
+		}
 		if f, ok := toFloat(v); ok {
 			k := int64(f)
 			return k, "", false, canonicalTermKey(k), true
@@ -605,9 +704,21 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *Inde
 			RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
 			CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}}
 	}
+	if isRangeFieldType(ft) {
+		reason := "Field [" + field + "] of type [" + ft + "] is not supported for aggregation [terms]"
+		return nil, matchSearchError("illegal_argument_exception", reason)
+	}
 	if ft == "text" {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
-			Reason: "Text fields are not optimised for operations that require per-document field data like aggregations and sorting, so these operations are disabled by default. Please use a keyword field instead. Alternatively, set fielddata=true on [" + field + "] in order to load field data by uninverting the inverted index."}
+		fd := false
+		if def, ok := mappingFieldDef(idx, resolved); ok {
+			fd, _ = def["fielddata"].(bool)
+		}
+		if !fd {
+			reason := "Text fields are not optimised for operations that require per-document field data like aggregations and sorting, so these operations are disabled by default. Please use a keyword field instead. Alternatively, set fielddata=true on [" + field + "] in order to load field data by uninverting the inverted index. Note that this can use significant memory."
+			return nil, &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed", Phase: "query",
+				RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
+				CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}}
+		}
 	}
 	if def, ok := mappingFieldDef(idx, resolved); ok {
 		if dv, ok := def["doc_values"].(bool); ok && !dv {

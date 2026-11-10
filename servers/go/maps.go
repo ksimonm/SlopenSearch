@@ -160,6 +160,13 @@ func (s *Server) putMappingAPI(w http.ResponseWriter, r *http.Request, spec stri
 		body["dynamic"] = s
 	}
 	if props, ok := body["properties"].(map[string]any); ok {
+		if err := expandDottedProperties(props); err != nil {
+			reason := err.Reason
+			writeError(w, &apiError{Type: "mapper_parsing_exception", Status: 400,
+				Reason:   "Failed to parse mapping [_doc]: " + reason,
+				CausedBy: &apiError{Type: "illegal_argument_exception", Reason: reason}})
+			return
+		}
 		if err := validateProps(props); err != nil {
 			writeError(w, &apiError{Type: "mapper_parsing_exception", Status: 400, Reason: err.Reason})
 			return
@@ -204,6 +211,10 @@ func (s *Server) putMappingAPI(w http.ResponseWriter, r *http.Request, spec stri
 		}
 		existingProps := ensureProperties(idx.Mappings)
 		if props, ok := body["properties"].(map[string]any); ok {
+			if err := validateMappingAnalyzers(props, idx.Settings); err != nil {
+				writeError(w, err)
+				return
+			}
 			if err := mergeMappingChecked(existingProps, props); err != nil {
 				writeError(w, err)
 				return

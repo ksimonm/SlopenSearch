@@ -338,13 +338,21 @@ func (cfg *highlightConfig) render(idx *Index, doc map[string]any) map[string]an
 		for _, name := range names {
 			def, mapped := mappingFieldDef(idx, name)
 			ftype := ""
+			target := name
 			if mapped {
 				ftype, _ = def["type"].(string)
+				if ftype == "alias" {
+					target = resolveAliasField(idx, name)
+					if tdef, tok := mappingFieldDef(idx, target); tok {
+						def = tdef
+						ftype, _ = def["type"].(string)
+					}
+				}
 			}
 			if ftype != "text" && ftype != "keyword" {
 				continue
 			}
-			val, ok := fieldValue(doc, name)
+			val, ok := fieldValue(doc, target)
 			if !ok {
 				continue
 			}

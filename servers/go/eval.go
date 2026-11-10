@@ -98,7 +98,7 @@ func (c *queryCtx) values(field string) ([]any, bool) {
 		}
 		return nil, false
 	}
-	if _, nested := nestedAncestorPath(c.idx, resolved); nested {
+	if _, nested := nestedAncestorPath(c.idx, resolved); nested && !nestedAncestorIncluded(c.idx, resolved) {
 		return nil, false
 	}
 	if dv, ok := c.rawValues(); ok {
@@ -208,6 +208,34 @@ func nestedAncestorPath(idx *Index, field string) (string, bool) {
 		cur = sub
 	}
 	return "", false
+}
+
+// nestedAncestorIncluded reports whether a field under a nested ancestor is
+// also indexed at the parent/root because of include_in_parent/include_in_root.
+func nestedAncestorIncluded(idx *Index, field string) bool {
+	props, _ := idx.Mappings["properties"].(map[string]any)
+	cur := props
+	parts := strings.Split(field, ".")
+	for i := 0; i < len(parts)-1; i++ {
+		def, ok := cur[parts[i]].(map[string]any)
+		if !ok {
+			return false
+		}
+		if t, _ := def["type"].(string); t == "nested" {
+			if b, ok := def["include_in_parent"].(bool); ok && b {
+				return true
+			}
+			if b, ok := def["include_in_root"].(bool); ok && b {
+				return true
+			}
+		}
+		sub, _ := def["properties"].(map[string]any)
+		if sub == nil {
+			return false
+		}
+		cur = sub
+	}
+	return false
 }
 
 func (c *queryCtx) hasField(field string) bool {
@@ -542,6 +570,31 @@ func parseTermValue(ftype string, def map[string]any, v any) ([]any, *apiError) 
 		}
 		return []any{parsed}, nil
 	case "ip":
+		s, isStr := valueScalarString(v)
+		if isStr && strings.Contains(s, "/") {
+			_, ipnet, err := net.ParseCIDR(s)
+			if err != nil {
+				ones := 0
+				ipPart := s
+				if i := strings.LastIndex(s, "/"); i >= 0 {
+					ipPart = s[:i]
+					ones, _ = strconv.Atoi(s[i+1:])
+				}
+				if net.ParseIP(ipPart) != nil {
+					max := 32
+					if strings.Contains(ipPart, ":") {
+						max = 128
+					}
+					if ones < 0 || ones > max {
+						return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+							Reason: fmt.Sprintf("Illegal prefix length [%d] in [%s]. Must be 0-32 for IPv4 ranges, 0-128 for IPv6 ranges", ones, s)}
+					}
+				}
+				return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+					Reason: fmt.Sprintf("'%s' is not an IP string literal.", s)}
+			}
+			return []any{canonicalIP(ipnet.String())}, nil
+		}
 		ctx := &indexCtx{idx: nil, indexCoerce: true}
 		parsed, err := ctx.parseIPValue("_value", v)
 		if err != nil {
@@ -633,7 +686,7 @@ func inRangeField(rng map[string]any, v any) bool {
 		if _, ok := rng["gt"]; ok {
 			op = "gt"
 		}
-		c := compareAny(lower, v)
+		c := compareRangeBound(lower, v)
 		if op == "gte" && c > 0 {
 			return false
 		}
@@ -646,7 +699,7 @@ func inRangeField(rng map[string]any, v any) bool {
 		if _, ok := rng["lt"]; ok {
 			op = "lt"
 		}
-		c := compareAny(upper, v)
+		c := compareRangeBound(upper, v)
 		if op == "lte" && c < 0 {
 			return false
 		}
@@ -665,6 +718,21 @@ func compareAny(a, b any) int {
 		return strings.Compare(as, previewValue(b))
 	}
 	return numericLess(a, b)
+}
+
+// compareRangeBound compares two range bounds, using numeric IP ordering for
+// fields whose bounds are IP literals.
+func compareRangeBound(a, b any) int {
+	as, aok := a.(string)
+	bs, bok := b.(string)
+	if aok && bok {
+		if ai := net.ParseIP(as); ai != nil {
+			if bi := net.ParseIP(bs); bi != nil {
+				return strings.Compare(string(ai.To16()), string(bi.To16()))
+			}
+		}
+	}
+	return compareAny(a, b)
 }
 
 // rangeRelation evaluates the relation between a query range and a stored range.
@@ -692,13 +760,13 @@ func rangeRelation(relation string, qLower, qUpper any, hasLower, lowerIncl, has
 			sLower, sLowerIncl, sHasLower, sUpper, sUpperIncl, sHasUpper)
 	}
 	if hasLower && sHasUpper {
-		c := compareAny(sUpper, qLower)
+		c := compareRangeBound(sUpper, qLower)
 		if c < 0 || c == 0 && (!sUpperIncl || !lowerIncl) {
 			return false
 		}
 	}
 	if hasUpper && sHasLower {
-		c := compareAny(qUpper, sLower)
+		c := compareRangeBound(qUpper, sLower)
 		if c < 0 || c == 0 && (!upperIncl || !sLowerIncl) {
 			return false
 		}
@@ -723,7 +791,7 @@ func rangeLowerWithin(outer any, outerIncl, outerHas bool, inner any, innerIncl,
 	if !outerHas {
 		return true
 	}
-	c := compareAny(inner, outer)
+	c := compareRangeBound(inner, outer)
 	if c > 0 {
 		return true
 	}
@@ -740,7 +808,7 @@ func rangeUpperWithin(outer any, outerIncl, outerHas bool, inner any, innerIncl,
 	if !outerHas {
 		return true
 	}
-	c := compareAny(inner, outer)
+	c := compareRangeBound(inner, outer)
 	if c < 0 {
 		return true
 	}
@@ -776,6 +844,9 @@ func (c *queryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 		if t == "completion" {
 			return false, 0, nil
 		}
+		if t == "binary" {
+			return false, 0, matchSearchError("query_shard_exception", "Binary fields do not support searching")
+		}
 		notIndexed := false
 		if iv, ok := def["index"].(bool); ok && !iv {
 			notIndexed = true
@@ -785,8 +856,16 @@ func (c *queryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 			noDocValues = true
 		}
 		if notIndexed && noDocValues {
+			textField := t == "text" || t == "match_only_text" || t == "search_as_you_type"
+			reason := "failed to create query: Cannot search on field [" + field + "] since it is both not indexed, and does not have doc_values enabled."
+			if textField {
+				reason = "failed to create query: Cannot search on field [" + field + "] since it is not indexed."
+			}
+			return false, 0, matchSearchError("query_shard_exception", reason)
+		}
+		if notIndexed && (t == "text" || t == "match_only_text" || t == "search_as_you_type") {
 			return false, 0, matchSearchError("query_shard_exception",
-				"failed to create query: Cannot search on field ["+field+"] since it is both not indexed, and does not have doc_values enabled.")
+				"failed to create query: Cannot search on field ["+field+"] since it is not indexed.")
 		}
 	}
 	val := raw
@@ -864,13 +943,15 @@ func (c *queryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 		if caseInsensitive {
 			term = strings.ToLower(term)
 		}
+		analyzer, _ := def["analyzer"].(string)
 		for _, v := range vals {
 			s, _ := valueScalarString(v)
-			for _, tok := range analyze(s) {
+			for _, tok := range analyzeTokensWithIndex(c.idx, analyzer, s) {
+				t := tok.term
 				if caseInsensitive {
-					tok = strings.ToLower(tok)
+					t = strings.ToLower(t)
 				}
-				if tok == term {
+				if t == term {
 					return true, boost, nil
 				}
 			}
@@ -1006,10 +1087,21 @@ func (c *queryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 		if err != nil {
 			return false, 0, termDateParseError(err)
 		}
+		dayOnly := false
+		if s, ok := valueScalarString(val); ok && len(s) == 10 && s[4] == '-' && s[7] == '-' {
+			dayOnly = true
+		}
 		for _, v := range vals {
 			for _, p := range parsed {
 				if numericEqual(v, p) {
 					return true, boost, nil
+				}
+				if dayOnly {
+					if vm, ok := toFloat(v); ok {
+						if pm, ok := toFloat(p); ok && vm >= pm && vm < pm+86400000 {
+							return true, boost, nil
+						}
+					}
 				}
 			}
 		}
@@ -1215,8 +1307,8 @@ func resolveTermsLookup(spec map[string]any) ([]any, *apiError) {
 	if globalServer == nil {
 		return nil, nil
 	}
-	globalServer.mu.RLock()
-	defer globalServer.mu.RUnlock()
+	// Callers already hold globalServer.mu (read or write); taking it again
+	// here deadlocks once a writer is queued.
 	idx, ok := globalServer.indices[index]
 	if !ok {
 		return nil, &apiError{Type: "index_not_found_exception", Status: 404,
@@ -1326,6 +1418,30 @@ func isFractionalNumber(v any) bool {
 	return false
 }
 
+// rawFloatValue parses a JSON number or numeric string without applying any
+// field-type rounding.
+func rawFloatValue(v any) (float64, bool) {
+	switch t := v.(type) {
+	case json.Number:
+		f, err := t.Float64()
+		return f, err == nil
+	case float64:
+		return t, true
+	case float32:
+		return float64(t), true
+	case int:
+		return float64(t), true
+	case int64:
+		return float64(t), true
+	case uint64:
+		return float64(t), true
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(t), 64)
+		return f, err == nil
+	}
+	return 0, false
+}
+
 func hasFractionalNumericValue(v any) bool {
 	f, ok := toFloat(v)
 	return ok && f != math.Trunc(f)
@@ -1350,6 +1466,13 @@ func rangeBoundValue(def map[string]any, ftype, field string, v any, tz, format 
 				return ctx.parseFloatValue(field, base, def, v)
 			}
 			return ctx.parseIntValue(field, base, def, v)
+		}
+		if base == "half_float" {
+			// OpenSearch keeps half_float range bounds in full precision: only
+			// the stored value is rounded to half precision.
+			if f, ok := rawFloatValue(v); ok {
+				return f, nil
+			}
 		}
 		return ctx.parseFloatValue(field, base, def, v)
 	}
@@ -2306,8 +2429,7 @@ func msmRequired(spec any, n int, defaultAll bool) (int, *apiError) {
 }
 
 func matchAnalyzerExists(idx *Index, name string) bool {
-	switch name {
-	case "standard", "simple", "whitespace", "keyword", "stop", "english", "lowercase", "pattern", "fingerprint":
+	if builtinAnalyzer(name) {
 		return true
 	}
 	if idx != nil {
@@ -2423,6 +2545,12 @@ func (c *queryCtx) evalMatch(field string, raw any, boost float64) (bool, float6
 	}
 	def, _ := mappingFieldDef(c.idx, field)
 	ftype, _ := def["type"].(string)
+	if iv, ok := def["index"].(bool); ok && !iv {
+		if ftype == "text" || ftype == "match_only_text" || ftype == "search_as_you_type" {
+			return false, 0, matchSearchError("query_shard_exception",
+				"failed to create query: Cannot search on field ["+field+"] since it is not indexed.")
+		}
+	}
 	lenient := false
 	if m != nil {
 		if b, ok := m["lenient"].(bool); ok {
@@ -2488,6 +2616,31 @@ func (c *queryCtx) evalMatch(field string, raw any, boost float64) (bool, float6
 			return false, 0, nil
 		}
 		text = normalizeQueryValue(c.idx, field, text)
+		if split, _ := def["split_queries_on_whitespace"].(bool); split {
+			tokens := strings.Fields(text)
+			if len(tokens) == 0 {
+				return false, 0, nil
+			}
+			required := 1
+			if operator == "and" {
+				required = len(tokens)
+			}
+			matched := 0
+			for _, tok := range tokens {
+				norm := normalizeQueryValue(c.idx, field, tok)
+				for _, v := range vals {
+					s, _ := valueScalarString(v)
+					if s == norm {
+						matched++
+						break
+					}
+				}
+			}
+			if matched >= required {
+				return true, boost, nil
+			}
+			return false, 0, nil
+		}
 		for _, v := range vals {
 			s, _ := valueScalarString(v)
 			if s == text {
@@ -2621,6 +2774,9 @@ func (c *queryCtx) evalMatch(field string, raw any, boost float64) (bool, float6
 		}
 	}
 	if int(score) >= required {
+		if ftype == "match_only_text" {
+			return true, boost, nil
+		}
 		_, hasAnalyzer := any(nil), false
 		if m != nil {
 			_, hasAnalyzer = m["analyzer"]
@@ -2698,10 +2854,22 @@ func (c *queryCtx) evalMatchPhrase(field string, raw any, boost, slop float64) (
 	if slop < 0 {
 		return false, 0, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "No negative slop allowed."}
 	}
+	if io, _ := def["index_options"].(string); io == "docs" || io == "freqs" {
+		reason := "field:[" + field + "] was indexed without position data; cannot run PhraseQuery"
+		return false, 0, &apiError{Type: "query_shard_exception", Status: 400,
+			Reason:   "failed to create query: " + reason,
+			CausedBy: &apiError{Type: "illegal_state_exception", Status: 400, Reason: reason}}
+	}
 	if ftype == "boolean" || isNumericType(ftype) || ftype == "date" || ftype == "date_nanos" || ftype == "ip" {
 		return c.evalMatch(field, raw, boost)
 	}
 	if ftype == "keyword" || ftype == "constant_keyword" || ftype == "wildcard" || ftype == "flat_object" {
+		if split, _ := def["split_queries_on_whitespace"].(bool); split {
+			reason := "field:[" + field + "] was indexed without position data; cannot run PhraseQuery"
+			return false, 0, &apiError{Type: "query_shard_exception", Status: 400,
+				Reason:   "failed to create query: " + reason,
+				CausedBy: &apiError{Type: "illegal_state_exception", Status: 400, Reason: reason}}
+		}
 		for _, v := range c.mustValues(field) {
 			s, _ := valueScalarString(v)
 			if s == text {

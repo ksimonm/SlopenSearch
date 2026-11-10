@@ -282,7 +282,11 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		props := ensureProperties(destIdx.Mappings)
-		mergeMappingForIndex(destIdx, props, doc)
+		if derr := mergeMappingForIndex(destIdx, props, doc); derr != nil {
+			failures = append(failures, reindexFailure{index: destName, id: id,
+				typ: derr.Type, rex: derr.Reason, code: derr.Status}.json(destUUID))
+			continue
+		}
 		destIdx.FieldTypes = map[string]string{}
 		buildFieldTypes(destIdx.Mappings, "", destIdx.FieldTypes)
 		if derr := destIdx.computeDocValues(id, doc); derr != nil {
