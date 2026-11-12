@@ -756,6 +756,12 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 				s.handleGetDocV2(w, r, index, segs[2])
 			case http.MethodDelete:
 				s.handleDeleteDocV2(w, r, index, segs[2])
+			case http.MethodOptions:
+				w.Header().Set("Allow", "PUT,POST,GET,HEAD,DELETE")
+				w.Header().Set("Content-Type", "text/plain; charset=UTF-8")
+				w.WriteHeader(200)
+			default:
+				methodNotAllowed(w, r, "PUT", "POST", "GET", "HEAD", "DELETE")
 			}
 		case "_source":
 			if r.Method != http.MethodGet && r.Method != http.MethodHead {

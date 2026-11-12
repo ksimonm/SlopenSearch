@@ -237,6 +237,26 @@ func writeFinal(w http.ResponseWriter, r *http.Request, status int, body []byte)
 	w.Write(body)
 }
 
+// javaURLEncode mirrors java.net.URLEncoder.encode(s, UTF-8).
+func javaURLEncode(s string) string {
+	const hex = "0123456789ABCDEF"
+	var sb strings.Builder
+	for _, b := range []byte(s) {
+		switch {
+		case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9',
+			b == '.', b == '-', b == '*', b == '_':
+			sb.WriteByte(b)
+		case b == ' ':
+			sb.WriteByte('+')
+		default:
+			sb.WriteByte('%')
+			sb.WriteByte(hex[b>>4])
+			sb.WriteByte(hex[b&15])
+		}
+	}
+	return sb.String()
+}
+
 // levenshteinSimilarity mirrors Lucene's LevenshteinDistance.getDistance.
 func levenshteinSimilarity(a, b string) float64 {
 	s, t := []rune(a), []rune(b)
