@@ -89,13 +89,17 @@ func (s *Server) resolveWriteTargetV2(name string) (*Index, *apiError) {
 }
 
 func unknownParams(r *http.Request, allowed map[string]bool) *apiError {
+	var bad []string
 	for k := range r.URL.Query() {
 		if !allowed[k] {
-			return &apiError{Type: "illegal_argument_exception", Status: 400,
-				Reason: "request [" + r.URL.Path + "] contains unrecognized parameter: [" + k + "]"}
+			bad = append(bad, k)
 		}
 	}
-	return nil
+	if len(bad) == 0 {
+		return nil
+	}
+	return &apiError{Type: "illegal_argument_exception", Status: 400,
+		Reason: unrecognizedParamsReason(r.URL.Path, bad, allowed)}
 }
 
 func refreshValue(r *http.Request) (string, *apiError) {
@@ -338,7 +342,7 @@ var getDocParams = map[string]bool{
 	"realtime": true, "version": true, "version_type": true, "routing": true,
 	"preference": true, "_source": true, "_source_includes": true, "_source_excludes": true,
 	"stored_fields": true, "refresh": true, "error_trace": true, "human": true,
-	"pretty": true, "filter_path": true,
+	"pretty": true, "filter_path": true, "format": true,
 }
 
 var deleteDocParams = map[string]bool{
@@ -1142,6 +1146,13 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 	if routing != "" {
 		resp = append(resp, orderedKV{"_routing", routing})
 	}
+	if status == 201 {
+		loc := "/" + idx.Name + "/_doc/" + javaURLEncode(id)
+		if routing != "" {
+			loc += "?routing=" + javaURLEncode(routing)
+		}
+		w.Header().Set("Location", loc)
+	}
 	writeJSON(w, status, resp)
 }
 
@@ -1166,6 +1177,10 @@ func (s *Server) handleGetDocV2(w http.ResponseWriter, r *http.Request, name, id
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if err := unknownParams(r, getDocParams); err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := strictBoolParam(r, "realtime"); err != nil {
 		writeError(w, err)
 		return
 	}

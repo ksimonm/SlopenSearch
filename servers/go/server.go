@@ -234,21 +234,53 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxContentLength)
 	cw := &captureWriter{h: w.Header()}
-	if r.ContentLength > 0 {
-		base := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0])
-		switch base {
-		case "application/json", "application/x-ndjson", "application/yaml",
-			"application/x-yaml", "text/yaml", "application/yml":
-		default:
-			writeSimpleError(cw, 406, "Content-Type header ["+base+"] is not supported")
-			status := cw.status
-			cw.h.Set("X-OpenSearch-Version", "OpenSearch/3.9.0 (opensearch)")
-			w.WriteHeader(status)
-			w.Write(bytes.TrimRight(cw.buf.Bytes(), "\n"))
+	finish := func() {
+		status := cw.status
+		if status == 0 {
+			status = 200
+		}
+		cw.h.Set("X-OpenSearch-Version", "OpenSearch/3.9.0 (opensearch)")
+		writeFinal(w, r, status, bytes.TrimRight(cw.buf.Bytes(), "\n"))
+	}
+	if ids := r.Header.Values("X-Opaque-Id"); len(ids) > 0 {
+		cw.h.Set("X-Opaque-Id", ids[0])
+		if len(ids) > 1 {
+			writeSimpleError(cw, 400, "multiple values for single-valued header [X-Opaque-Id].")
+			finish()
 			return
 		}
 	}
-	s.route(cw, r)
+	normalizeQuery(r)
+	if r.ContentLength > 0 && checkContentType(cw, r) {
+		finish()
+		return
+	}
+	if e := decodeRequestBody(r); e != nil {
+		writeError(cw, e)
+		finish()
+		return
+	}
+	for _, p := range []string{"pretty", "human", "error_trace"} {
+		if e := strictBoolParam(r, p); e != nil {
+			writeError(cw, e)
+			finish()
+			return
+		}
+	}
+	if !s.handleTaskRoutes(cw, r) {
+		s.route(cw, r)
+	}
+	if r.Method == http.MethodHead && cw.buf.Len() == 0 && cw.status < 300 {
+		// HEAD answers carry the Content-Length of the matching GET body
+		g := r.Clone(r.Context())
+		g.Method = http.MethodGet
+		gw := &captureWriter{h: http.Header{}}
+		s.route(gw, g)
+		if gw.status == cw.status || (gw.status == 0 && cw.status == 0) {
+			cw.buf = gw.buf
+			cw.ordered = gw.ordered
+		}
+	}
 	status := cw.status
 	if status == 0 {
 		status = 200
@@ -315,11 +347,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	cw.h.Set("X-OpenSearch-Version", "OpenSearch/3.9.0 (opensearch)")
-	if r.Method == http.MethodHead {
-		body = nil
-	}
-	w.WriteHeader(status)
-	w.Write(body)
+	writeFinal(w, r, status, body)
 }
 
 func jsonMustMarshal(v any) []byte {
@@ -741,6 +769,12 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 				s.handleGetDocV2(w, r, index, segs[2])
 			case http.MethodDelete:
 				s.handleDeleteDocV2(w, r, index, segs[2])
+			case http.MethodOptions:
+				w.Header().Set("Allow", "PUT,POST,GET,HEAD,DELETE")
+				w.Header().Set("Content-Type", "text/plain; charset=UTF-8")
+				w.WriteHeader(200)
+			default:
+				methodNotAllowed(w, r, "PUT", "POST", "GET", "HEAD", "DELETE")
 			}
 		case "_source":
 			if r.Method != http.MethodGet && r.Method != http.MethodHead {
