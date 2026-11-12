@@ -1719,6 +1719,7 @@ func (idx *Index) computeDocValues(id string, doc map[string]any) *apiError {
 		idx.DocValues = map[string]map[string][]any{}
 	}
 	idx.DocValues[id] = c.values
+	idx.dvGen++
 	if len(c.ignored) > 0 {
 		if idx.DocIgnored == nil {
 			idx.DocIgnored = map[string][]string{}
@@ -1743,11 +1744,13 @@ func ignoredValues(fields []string) []any {
 func (idx *Index) removeDocValues(id string) {
 	delete(idx.DocValues, id)
 	delete(idx.DocIgnored, id)
+	idx.dvGen++
 }
 
 // recomputeAllDocValues rebuilds doc values for every document (used when
 // mappings change).
 func (idx *Index) recomputeAllDocValues() {
+	idx.dvGen++
 	idx.DocValues = map[string]map[string][]any{}
 	idx.DocIgnored = map[string][]string{}
 	for _, id := range idx.Order {

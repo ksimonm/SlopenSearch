@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -81,11 +82,14 @@ func (c *queryCtx) bm25FieldScore(field string, qtokens []string, operator strin
 		}
 		return out
 	}
-	myVals := []any{}
-	if dv, ok := c.rawValues(); ok {
-		myVals = dv[resolveAliasField(c.idx, field)]
+	var myTokens []string
+	var st *fieldTermStats
+	if c.vals == nil {
+		st = termStatsFor(c.idx, resolveAliasField(c.idx, field), analyzer, docTerms)
+		myTokens = st.docTokens[c.id]
+	} else {
+		myTokens = docTerms(c.vals[resolveAliasField(c.idx, field)])
 	}
-	myTokens := docTerms(myVals)
 	if len(myTokens) == 0 {
 		return 0
 	}
@@ -100,29 +104,15 @@ func (c *queryCtx) bm25FieldScore(field string, qtokens []string, operator strin
 			}
 		}
 	}
-	N := 0
-	avgdl := 0.0
-	df := map[string]int{}
-	for _, dv := range c.idx.DocValues {
-		vals := dv[resolveAliasField(c.idx, field)]
-		if len(vals) == 0 {
-			continue
-		}
-		N++
-		toks := docTerms(vals)
-		avgdl += float64(len(toks))
-		seen := map[string]bool{}
-		for _, t := range toks {
-			if !seen[t] {
-				seen[t] = true
-				df[t]++
-			}
-		}
+	if st == nil {
+		st = termStatsFor(c.idx, resolveAliasField(c.idx, field), analyzer, docTerms)
 	}
+	N := st.n
+	df := st.df
 	if N == 0 {
 		return 0
 	}
-	avgdl /= float64(N)
+	avgdl := st.sumdl / float64(N)
 	if avgdl == 0 {
 		avgdl = 1
 	}
@@ -5484,4 +5474,63 @@ func balancedQueryParens(s string) bool {
 		}
 	}
 	return depth == 0
+}
+
+// fieldTermStats holds the per-field corpus statistics BM25 needs (document
+// count, total length, document frequencies) plus each document's analysed
+// tokens, so scoring a hit does not re-analyse the whole index.
+type fieldTermStats struct {
+	gen       uint64
+	mapVer    int64
+	settings  int
+	n         int
+	sumdl     float64
+	df        map[string]int
+	docTokens map[string][]string
+}
+
+type termStatsKey struct {
+	idx             *Index
+	field, analyzer string
+}
+
+var (
+	termStatsMu    sync.Mutex
+	termStatsCache = map[termStatsKey]*fieldTermStats{}
+)
+
+func termStatsFor(idx *Index, field, analyzer string, docTerms func([]any) []string) *fieldTermStats {
+	key := termStatsKey{idx, field, analyzer}
+	termStatsMu.Lock()
+	st := termStatsCache[key]
+	termStatsMu.Unlock()
+	if st != nil && st.gen == idx.dvGen && st.mapVer == idx.MappingVersion && st.settings == len(idx.Settings) {
+		return st
+	}
+	st = &fieldTermStats{gen: idx.dvGen, mapVer: idx.MappingVersion, settings: len(idx.Settings),
+		df: map[string]int{}, docTokens: map[string][]string{}}
+	for id, dv := range idx.DocValues {
+		vals := dv[field]
+		if len(vals) == 0 {
+			continue
+		}
+		st.n++
+		toks := docTerms(vals)
+		st.docTokens[id] = toks
+		st.sumdl += float64(len(toks))
+		seen := map[string]bool{}
+		for _, t := range toks {
+			if !seen[t] {
+				seen[t] = true
+				st.df[t]++
+			}
+		}
+	}
+	termStatsMu.Lock()
+	if len(termStatsCache) > 256 {
+		termStatsCache = map[termStatsKey]*fieldTermStats{}
+	}
+	termStatsCache[key] = st
+	termStatsMu.Unlock()
+	return st
 }
