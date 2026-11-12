@@ -89,13 +89,17 @@ func (s *Server) resolveWriteTargetV2(name string) (*Index, *apiError) {
 }
 
 func unknownParams(r *http.Request, allowed map[string]bool) *apiError {
+	var bad []string
 	for k := range r.URL.Query() {
 		if !allowed[k] {
-			return &apiError{Type: "illegal_argument_exception", Status: 400,
-				Reason: "request [" + r.URL.Path + "] contains unrecognized parameter: [" + k + "]"}
+			bad = append(bad, k)
 		}
 	}
-	return nil
+	if len(bad) == 0 {
+		return nil
+	}
+	return &apiError{Type: "illegal_argument_exception", Status: 400,
+		Reason: unrecognizedParamsReason(r.URL.Path, bad, allowed)}
 }
 
 func refreshValue(r *http.Request) (string, *apiError) {
