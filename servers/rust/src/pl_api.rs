@@ -480,7 +480,7 @@ pub fn doc_lookup(idx: Rc<Index>, id: &str, values: Option<Map<String, Value>>) 
 
 // ---- score functions ----
 
-fn score_bindings(id: String) -> HashMap<String, NativeFn> {
+pub fn score_bindings(id: String) -> HashMap<String, NativeFn> {
     fn f(a: &[PV], i: usize) -> f64 {
         f64_of(&a[i])
     }

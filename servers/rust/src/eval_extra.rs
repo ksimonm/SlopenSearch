@@ -2487,6 +2487,17 @@ impl<'a> QueryCtx<'a> {
                 functions = vec![Value::Object(f.clone())];
             }
         }
+        if functions.is_empty() {
+            let mut f = Map::new();
+            for k in ["script_score", "field_value_factor", "random_score", "gauss", "linear", "exp"] {
+                if let Some(v) = bm.get(k) {
+                    f.insert(k.to_string(), v.clone());
+                }
+            }
+            if !f.is_empty() {
+                functions = vec![Value::Object(f)];
+            }
+        }
         let mut score_mode = bm
             .get("score_mode")
             .and_then(|s| s.as_str())
@@ -2688,18 +2699,8 @@ impl<'a> QueryCtx<'a> {
             return Ok(pseudo_random(&self.id, seed));
         }
         if let Some(ss) = fno.get("script_score").and_then(|s| s.as_object()) {
-            let sm = ss.get("script").and_then(|s| s.as_object());
-            let src = sm
-                .and_then(|s| s.get("source"))
-                .and_then(|s| s.as_str())
-                .unwrap_or("");
-            let mut params = crate::painless::script_params_of(sm.unwrap_or(&Map::new()));
-            params.insert("__score".to_string(), json!(base));
-            let env = ScriptEnv { c: self, params };
-            if let Ok(v) = env.eval_script_expression(src) {
-                return Ok(script_float(&v));
-            }
-            return Ok(1.0);
+            let raw = ss.get("script").cloned().unwrap_or(Value::Null);
+            return crate::script_ctx::run_score_script(self, &raw, base, true);
         }
         for fn_name in ["gauss", "linear", "exp"] {
             if let Some(dec) = fno.get(fn_name).and_then(|d| d.as_object()) {

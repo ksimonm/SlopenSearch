@@ -8,6 +8,7 @@ __pycache__/
 
 # Server build artifacts
 servers/rust/target/
+servers/rust/target-*/
 servers/go/slopensearch
 servers/go/slopsearch
 

@@ -891,6 +891,7 @@ fn cluster_defaults_for() -> Map<String, Value> {
         "script.painless.regex.limit-factor".into(),
         json!(crate::pl_regex::LIMIT_FACTOR.to_string()),
     );
+    d.insert("script.max_size_in_bytes".into(), json!("65535"));
     d
 }
 

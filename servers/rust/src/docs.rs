@@ -1261,7 +1261,7 @@ fn ctx_expr(
     env.eval_script_expression(e)
 }
 
-fn run_ctx_script(
+pub(crate) fn run_ctx_script(
     src: &str,
     idx: &Index,
     source: &mut Map<String, Value>,
@@ -1269,6 +1269,7 @@ fn run_ctx_script(
     id: &str,
     version: i64,
     op: &mut String,
+    meta: &mut Map<String, Value>,
 ) -> Result<(), (bool, String)> {
     let statements = split_top(src, ';');
     for st in statements {
@@ -1288,23 +1289,37 @@ fn run_ctx_script(
             let Some(b) = matching_paren(st, a, '(', ')') else { return Err((false, "compile error".into())); };
             let cond = &st[a + 1..b];
             let rest = st[b + 1..].trim();
-            let Some(open) = rest.find('{') else { return Err((false, "compile error".into())); };
-            let Some(close) = matching_paren(rest, open, '{', '}') else { return Err((false, "compile error".into())); };
-            let then_block = &rest[open + 1..close];
+            let (then_block, after) = if rest.starts_with('{') {
+                let Some(close) = matching_paren(rest, 0, '{', '}') else { return Err((false, "compile error".into())); };
+                (&rest[1..close], rest[close + 1..].trim())
+            } else {
+                (rest, "")
+            };
             let condv = ctx_expr(cond, idx, source, params, id, version)
                 .map_err(|_| (false, "compile error".into()))?;
-            if crate::painless::truthy(&condv) {
-                run_ctx_script(then_block, idx, source, params, id, version, op)?;
-            } else {
-                let tail = rest[close + 1..].trim();
-                if let Some(else_rest) = tail.strip_prefix("else") {
-                    let else_rest = else_rest.trim();
-                    if let Some(eo) = else_rest.find('{') {
-                        if let Some(ec) = matching_paren(else_rest, eo, '{', '}') {
-                            run_ctx_script(&else_rest[eo + 1..ec], idx, source, params, id, version, op)?;
-                        }
-                    }
+            let taken = crate::painless::truthy(&condv);
+            if taken {
+                run_ctx_script(then_block, idx, source, params, id, version, op, meta)?;
+            }
+            let else_rest = after
+                .strip_prefix("else")
+                .filter(|r| r.starts_with(|c: char| c.is_whitespace() || c == '{'));
+            if let Some(else_rest) = else_rest {
+                let else_rest = else_rest.trim();
+                let (else_body, remainder) = if else_rest.starts_with('{') {
+                    let Some(ec) = matching_paren(else_rest, 0, '{', '}') else { return Err((false, "compile error".into())); };
+                    (&else_rest[1..ec], else_rest[ec + 1..].trim())
+                } else {
+                    (else_rest, "")
+                };
+                if !taken {
+                    run_ctx_script(else_body, idx, source, params, id, version, op, meta)?;
                 }
+                if !remainder.is_empty() {
+                    run_ctx_script(remainder, idx, source, params, id, version, op, meta)?;
+                }
+            } else if !after.is_empty() {
+                run_ctx_script(after, idx, source, params, id, version, op, meta)?;
             }
             continue;
         }
@@ -1314,7 +1329,16 @@ fn run_ctx_script(
             *op = val.to_string();
             continue;
         }
-        if st.starts_with("ctx._id") {
+        for key in ["_id", "_index"] {
+            if let Some(rest) = st.strip_prefix(&format!("ctx.{}", key)) {
+                if let Some(rhs) = rest.trim_start().strip_prefix('=') {
+                    let val = ctx_expr(rhs.trim(), idx, source, params, id, version)
+                        .map_err(|_| (false, "compile error".to_string()))?;
+                    meta.insert(key.to_string(), val);
+                }
+            }
+        }
+        if st.starts_with("ctx._id") || st.starts_with("ctx._index") {
             continue;
         }
         if let Some(rest) = st.strip_prefix("ctx._source.remove(") {
@@ -1456,24 +1480,7 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
             400,
         ));
     }
-    let script_obj = body.get("script").and_then(|v| v.as_object());
-    let script_src = match body.get("script") {
-        Some(Value::String(s)) => Some(s.clone()),
-        Some(Value::Object(m)) => m.get("source").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        _ => None,
-    };
-    let mut params = script_obj.map(crate::painless::script_params_of).unwrap_or_default();
-    if let Some(Value::Object(bm)) = body.get("script") {
-        if let Some(Value::String(lang)) = bm.get("lang") {
-            if lang != "painless" {
-                return err_response(ApiError::new(
-                    "illegal_argument_exception",
-                    &format!("script_lang not supported [{}]", lang),
-                    400,
-                ));
-            }
-        }
-    }
+    let script_raw = body.get("script").cloned();
     let default_pipeline = match crate::ingest::effective_ingest_pipeline(store, &target, "") {
         Ok(p) => p,
         Err(e) => return err_response(e),
@@ -1538,41 +1545,28 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
                 cur = merged;
             }
         }
-        if let Some(src) = &script_src {
-            let mut sc = cur.clone();
-            match run_ctx_script(src, idx, &mut sc, &params, id, old_version, &mut op) {
-                Ok(()) => {}
-                Err((runtime, msg)) => {
-                    let wrapper = ApiError::new("illegal_argument_exception", "failed to execute script", 400)
-                        .caused_by(ApiError::new(
-                            "script_exception",
-                            if runtime { "runtime error" } else { "compile error" },
-                            400,
-                        ));
-                    let mut wrapper = wrapper;
-                    if runtime {
-                        if let Some(cb) = wrapper.caused_by.as_mut() {
-                            cb.caused_by = Some(Box::new(ApiError::new(
-                                "illegal_argument_exception",
-                                &msg,
-                                400,
-                            )));
-                        }
-                    }
-                    if let Some(cb) = wrapper.caused_by.as_mut() {
-                        **cb = (**cb).clone().field("lang", json!("painless"));
-                    }
-                    return err_response(wrapper);
-                }
-            }
-            params.clear();
+        if let Some(raw) = &script_raw {
+            let routing = idx.routing.get(id).cloned();
+            let res = match crate::script_ctx::run_update_script(
+                raw,
+                &cur,
+                &idx.name,
+                id,
+                old_version,
+                "index",
+                routing.as_deref(),
+            ) {
+                Ok(r) => r,
+                Err(e) => return err_response(crate::script_ctx::update_failure(&e)),
+            };
+            op = res.op.clone();
             if op == "delete" {
                 result = "deleted";
-            } else if op == "noop" || op == "none" || (!op.is_empty() && op != "index") {
+            } else if op == "noop" {
                 result = "noop";
-            } else if sc != cur {
+            } else {
                 result = "updated";
-                cur = sc;
+                cur = res.source;
             }
         }
         if result == "deleted" {
@@ -1635,30 +1629,13 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
         };
         let scripted_upsert = body.get("scripted_upsert").and_then(|v| v.as_bool()).unwrap_or(false);
         if scripted_upsert {
-            if let Some(src) = &script_src {
-                match run_ctx_script(src, idx, &mut base, &params, id, 0, &mut op) {
-                    Ok(()) => {}
-                    Err((runtime, msg)) => {
-                        let mut wrapper = ApiError::new("illegal_argument_exception", "failed to execute script", 400)
-                            .caused_by(ApiError::new(
-                                "script_exception",
-                                if runtime { "runtime error" } else { "compile error" },
-                                400,
-                            ));
-                        if runtime {
-                            if let Some(cb) = wrapper.caused_by.as_mut() {
-                                cb.caused_by = Some(Box::new(ApiError::new(
-                                    "illegal_argument_exception",
-                                    &msg,
-                                    400,
-                                )));
-                            }
-                        }
-                        if let Some(cb) = wrapper.caused_by.as_mut() {
-                            **cb = (**cb).clone().field("lang", json!("painless"));
-                        }
-                        return err_response(wrapper);
+            if let Some(raw) = &script_raw {
+                match crate::script_ctx::run_update_script(raw, &base, &idx.name, id, 0, "create", None) {
+                    Ok(res) => {
+                        op = res.op.clone();
+                        base = res.source;
                     }
+                    Err(e) => return err_response(crate::script_ctx::update_failure(&e)),
                 }
             }
             if op == "none" || op == "noop" {
@@ -2702,7 +2679,7 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
                     }
                 } else if let Some(src) = &script_src {
                     if !has_upsert {
-                        if let Err((runtime, msg)) = run_ctx_script(src, idx, &mut cur, &sparams, &doc_id, old_ver, &mut op) {
+                        if let Err((runtime, msg)) = run_ctx_script(src, idx, &mut cur, &sparams, &doc_id, old_ver, &mut op, &mut Map::new()) {
                             has_errors = true;
                             items.push(json!({"update": {"_index": idx.name, "_id": doc_id, "status": 400,
                                 "error": {"type": "illegal_argument_exception", "reason": if runtime { msg } else { "compile error".to_string() }}}}));
@@ -2732,7 +2709,7 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
                 };
                 let mut op = String::new();
                 if let Some(src) = &script_src {
-                    if let Err((runtime, msg)) = run_ctx_script(src, idx, &mut base, &sparams, &doc_id, 0, &mut op) {
+                    if let Err((runtime, msg)) = run_ctx_script(src, idx, &mut base, &sparams, &doc_id, 0, &mut op, &mut Map::new()) {
                         has_errors = true;
                         items.push(json!({"update": {"_index": idx.name, "_id": doc_id, "status": 400,
                             "error": {"type": "illegal_argument_exception", "reason": if runtime { msg } else { "compile error".to_string() }}}}));
@@ -3889,30 +3866,11 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
         ids.truncate(max);
     }
     let total = ids.len() as i64;
-    let script_obj = body.get("script").and_then(|v| v.as_object());
-    let script_src = match body.get("script") {
-        Some(Value::String(s)) => Some(s.clone()),
-        Some(Value::Object(m)) => m.get("source").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        _ => None,
-    };
-    let params = script_obj.map(crate::painless::script_params_of).unwrap_or_default();
+    let script_raw = body.get("script").cloned();
     let pipeline_name = match crate::ingest::effective_ingest_pipeline(store, &target, req.param("pipeline").unwrap_or("")) {
         Ok(p) => p,
         Err(e) => return err_response(e),
     };
-    if let Some(src) = &script_src {
-        let idx = &store.indices[&target];
-        let mut sc = Map::new();
-        let mut op = String::new();
-        if let Err((runtime, msg)) = run_ctx_script(src, idx, &mut sc, &params, "", 0, &mut op) {
-            let mut e = ApiError::new("script_exception", if runtime { "runtime error" } else { "compile error" }, 400);
-            e = e.field("lang", json!("painless"));
-            if msg != "compile error" && msg != "runtime error" {
-                e.caused_by = Some(Box::new(ApiError::new("illegal_argument_exception", &msg, 400)));
-            }
-            return err_response(e);
-        }
-    }
     let mut updated = 0i64;
     let mut deleted = 0i64;
     let mut noops = 0i64;
@@ -3926,14 +3884,18 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
         let old_ver = store.indices.get(&target).and_then(|i| i.versions.get(id)).copied().unwrap_or(1);
         let mut cur = old.clone();
         let mut op = String::new();
-        if let Some(src) = &script_src {
+        if let Some(raw) = &script_raw {
             let idx = &store.indices[&target];
-            if let Err((_runtime, _msg)) = run_ctx_script(src, idx, &mut cur, &params, id, old_ver, &mut op) {
-                failure_status = 400;
-                failures.push(json!({"id": id, "index": target,
-                    "cause": {"type": "script_exception", "reason": "compile error"}}));
-                continue;
+            let routing = idx.routing.get(id).cloned();
+            let res = match crate::script_ctx::run_update_script(raw, &cur, &idx.name, id, -1, "index", routing.as_deref()) {
+                Ok(r) => r,
+                Err(e) => return err_response(crate::script_ctx::bulk_script_failure(&e)),
+            };
+            if let Some(e) = crate::script_ctx::check_by_query_ctx(&res, &idx.name, id) {
+                return err_response(e);
             }
+            op = res.op;
+            cur = res.source;
         }
         if op == "delete" {
             let idx = store.indices.get_mut(&target).unwrap();
@@ -3986,8 +3948,8 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
             continue;
         }
         let changed = pipeline_applied
-            || (script_src.is_some() && Value::Object(newdoc.clone()) != Value::Object(old));
-        if script_src.is_some() && !changed {
+            || (script_raw.is_some() && Value::Object(newdoc.clone()) != Value::Object(old));
+        if script_raw.is_some() && !changed {
             noops += 1;
             continue;
         }
