@@ -3922,6 +3922,15 @@ func (c *queryCtx) evalKnn(body any) (bool, float64, *apiError) {
 	if !ok {
 		return false, 0, errParsing("[knn] query malformed")
 	}
+	if _, old := bm["field"]; !old && len(bm) == 1 {
+		for f, v := range bm {
+			pm, ok := v.(map[string]any)
+			if !ok {
+				return false, 0, errParsing("[knn] malformed query, expected a START_OBJECT")
+			}
+			return c.evalKnnField(f, pm)
+		}
+	}
 	field, _ := bm["field"].(string)
 	vecRaw, _ := bm["query_vector"].([]any)
 	var qv []float64
