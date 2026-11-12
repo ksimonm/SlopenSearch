@@ -56,6 +56,8 @@ pub enum Tokenizer {
     SimplePatternSplit { re: JRegex },
     CharGroup { split: Vec<CharClass>, chars: HashSet<char>, max_len: usize },
     Thai,
+    /// A complete language analyzer of `crate::lang` (see builtin_analyzer).
+    Language { name: String, params: Map<String, Value> },
 }
 
 pub fn compile_regex(pattern: &str, flags: u32) -> AResult<JRegex> {
@@ -276,10 +278,29 @@ impl Tokenizer {
             Tokenizer::SimplePattern { re } => simple_pattern(&t, re, false),
             Tokenizer::SimplePatternSplit { re } => simple_pattern(&t, re, true),
             Tokenizer::Thai => thai(&t),
+            Tokenizer::Language { name, params } => language_analyzer(name, params, text),
         };
         s.fix_end();
         s
     }
+}
+
+/// A whole Lucene language analyzer chain from `crate::lang` (it runs as
+/// the tokenizer of a filter-less chain).
+fn language_analyzer(name: &str, params: &Map<String, Value>, text: &str) -> Stream {
+    let toks = crate::lang::chains::language_analyzer(name, params, text).unwrap_or_default();
+    let mut pos: isize = -1;
+    let mut end_pos = 0usize;
+    let mut out = Vec::with_capacity(toks.len());
+    for t in toks {
+        pos += t.pos_inc as isize;
+        let p = pos.max(0) as usize;
+        let mut tok = Token::new(t.term, t.start, t.end, &t.typ, p);
+        tok.pos_len = t.pos_len;
+        end_pos = end_pos.max(p + t.pos_len);
+        out.push(tok);
+    }
+    Stream { tokens: out, end_pos }
 }
 
 // ------------------------------------------------------------ char tokenizers

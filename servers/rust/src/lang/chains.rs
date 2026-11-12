@@ -370,80 +370,126 @@ fn capitalize(s: &str) -> String {
     }
 }
 
-/// StemmerTokenFilterFactory.create for a `language` setting.
-pub fn stemmer_filter(language: &str) -> Result<Filter, StemmerError> {
+/// A per-term stemmer: a function, or a Snowball class.
+#[derive(Debug, Clone, Copy)]
+pub enum TermStem {
+    F(fn(&mut Vec<u16>)),
+    S(&'static str),
+    /// EnglishPossessiveFilter (applies to keyword tokens too).
+    P,
+}
+
+impl PartialEq for TermStem {
+    fn eq(&self, other: &TermStem) -> bool {
+        match (self, other) {
+            (TermStem::F(a), TermStem::F(b)) => *a as usize == *b as usize,
+            (TermStem::S(a), TermStem::S(b)) => a == b,
+            (TermStem::P, TermStem::P) => true,
+            _ => false,
+        }
+    }
+}
+
+impl TermStem {
+    pub fn stem(&self, term: &str) -> String {
+        let mut u: Vec<u16> = term.encode_utf16().collect();
+        match self {
+            TermStem::F(f) => f(&mut u),
+            TermStem::P => english_possessive(&mut u),
+            TermStem::S(c) => {
+                if let Some(mut st) = super::snowball_gen::new_stemmer(c) {
+                    u = stem_units(st.as_mut(), &u);
+                }
+            }
+        }
+        String::from_utf16_lossy(&u)
+    }
+}
+
+/// The stemmer of a StemmerTokenFilterFactory `language`, if known here.
+pub fn term_stemmer(language: &str) -> Option<TermStem> {
     use super::*;
     let l = language.to_lowercase();
-    let f: Filter = match l.as_str() {
-        "arabic" => map_stem(arabic_family::arabic_stem),
-        "armenian" => snowball("Armenian"),
-        "basque" => snowball("Basque"),
-        "bengali" => map_stem(indic::bengali_stem),
-        "brazilian" => map_stem(brazilian::brazilian_stem),
-        "bulgarian" => map_stem(slavic_baltic::bulgarian_stem),
-        "catalan" => snowball("Catalan"),
-        "czech" => map_stem(slavic_baltic::czech_stem),
-        "danish" => snowball("Danish"),
-        "dutch" => snowball("Dutch"),
-        "english" | "porter" => map_stem(porter::porter_stem),
-        "light_english" | "lightenglish" | "kstem" => map_stem(kstem::kstem),
-        "porter2" => snowball("English"),
-        "minimal_english" | "minimalenglish" => map_stem(english_misc::english_minimal_stem),
-        "plural_english" | "pluralenglish" => map_stem(english_misc::english_plural_stem),
-        "possessive_english" | "possessiveenglish" => map_all(english_possessive),
-        "estonian" => snowball("Estonian"),
-        "finnish" => snowball("Finnish"),
+    Some(match l.as_str() {
+        "arabic" => TermStem::F(arabic_family::arabic_stem),
+        "armenian" => TermStem::S("Armenian"),
+        "basque" => TermStem::S("Basque"),
+        "bengali" => TermStem::F(indic::bengali_stem),
+        "brazilian" => TermStem::F(brazilian::brazilian_stem),
+        "bulgarian" => TermStem::F(slavic_baltic::bulgarian_stem),
+        "catalan" => TermStem::S("Catalan"),
+        "czech" => TermStem::F(slavic_baltic::czech_stem),
+        "danish" => TermStem::S("Danish"),
+        "dutch" => TermStem::S("Dutch"),
+        "english" | "porter" => TermStem::F(porter::porter_stem),
+        "light_english" | "lightenglish" | "kstem" => TermStem::F(kstem::kstem),
+        "porter2" => TermStem::S("English"),
+        "minimal_english" | "minimalenglish" => TermStem::F(english_misc::english_minimal_stem),
+        "plural_english" | "pluralenglish" => TermStem::F(english_misc::english_plural_stem),
+        "possessive_english" | "possessiveenglish" => TermStem::P,
+        "estonian" => TermStem::S("Estonian"),
+        "finnish" => TermStem::S("Finnish"),
         "light_finish" | "lightfinish" | "light_finnish" | "lightfinnish" => {
-            map_stem(other_light_stem::finnish_light_stem)
+            TermStem::F(other_light_stem::finnish_light_stem)
         }
-        "french" => snowball("French"),
-        "light_french" | "lightfrench" => map_stem(romance_stem::french_light_stem),
-        "minimal_french" | "minimalfrench" => map_stem(romance_stem::french_minimal_stem),
-        "galician" => map_stem(rslp::galician_stem),
-        "minimal_galician" => map_stem(rslp::galician_minimal_stem),
-        "german" | "german2" => snowball("German"),
-        "light_german" | "lightgerman" => map_stem(germanic_stem::german_light_stem),
-        "minimal_german" | "minimalgerman" => map_stem(germanic_stem::german_minimal_stem),
-        "greek" => map_stem(greek::greek_stem),
-        "hindi" => map_stem(indic::hindi_stem),
-        "hungarian" => snowball("Hungarian"),
-        "light_hungarian" | "lighthungarian" => map_stem(other_light_stem::hungarian_light_stem),
-        "indonesian" => map_stem(slavic_baltic::indonesian_stem),
-        "irish" => snowball("Irish"),
-        "italian" => snowball("Italian"),
-        "light_italian" | "lightitalian" => map_stem(romance_stem::italian_light_stem),
-        "latvian" => map_stem(slavic_baltic::latvian_stem),
-        "lithuanian" => snowball("Lithuanian"),
-        "norwegian" => snowball("Norwegian"),
+        "french" => TermStem::S("French"),
+        "light_french" | "lightfrench" => TermStem::F(romance_stem::french_light_stem),
+        "minimal_french" | "minimalfrench" => TermStem::F(romance_stem::french_minimal_stem),
+        "galician" => TermStem::F(rslp::galician_stem),
+        "minimal_galician" => TermStem::F(rslp::galician_minimal_stem),
+        "german" | "german2" => TermStem::S("German"),
+        "light_german" | "lightgerman" => TermStem::F(germanic_stem::german_light_stem),
+        "minimal_german" | "minimalgerman" => TermStem::F(germanic_stem::german_minimal_stem),
+        "greek" => TermStem::F(greek::greek_stem),
+        "hindi" => TermStem::F(indic::hindi_stem),
+        "hungarian" => TermStem::S("Hungarian"),
+        "light_hungarian" | "lighthungarian" => TermStem::F(other_light_stem::hungarian_light_stem),
+        "indonesian" => TermStem::F(slavic_baltic::indonesian_stem),
+        "irish" => TermStem::S("Irish"),
+        "italian" => TermStem::S("Italian"),
+        "light_italian" | "lightitalian" => TermStem::F(romance_stem::italian_light_stem),
+        "latvian" => TermStem::F(slavic_baltic::latvian_stem),
+        "lithuanian" => TermStem::S("Lithuanian"),
+        "norwegian" => TermStem::S("Norwegian"),
         "light_norwegian" | "lightnorwegian" => {
-            map_stem(|t| germanic_stem::norwegian_light_stem(t, germanic_stem::BOKMAAL))
+            TermStem::F(|t| germanic_stem::norwegian_light_stem(t, germanic_stem::BOKMAAL))
         }
         "minimal_norwegian" | "minimalnorwegian" => {
-            map_stem(|t| germanic_stem::norwegian_minimal_stem(t, germanic_stem::BOKMAAL))
+            TermStem::F(|t| germanic_stem::norwegian_minimal_stem(t, germanic_stem::BOKMAAL))
         }
         "light_nynorsk" | "lightnynorsk" => {
-            map_stem(|t| germanic_stem::norwegian_light_stem(t, germanic_stem::NYNORSK))
+            TermStem::F(|t| germanic_stem::norwegian_light_stem(t, germanic_stem::NYNORSK))
         }
         "minimal_nynorsk" | "minimalnynorsk" => {
-            map_stem(|t| germanic_stem::norwegian_minimal_stem(t, germanic_stem::NYNORSK))
+            TermStem::F(|t| germanic_stem::norwegian_minimal_stem(t, germanic_stem::NYNORSK))
         }
-        "persian" => map_stem(arabic_family::persian_stem),
-        "portuguese" => snowball("Portuguese"),
-        "light_portuguese" | "lightportuguese" => map_stem(romance_stem::portuguese_light_stem),
-        "minimal_portuguese" | "minimalportuguese" => map_stem(romance_stem::portuguese_minimal_stem),
-        "portuguese_rslp" => map_stem(rslp::portuguese_rslp_stem),
-        "romanian" => snowball("Romanian"),
-        "russian" => snowball("Russian"),
-        "light_russian" | "lightrussian" => map_stem(other_light_stem::russian_light_stem),
-        "spanish" => snowball("Spanish"),
-        "light_spanish" | "lightspanish" => map_stem(romance_stem::spanish_light_stem),
-        "sorani" => map_stem(arabic_family::sorani_stem),
-        "swedish" => snowball("Swedish"),
-        "light_swedish" | "lightswedish" => map_stem(germanic_stem::swedish_light_stem),
-        "turkish" => snowball("Turkish"),
-        _ => return snowball_by_class(&capitalize(language)),
-    };
-    Ok(f)
+        "persian" => TermStem::F(arabic_family::persian_stem),
+        "portuguese" => TermStem::S("Portuguese"),
+        "light_portuguese" | "lightportuguese" => TermStem::F(romance_stem::portuguese_light_stem),
+        "minimal_portuguese" | "minimalportuguese" => TermStem::F(romance_stem::portuguese_minimal_stem),
+        "portuguese_rslp" => TermStem::F(rslp::portuguese_rslp_stem),
+        "romanian" => TermStem::S("Romanian"),
+        "russian" => TermStem::S("Russian"),
+        "light_russian" | "lightrussian" => TermStem::F(other_light_stem::russian_light_stem),
+        "spanish" => TermStem::S("Spanish"),
+        "light_spanish" | "lightspanish" => TermStem::F(romance_stem::spanish_light_stem),
+        "sorani" => TermStem::F(arabic_family::sorani_stem),
+        "swedish" => TermStem::S("Swedish"),
+        "light_swedish" | "lightswedish" => TermStem::F(germanic_stem::swedish_light_stem),
+        "turkish" => TermStem::S("Turkish"),
+        _ => return None,
+    })
+}
+
+
+/// StemmerTokenFilterFactory.create for a `language` setting.
+pub fn stemmer_filter(language: &str) -> Result<Filter, StemmerError> {
+    match term_stemmer(language) {
+        Some(TermStem::P) => Ok(map_all(english_possessive)),
+        Some(TermStem::F(f)) => Ok(map_stem(f)),
+        Some(TermStem::S(c)) => Ok(snowball(c)),
+        None => snowball_by_class(&capitalize(language)),
+    }
 }
 
 /// SnowballFilter(stream, name): the stemmer class looked up by name.
@@ -754,4 +800,15 @@ pub fn language_analyzer(name: &str, p: &Map<String, Value>, text: &str) -> Opti
         toks = f(toks);
     }
     Some(toks)
+}
+
+/// The Snowball stemmer class name as a static string, if Lucene ships it.
+pub fn snowball_class(name: &str) -> Option<&'static str> {
+    const CLASSES: &[&str] = &[
+        "Arabic", "Armenian", "Basque", "Catalan", "Danish", "Dutch", "English", "Estonian", "Finnish",
+        "French", "German", "Greek", "Hindi", "Hungarian", "Indonesian", "Irish", "Italian",
+        "Lithuanian", "Nepali", "Norwegian", "Porter", "Portuguese", "Romanian", "Russian", "Serbian",
+        "Spanish", "Swedish", "Tamil", "Turkish", "Yiddish",
+    ];
+    CLASSES.iter().find(|c| **c == name).copied()
 }

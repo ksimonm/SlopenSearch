@@ -560,6 +560,11 @@ pub fn builtin_analyzer(typ: &str, p: &Map<String, Value>, ctx: &Ctx) -> AResult
             simple_chain(Tokenizer::Standard { max_len: 255 }, "standard", f)
         }
         // Language analyzers ("english", "french", ...) are resolved here.
+        lang if crate::lang::chains::LANGUAGE_ANALYZERS.contains(&lang) => simple_chain(
+            Tokenizer::Language { name: lang.to_string(), params: p.clone() },
+            if lang == "thai" { "thai" } else { "standard" },
+            vec![],
+        ),
         _ => return Ok(None),
     };
     let _ = ctx;
