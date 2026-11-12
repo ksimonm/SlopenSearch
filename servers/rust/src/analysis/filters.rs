@@ -48,10 +48,9 @@ pub enum Norm {
     ScandinavianNormalization,
     Arabic,
     Serbian,
-    Sorani,
     DecimalDigit,
-    Persian,
-    Other,
+    /// A language normalization filter of `crate::lang` by name.
+    Lang(&'static str),
 }
 
 #[derive(Debug, Clone)]
@@ -456,10 +455,12 @@ pub fn build(typ: &str, p: &Map<String, Value>, ctx: &Ctx, chain: &Chain) -> ARe
         "scandinavian_normalization" => Filter::Normalize(Norm::ScandinavianNormalization),
         "arabic_normalization" => Filter::Normalize(Norm::Arabic),
         "serbian_normalization" => Filter::Normalize(Norm::Serbian),
-        "sorani_normalization" => Filter::Normalize(Norm::Sorani),
         "decimal_digit" => Filter::Normalize(Norm::DecimalDigit),
-        "persian_normalization" => Filter::Normalize(Norm::Persian),
-        "hindi_normalization" | "indic_normalization" | "bengali_normalization" => Filter::Normalize(Norm::Other),
+        "sorani_normalization" => Filter::Normalize(Norm::Lang("sorani_normalization")),
+        "persian_normalization" => Filter::Normalize(Norm::Lang("persian_normalization")),
+        "hindi_normalization" => Filter::Normalize(Norm::Lang("hindi_normalization")),
+        "indic_normalization" => Filter::Normalize(Norm::Lang("indic_normalization")),
+        "bengali_normalization" => Filter::Normalize(Norm::Lang("bengali_normalization")),
         _ => return Ok(None),
     }))
 }
@@ -689,32 +690,6 @@ fn arabic_normalize(s: &str) -> String {
             'آ' | 'أ' | 'إ' => Some('ا'),
             'ى' => Some('ي'),
             'ة' => Some('ه'),
-            'ـ' => None,
-            '\u{064B}'..='\u{0652}' => None,
-            _ => Some(c),
-        })
-        .collect()
-}
-
-fn persian_normalize(s: &str) -> String {
-    s.chars()
-        .filter_map(|c| match c {
-            'ي' | 'ى' => Some('ی'),
-            'ك' => Some('ک'),
-            'ە' | 'ۀ' | 'ة' => Some('ه'),
-            '\u{200C}' => Some(' '),
-            '\u{064B}'..='\u{0652}' => None,
-            _ => Some(c),
-        })
-        .collect()
-}
-
-fn sorani_normalize(s: &str) -> String {
-    s.chars()
-        .filter_map(|c| match c {
-            'ي' | 'ى' => Some('ی'),
-            'ك' => Some('ک'),
-            '\u{200C}' => None,
             'ـ' => None,
             '\u{064B}'..='\u{0652}' => None,
             _ => Some(c),
@@ -1162,10 +1137,8 @@ impl Filter {
                     Norm::ScandinavianNormalization => scandinavian(&t.term, false),
                     Norm::Arabic => arabic_normalize(&t.term),
                     Norm::Serbian => serbian_normalize(&t.term),
-                    Norm::Sorani => sorani_normalize(&t.term),
                     Norm::DecimalDigit => decimal_digit(&t.term),
-                    Norm::Persian => persian_normalize(&t.term),
-                    Norm::Other => t.term.clone(),
+                    Norm::Lang(name) => crate::lang::chains::normalize_term(name, &t.term),
                 })
             }
         }

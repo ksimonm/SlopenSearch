@@ -477,6 +477,9 @@ pub fn term_stemmer(language: &str) -> Option<TermStem> {
         "swedish" => TermStem::S("Swedish"),
         "light_swedish" | "lightswedish" => TermStem::F(germanic_stem::swedish_light_stem),
         "turkish" => TermStem::S("Turkish"),
+        "serbian" => TermStem::S("Serbian"),
+        // the prebuilt `german_stem` filter (GermanStemFilter)
+        "german_stem" => TermStem::F(germanic_stem::german_stem),
         _ => return None,
     })
 }
@@ -811,4 +814,31 @@ pub fn snowball_class(name: &str) -> Option<&'static str> {
         "Spanish", "Swedish", "Tamil", "Turkish", "Yiddish",
     ];
     CLASSES.iter().find(|c| **c == name).copied()
+}
+
+/// The language normalization filters by name, applied to one term.
+pub fn normalize_term(name: &str, term: &str) -> String {
+    use super::*;
+    let f: fn(&mut Vec<u16>) = match name {
+        "german_normalization" => germanic_stem::german_normalization,
+        "scandinavian_folding" => germanic_stem::scandinavian_folding,
+        "scandinavian_normalization" => germanic_stem::scandinavian_normalization,
+        "arabic_normalization" => arabic_family::arabic_normalize,
+        "serbian_normalization" => slavic_baltic::serbian_normalize,
+        "sorani_normalization" => arabic_family::sorani_normalize,
+        "decimal_digit" => decimal_digit,
+        "persian_normalization" => arabic_family::persian_normalize,
+        "hindi_normalization" => indic::hindi_normalize,
+        "indic_normalization" => indic::indic_normalize,
+        "bengali_normalization" => indic::bengali_normalize,
+        _ => return term.to_string(),
+    };
+    let mut u: Vec<u16> = term.encode_utf16().collect();
+    f(&mut u);
+    String::from_utf16_lossy(&u)
+}
+
+/// ThaiTokenizer as (term, start, end) in UTF-16 offsets.
+pub fn thai_tokens(text: &str) -> Vec<(String, usize, usize)> {
+    super::thai::thai_tokenize(text).into_iter().map(|t| (t.term, t.start, t.end)).collect()
 }

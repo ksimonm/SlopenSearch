@@ -66,7 +66,7 @@ pub fn stemmer_for(language: &str) -> Result<Stemmer, ApiError> {
         "porter2" => Stemmer::Porter2,
         "light_english" | "kstem" => Stemmer::Unimplemented,
         "arabic" | "armenian" | "basque" | "bengali" | "brazilian" | "bulgarian" | "catalan" | "czech"
-        | "danish" | "dutch" | "dutch_kp" | "estonian" | "finnish" | "light_finnish" | "french"
+        | "danish" | "dutch" | "estonian" | "finnish" | "light_finnish" | "french"
         | "light_french" | "minimal_french" | "galician" | "minimal_galician" | "german" | "german2"
         | "light_german" | "minimal_german" | "greek" | "hindi" | "hungarian" | "light_hungarian"
         | "indonesian" | "irish" | "italian" | "light_italian" | "sorani" | "latvian" | "lithuanian"
@@ -115,6 +115,8 @@ pub fn snowball_for(language: &str) -> Result<Stemmer, ApiError> {
 }
 
 fn lang_snowball(cls: &str) -> Stemmer {
+    // Snowball folded "German2" into "German".
+    let cls = if cls == "German2" { "German" } else { cls };
     match crate::lang::chains::snowball_class(cls) {
         Some(c) => Stemmer::Lang(crate::lang::chains::TermStem::S(c)),
         None => Stemmer::Unimplemented,

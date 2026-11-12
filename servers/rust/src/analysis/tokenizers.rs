@@ -277,7 +277,7 @@ impl Tokenizer {
             Tokenizer::Pattern { re, group } => pattern(&t, re, *group),
             Tokenizer::SimplePattern { re } => simple_pattern(&t, re, false),
             Tokenizer::SimplePatternSplit { re } => simple_pattern(&t, re, true),
-            Tokenizer::Thai => thai(&t),
+            Tokenizer::Thai => thai(text),
             Tokenizer::Language { name, params } => language_analyzer(name, params, text),
         };
         s.fix_end();
@@ -1079,13 +1079,10 @@ fn simple_pattern(t: &Text, re: &JRegex, split: bool) -> Stream {
 
 /// Thai needs a dictionary-based word break; without one, runs of Thai
 /// letters and other words are emitted whole.
-fn thai(t: &Text) -> Stream {
-    let mut s = standard(t, 255, false);
-    // The word break iterator skips symbols such as emoji.
-    s.tokens.retain(|tok| tok.typ != "<EMOJI>");
-    for (i, tok) in s.tokens.iter_mut().enumerate() {
-        tok.pos = i;
-        tok.typ = "word".to_string();
-    }
-    s
+/// Lucene ThaiTokenizer (JDK dictionary-based word breaks), from `crate::lang`.
+fn thai(text: &str) -> Stream {
+    let toks = crate::lang::chains::thai_tokens(text);
+    let n = toks.len();
+    let tokens = toks.into_iter().enumerate().map(|(i, (term, s, e))| Token::new(term, s, e, "word", i)).collect();
+    Stream { tokens, end_pos: n }
 }
