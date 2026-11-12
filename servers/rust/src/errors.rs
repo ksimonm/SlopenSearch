@@ -221,3 +221,69 @@ pub fn no_handler(method: &str, path: &str) -> Response {
         }),
     )
 }
+
+/// Lucene's LevenshteinDistance similarity: 1 - distance / max(len).
+fn levenshtein_similarity(a: &str, b: &str) -> f64 {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    if a.is_empty() || b.is_empty() {
+        return if a == b { 1.0 } else { 0.0 };
+    }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for i in 1..=a.len() {
+        let mut cur = vec![i; b.len() + 1];
+        for j in 1..=b.len() {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        prev = cur;
+    }
+    1.0 - prev[b.len()] as f64 / a.len().max(b.len()) as f64
+}
+
+/// BaseRestHandler.unrecognized: "request [p] contains unrecognized parameter(s): [a] -> did you mean [b]?, ..."
+pub fn unrecognized_message(path: &str, invalid: &[&str], candidates: &[&str], kind: &str) -> String {
+    let mut msg = format!(
+        "request [{}] contains unrecognized {}{}: ",
+        path,
+        kind,
+        if invalid.len() > 1 { "s" } else { "" }
+    );
+    let mut first = true;
+    for inv in invalid {
+        if !first {
+            msg.push_str(", ");
+        }
+        first = false;
+        msg.push_str(&format!("[{}]", inv));
+        let mut scored: Vec<(f64, &str)> = candidates
+            .iter()
+            .map(|c| (levenshtein_similarity(inv, c), *c))
+            .filter(|(d, _)| *d > 0.5)
+            .collect();
+        scored.sort_by(|x, y| y.0.partial_cmp(&x.0).unwrap_or(std::cmp::Ordering::Equal).then(x.1.cmp(y.1)));
+        if !scored.is_empty() {
+            msg.push_str(" -> did you mean ");
+            if scored.len() == 1 {
+                msg.push_str(&format!("[{}]?", scored[0].1));
+            } else {
+                let names: Vec<&str> = scored.iter().map(|x| x.1).collect();
+                msg.push_str(&format!("any of [{}]?", names.join(", ")));
+            }
+        }
+    }
+    msg
+}
+
+/// Booleans.parseBoolean: only "true", "false" and the empty value are accepted.
+pub fn strict_bool(v: &str) -> Result<bool, ApiError> {
+    match v {
+        "" | "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(ApiError::new(
+            "illegal_argument_exception",
+            &format!("Failed to parse value [{}] as only [true] or [false] are allowed.", v),
+            400,
+        )),
+    }
+}

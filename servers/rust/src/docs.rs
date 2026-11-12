@@ -272,16 +272,31 @@ fn bad_param(req: &Req) -> Option<Response> {
         "requests_per_second", "retry_on_conflict", "analyze_wildcard", "default_operator", "df", "lenient",
         "allow_partial_search_results", "expand_wildcards", "ignore_unavailable", "allow_no_indices",
     ];
-    for (k, _) in &req.query {
-        if !ALLOWED.contains(&k.as_str()) {
-            return Some(err_response(ApiError::new(
-                "illegal_argument_exception",
-                &format!("request [{}] contains unrecognized parameter: [{}]", req.path, k),
-                400,
-            )));
+    // the parameters a GET of one document consumes (did-you-mean candidates)
+    const GET_CONSUMED: &[&str] = &[
+        "index", "id", "routing", "preference", "realtime", "refresh", "stored_fields",
+        "version", "version_type", "_source", "_source_includes", "_source_excludes",
+    ];
+    if let Some(v) = req.param("realtime") {
+        if let Err(e) = crate::errors::strict_bool(v) {
+            return Some(err_response(e));
         }
     }
-    None
+    let mut invalid: Vec<&str> = Vec::new();
+    for (k, _) in &req.query {
+        if !ALLOWED.contains(&k.as_str()) && !invalid.contains(&k.as_str()) {
+            invalid.push(k.as_str());
+        }
+    }
+    if invalid.is_empty() {
+        return None;
+    }
+    let candidates: &[&str] = if req.method == "GET" || req.method == "HEAD" { GET_CONSUMED } else { ALLOWED };
+    Some(err_response(ApiError::new(
+        "illegal_argument_exception",
+        &crate::errors::unrecognized_message(&req.path, &invalid, candidates, "parameter"),
+        400,
+    )))
 }
 
 fn check_refresh(req: &Req) -> Option<Response> {
@@ -779,7 +794,30 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
     if !routing.is_empty() {
         resp.insert("_routing".to_string(), json!(routing));
     }
-    json_response(status, Value::Object(resp))
+    let mut out = json_response(status, Value::Object(resp));
+    if status == 201 {
+        let mut loc = format!("/{}/_doc/{}", java_url_encode(&idx.name), java_url_encode(&doc_id));
+        if !routing.is_empty() {
+            loc.push_str(&format!("?routing={}", java_url_encode(&routing)));
+        }
+        if let Ok(v) = loc.parse() {
+            out.headers_mut().insert("location", v);
+        }
+    }
+    out
+}
+
+/// java.net.URLEncoder.encode with UTF-8: unreserved `a-zA-Z0-9.-*_`, space as '+'.
+fn java_url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'-' | b'*' | b'_' => out.push(b as char),
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
 }
 
 fn source_enabled(idx: &Index) -> bool {

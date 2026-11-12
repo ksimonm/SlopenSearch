@@ -57,8 +57,7 @@ fn write_pretty(buf: &mut String, v: &Value, indent: usize) {
                 buf.push_str("{ }");
                 return;
             }
-            let mut keys: Vec<&String> = m.keys().collect();
-            keys.sort();
+            let keys: Vec<&String> = m.keys().collect();
             buf.push_str("{\n");
             for (i, k) in keys.iter().enumerate() {
                 write_indent(buf, indent + 1);

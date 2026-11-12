@@ -73,8 +73,10 @@ pub struct Req {
 
 impl Req {
     pub fn param(&self, k: &str) -> Option<&str> {
+        // a repeated parameter: the last value wins
         self.query
             .iter()
+            .rev()
             .find(|(qk, _)| qk == k)
             .map(|(_, v)| v.as_str())
     }
@@ -322,6 +324,8 @@ fn parse_query(uri: &Uri) -> Vec<(String, String)> {
                 Some((k, v)) => (k, v),
                 None => (pair, ""),
             };
+            // `?=x` names the parameter after its value
+            let k = if k.is_empty() { v } else { k };
             out.push((pct_decode(k), pct_decode(v)));
         }
     }
@@ -338,6 +342,15 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
         Ok(b) => b,
         Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
     };
+    let mut opaque_values = headers.get_all("x-opaque-id").iter();
+    let opaque_id = opaque_values.next().cloned();
+    if opaque_values.next().is_some() {
+        let mut resp = errors::write_simple_error(400, "multiple values for single-valued header [X-Opaque-Id].");
+        if let Some(op) = opaque_id {
+            resp.headers_mut().insert("x-opaque-id", op);
+        }
+        return resp;
+    }
     let req = Req {
         method: method.as_str().to_string(),
         path: uri.path().to_string(),
@@ -348,16 +361,29 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
 
     // Content-Type gate (mirrors Go ServeHTTP)
     if !req.body.is_empty() {
-        let ct = req
+        let full = req
             .headers
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
-            .split(';')
-            .next()
-            .unwrap_or("")
-            .trim()
             .to_string();
+        let ct = full.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+        if !full.is_empty() && !ct.contains('/') {
+            let reason = format!("invalid Content-Type header [{}]", full);
+            let mut resp = errors::json_response(
+                400,
+                serde_json::json!({"error": {
+                    "root_cause": [{"type": "content_type_header_exception",
+                                    "reason": format!("java.lang.IllegalArgumentException: {}", reason)}],
+                    "type": "content_type_header_exception",
+                    "reason": format!("java.lang.IllegalArgumentException: {}", reason),
+                    "caused_by": {"type": "illegal_argument_exception", "reason": reason}},
+                    "status": 400}),
+            );
+            resp.headers_mut()
+                .insert("x-opensearch-version", "OpenSearch/3.9.0 (opensearch)".parse().unwrap());
+            return resp;
+        }
         let ok = matches!(
             ct.as_str(),
             "application/json"
@@ -366,15 +392,26 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
                 | "application/x-yaml"
                 | "text/yaml"
                 | "application/yml"
-        );
+        ) || (ct.starts_with("application/vnd.opensearch+") && ct.len() > "application/vnd.opensearch+".len());
         if !ok {
             let mut resp = errors::write_simple_error(
                 406,
-                &format!("Content-Type header [{}] is not supported", ct),
+                &format!("Content-Type header [{}] is not supported", full),
             );
             resp.headers_mut()
                 .insert("x-opensearch-version", "OpenSearch/3.9.0 (opensearch)".parse().unwrap());
             return resp;
+        }
+    }
+
+    for flag in ["pretty", "human", "error_trace"] {
+        if let Some(v) = req.param(flag) {
+            if let Err(e) = errors::strict_bool(v) {
+                let mut resp = errors::err_response(e);
+                resp.headers_mut()
+                    .insert("x-opensearch-version", "OpenSearch/3.9.0 (opensearch)".parse().unwrap());
+                return resp;
+            }
         }
     }
 
@@ -422,7 +459,7 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
             }
         }
         if !ordered || reencoded {
-            if pretty && status < 400 {
+            if pretty {
                 if let Ok(v) = serde_json::from_slice::<Value>(&body) {
                     body = pretty_json(&v).into_bytes();
                 }
@@ -485,8 +522,16 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
         "x-opensearch-version",
         "OpenSearch/3.9.0 (opensearch)".parse().unwrap(),
     );
+    if let Some(op) = opaque_id {
+        resp.headers_mut().insert("x-opaque-id", op);
+    }
     if req.method == "HEAD" {
-        *resp.body_mut() = axum::body::Body::empty();
+        let (mut parts, b) = resp.into_parts();
+        let bytes = axum::body::to_bytes(b, usize::MAX).await.unwrap_or_default();
+        if !parts.headers.contains_key("content-length") {
+            parts.headers.insert("content-length", bytes.len().into());
+        }
+        resp = axum::response::Response::from_parts(parts, axum::body::Body::empty());
     }
     resp
 }
