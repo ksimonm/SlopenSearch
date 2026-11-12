@@ -206,9 +206,6 @@ pub fn create_index_internal(
         crate::shared::apply_mapper_defaults(props);
         let knn = canonical.get("index.knn").and_then(|v| v.as_str()) == Some("true");
         crate::knn::normalize_knn_props(props, knn)?;
-        if knn && !canonical.contains_key("index.knn.derived_source.enabled") {
-            canonical.insert("index.knn.derived_source.enabled".to_string(), json!("true"));
-        }
     }
     validate_mapping_full(&Value::Object(merged_mappings.clone()))?;
     if let Some(props) = merged_mappings.get("properties").and_then(|p| p.as_object()) {

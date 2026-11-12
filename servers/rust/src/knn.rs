@@ -272,17 +272,13 @@ pub fn normalize_knn_props(props: &mut Map<String, Value>, knn: bool) -> Result<
 /// Effective vector settings of a knn_vector field definition.
 #[derive(Clone, Debug)]
 pub struct VecField {
-    pub dimension: usize,
-    pub data_type: String,
     pub space: String,
-    pub engine: String,
 }
 
 pub fn vec_field(def: &Value) -> Option<VecField> {
     if def.get("type").and_then(|t| t.as_str()) != Some("knn_vector") {
         return None;
     }
-    let dimension = def.get("dimension").and_then(|d| d.as_u64()).unwrap_or(0) as usize;
     let data_type = def
         .get("data_type")
         .and_then(|d| d.as_str())
@@ -295,12 +291,7 @@ pub fn vec_field(def: &Value) -> Option<VecField> {
         .and_then(|s| s.as_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| if data_type == "binary" { "hamming".into() } else { "l2".into() });
-    let engine = method
-        .and_then(|m| m.get("engine"))
-        .and_then(|s| s.as_str())
-        .unwrap_or("faiss")
-        .to_string();
-    Some(VecField { dimension, data_type, space, engine })
+    Some(VecField { space })
 }
 
 /// Raw distance/similarity between two vectors for a space.
@@ -341,4 +332,42 @@ pub fn score(space: &str, r: f64) -> f64 {
         _ => 0.0,
     };
     s as f32 as f64
+}
+
+/// Mapping definition of a (dotted) field path.
+pub fn field_def<'a>(mappings: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut cur = mappings;
+    for part in path.split('.') {
+        cur = cur.get("properties")?.get(part)?;
+    }
+    Some(cur)
+}
+
+/// Vector stored in a document source under a dotted path.
+pub fn source_vector(doc: &Value, path: &str) -> Option<Vec<f64>> {
+    let mut cur = doc;
+    for part in path.split('.') {
+        cur = cur.get(part)?;
+    }
+    cur.as_array()?
+        .iter()
+        .map(|v| match v {
+            Value::Number(n) => n.as_f64(),
+            Value::String(s) => s.parse().ok(),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Score and raw value of a document vector, or None when it has no usable vector.
+pub fn doc_score(vf: &VecField, doc: &Value, path: &str, q: &[f64]) -> Option<(f64, f64)> {
+    let v = source_vector(doc, path)?;
+    if v.len() != q.len() {
+        return None;
+    }
+    let r = raw(&vf.space, q, &v);
+    if !r.is_finite() {
+        return None;
+    }
+    Some((score(&vf.space, r), r))
 }
