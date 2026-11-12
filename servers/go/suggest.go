@@ -26,9 +26,17 @@ func collectFieldTerms(idx *Index, field string) (map[string]int, []string) {
 	return freq, order
 }
 
-func evalSuggest(suggest map[string]any, idx *Index, typed bool) map[string]any {
+func evalSuggest(suggest map[string]any, indices []*Index, typed bool) (map[string]any, *apiError) {
 	out := map[string]any{}
+	var idx *Index
+	if len(indices) > 0 {
+		idx = indices[0]
+	}
+	globalText := suggest["text"]
 	for name, raw := range suggest {
+		if name == "text" {
+			continue
+		}
 		spec, ok := raw.(map[string]any)
 		if !ok {
 			continue
@@ -38,7 +46,11 @@ func evalSuggest(suggest map[string]any, idx *Index, typed bool) map[string]any 
 			if typed {
 				key = "term#" + name
 			}
-			out[key] = []any{termSuggester(spec, t, idx)}
+			entries, err := termSuggester(spec, t, indices, globalText)
+			if err != nil {
+				return nil, err
+			}
+			out[key] = entries
 		} else if t, ok := spec["phrase"].(map[string]any); ok {
 			key := name
 			if typed {
@@ -53,7 +65,7 @@ func evalSuggest(suggest map[string]any, idx *Index, typed bool) map[string]any 
 			out[key] = []any{completionSuggester(spec, t, idx)}
 		}
 	}
-	return out
+	return out, nil
 }
 
 func suggestText(spec map[string]any) string {
@@ -66,40 +78,6 @@ func suggestText(spec map[string]any) string {
 		return s
 	}
 	return ""
-}
-
-func termSuggester(spec, body map[string]any, idx *Index) map[string]any {
-	field, _ := toString(body["field"])
-	input := suggestText(spec)
-	freq, order := collectFieldTerms(idx, field)
-
-	options := []any{}
-	seen := map[string]bool{}
-	for _, tok := range analyze(input) {
-		fuzz := autoFuzziness(tok)
-		type cand struct {
-			text  string
-			score float64
-		}
-		var cands []cand
-		for _, c := range order {
-			d := levenshtein(tok, c)
-			if d == 0 || d > fuzz {
-				continue
-			}
-			ml := max(len([]rune(tok)), len([]rune(c)))
-			cands = append(cands, cand{text: c, score: 1 - float64(d)/float64(ml)})
-		}
-		sort.Slice(cands, func(i, j int) bool { return cands[i].score > cands[j].score })
-		for _, c := range cands {
-			if seen[c.text] {
-				continue
-			}
-			seen[c.text] = true
-			options = append(options, map[string]any{"text": c.text, "score": c.score, "freq": freq[c.text]})
-		}
-	}
-	return map[string]any{"text": input, "offset": 0, "length": len(input), "options": options}
 }
 
 func phraseSuggester(spec, body map[string]any, idx *Index) map[string]any {
