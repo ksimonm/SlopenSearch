@@ -47,7 +47,9 @@ reference with `make ref-up` and `curl localhost:9290/...`.
 | `pl_api.go`, `script_ctx.go`, `script_meta.go` | script contexts, `_scripts/painless/_execute`, script errors, wiring into search/aggs/update/ingest |
 | `pl_expr.go`, `mustache.go` | Lucene expressions, mustache templates |
 | `painless.go`, `scripts.go`, `search_templates.go` | script queries, stored scripts, `script_fields`, search templates |
-| `analysis.go` | `_analyze` and analyzers (mostly open work) |
+| `analysis.go`, `analysis_chain.go`, `analyze_api.go` | analyzers, analysis chains (index/global/inline components, settings validation), the `_analyze` API with `explain` |
+| `tokenizers.go`, `filters.go`, `filters_pattern.go`, `synonyms.go`, `charfilter.go`, `asciifold_table.go` | tokenizers, token filters, synonym filters, char filters with Lucene offset correction |
+| `jregex.go` | backtracking `java.util.regex` subset (lookaround, possessive, `\p{..}`) for pattern components |
 
 ## Rules
 

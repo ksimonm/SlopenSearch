@@ -187,6 +187,7 @@ type apiError struct {
 	NoCausedBy    bool
 	SearchFailure string
 	Shard         *shardFailure // pre-rendered search shard failure
+	Suppressed    []*apiError
 }
 
 func (e *apiError) Error() string { return e.Type + ": " + e.Reason }

@@ -109,6 +109,13 @@ func writeError(w http.ResponseWriter, e *apiError) {
 	if e.CausedBy != nil {
 		err["caused_by"] = causedByObject(e.CausedBy)
 	}
+	if len(e.Suppressed) > 0 {
+		sup := make([]any, 0, len(e.Suppressed))
+		for _, s := range e.Suppressed {
+			sup = append(sup, causedByObject(s))
+		}
+		err["suppressed"] = sup
+	}
 	writeJSON(w, e.Status, map[string]any{"error": err, "status": e.Status})
 }
 

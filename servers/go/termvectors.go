@@ -15,6 +15,19 @@ type tvToken struct {
 	start, end int
 }
 
+// tvTokensIdx analyzes with the index's own analyzers when the field uses
+// one, falling back to the built-in term vector tokenizer.
+func tvTokensIdx(idx *Index, text, analyzer string) []tvToken {
+	if toks, ok := indexAnalyzerTokens(idx, analyzer, text); ok {
+		out := make([]tvToken, 0, len(toks))
+		for _, t := range toks {
+			out = append(out, tvToken{term: t.term, position: t.pos, start: t.start, end: t.end})
+		}
+		return out
+	}
+	return tvTokens(text, analyzer)
+}
+
 func tvTokens(text, analyzer string) []tvToken {
 	if analyzer == "keyword" {
 		return []tvToken{{term: text, position: 0, start: 0, end: len(text)}}
@@ -83,7 +96,7 @@ func tvFieldStats(idx *Index, field string) map[string]any {
 		docCount++
 		seen := map[string]bool{}
 		for _, s := range docStrings(v) {
-			toks := tvTokens(s, analyzer)
+			toks := tvTokensIdx(idx, s, analyzer)
 			sumTTF += len(toks)
 			for _, t := range toks {
 				seen[t.term] = true
@@ -108,7 +121,7 @@ func tvIndexTermStats(idx *Index, field string) map[string]map[string]int {
 		}
 		seen := map[string]bool{}
 		for _, s := range docStrings(v) {
-			for _, t := range tvTokens(s, analyzer) {
+			for _, t := range tvTokensIdx(idx, s, analyzer) {
 				if out[t.term] == nil {
 					out[t.term] = map[string]int{"doc_freq": 0, "ttf": 0}
 				}
@@ -139,7 +152,7 @@ func termVectorFor(idx *Index, field string, doc map[string]any, analyzer string
 	}
 	byTerm := map[string]*agg{}
 	for _, s := range docStrings(v) {
-		for _, t := range tvTokens(s, analyzer) {
+		for _, t := range tvTokensIdx(idx, s, analyzer) {
 			a := byTerm[t.term]
 			if a == nil {
 				a = &agg{}
