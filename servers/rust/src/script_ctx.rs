@@ -657,6 +657,134 @@ pub fn run_pipeline_script(raw: &Value, ctx_name: &str, vars: &Map<String, Value
     cs.run(None, &mut opts).map_err(|se| pipeline_script_error(&se))
 }
 
+// ---- update-context scripts (update, update_by_query, reindex) -----------
+
+/// What an update-context script did to its ctx.
+#[derive(Debug, Clone)]
+pub struct CtxOutcome {
+    /// index, delete or noop
+    pub op: String,
+    /// ctx.op as the script left it
+    pub raw_op: String,
+    pub source: Map<String, Value>,
+    pub id: Value,
+    pub index: Value,
+}
+
+/// The "failed to execute script" envelope of the update API.
+pub fn update_failure(e: &PrepErr) -> ApiError {
+    let cause = match e {
+        PrepErr::Script(se) => se.object(true),
+        PrepErr::Api(ae) => {
+            let mut c = json!({"type": ae.typ, "reason": ae.reason});
+            if let Some(cb) = &ae.caused_by {
+                c["caused_by"] = json!({"type": cb.typ, "reason": cb.reason});
+            }
+            c
+        }
+    };
+    let body = json!({
+        "error": {
+            "root_cause": [{"type": "illegal_argument_exception", "reason": "failed to execute script"}],
+            "type": "illegal_argument_exception",
+            "reason": "failed to execute script",
+            "caused_by": cause,
+        },
+        "status": 400,
+    });
+    let mut out = ApiError::new("illegal_argument_exception", "failed to execute script", 400);
+    out.raw = Some(Box::new(body));
+    out
+}
+
+/// The error a by-query or reindex request reports for a failing script.
+pub fn bulk_script_failure(e: &PrepErr) -> ApiError {
+    match e {
+        PrepErr::Script(se) => se.api_error(),
+        PrepErr::Api(ae) => match &ae.caused_by {
+            Some(cb) => ApiError::new(&cb.typ, &cb.reason, 400),
+            None => ae.clone(),
+        },
+    }
+}
+
+/// Validates the ctx changes of an update_by_query script.
+pub fn check_by_query_ctx(res: &CtxOutcome, index: &str, id: &str) -> Option<ApiError> {
+    if !matches!(res.raw_op.as_str(), "noop" | "index" | "delete") {
+        return Some(ApiError::bad(&format!(
+            "Operation type [{}] not allowed, only [noop, index, delete] are allowed",
+            res.raw_op
+        )));
+    }
+    if value_text(&res.id) != id {
+        return Some(ApiError::bad("Modifying [_id] not allowed"));
+    }
+    if value_text(&res.index) != index {
+        return Some(ApiError::bad("Modifying [_index] not allowed"));
+    }
+    None
+}
+
+/// The string form of a scalar ctx value (Painless String.valueOf).
+pub fn value_text(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Null => "null".into(),
+        other => other.to_string(),
+    }
+}
+
+/// Runs an update-context script against a copy of ctx.
+pub fn run_update_script(
+    raw: &Value,
+    source: &Map<String, Value>,
+    index: &str,
+    id: &str,
+    version: i64,
+    op: &str,
+    routing: Option<&str>,
+) -> Result<CtxOutcome, PrepErr> {
+    let cs = prepare(raw, "update")?;
+    let mut ctx = Map::new();
+    ctx.insert("_index".into(), json!(index));
+    ctx.insert("_id".into(), json!(id));
+    ctx.insert("_version".into(), json!(version));
+    ctx.insert("_routing".into(), routing.filter(|r| !r.is_empty()).map(|r| json!(r)).unwrap_or(Value::Null));
+    ctx.insert("op".into(), json!(op));
+    ctx.insert("_now".into(), json!(now_millis()));
+    ctx.insert("_source".into(), Value::Object(source.clone()));
+    painless_ctx_backend(&cs, &mut ctx).map_err(PrepErr::Script)?;
+    let raw_op = match ctx.get("op") {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Null) | None => "null".to_string(),
+        Some(other) => other.to_string(),
+    };
+    let op = match raw_op.as_str() {
+        "delete" => "delete",
+        "index" | "create" => "index",
+        _ => "noop",
+    }
+    .to_string();
+    let source = match ctx.remove("_source") {
+        Some(Value::Object(m)) => m,
+        _ => Map::new(),
+    };
+    Ok(CtxOutcome {
+        op,
+        raw_op,
+        source,
+        id: ctx.remove("_id").unwrap_or(Value::Null),
+        index: ctx.remove("_index").unwrap_or(Value::Null),
+    })
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 // ---- painless backend ----------------------------------------------------
 //
 // The only two functions that talk to the Painless implementation. The
@@ -736,6 +864,35 @@ fn painless_backend(cs: &Compiled, qc: Option<&QueryCtx>, o: &mut RunOpts) -> Re
         }
     };
     run_toy(q, params, src, &mk_err)
+}
+
+/// Runs a script that works on a `ctx` map (update context).
+fn painless_ctx_backend(cs: &Compiled, ctx: &mut Map<String, Value>) -> Result<(), ScriptErr> {
+    let index = ctx.get("_index").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let id = ctx.get("_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let version = ctx.get("_version").and_then(|v| v.as_i64()).unwrap_or(0);
+    let mut source = match ctx.get("_source") {
+        Some(Value::Object(m)) => m.clone(),
+        _ => Map::new(),
+    };
+    let mut op = String::new();
+    let mut meta = Map::new();
+    let idx = Index::skeleton(&index);
+    crate::docs::run_ctx_script(&cs.spec.src, &idx, &mut source, &cs.spec.params, &id, version, &mut op, &mut meta)
+        .map_err(|(runtime, msg)| {
+            let mut se = ScriptErr::new(!runtime, "illegal_argument_exception", &msg);
+            se.script = cs.spec.err_name();
+            se.stack = vec![cs.spec.src.clone()];
+            se
+        })?;
+    ctx.insert("_source".into(), Value::Object(source));
+    if !op.is_empty() {
+        ctx.insert("op".into(), json!(op));
+    }
+    for (k, v) in meta {
+        ctx.insert(k, v);
+    }
+    Ok(())
 }
 
 fn run_toy(

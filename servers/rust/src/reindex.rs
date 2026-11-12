@@ -3,10 +3,7 @@ use serde_json::{json, Map, Value};
 
 use crate::errors::{err_response, json_response, method_not_allowed, ApiError};
 use crate::shared::{resolve_spec2, validate_index_name, ResolveOpts2};
-use crate::store::{
-    ensure_properties, field_value, merge_mapping, settings_value_int, settings_value_string,
-    to_f64, Store,
-};
+use crate::store::{ensure_properties, merge_mapping, settings_value_int, Store};
 use crate::Req;
 
 struct ReindexFailure {
@@ -186,14 +183,7 @@ pub fn handle_reindex(store: &mut Store, req: &Req) -> Response {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let mut script_src = String::new();
-    if let Some(sc) = body.get("script").and_then(|s| s.as_object()) {
-        script_src = sc
-            .get("source")
-            .and_then(|s| s.as_str())
-            .unwrap_or("")
-            .to_string();
-    }
+    let script_raw = body.get("script").cloned();
     let query = src_raw.get("query").cloned();
     let mut source_include: Option<Vec<String>> = None;
     if let Some(Value::Array(si)) = src_raw.get("_source") {
@@ -248,31 +238,53 @@ pub fn handle_reindex(store: &mut Store, req: &Req) -> Response {
     let (mut created, mut updated, mut deleted, mut noops, mut version_conflicts) =
         (0i64, 0i64, 0i64, 0i64, 0i64);
     let mut failures: Vec<Value> = vec![];
-    let mut dest_name_err = validate_index_name(&dest_name).err();
-    let mut dest_uuid = match store.indices.get(&dest_name) {
-        Some(i) => i.uuid.clone(),
-        None => "_na_".to_string(),
-    };
     let mut dest_created = store.indices.contains_key(&dest_name);
 
-    for (_it_idx, it_id, it_doc) in items {
+    let base_dest = dest_name.clone();
+    for (it_idx, it_id, it_doc) in items {
         let mut doc = match it_doc.as_object() {
             Some(m) => m.clone(),
             None => Map::new(),
         };
         let mut id = it_id.clone();
-        if !script_src.is_empty() {
-            let mut op = String::new();
-            run_reindex_script(&script_src, &mut doc, &mut id, &mut op);
-            if op == "noop" {
-                noops += 1;
-                continue;
+        let mut dest_name = base_dest.clone();
+        if let Some(raw) = &script_raw {
+            let routing = store.indices.get(&it_idx).and_then(|i| i.routing.get(&it_id)).cloned();
+            let res = match crate::script_ctx::run_update_script(raw, &doc, &it_idx, &it_id, -1, "index", routing.as_deref()) {
+                Ok(r) => r,
+                Err(e) => return err_response(crate::script_ctx::bulk_script_failure(&e)),
+            };
+            match res.raw_op.as_str() {
+                "noop" => {
+                    noops += 1;
+                    continue;
+                }
+                "delete" => {
+                    deleted += 1;
+                    continue;
+                }
+                "index" | "create" => {}
+                other => {
+                    return err_response(ApiError::bad(&format!(
+                        "Operation type [{}] not allowed, only [noop, index, delete] are allowed",
+                        other
+                    )))
+                }
             }
-            if op == "delete" {
-                deleted += 1;
-                continue;
+            doc = res.source;
+            id = match &res.id {
+                Value::Null => store.next_id(),
+                v => crate::script_ctx::value_text(v),
+            };
+            if let Value::String(n) = &res.index {
+                if *n != it_idx {
+                    dest_name = n.clone();
+                }
             }
         }
+        dest_created = store.indices.contains_key(&dest_name);
+        let dest_name_err = validate_index_name(&dest_name).err();
+        let mut dest_uuid = store.indices.get(&dest_name).map(|i| i.uuid.clone()).unwrap_or_else(|| "_na_".to_string());
         if let Some(pname) = &dest_pipeline {
             let mut pm = Map::new();
             pm.insert("_index".to_string(), json!(dest_name));
@@ -323,7 +335,6 @@ pub fn handle_reindex(store: &mut Store, req: &Req) -> Response {
                 Ok(()) => {
                     dest_created = true;
                     dest_uuid = store.indices[&dest_name].uuid.clone();
-                    dest_name_err = None;
                 }
                 Err(e) => {
                     failures.push(
@@ -451,322 +462,4 @@ pub fn handle_reindex(store: &mut Store, req: &Req) -> Response {
             "failures": failures,
         }),
     )
-}
-
-// ---------------------------------------------------------------- script subset
-
-fn split_reindex_statements(s: &str) -> Vec<String> {
-    let mut out = vec![];
-    let mut depth = 0i32;
-    let mut start = 0usize;
-    let bytes = s.as_bytes();
-    for i in 0..bytes.len() {
-        match bytes[i] {
-            b'{' => depth += 1,
-            b'}' => depth -= 1,
-            b';' if depth == 0 => {
-                let st = s[start..i].trim();
-                if !st.is_empty() {
-                    out.push(st.to_string());
-                }
-                start = i + 1;
-            }
-            _ => {}
-        }
-    }
-    let st = s[start..].trim();
-    if !st.is_empty() {
-        out.push(st.to_string());
-    }
-    out
-}
-
-fn match_close_brace(s: &str, open: usize) -> usize {
-    let mut depth = 0i32;
-    let bytes = s.as_bytes();
-    for i in open..bytes.len() {
-        match bytes[i] {
-            b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return i;
-                }
-            }
-            _ => {}
-        }
-    }
-    s.len().saturating_sub(1)
-}
-
-fn match_paren(s: &str, open: usize) -> Option<usize> {
-    let mut depth = 0i32;
-    let mut quote = 0u8;
-    let bytes = s.as_bytes();
-    for i in open..bytes.len() {
-        let c = bytes[i];
-        if quote != 0 {
-            if c == quote {
-                quote = 0;
-            }
-            continue;
-        }
-        match c {
-            b'\'' | b'"' => quote = c,
-            b'(' => depth += 1,
-            b')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn reindex_source_get(doc: &Map<String, Value>, reference: &str) -> Option<Value> {
-    let mut r = reference.trim();
-    r = r.strip_prefix("ctx._source.").unwrap_or(r);
-    r = r.strip_prefix("ctx._source").unwrap_or(r);
-    let r = r.trim_matches(|c| c == '[' || c == ']' || c == '\'' || c == '"');
-    if r.is_empty() {
-        return None;
-    }
-    field_value(&Value::Object(doc.clone()), r).cloned()
-}
-
-fn reindex_literal(tok: &str) -> Option<Value> {
-    let tok = tok.trim();
-    let bytes = tok.as_bytes();
-    if tok.len() >= 2 && (bytes[0] == b'\'' || bytes[0] == b'"') && bytes[tok.len() - 1] == bytes[0] {
-        return Some(json!(&tok[1..tok.len() - 1]));
-    }
-    if let Ok(f) = tok.parse::<f64>() {
-        return Some(json!(f));
-    }
-    None
-}
-
-fn split_top_level_expr(expr: &str, op: u8) -> Vec<String> {
-    let mut out = vec![];
-    let mut depth = 0i32;
-    let mut quote = 0u8;
-    let mut start = 0usize;
-    let bytes = expr.as_bytes();
-    for i in 0..bytes.len() {
-        let c = bytes[i];
-        if quote != 0 {
-            if c == quote {
-                quote = 0;
-            }
-            continue;
-        }
-        match c {
-            b'\'' | b'"' => quote = c,
-            b'(' | b'[' => depth += 1,
-            b')' | b']' => depth -= 1,
-            _ => {
-                if c == op && depth == 0 {
-                    out.push(expr[start..i].to_string());
-                    start = i + 1;
-                }
-            }
-        }
-    }
-    out.push(expr[start..].to_string());
-    out
-}
-
-fn eval_reindex_expr(expr: &str, doc: &Map<String, Value>, id: &str) -> Value {
-    let expr = expr.trim();
-    if expr == "ctx._id" || expr == "ctx.id" {
-        return json!(id);
-    }
-    if let Some(v) = reindex_literal(expr) {
-        return v;
-    }
-    if let Some(v) = reindex_source_get(doc, expr) {
-        if expr.trim_start().starts_with("ctx._source") {
-            return v;
-        }
-    }
-    let parts = split_top_level_expr(expr, b'+');
-    if parts.len() > 1 {
-        let mut out = String::new();
-        for p in &parts {
-            let v = eval_reindex_expr(p, doc, id);
-            out.push_str(&settings_value_string(&v));
-        }
-        return json!(out);
-    }
-    for op_ch in [b'*', b'/', b'-', b'+'] {
-        let sub = split_top_level_expr(expr, op_ch);
-        if sub.len() == 2 {
-            let lv = eval_reindex_expr(&sub[0], doc, id);
-            let rv = eval_reindex_expr(&sub[1], doc, id);
-            let lf = to_f64(&lv);
-            let rf = to_f64(&rv);
-            match (lf, rf) {
-                (Some(lf), Some(rf)) => match op_ch {
-                    b'*' => return json!(lf * rf),
-                    b'/' => {
-                        if rf != 0.0 {
-                            return json!(lf / rf);
-                        }
-                        return json!(lf);
-                    }
-                    b'-' => return json!(lf - rf),
-                    b'+' => return json!(lf + rf),
-                    _ => {}
-                },
-                _ => {
-                    if op_ch == b'+' {
-                        return json!(format!(
-                            "{}{}",
-                            settings_value_string(&lv),
-                            settings_value_string(&rv)
-                        ));
-                    }
-                    return lv;
-                }
-            }
-        }
-    }
-    json!(expr)
-}
-
-fn index_outside_quotes(s: &str, sub: &str) -> Option<usize> {
-    let mut quote = 0u8;
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i + sub.len() <= bytes.len() {
-        let c = bytes[i];
-        if quote != 0 {
-            if c == quote {
-                quote = 0;
-            }
-            i += 1;
-            continue;
-        }
-        if c == b'\'' || c == b'"' {
-            quote = c;
-            i += 1;
-            continue;
-        }
-        if s[i..].starts_with(sub) {
-            return Some(i);
-        }
-        i += 1;
-    }
-    None
-}
-
-fn eval_reindex_cond(cond: &str, doc: &Map<String, Value>) -> bool {
-    for op in ["==", "!=", ">=", "<=", ">", "<"] {
-        let i = match index_outside_quotes(cond, op) {
-            Some(i) => i,
-            None => continue,
-        };
-        let lhs = cond[..i].trim();
-        let rhs = cond[i + op.len()..].trim();
-        let lv = reindex_source_get(doc, lhs);
-        let mut rv = reindex_literal(rhs);
-        if rv.is_none() {
-            rv = reindex_source_get(doc, rhs);
-        }
-        let (lv, rv) = match (lv, rv) {
-            (Some(l), Some(r)) => (l, r),
-            _ => return false,
-        };
-        if let (Value::String(ls), Value::String(rs)) = (&lv, &rv) {
-            return match op {
-                "==" => ls == rs,
-                "!=" => ls != rs,
-                _ => false,
-            };
-        }
-        let lf = to_f64(&lv).unwrap_or(0.0);
-        let rf = to_f64(&rv).unwrap_or(0.0);
-        return match op {
-            "==" => lf == rf,
-            "!=" => lf != rf,
-            ">" => lf > rf,
-            "<" => lf < rf,
-            ">=" => lf >= rf,
-            "<=" => lf <= rf,
-            _ => false,
-        };
-    }
-    false
-}
-
-fn run_reindex_script(code: &str, doc: &mut Map<String, Value>, id: &mut String, op: &mut String) {
-    for st in split_reindex_statements(code) {
-        exec_reindex_stmt(&st, doc, id, op);
-    }
-}
-
-fn exec_reindex_stmt(st: &str, doc: &mut Map<String, Value>, id: &mut String, op: &mut String) {
-    if let Some(rest) = st.strip_prefix("if") {
-        if !st.starts_with("if") {
-            return;
-        }
-        let rest = rest;
-        let open = match rest.find('(') {
-            Some(o) => o,
-            None => return,
-        };
-        let close = match match_paren(rest, open) {
-            Some(c) => c,
-            None => return,
-        };
-        let cond = &rest[open + 1..close];
-        let after = rest[close + 1..].trim();
-        let (body, remainder) = if after.strip_prefix('{').is_some() {
-            let end = match_close_brace(after, 0);
-            let body = &after[1..end];
-            let rem = after[end + 1..].trim();
-            (body.to_string(), rem.to_string())
-        } else {
-            (after.to_string(), String::new())
-        };
-        if eval_reindex_cond(cond, doc) {
-            run_reindex_script(&body, doc, id, op);
-        }
-        if !remainder.is_empty() {
-            run_reindex_script(&remainder, doc, id, op);
-        }
-        return;
-    }
-    let eq = match index_outside_quotes(st, "=") {
-        Some(e) => e,
-        None => return,
-    };
-    let lhs = st[..eq].trim();
-    let rhs = st[eq + 1..].trim();
-    let lhs = lhs.strip_prefix("ctx.").unwrap_or(lhs);
-    match lhs {
-        "op" => {
-            if let Some(v) = reindex_literal(rhs) {
-                *op = settings_value_string(&v);
-            }
-        }
-        "_id" => {
-            let v = eval_reindex_expr(rhs, doc, id);
-            *id = settings_value_string(&v);
-        }
-        _ => {
-            if let Some(rest) = lhs.strip_prefix("_source.") {
-                let field = rest.trim_matches(|c| c == '[' || c == ']' || c == '\'' || c == '"');
-                let v = eval_reindex_expr(rhs, doc, id);
-                doc.insert(field.to_string(), v);
-            } else if lhs.starts_with("_source[") {
-                let field = lhs.trim_start_matches("_source").trim_matches(|c| c == '[' || c == ']' || c == '\'' || c == '"');
-                let v = eval_reindex_expr(rhs, doc, id);
-                doc.insert(field.to_string(), v);
-            }
-        }
-    }
 }
