@@ -1123,7 +1123,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 	if rv == "true" || rv == "wait_for" {
 		delete(idx.Pending, id)
 	} else {
-		idx.Pending[id] = body
+		markPending(idx, id, body, existing)
 	}
 	status := 201
 	result := "created"
@@ -1666,7 +1666,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 	if rv == "true" || rv == "wait_for" {
 		delete(idx.Pending, id)
 	} else {
-		idx.Pending[id] = newDoc
+		markPending(idx, id, newDoc, true)
 	}
 	resp := orderedJSON{
 		{"_index", idx.Name}, {"_id", id}, {"_version", ver}, {"result", "updated"},
@@ -2028,4 +2028,14 @@ func errorObject(e *apiError) map[string]any {
 		out["caused_by"] = errorObject(e.CausedBy)
 	}
 	return out
+}
+
+// markPending records an unrefreshed write. A document that searches could
+// already see stays visible: a refresh only changes which version they read,
+// it never makes an existing document disappear.
+func markPending(idx *Index, id string, doc map[string]any, existed bool) {
+	if _, pending := idx.Pending[id]; existed && !pending {
+		return
+	}
+	idx.Pending[id] = doc
 }

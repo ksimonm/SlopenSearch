@@ -507,7 +507,7 @@ func (s *Server) runBulkIndex(idx *Index, a bulkAction, id, routing, rv, urlPipe
 	if rv == "true" || rv == "wait_for" {
 		delete(idx.Pending, id)
 	} else {
-		idx.Pending[id] = src
+		markPending(idx, id, src, exists)
 	}
 	result := "created"
 	status := 201
@@ -641,7 +641,7 @@ func (s *Server) runBulkUpdate(idx *Index, a bulkAction, id, routing, rv, urlSou
 	if rv == "true" || rv == "wait_for" {
 		delete(idx.Pending, id)
 	} else {
-		idx.Pending[id] = newDoc
+		markPending(idx, id, newDoc, true)
 	}
 	it := bulkItem("update", idx.Name, id, ver, seq, 1, "updated", 200, rv == "true")
 	if get, ok := bulkGetObject(idx, id, newDoc, seq, a.meta, body, urlSource); ok {
