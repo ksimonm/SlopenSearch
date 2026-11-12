@@ -689,6 +689,7 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
     }
 }
 
+#[allow(dead_code)] // no longer used by _execute, which runs on the pl_* engine
 pub fn format_script_value(v: &Value) -> String {
     match v {
         Value::Null => "null".to_string(),

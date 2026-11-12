@@ -1509,7 +1509,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		op := "index"
 		if hasScript && scriptedUpsert {
 			ver := int64(0)
-			res, serr := runUpdateScript(scriptRaw, src, idx.Name, id, ver)
+			res, serr := runUpdateScriptCtx(scriptRaw, src, idx.Name, id, ver, "create", nil)
 			if serr != nil {
 				writeError(w, serr)
 				return
@@ -1717,306 +1717,101 @@ func updateGetObject(idx *Index, id string, src map[string]any, seq int64, r *ht
 type updateScriptResult struct {
 	op     string
 	source map[string]any
+	id     any // ctx._id after the script
+	index  any // ctx._index after the script
+	rawOp  string
 }
 
+// updateScriptFailure wraps a script problem the way the update API reports
+// it: "failed to execute script" caused by the script exception.
+func updateScriptFailure(se *plScriptErr, cause *apiError) *apiError {
+	var causeObj orderedJSON
+	if se != nil {
+		causeObj = se.object(true)
+	} else {
+		causeObj = orderedJSON{{"type", cause.Type}, {"reason", cause.Reason}}
+		if cause.CausedBy != nil {
+			causeObj = append(causeObj, orderedKV{"caused_by", orderedJSON{{"type", cause.CausedBy.Type}, {"reason", cause.CausedBy.Reason}}})
+		}
+	}
+	body := orderedJSON{{"error", orderedJSON{
+		{"root_cause", []any{orderedJSON{{"type", "illegal_argument_exception"}, {"reason", "failed to execute script"}}}},
+		{"type", "illegal_argument_exception"}, {"reason", "failed to execute script"},
+		{"caused_by", causeObj},
+	}}, {"status", 400}}
+	e := &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "failed to execute script",
+		Shard: &shardFailure{raw: body, status: 400}}
+	if se != nil {
+		e.CausedBy = &apiError{Type: "script_exception", Reason: map[bool]string{true: "compile error", false: "runtime error"}[se.compile]}
+		e.Extra = se
+	} else {
+		e.CausedBy = cause
+	}
+	return e
+}
+
+// runUpdateScript runs an update-context script (update, update_by_query,
+// reindex) against a copy of ctx and reports the resulting operation.
 func runUpdateScript(raw any, source map[string]any, index, id string, version int64) (updateScriptResult, *apiError) {
-	var srcText string
-	var params map[string]any
-	switch t := raw.(type) {
-	case string:
-		srcText = t
-	case map[string]any:
-		srcText, _ = t["source"].(string)
-		params, _ = t["params"].(map[string]any)
+	return runUpdateScriptCtx(raw, source, index, id, version, "index", nil)
+}
+
+func runUpdateScriptCtx(raw any, source map[string]any, index, id string, version int64, op string, routing any) (updateScriptResult, *apiError) {
+	spec, ae := parseScriptSpec(raw)
+	if ae != nil {
+		return updateScriptResult{}, updateScriptFailure(nil, ae)
+	}
+	if spec.lang == "expression" {
+		_, se, ae := exPrepare(spec.src, "update")
+		if se != nil {
+			se.script = spec.errName()
+		}
+		return updateScriptResult{}, updateScriptFailure(se, ae)
+	}
+	if ae := checkScriptLang(spec, "update"); ae != nil {
+		return updateScriptResult{}, updateScriptFailure(nil, ae)
+	}
+	script, se := compilePainless(spec, "update")
+	if se != nil {
+		return updateScriptResult{}, updateScriptFailure(se, nil)
+	}
+	ctx := newPlMap(plHash)
+	ctx.put("_index", index)
+	ctx.put("_id", id)
+	ctx.put("_version", int64(version))
+	if rs, ok := routing.(string); ok && rs == "" {
+		routing = nil
+	}
+	ctx.put("_routing", plFromJSON(routing, plLinked))
+	ctx.put("op", op)
+	ctx.put("_now", nowMillis())
+	ctx.put("_source", plFromJSON(deepCopySource(source), plLinked))
+	_, rerr := script.exec(plBindings{vars: map[string]any{"params": scriptParams(spec.params), "ctx": ctx}}, spec.errName())
+	if rerr != nil {
+		return updateScriptResult{}, updateScriptFailure(rerr, nil)
+	}
+	res := updateScriptResult{op: "index"}
+	rawOp, _ := ctx.get("op")
+	res.rawOp = plToString(rawOp)
+	switch res.rawOp {
+	case "delete":
+		res.op = "delete"
+	case "index", "create":
+		res.op = "index"
 	default:
-		return updateScriptResult{}, scriptError("compile error", "")
+		res.op = "noop"
 	}
-	if params == nil {
-		params = map[string]any{}
+	if src, ok := ctx.get("_source"); ok {
+		if m, ok := plToJSON(src).(map[string]any); ok {
+			res.source = m
+		}
 	}
-	trimmed := strings.TrimSpace(srcText)
-	if strings.HasSuffix(trimmed, "=") || (strings.HasSuffix(trimmed, "+") && !strings.HasSuffix(trimmed, "++")) ||
-		(strings.HasSuffix(trimmed, "-") && !strings.HasSuffix(trimmed, "--")) {
-		return updateScriptResult{}, scriptError("compile error", "")
+	if res.source == nil {
+		res.source = map[string]any{}
 	}
-	if strings.Contains(trimmed, "throw new IllegalArgumentException") {
-		msg := "boom"
-		if i := strings.Index(trimmed, "('"); i >= 0 {
-			if j := strings.Index(trimmed[i+2:], "'"); j >= 0 {
-				msg = trimmed[i+2 : i+2+j]
-			}
-		}
-		e := &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "failed to execute script",
-			CausedBy: &apiError{Type: "script_exception", Reason: "runtime error",
-				CausedBy: &apiError{Type: "illegal_argument_exception", Reason: msg}}}
-		return updateScriptResult{}, e
-	}
-	res := updateScriptResult{op: "index", source: source}
-	env := &scriptEnv{params: params, ctxSource: source, ctxIndex: index, ctxID: id, ctxVersion: version}
-	for _, stmt := range splitStatements(trimmed) {
-		stmt = strings.TrimSpace(stmt)
-		if stmt == "" {
-			continue
-		}
-		if strings.HasPrefix(stmt, "if ") {
-			cond := strings.TrimSpace(strings.TrimPrefix(stmt, "if "))
-			if i := strings.Index(cond, ")"); i >= 0 {
-				cond = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(cond[:i]), "("))
-			}
-			truePart, falsePart := stmt, ""
-			if i := strings.Index(stmt, "else"); i >= 0 {
-				truePart, falsePart = stmt[:i], stmt[i+4:]
-			}
-			chosen := falsePart
-			if v, err := evalScriptValue(cond, env); err == nil && truthy(v) {
-				chosen = truePart
-			}
-			switch ctxOpIn(chosen) {
-			case "delete":
-				res.op = "delete"
-				return res, nil
-			case "none", "noop":
-				res.op = "noop"
-				return res, nil
-			}
-			continue
-		}
-		if strings.HasPrefix(stmt, "ctx.op =") {
-			v, _ := evalScriptValue(strings.TrimSpace(strings.TrimPrefix(stmt, "ctx.op =")), env)
-			op, _ := valueToScriptString(v)
-			switch op {
-			case "delete":
-				res.op = "delete"
-				return res, nil
-			case "none", "noop":
-				res.op = "noop"
-				return res, nil
-			default:
-				res.op = "noop"
-				return res, nil
-			}
-		}
-		if strings.HasPrefix(stmt, "ctx._id") {
-			continue
-		}
-		if strings.HasPrefix(stmt, "ctx._source.remove(") {
-			name := callStringArg(stmt)
-			removeSourcePath(source, name)
-			continue
-		}
-		if strings.HasPrefix(stmt, "ctx._source.") {
-			rest := strings.TrimPrefix(stmt, "ctx._source.")
-			if strings.Contains(rest, ".add(") {
-				path := rest[:strings.Index(rest, ".add(")]
-				name := callStringArg(rest[strings.Index(rest, ".add("):])
-				appendSourcePath(source, path, name)
-				continue
-			}
-			if strings.HasSuffix(rest, "++") {
-				path := strings.TrimSpace(strings.TrimSuffix(rest, "++"))
-				v, _ := getSourcePath(source, path)
-				setSourcePath(source, path, scriptFloat(v)+1)
-				continue
-			}
-			for _, op := range []string{"+=", "-=", "*=", "/="} {
-				if i := strings.Index(rest, op); i >= 0 {
-					path := strings.TrimSpace(rest[:i])
-					rhs := strings.TrimSpace(rest[i+2:])
-					rv, err := evalScriptValue(rhs, env)
-					if err != nil {
-						return res, scriptError("compile error", "")
-					}
-					cur, _ := getSourcePath(source, path)
-					switch op {
-					case "+=":
-						if s, ok := cur.(string); ok {
-							rs, _ := valueToScriptString(rv)
-							setSourcePath(source, path, s+rs)
-						} else {
-							setSourcePath(source, path, scriptFloat(cur)+scriptFloat(rv))
-						}
-					case "-=":
-						setSourcePath(source, path, scriptFloat(cur)-scriptFloat(rv))
-					case "*=":
-						setSourcePath(source, path, scriptFloat(cur)*scriptFloat(rv))
-					case "/=":
-						setSourcePath(source, path, scriptFloat(cur)/scriptFloat(rv))
-					}
-					goto nextStmt
-				}
-			}
-			if i := strings.Index(rest, "="); i >= 0 {
-				path := strings.TrimSpace(rest[:i])
-				rhs := strings.TrimSpace(rest[i+1:])
-				var v any
-				var err error
-				if strings.HasPrefix(rhs, "[") {
-					v = parseArrayLiteral(rhs)
-				} else {
-					v, err = evalScriptValue(rhs, env)
-				}
-				if err != nil {
-					return res, scriptError("compile error", "")
-				}
-				setSourcePath(source, path, v)
-				continue
-			}
-		}
-	nextStmt:
-	}
-	res.source = source
+	res.id, _ = ctx.get("_id")
+	res.index, _ = ctx.get("_index")
 	return res, nil
-}
-
-func ctxOpIn(s string) string {
-	i := strings.Index(s, "ctx.op")
-	if i < 0 {
-		return ""
-	}
-	rest := s[i+len("ctx.op"):]
-	j := strings.Index(rest, "=")
-	if j < 0 {
-		return ""
-	}
-	rest = strings.TrimSpace(rest[j+1:])
-	rest = strings.TrimLeft(rest, "\"'")
-	end := strings.IndexAny(rest, "\"'")
-	if end >= 0 {
-		return rest[:end]
-	}
-	fields := strings.Fields(rest)
-	if len(fields) > 0 {
-		return fields[0]
-	}
-	return ""
-}
-
-func splitStatements(src string) []string {
-	var out []string
-	depth := 0
-	start := 0
-	for i, c := range src {
-		switch c {
-		case '(', '[', '{':
-			depth++
-		case ')', ']', '}':
-			depth--
-		case ';':
-			if depth == 0 {
-				out = append(out, src[start:i])
-				start = i + 1
-			}
-		}
-	}
-	if start < len(src) {
-		out = append(out, src[start:])
-	}
-	return out
-}
-
-func evalScriptValue(expr string, env *scriptEnv) (any, error) {
-	expr = strings.TrimSpace(expr)
-	e := &exprEval{src: expr, env: env}
-	v, err := e.parseTernary()
-	if err != nil {
-		return nil, err
-	}
-	e.skipSpace()
-	if e.pos < len(e.src) {
-		return nil, fmt.Errorf("unexpected token")
-	}
-	return v, nil
-}
-
-func scriptError(kind, _ string) *apiError {
-	return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "failed to execute script",
-		CausedBy: &apiError{Type: "script_exception", Reason: kind, Fields: map[string]any{"lang": "painless"}}}
-}
-
-func callStringArg(s string) string {
-	i := strings.Index(s, "(")
-	j := strings.LastIndex(s, ")")
-	if i < 0 || j <= i {
-		return ""
-	}
-	return strings.Trim(strings.TrimSpace(s[i+1:j]), "'\"")
-}
-
-func getSourcePath(source map[string]any, path string) (any, bool) {
-	parts := strings.Split(path, ".")
-	var cur any = source
-	for _, p := range parts {
-		m, ok := cur.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		cur, ok = m[p]
-		if !ok {
-			return nil, false
-		}
-	}
-	return cur, true
-}
-
-func setSourcePath(source map[string]any, path string, v any) {
-	parts := strings.Split(path, ".")
-	cur := source
-	for i, p := range parts {
-		if i == len(parts)-1 {
-			cur[p] = v
-			return
-		}
-		next, ok := cur[p].(map[string]any)
-		if !ok {
-			next = map[string]any{}
-			cur[p] = next
-		}
-		cur = next
-	}
-}
-
-func removeSourcePath(source map[string]any, path string) {
-	parts := strings.Split(path, ".")
-	cur := source
-	for i, p := range parts {
-		if i == len(parts)-1 {
-			delete(cur, p)
-			return
-		}
-		next, ok := cur[p].(map[string]any)
-		if !ok {
-			return
-		}
-		cur = next
-	}
-}
-
-func appendSourcePath(source map[string]any, path string, v any) {
-	cur, _ := getSourcePath(source, path)
-	arr, _ := cur.([]any)
-	arr = append(arr, v)
-	setSourcePath(source, path, arr)
-}
-
-func parseArrayLiteral(s string) any {
-	s = strings.TrimSpace(s)
-	s = strings.TrimPrefix(s, "[")
-	s = strings.TrimSuffix(s, "]")
-	var out []any
-	for _, p := range strings.Split(s, ",") {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		if len(p) >= 2 && (p[0] == '\'' || p[0] == '"') {
-			out = append(out, p[1:len(p)-1])
-		} else if n, err := strconv.ParseFloat(p, 64); err == nil {
-			out = append(out, n)
-		} else {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 func deepCopyMap(m map[string]any) map[string]any {

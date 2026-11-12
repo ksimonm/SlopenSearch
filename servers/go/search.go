@@ -4,9 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"math"
 	"net"
 	"net/http"
@@ -192,7 +189,7 @@ func docValuesOutput(idx *Index, id, field string, spec fieldSpec, fallbackSourc
 				if fallbackSource {
 					res[i] = map[string]any{"type": "Point", "coordinates": []any{lon, lat}}
 				} else {
-					res[i] = strconv.FormatFloat(lat, 'f', -1, 64) + ", " + strconv.FormatFloat(lon, 'f', -1, 64)
+					res[i] = plFmtDouble(lat) + ", " + plFmtDouble(lon)
 				}
 			}
 		}
@@ -1124,6 +1121,33 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				}
 			}
 		}
+		for i := range searchSortSpecs {
+			sp := &searchSortSpecs[i]
+			if sp.field != "_script" {
+				continue
+			}
+			ctxName := "number_sort"
+			if sp.scriptType == "string" {
+				ctxName = "string_sort"
+			}
+			cs, se, ae := prepareScript(sp.scriptRaw, ctxName)
+			if se != nil || ae != nil {
+				writeError(w, scriptErrForShard(indices[0], se, ae, false))
+				return
+			}
+			sp.scriptVals = map[string]any{}
+			for _, h := range matched {
+				v, rerr := cs.run(newQueryCtxForDoc(h.idx, h.id, h.doc), runOpts{score: h.score})
+				if rerr != nil {
+					writeError(w, scriptShardError(h.idx, rerr))
+					return
+				}
+				if ctxName == "number_sort" {
+					v = plF64(v)
+				}
+				sp.scriptVals[h.idx.Name+"\x00"+h.id] = v
+			}
+		}
 		sort.SliceStable(matched, func(i, j int) bool {
 			for _, sp := range searchSortSpecs {
 				c := compareSortSpec(matched[i], matched[j], sp)
@@ -1285,6 +1309,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			}
 		}
 		maxScore = scoreJSON(m)
+		if math.IsInf(m, 0) || math.IsNaN(m) {
+			maxScore = nil
+		}
 	}
 	trackTotal := true
 	trackTotalVal := 10000
@@ -1414,11 +1441,17 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		if explainFlag {
 			entry["_shard"] = "[" + h.idx.Name + "][0]"
 			entry["_node"] = "slopensearch-node-1"
-			field, term := explainLabel(query)
-			qc := newQueryCtxForDoc(h.idx, h.id, h.doc)
-			exp := qc.bm25Explain(field, term, h.score)
-			exp["value"] = scoreJSON(h.score)
-			entry["_explanation"] = exp
+			if ss, ok := query["script_score"].(map[string]any); ok && len(query) == 1 {
+				entry["_explanation"] = map[string]any{"value": scoreJSON(h.score),
+					"description": "script score function, computed with script:\"" + scriptToString(ss["script"]) + "\"",
+					"details":     []any{}}
+			} else {
+				field, term := explainLabel(query)
+				qc := newQueryCtxForDoc(h.idx, h.id, h.doc)
+				exp := qc.bm25Explain(field, term, h.score)
+				exp["value"] = scoreJSON(h.score)
+				entry["_explanation"] = exp
+			}
 		}
 		if sortedByField && len(searchSortSpecs) > 0 && !allScoreSort {
 			sortVals := make([]any, 0, len(searchSortSpecs))
@@ -1559,7 +1592,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				writeError(w, serr)
 				return
 			}
-			if existing, ok := entry["fields"].(map[string]any); ok {
+			if len(got) == 0 {
+				// nothing to add
+			} else if existing, ok := entry["fields"].(map[string]any); ok {
 				for k, v := range got {
 					existing[k] = v
 				}
@@ -1841,6 +1876,8 @@ type searchSortSpec struct {
 	scriptSource string
 	scriptParams any
 	scriptType   string
+	scriptRaw    any
+	scriptVals   map[string]any
 	geoField     string
 	geoPoint     any
 	geoUnit      string
@@ -1932,6 +1969,18 @@ func parseSortSpecs(bodySort any, uriSort string) ([]searchSortSpec, *apiError) 
 								return &apiError{Type: "illegal_argument_exception", Status: 400,
 									Reason: "No distance unit match [" + sp.geoUnit + "]"}
 							}
+						}
+					}
+					if sp.field == "_script" {
+						sp.scriptRaw = ov["script"]
+						st, hasType := ov["type"].(string)
+						if !hasType {
+							return errBad("Required [type]")
+						}
+						if st != "number" && st != "string" && st != "version" {
+							return &apiError{Type: "x_content_parse_exception", Status: 400,
+								Reason:   "[_script] failed to parse field [type]",
+								CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "Unknown ScriptSortType [" + st + "]"}}
 						}
 					}
 					switch sc := ov["script"].(type) {
@@ -2044,7 +2093,11 @@ func searchSortSpecValueRaw(h multiHit, sp searchSortSpec) (any, bool, bool) {
 	case "_index":
 		return h.idx.Name, true, false
 	case "_script":
-		return evalSearchSortScript(sp.scriptSource, sp.scriptParams, h.doc), true, false
+		if sp.scriptVals != nil {
+			v, ok := sp.scriptVals[h.idx.Name+"\x00"+h.id]
+			return v, ok, false
+		}
+		return scriptSortValue(sp, h), true, false
 	case "_geo_distance":
 		return geoSortDistance(h, sp), true, false
 	case "_shard_doc":
@@ -2792,6 +2845,10 @@ func jsonClauseEndPos(body []byte, key string) (int, int) {
 }
 
 func writeQueryShardError(w http.ResponseWriter, idx *Index, cause *apiError) {
+	if cause.Shard != nil {
+		writeJSON(w, cause.Shard.status, cause.Shard.body())
+		return
+	}
 	if cause.SearchFailure != "" {
 		writeCustomSearchFailure(w, idx, cause)
 		return
@@ -2962,6 +3019,9 @@ func evalQuery(idx *Index, query map[string]any, doc map[string]any) (bool, floa
 			return evalExists(raw, doc)
 		case "prefix":
 			return evalPrefix(idx, raw, doc)
+		case "script":
+			id, _ := doc["__slop_id"].(string)
+			return newQueryCtxForDoc(idx, id, doc).evalScriptQuery(raw)
 		default:
 			return false, 0, errParsing("unknown query [" + clause + "]")
 		}
@@ -3679,33 +3739,16 @@ func nestedSortValues(h multiHit, sp searchSortSpec) []any {
 }
 
 func scoreJSON(v float64) any {
+	switch {
+	case math.IsInf(v, 1):
+		return "Infinity"
+	case math.IsInf(v, -1):
+		return "-Infinity"
+	case math.IsNaN(v):
+		return "NaN"
+	}
 	if v == math.Trunc(v) {
 		return json.Number(strconv.FormatFloat(v, 'f', 1, 64))
-	}
-	return v
-}
-
-var scriptDocRefRe = regexp.MustCompile(`doc\['([^']+)'\]\.value`)
-var scriptParamRefRe = regexp.MustCompile(`params\.([A-Za-z0-9_]+)`)
-
-func evalSearchSortScript(src string, params any, doc map[string]any) any {
-	expr := scriptDocRefRe.ReplaceAllStringFunc(src, func(m string) string {
-		sub := scriptDocRefRe.FindStringSubmatch(m)
-		v := docNestedValue(doc, sub[1])
-		return scriptLiteral(v)
-	})
-	pm, _ := params.(map[string]any)
-	expr = scriptParamRefRe.ReplaceAllStringFunc(expr, func(m string) string {
-		sub := scriptParamRefRe.FindStringSubmatch(m)
-		return scriptLiteral(pm[sub[1]])
-	})
-	node, err := parser.ParseExpr(expr)
-	if err != nil {
-		return nil
-	}
-	v, err := evalSortScriptNode(node)
-	if err != nil {
-		return nil
 	}
 	return v
 }
@@ -3720,96 +3763,6 @@ func docRawValue(doc map[string]any, field string) any {
 		cur = m[part]
 	}
 	return cur
-}
-
-func docNestedValue(doc map[string]any, field string) any {
-	var cur any = doc
-	for _, part := range strings.Split(field, ".") {
-		m, ok := cur.(map[string]any)
-		if !ok {
-			return nil
-		}
-		cur = m[part]
-	}
-	if list, ok := cur.([]any); ok {
-		if len(list) == 0 {
-			return nil
-		}
-		return list[0]
-	}
-	return cur
-}
-
-func scriptLiteral(v any) string {
-	switch t := v.(type) {
-	case nil:
-		return "0"
-	case string:
-		return strconv.Quote(t)
-	case bool:
-		return strconv.FormatBool(t)
-	case json.Number:
-		return t.String()
-	}
-	if f, ok := toFloat(v); ok {
-		return strconv.FormatFloat(f, 'f', -1, 64)
-	}
-	return "0"
-}
-
-func evalSortScriptNode(node ast.Expr) (any, error) {
-	switch n := node.(type) {
-	case *ast.ParenExpr:
-		return evalSortScriptNode(n.X)
-	case *ast.BasicLit:
-		switch n.Kind {
-		case token.INT, token.FLOAT:
-			return strconv.ParseFloat(n.Value, 64)
-		case token.STRING:
-			return strconv.Unquote(n.Value)
-		}
-	case *ast.UnaryExpr:
-		v, err := evalSortScriptNode(n.X)
-		if err != nil {
-			return nil, err
-		}
-		f, _ := toFloat(v)
-		if n.Op == token.SUB {
-			return -f, nil
-		}
-		return f, nil
-	case *ast.BinaryExpr:
-		lv, err := evalSortScriptNode(n.X)
-		if err != nil {
-			return nil, err
-		}
-		rv, err := evalSortScriptNode(n.Y)
-		if err != nil {
-			return nil, err
-		}
-		lf, _ := toFloat(lv)
-		rf, _ := toFloat(rv)
-		switch n.Op {
-		case token.ADD:
-			return lf + rf, nil
-		case token.SUB:
-			return lf - rf, nil
-		case token.MUL:
-			return lf * rf, nil
-		case token.QUO:
-			return lf / rf, nil
-		}
-	case *ast.CallExpr:
-		if sel, ok := n.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "abs" && len(n.Args) == 1 {
-			v, err := evalSortScriptNode(n.Args[0])
-			if err != nil {
-				return nil, err
-			}
-			f, _ := toFloat(v)
-			return math.Abs(f), nil
-		}
-	}
-	return nil, fmt.Errorf("unsupported script")
 }
 
 func geoUnitMeters(unit string) (float64, bool) {

@@ -5,294 +5,106 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strconv"
 	"strings"
 )
 
-func templateLookup(params map[string]any, name string) (any, bool) {
-	cur := any(params)
-	for _, part := range strings.Split(name, ".") {
-		m, ok := cur.(map[string]any)
+// resolveTemplate finds the template text of a render / search template
+// request: an inline source (which wins), the legacy "inline" key or a
+// stored script id.
+func (s *Server) resolveTemplate(body map[string]any) (text string, rendered bool, err *apiError) {
+	source, hasSource := body["source"]
+	if !hasSource {
+		source, hasSource = body["inline"]
+	}
+	if hasSource {
+		text, ok := mustacheTemplateText(source)
 		if !ok {
-			return nil, false
+			return "", false, errParsing("template source must be a string or object")
 		}
-		cur, ok = m[part]
-		if !ok {
-			return nil, false
-		}
+		return text, false, nil
 	}
-	return cur, true
-}
-
-func templateTruthy(v any) bool {
-	switch t := v.(type) {
-	case nil:
-		return false
-	case bool:
-		return t
-	case string:
-		return t != ""
-	case []any:
-		return len(t) > 0
-	case map[string]any:
-		return len(t) > 0
-	case json.Number:
-		f, _ := t.Float64()
-		return f != 0
-	case float64:
-		return t != 0
+	id, _ := body["id"].(string)
+	if id == "" {
+		return "", false, &apiError{Type: "action_request_validation_exception", Status: 400,
+			Reason: "Validation Failed: 1: template is missing;2: template's script type is missing;"}
 	}
-	return true
-}
-
-func templateString(v any) string {
-	switch t := v.(type) {
-	case nil:
-		return ""
-	case string:
-		return t
-	case json.Number:
-		return t.String()
-	case float64:
-		if t == float64(int64(t)) {
-			return strconv.FormatInt(int64(t), 10)
-		}
-		return strconv.FormatFloat(t, 'f', -1, 64)
-	case bool:
-		if t {
-			return "true"
-		}
-		return "false"
+	sc, serr := storedScript(id)
+	if serr != nil {
+		return "", false, serr
 	}
-	b, _ := json.Marshal(v)
-	return string(b)
-}
-
-func templateEscape(s string) string {
-	b, _ := json.Marshal(s)
-	if len(b) >= 2 {
-		return string(b[1 : len(b)-1])
-	}
-	return s
-}
-
-func findSectionEnd(tpl, name string, start int) int {
-	depth := 1
-	for i := start; i < len(tpl); {
-		j := strings.Index(tpl[i:], "{{")
-		if j < 0 {
-			return -1
-		}
-		j += i
-		k := strings.Index(tpl[j:], "}}")
-		if k < 0 {
-			return -1
-		}
-		tag := strings.TrimSpace(tpl[j+2 : j+k])
-		if tag == "#"+name || tag == "^"+name {
-			depth++
-		} else if tag == "/"+name {
-			depth--
-			if depth == 0 {
-				return j
+	src, _ := sc["source"].(string)
+	if lang, _ := sc["lang"].(string); lang != "" && lang != "mustache" {
+		if lang == "painless" {
+			script, se := plCompileScript(src, "template", id)
+			if se != nil {
+				return "", false, &apiError{Type: "script_exception", Status: 400, Reason: "compile error",
+					Shard: &shardFailure{raw: se.errorBody(), status: 400}}
 			}
+			v, se := script.exec(plBindings{vars: map[string]any{"params": scriptParams(templateParams(body))}}, id)
+			if se != nil {
+				return "", false, &apiError{Type: "script_exception", Status: 400, Reason: "runtime error",
+					Shard: &shardFailure{raw: se.errorBody(), status: 400}}
+			}
+			return plToString(v), true, nil
 		}
-		i = j + k + 2
+		return "", false, errBad(lang + " engine does not know how to handle context [template]")
 	}
-	return -1
+	return src, false, nil
 }
 
-func renderMustache(tpl string, params map[string]any, jsonMode bool) (string, error) {
-	var b strings.Builder
-	inString := false
-	for i := 0; i < len(tpl); {
-		if strings.HasPrefix(tpl[i:], "{{") {
-			j := strings.Index(tpl[i:], "}}")
-			if j < 0 {
-				return "", errParsing("unclosed mustache tag")
-			}
-			tag := strings.TrimSpace(tpl[i+2 : i+j])
-			after := i + j + 2
-			if strings.HasPrefix(tag, "#") || strings.HasPrefix(tag, "^") {
-				inv := strings.HasPrefix(tag, "^")
-				name := strings.TrimSpace(tag[1:])
-				if !inv && (name == "toJson" || name == "join" || name == "url") {
-					end := findSectionEnd(tpl, name, after)
-					if end < 0 {
-						return "", errParsing("unclosed function [" + name + "]")
-					}
-					inner := strings.TrimSpace(tpl[after:end])
-					v, _ := templateLookup(params, inner)
-					var out string
-					switch name {
-					case "toJson":
-						b, _ := json.Marshal(v)
-						out = string(b)
-					case "join":
-						items := []string{}
-						if list, ok := v.([]any); ok {
-							for _, e := range list {
-								items = append(items, templateString(e))
-							}
-						}
-						out = strings.Join(items, ",")
-					case "url":
-						rendered, rerr := renderMustache(inner, params, false)
-						if rerr != nil {
-							return "", rerr
-						}
-						out = url.QueryEscape(rendered)
-					}
-					if jsonMode && inString {
-						out = templateEscape(out)
-					}
-					b.WriteString(out)
-					i = end + len("{{/"+name+"}}")
-					continue
-				}
-				end := findSectionEnd(tpl, name, after)
-				if end < 0 {
-					return "", errParsing("unclosed section [" + name + "]")
-				}
-				inner := tpl[after:end]
-				v, ok := templateLookup(params, name)
-				include := ok && templateTruthy(v)
-				if inv {
-					include = !include
-				}
-				if include {
-					rendered, err := renderMustache(inner, params, jsonMode)
-					if err != nil {
-						return "", err
-					}
-					b.WriteString(rendered)
-				}
-				closeLen := len("{{/" + name + "}}")
-				i = end + closeLen
-				continue
-			}
-			v, ok := templateLookup(params, tag)
-			if !ok {
-				v = ""
-			}
-			out := templateString(v)
-			if jsonMode && inString {
-				out = templateEscape(out)
-			}
-			b.WriteString(out)
-			i = after
-			continue
-		}
-		ch := tpl[i]
-		if jsonMode && ch == '"' && (i == 0 || tpl[i-1] != '\\') {
-			inString = !inString
-		}
-		b.WriteByte(ch)
-		i++
-	}
-	return b.String(), nil
-}
-
-func renderMustacheValue(v any, params map[string]any) (any, error) {
-	switch t := v.(type) {
-	case string:
-		return renderMustache(t, params, false)
-	case map[string]any:
-		out := map[string]any{}
-		for k, e := range t {
-			r, err := renderMustacheValue(e, params)
-			if err != nil {
-				return nil, err
-			}
-			out[k] = r
-		}
-		return out, nil
-	case []any:
-		out := make([]any, 0, len(t))
-		for _, e := range t {
-			r, err := renderMustacheValue(e, params)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, r)
-		}
-		return out, nil
-	}
-	return v, nil
-}
-
-func renderTemplateSource(source any, params map[string]any) (map[string]any, *apiError) {
-	var rendered any
-	var err error
-	switch t := source.(type) {
-	case map[string]any:
-		rendered, err = renderMustacheValue(t, params)
-	case string:
-		var text string
-		text, err = renderMustache(t, params, true)
-		if err == nil {
-			var m map[string]any
-			if uerr := json.Unmarshal([]byte(text), &m); uerr != nil {
-				err = uerr
-			} else {
-				rendered = m
-			}
-		}
-	default:
-		err = errParsing("template source must be a string or object")
-	}
-	if err != nil {
-		reason := "Failed to parse template"
-		if ae, ok := err.(*apiError); ok {
-			reason = ae.Reason
-		}
-		return nil, &apiError{Type: "script_exception", Status: 400, Reason: reason,
-			Fields:    map[string]any{"lang": "mustache"},
-			CausedBy:  &apiError{Type: "mustache_exception", Reason: reason},
-			RootCause: &apiError{Type: "script_exception", Reason: reason, Fields: map[string]any{"lang": "mustache"}}}
-	}
-	m, ok := rendered.(map[string]any)
-	if !ok {
-		return nil, &apiError{Type: "script_exception", Status: 400, Reason: "template output is not an object",
-			Fields: map[string]any{"lang": "mustache"}}
-	}
-	return m, nil
-}
-
-func (s *Server) templateSourceFor(id string) (any, *apiError) {
-	s.scriptsMu.RLock()
-	sc, ok := s.scripts[id]
-	s.scriptsMu.RUnlock()
-	if !ok {
-		return nil, &apiError{Type: "resource_not_found_exception", Status: 404,
-			Reason: "unable to find script [" + id + "] in cluster state"}
-	}
-	return sc["source"], nil
-}
-
-func (s *Server) renderTemplateBody(body map[string]any) (map[string]any, *apiError) {
-	source := body["source"]
-	if id, _ := body["id"].(string); id != "" {
-		src, apiErr := s.templateSourceFor(id)
-		if apiErr != nil {
-			return nil, apiErr
-		}
-		source = src
-	}
+func templateParams(body map[string]any) map[string]any {
 	params, _ := body["params"].(map[string]any)
 	if params == nil {
 		params = map[string]any{}
 	}
-	out, apiErr := renderTemplateSource(source, params)
-	if apiErr != nil {
-		return nil, apiErr
+	return params
+}
+
+// renderTemplateText renders the template of a request to text.
+func (s *Server) renderTemplateText(body map[string]any) (string, *apiError) {
+	text, rendered, err := s.resolveTemplate(body)
+	if err != nil || rendered {
+		return text, err
+	}
+	out, merr := mustacheRender(text, templateParams(body))
+	if merr != nil {
+		return "", mustacheScriptError(text, merr)
+	}
+	return out, nil
+}
+
+var searchTemplateKeys = map[string]bool{"source": true, "inline": true, "id": true, "params": true,
+	"explain": true, "profile": true, "file": true}
+
+// renderTemplateBody renders a search template into a search request body.
+func (s *Server) renderTemplateBody(body map[string]any) (map[string]any, *apiError) {
+	text, err := s.renderTemplateText(body)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if uerr := unmarshalJSON([]byte(text), &out); uerr != nil || out == nil {
+		reason := "Unexpected character: expected a value"
+		if uerr != nil {
+			reason = uerr.Error()
+		}
+		return nil, &apiError{Type: "json_parse_exception", Status: 400, Reason: reason,
+			CausedBy: &apiError{Type: "stream_read_exception", Reason: reason}}
+	}
+	for _, k := range []string{"size", "from", "terminate_after"} {
+		if str, ok := out[k].(string); ok {
+			n, perr := strconv.Atoi(strings.TrimSpace(str))
+			if perr != nil {
+				return nil, &apiError{Type: "number_format_exception", Status: 400, Reason: `For input string: "` + str + `"`}
+			}
+			out[k] = json.Number(strconv.Itoa(n))
+		}
 	}
 	for k, v := range body {
-		if k == "source" || k == "id" || k == "params" {
-			continue
+		if k == "explain" || k == "profile" {
+			out[k] = v
 		}
-		out[k] = v
 	}
 	return out, nil
 }
@@ -320,15 +132,28 @@ func (s *Server) executeTemplateSearch(r *http.Request, name string, tplBody map
 }
 
 func (s *Server) handleSearchTemplate(w http.ResponseWriter, r *http.Request, name string) {
-	body, apiErr := readJSON(r)
+	body, raw, apiErr := readJSONRaw(r)
 	if apiErr != nil {
 		writeError(w, apiErr)
 		return
+	}
+	for _, k := range sortedKeys(body) {
+		if !searchTemplateKeys[k] {
+			col := strings.Index(string(raw), `"`+k+`"`) + 1
+			writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400,
+				Reason: "[1:" + itoa(col) + "] [search_template] unknown field [" + k + "]"})
+			return
+		}
 	}
 	code, out, apiErr := s.executeTemplateSearch(r, name, body)
 	if apiErr != nil {
 		writeError(w, apiErr)
 		return
+	}
+	if code == 200 {
+		if t := bytes.TrimSpace(out); len(t) > 0 && t[len(t)-1] == '}' {
+			out = append(append(append([]byte{}, t[:len(t)-1]...), []byte(`,"status":200`)...), '}')
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -348,12 +173,13 @@ func (s *Server) handleRenderTemplate(w http.ResponseWriter, r *http.Request, id
 	if id != "" {
 		body["id"] = id
 	}
-	out, apiErr := s.renderTemplateBody(body)
+	out, apiErr := s.renderTemplateText(body)
 	if apiErr != nil {
 		writeError(w, apiErr)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"template_output": out})
+	// the rendered template is written verbatim, valid JSON or not
+	writeJSON(w, 200, verbatimJSON(`{"template_output":`+out+`}`))
 }
 
 func parseMsearchPairs(raw []byte) ([][2]map[string]any, *apiError) {

@@ -109,10 +109,20 @@ func scriptText(raw any) (string, map[string]any) {
 }
 
 func scriptNumericValues(docs []map[string]any, idx *Index, script any, field string, pathPrefix string) []float64 {
-	src, params := scriptText(script)
-	src = strings.TrimSpace(strings.TrimSuffix(src, ";"))
+	out, _ := scriptNumericValuesErr(docs, idx, script, field, pathPrefix)
+	return out
+}
+
+// scriptNumericValuesErr evaluates a metric aggregation script for every
+// document; with a field the script is a value script over its values.
+func scriptNumericValuesErr(docs []map[string]any, idx *Index, script any, field string, pathPrefix string) ([]float64, *apiError) {
 	out := []float64{}
+	cs, err := prepareAggScript(idx, script)
+	if err != nil {
+		return nil, err
+	}
 	for _, doc := range docs {
+		var vals []any
 		if field != "" {
 			raw, ok := aggFieldValue(doc, field, pathPrefix)
 			if !ok {
@@ -121,30 +131,24 @@ func scriptNumericValues(docs []map[string]any, idx *Index, script any, field st
 			var flat []any
 			flattenMetricRaw(raw, &flat)
 			for _, v := range flat {
-				f, ok := numericFromRaw(idx, resolveField(field, pathPrefix), v)
-				if !ok {
-					continue
-				}
-				expr := strings.ReplaceAll(src, "_value", formatNumber(f))
-				env := &scriptEnv{params: params}
-				if r, err := env.evalScriptExpression(expr); err == nil {
-					if rf, ok := toFloat(r); ok {
-						out = append(out, rf)
-					}
+				if f, ok := numericFromRaw(idx, resolveField(field, pathPrefix), v); ok {
+					vals = append(vals, f)
 				}
 			}
-			continue
 		}
-		id, _ := doc["__slop_id"].(string)
-		qc := newQueryCtxForDoc(idx, id, doc)
-		env := &scriptEnv{c: qc, params: params}
-		if r, err := env.evalScriptExpression(src); err == nil {
-			if rf, ok := toFloat(r); ok {
-				out = append(out, rf)
+		res, err := aggScriptRun(cs, idx, doc, vals, field != "")
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range res {
+			if plIsNumber(r) {
+				out = append(out, plF64(r))
+			} else if f, ok := toFloat(r); ok {
+				out = append(out, f)
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 func metricValues(spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string) ([]float64, *apiError) {
@@ -156,9 +160,9 @@ func metricValues(spec map[string]any, docs []map[string]any, idx *Index, pathPr
 	}
 	if hasScript {
 		if field == "" {
-			return scriptNumericValues(docs, idx, script, "", pathPrefix), nil
+			return scriptNumericValuesErr(docs, idx, script, "", pathPrefix)
 		}
-		return scriptNumericValues(docs, idx, script, field, pathPrefix), nil
+		return scriptNumericValuesErr(docs, idx, script, field, pathPrefix)
 	}
 	resolved := resolveField(field, pathPrefix)
 	out := []float64{}
@@ -407,12 +411,12 @@ func weightedAvgAgg(spec map[string]any, docs []map[string]any, idx *Index, path
 		var w float64
 		wok := false
 		if hasWScript {
-			env := &scriptEnv{params: map[string]any{}}
-			if src, params := scriptText(wScript); src != "" {
-				env.params = params
-				if r, err := env.evalScriptExpression(src); err == nil {
-					w, wok = toFloat(r)
-				}
+			res, serr := scriptNumericValuesErr([]map[string]any{doc}, idx, wScript, "", pathPrefix)
+			if serr != nil {
+				return nil, serr
+			}
+			if len(res) > 0 {
+				w, wok = res[0], true
 			}
 		} else {
 			raw, ok := aggFieldValue(doc, wf, pathPrefix)

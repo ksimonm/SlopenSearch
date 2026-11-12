@@ -55,6 +55,10 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeError(w http.ResponseWriter, e *apiError) {
+	if e.Shard != nil {
+		writeJSON(w, e.Shard.status, e.Shard.body())
+		return
+	}
 	rcType, rcReason := e.Type, e.Reason
 	if e.RootCause != nil {
 		rcType, rcReason = e.RootCause.Type, e.RootCause.Reason
@@ -104,6 +108,13 @@ func writeError(w http.ResponseWriter, e *apiError) {
 	}
 	if e.CausedBy != nil {
 		err["caused_by"] = causedByObject(e.CausedBy)
+	}
+	if len(e.Suppressed) > 0 {
+		sup := make([]any, 0, len(e.Suppressed))
+		for _, s := range e.Suppressed {
+			sup = append(sup, causedByObject(s))
+		}
+		err["suppressed"] = sup
 	}
 	writeJSON(w, e.Status, map[string]any{"error": err, "status": e.Status})
 }
@@ -362,6 +373,18 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeNoHandler(w, r)
+		return
+	}
+	if (segs[0] == "_script_context" || segs[0] == "_script_language") && len(segs) == 1 {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, r, "GET")
+			return
+		}
+		if segs[0] == "_script_context" {
+			writeJSON(w, 200, verbatimJSON(scriptContextListing))
+		} else {
+			writeJSON(w, 200, verbatimJSON(scriptLanguageListing))
+		}
 		return
 	}
 	if segs[0] == "_scripts" {

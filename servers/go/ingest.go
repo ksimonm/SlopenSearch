@@ -747,16 +747,13 @@ func validateProcessorConfig(typ string, cfg map[string]any) *apiError {
 		}
 	}
 	if typ == "script" {
-		if lang, ok := cfg["lang"].(string); ok && lang == "mustache" {
+		if _, inline := cfg["source"]; inline {
+			if _, _, err := compileIngestScript(ingestScriptSpec(cfg), "ingest", cfgString(cfg, "tag")); err != nil {
+				return err
+			}
+		} else if lang, ok := cfg["lang"].(string); ok && lang == "mustache" {
 			return &apiError{Type: "illegal_argument_exception", Status: 400,
 				Reason: "mustache engine does not know how to handle context [ingest]", ForceTop: true}
-		}
-		if src, ok := cfg["source"].(string); ok {
-			trimmed := strings.TrimSpace(src)
-			if trimmed == "" || strings.HasSuffix(trimmed, "=") {
-				return &apiError{Type: "script_exception", Status: 400, Reason: "compile error",
-					Fields: map[string]any{"processor_type": "script", "script_stack": []any{src, "        ^---- HERE"}}}
-			}
 		}
 	}
 	if typ == "dot_expander" {
@@ -988,7 +985,7 @@ func procControl(def, cfg map[string]any, key string) (any, bool) {
 
 func (s *Server) runPipelineFailureHandlers(handlers []any, env *ingestEnv, cause *apiError) *apiError {
 	env.onFailure = map[string]any{
-		"on_failure_message":        cause.Reason,
+		"on_failure_message":        failureMessage(cause),
 		"on_failure_processor_type": env.processor,
 		"on_failure_processor_tag":  env.tag,
 	}
@@ -1027,7 +1024,7 @@ func (s *Server) handleProcessorFailure(def map[string]any, typ string, cfg map[
 		return perr, false
 	}
 	env.onFailure = map[string]any{
-		"on_failure_message":        perr.Reason,
+		"on_failure_message":        failureMessage(perr),
 		"on_failure_processor_type": typ,
 		"on_failure_processor_tag":  env.tag,
 	}
@@ -1120,4 +1117,12 @@ func (s *Server) applyPipelines(idx *Index, doc map[string]any, params map[strin
 		}
 	}
 	return doc, nil
+}
+
+// failureMessage is the message of the root cause of a processor failure.
+func failureMessage(e *apiError) string {
+	if e.Type == "script_exception" && e.CausedBy != nil {
+		return e.CausedBy.Reason
+	}
+	return e.Reason
 }

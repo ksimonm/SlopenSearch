@@ -571,7 +571,7 @@ func applyBucketScript(name string, body map[string]any, buckets []map[string]an
 		return err
 	}
 	format, _ := toString(body["format"])
-	src, params := scriptText(body["script"])
+	_, params := scriptText(body["script"])
 	for _, b := range buckets {
 		pvals := map[string]any{}
 		missing := false
@@ -588,18 +588,23 @@ func applyBucketScript(name string, body map[string]any, buckets []map[string]an
 		if missing {
 			continue
 		}
-		env := &scriptEnv{params: pvals}
-		if len(params) > 0 {
-			for k, v := range params {
+		for k, v := range params {
+			if _, taken := pvals[k]; !taken {
 				pvals[k] = v
 			}
 		}
-		r, e := env.evalScriptExpression(src)
-		if e != nil {
+		res, perr := runPipelineScript(body["script"], "bucket_aggregation", pvals)
+		if perr != nil {
+			return perr
+		}
+		if res == nil {
 			continue
 		}
-		if r == nil {
-			continue
+		var r any = res
+		if plIsNumber(res) {
+			r = plF64(res)
+		} else if _, isStr := res.(string); !isStr {
+			r = plToJSON(res)
 		}
 		if _, ok := toFloat(r); !ok {
 			reason := "Cannot cast from [java.lang.String] to [java.lang.Number]."
@@ -626,7 +631,6 @@ func applyBucketSelector(name string, body map[string]any, buckets []map[string]
 	if err != nil {
 		return buckets, err
 	}
-	src, _ := scriptText(body["script"])
 	kept := []map[string]any{}
 	for _, b := range buckets {
 		pvals := map[string]any{}
@@ -644,18 +648,11 @@ func applyBucketSelector(name string, body map[string]any, buckets []map[string]
 		if missing {
 			continue
 		}
-		env := &scriptEnv{params: pvals}
-		r, e := env.evalScriptExpression(src)
-		if e != nil {
-			continue
+		r, perr := runPipelineScript(body["script"], "aggregation_selector", pvals)
+		if perr != nil {
+			return buckets, perr
 		}
-		bv, ok := r.(bool)
-		if !ok {
-			reason := "Cannot cast from [int] to [boolean]."
-			return buckets, &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: reason,
-				CausedBy: &apiError{Type: "script_exception", Reason: reason,
-					CausedBy: &apiError{Type: "illegal_argument_exception", Reason: reason}}}
-		}
+		bv, _ := r.(bool)
 		if bv {
 			kept = append(kept, b)
 		}
