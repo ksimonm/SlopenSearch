@@ -3816,8 +3816,9 @@ pub fn run_search(
                 resp.insert("aggregations".to_string(), out);
             }
         }
-        if let Some(suggest) = bodym.get("suggest").and_then(|s| s.as_object()) {
-            let plain = eval_suggest(suggest, idx);
+        if let Some(suggest) = bodym.get("suggest").and_then(|s| s.as_object()).filter(|s| !s.is_empty()) {
+            let all: Vec<&Index> = names.iter().filter_map(|n| store.indices.get(n)).collect();
+            let plain = eval_suggest(suggest, &all)?;
             let typed = req
                 .param("typed_keys")
                 .map(|v| v != "false")
@@ -4980,6 +4981,22 @@ pub fn handle_search(store: &mut Store, req: &Req, name: &str) -> Response {
                         400,
                     ));
                 }
+            }
+        }
+        if let Some(sv) = body.get("suggest") {
+            if !sv.is_object() {
+                let vt = match sv {
+                    Value::Null => "VALUE_NULL",
+                    Value::Bool(_) => "VALUE_BOOLEAN",
+                    Value::Number(_) => "VALUE_NUMBER",
+                    Value::Array(_) => "START_ARRAY",
+                    _ => "VALUE_STRING",
+                };
+                return err_response(ApiError::new(
+                    "parsing_exception",
+                    &format!("Unknown key for a {} in [suggest].", vt),
+                    400,
+                ));
             }
         }
         for k in ["from", "size"] {
