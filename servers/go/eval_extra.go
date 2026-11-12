@@ -4247,13 +4247,19 @@ func (c *queryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 		return pseudoRandom(c.id, seed), nil
 	}
 	if ss, ok := fn["script_score"].(map[string]any); ok {
-		sm, _ := ss["script"].(map[string]any)
-		src, _ := sm["source"].(string)
-		env := &scriptEnv{c: c, params: scriptParamsOf(sm), score: baseScore}
-		if v, err := env.evalScriptExpression(src); err == nil {
-			return scriptFloat(v), nil
+		cs, se, ae := prepareScript(ss["script"], "score")
+		if se != nil || ae != nil {
+			return 0, scriptErrForShard(c.idx, se, ae, true)
 		}
-		return 1, nil
+		v, rerr := cs.run(c, runOpts{score: float64(float32(baseScore))})
+		if rerr != nil {
+			return 0, scriptShardError(c.idx, rerr)
+		}
+		score := plF64(v)
+		if score < 0 {
+			return 0, plainShardError(c.idx, errBad("script score function must not produce negative scores, but got: ["+plFmtDouble(score)+"]"))
+		}
+		return float64(float32(score)), nil
 	}
 	for _, fnName := range []string{"gauss", "linear", "exp"} {
 		decRaw, ok := fn[fnName].(map[string]any)

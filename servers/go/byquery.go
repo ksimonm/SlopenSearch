@@ -171,15 +171,22 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 		newDoc := deepCopyMap(doc)
 		op := "index"
 		if hasScript {
-			res, serr := runUpdateScript(script, newDoc, idx.Name, id, currentVersion(idx, id))
+			res, serr := runUpdateScriptCtx(script, newDoc, idx.Name, id, -1, "index", idx.Routing[id])
 			if serr != nil {
-				if serr.CausedBy != nil && serr.CausedBy.Type == "script_exception" {
-					writeError(w, &apiError{Type: "script_exception", Status: serr.Status,
-						Reason: serr.CausedBy.Reason, CausedBy: serr.CausedBy.CausedBy})
+				if se, ok := serr.Extra.(*plScriptErr); ok {
+					writeJSON(w, 400, se.errorBody())
+					return
+				}
+				if serr.CausedBy != nil {
+					writeError(w, &apiError{Type: serr.CausedBy.Type, Status: 400, Reason: serr.CausedBy.Reason})
 					return
 				}
 				failures = append(failures, byQueryFailure(idx.Name, id, serr))
 				continue
+			}
+			if verr := checkByQueryCtx(res, idx.Name, id); verr != nil {
+				writeError(w, verr)
+				return
 			}
 			op = res.op
 			newDoc = res.source
@@ -309,4 +316,20 @@ func byQueryFailure(index, id string, e *apiError) map[string]any {
 	return map[string]any{
 		"index": index, "id": id, "status": e.Status, "cause": errorObject(e),
 	}
+}
+
+// checkByQueryCtx rejects ctx changes a by-query script may not make.
+func checkByQueryCtx(res updateScriptResult, index, id string) *apiError {
+	switch res.rawOp {
+	case "noop", "index", "delete":
+	default:
+		return errBad("Operation type [" + res.rawOp + "] not allowed, only [noop, index, delete] are allowed")
+	}
+	if plToString(res.id) != id {
+		return errBad("Modifying [_id] not allowed")
+	}
+	if plToString(res.index) != index {
+		return errBad("Modifying [_index] not allowed")
+	}
+	return nil
 }

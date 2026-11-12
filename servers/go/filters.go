@@ -224,36 +224,51 @@ var defaultEnglishStop = map[string]bool{
 	"this": true, "to": true, "was": true, "will": true, "with": true,
 }
 
-var russianStop = map[string]bool{
-	"и": true, "в": true, "во": true, "не": true, "что": true, "он": true,
-	"на": true, "я": true, "с": true, "со": true, "как": true, "а": true,
-	"то": true, "все": true, "она": true, "так": true, "его": true, "но": true,
-	"да": true, "ты": true, "к": true, "у": true, "же": true, "вы": true,
-	"за": true, "бы": true, "по": true, "только": true, "ее": true, "мне": true,
-	"было": true, "вот": true, "от": true, "меня": true, "еще": true, "нет": true,
-	"о": true, "из": true, "ему": true, "теперь": true, "когда": true,
-	"даже": true, "ну": true, "вдруг": true, "ли": true, "если": true,
-	"уже": true, "или": true, "ни": true, "быть": true, "был": true,
-	"него": true, "до": true, "вас": true, "нибудь": true, "опять": true,
-	"уж": true, "вам": true, "ведь": true, "там": true, "потом": true,
-	"себя": true, "ничего": true, "ей": true, "может": true, "они": true,
-	"тут": true, "где": true, "есть": true, "надо": true, "ней": true,
-	"для": true, "мы": true, "тебя": true, "их": true, "чем": true,
-	"была": true, "сам": true, "чтоб": true, "без": true, "будто": true,
-	"чего": true, "раз": true, "тоже": true, "себе": true, "под": true,
-	"будет": true, "ж": true, "тогда": true, "кто": true, "этот": true,
-	"того": true, "потому": true, "этого": true, "какой": true, "совсем": true,
-	"ним": true, "здесь": true, "этом": true, "один": true, "почти": true,
-	"мой": true, "тем": true, "чтобы": true, "нее": true, "сейчас": true,
-	"были": true, "куда": true, "зачем": true, "всех": true, "никогда": true,
-	"можно": true, "при": true, "наконец": true, "два": true, "об": true,
-	"другой": true, "хоть": true, "после": true, "над": true, "больше": true,
-	"тот": true, "через": true, "эти": true, "нас": true, "про": true,
-	"всего": true, "них": true, "какая": true, "много": true, "разве": true,
-	"три": true, "эту": true, "моя": true, "впрочем": true, "хорошо": true,
-	"свою": true, "этой": true, "перед": true, "иногда": true, "лучше": true,
-	"чуть": true, "том": true, "нельзя": true, "такой": true, "им": true,
-	"более": true, "всегда": true, "конечно": true, "всю": true, "между": true,
+// stopSetCache holds the predefined sets, built once at startup.
+var stopSetCache = func() map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	for lang, words := range luceneStopwords {
+		set := make(map[string]bool, len(words))
+		for _, w := range words {
+			set[w] = true
+		}
+		out[lang] = set
+	}
+	return out
+}()
+
+// namedStopLanguages are the _lang_ sets OpenSearch accepts (Analysis.NAMED_STOP_WORDS).
+var namedStopLanguages = map[string]bool{
+	"arabic": true, "armenian": true, "basque": true, "bengali": true, "brazilian": true,
+	"bulgarian": true, "catalan": true, "czech": true, "danish": true, "dutch": true,
+	"estonian": true, "finnish": true, "french": true, "galician": true, "german": true,
+	"greek": true, "hindi": true, "hungarian": true, "indonesian": true, "irish": true,
+	"italian": true, "latvian": true, "lithuanian": true, "norwegian": true, "persian": true,
+	"portuguese": true, "romanian": true, "russian": true, "sorani": true, "spanish": true,
+	"swedish": true, "thai": true, "turkish": true,
+}
+
+// namedStopSet resolves a predefined stopword set such as _french_.
+func namedStopSet(name string) (map[string]bool, bool) {
+	if name == "_none_" {
+		return map[string]bool{}, true
+	}
+	if name == "_english_" {
+		return defaultEnglishStop, true
+	}
+	if len(name) < 3 || name[0] != '_' || name[len(name)-1] != '_' || !namedStopLanguages[name[1:len(name)-1]] {
+		return nil, false
+	}
+	return languageStopSet(name[1 : len(name)-1])
+}
+
+// languageStopSet is the default stopword set of a language analyzer.
+func languageStopSet(lang string) (map[string]bool, bool) {
+	if lang == "english" {
+		return defaultEnglishStop, true
+	}
+	set, ok := stopSetCache[lang]
+	return set, ok
 }
 
 func stopWordSet(p map[string]any) map[string]bool {
@@ -263,20 +278,13 @@ func stopWordSet(p map[string]any) map[string]bool {
 	}
 	set := map[string]bool{}
 	for _, w := range words {
-		switch w {
-		case "_english_":
-			for k := range defaultEnglishStop {
+		if named, ok := namedStopSet(w); ok {
+			for k := range named {
 				set[k] = true
 			}
-		case "_russian_":
-			for k := range russianStop {
-				set[k] = true
-			}
-		case "_none_":
-			// empty
-		default:
-			set[w] = true
+			continue
 		}
+		set[w] = true
 	}
 	return set
 }

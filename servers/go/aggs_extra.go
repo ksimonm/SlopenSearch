@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strconv"
-	"strings"
 )
 
 func matrixStatsAgg(spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string) (any, *apiError) {
@@ -333,14 +331,12 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *Index) (any, *a
 			}
 		}
 		if sf, ok := spec["script_fields"].(map[string]any); ok {
-			for name, raw := range sf {
-				sm, _ := raw.(map[string]any)
-				src, params := scriptText(sm["script"])
-				qc := newQueryCtxForDoc(idx, id, d)
-				env := &scriptEnv{c: qc, params: params}
-				if r, err := env.evalScriptExpression(src); err == nil {
-					fields = append(fields, orderedKV{name, []any{normalizeNumbers(r)}})
-				}
+			got, serr := evalScriptFields(multiHit{idx: idx, id: id, doc: d}, sf)
+			if serr != nil {
+				return nil, serr
+			}
+			for _, name := range sortedKeys(got) {
+				fields = append(fields, orderedKV{name, got[name]})
 			}
 		}
 		if len(fields) > 0 {
@@ -486,165 +482,4 @@ func parseTopHitsSource(raw any) (bool, []string, []string) {
 		return true, inc, exc
 	}
 	return true, nil, nil
-}
-
-func scriptedMetricAgg(spec map[string]any, docs []map[string]any, idx *Index) (any, *apiError) {
-	mapScript, ok := spec["map_script"]
-	if !ok {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "Required [map_script]"}
-	}
-	if _, ok := spec["combine_script"]; !ok {
-		return nil, &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "[combineScript] must not be null: [a]",
-			RootCause: &apiError{Type: "illegal_argument_exception", Reason: "[combineScript] must not be null: [a]"}}
-	}
-	if _, ok := spec["reduce_script"]; !ok {
-		return nil, &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "[reduceScript] must not be null: [a]",
-			RootCause: &apiError{Type: "illegal_argument_exception", Reason: "[reduceScript] must not be null: [a]"}}
-	}
-	params, _ := spec["params"].(map[string]any)
-	state := map[string]any{}
-	if init, ok := spec["init_script"]; ok {
-		src, ip := scriptText(init)
-		if len(ip) > 0 {
-			params = mergeParams(params, ip)
-		}
-		applyStateScript(state, src, nil, idx, params)
-	}
-	for _, d := range docs {
-		src, _ := scriptText(mapScript)
-		applyStateScript(state, src, d, idx, params)
-	}
-	combine, _ := scriptText(spec["combine_script"])
-	combined := evalCombine(combine, state, idx)
-	reduce, _ := scriptText(spec["reduce_script"])
-	states := []any{combined}
-	res := evalReduce(reduce, states)
-	return orderedJSON{{"value", normalizeNumbers(res)}}, nil
-}
-
-func mergeParams(a, b map[string]any) map[string]any {
-	out := map[string]any{}
-	for k, v := range a {
-		out[k] = v
-	}
-	for k, v := range b {
-		out[k] = v
-	}
-	return out
-}
-
-func applyStateScript(state map[string]any, src string, doc map[string]any, idx *Index, params map[string]any) {
-	src = strings.TrimSpace(src)
-	if strings.HasPrefix(src, "state.") {
-		rest := strings.TrimPrefix(src, "state.")
-		if i := strings.Index(rest, "="); i > 0 {
-			key := strings.TrimSpace(rest[:i])
-			op := "="
-			if strings.HasSuffix(key, "+") {
-				key = strings.TrimSpace(strings.TrimSuffix(key, "+"))
-				op = "+="
-			}
-			expr := strings.TrimSpace(rest[i+1:])
-			val := evalStateExpr(expr, doc, idx, params)
-			switch op {
-			case "+=":
-				old, _ := toFloat(state[key])
-				add, _ := toFloat(val)
-				state[key] = old + add
-			default:
-				state[key] = val
-			}
-			return
-		}
-		if strings.HasSuffix(rest, ".add(") || strings.Contains(rest, ".add(") {
-			key := strings.TrimSpace(rest[:strings.Index(rest, ".add(")])
-			arg := rest[strings.Index(rest, ".add(")+5:]
-			arg = strings.TrimSuffix(arg, ")")
-			if arr, ok := state[key].([]any); ok {
-				state[key] = append(arr, evalStateExpr(arg, doc, idx, params))
-			}
-		}
-	}
-}
-
-func evalStateExpr(expr string, doc map[string]any, idx *Index, params map[string]any) any {
-	expr = strings.TrimSpace(expr)
-	if expr == "[]" {
-		return []any{}
-	}
-	id, _ := doc["__slop_id"].(string)
-	qc := newQueryCtxForDoc(idx, id, doc)
-	env := &scriptEnv{c: qc, params: params}
-	if r, err := env.evalScriptExpression(expr); err == nil {
-		return normalizeNumbers(r)
-	}
-	if n, err := strconv.ParseFloat(expr, 64); err == nil {
-		return n
-	}
-	return nil
-}
-
-func evalCombine(src string, state map[string]any, idx *Index) any {
-	src = strings.TrimSpace(src)
-	if strings.HasPrefix(src, "return state") {
-		if src == "return state" {
-			return state
-		}
-		key := strings.TrimPrefix(src, "return state.")
-		key = strings.TrimSpace(key)
-		return state[key]
-	}
-	if strings.Contains(src, "for (") && strings.Contains(src, "+=") {
-		total := 0.0
-		for _, v := range state {
-			if arr, ok := v.([]any); ok {
-				for _, e := range arr {
-					f, _ := toFloat(e)
-					total += f
-				}
-			}
-		}
-		if strings.Contains(src, "double ") || strings.Contains(src, "float ") {
-			return total
-		}
-		return int64(total)
-	}
-	return nil
-}
-
-func evalReduce(src string, states []any) any {
-	src = strings.TrimSpace(src)
-	if src == "return states" {
-		return states
-	}
-	if src == "return states.size()" {
-		return len(states)
-	}
-	if strings.Contains(src, "r.addAll(s)") {
-		r := []any{}
-		for _, s := range states {
-			if arr, ok := s.([]any); ok {
-				r = append(r, arr...)
-			}
-		}
-		sort.Slice(r, func(i, j int) bool {
-			a, _ := toFloat(r[i])
-			b, _ := toFloat(r[j])
-			return a < b
-		})
-		return orderedJSON{{"vals", r}, {"n", len(r)}}
-	}
-	if strings.Contains(src, "for (") && strings.Contains(src, "+=") {
-		total := 0.0
-		isInt := strings.Contains(src, "long ") || strings.Contains(src, "int ")
-		for _, s := range states {
-			f, _ := toFloat(s)
-			total += f
-		}
-		if isInt {
-			return int64(total)
-		}
-		return total
-	}
-	return nil
 }
