@@ -1326,7 +1326,7 @@ impl<'a> QueryCtx<'a> {
                 };
                 for v in &vals {
                     let s = value_scalar_string(v).unwrap_or_default();
-                    for tok in self.analyze_field(field, None, &s) {
+                    for tok in self.doc_tokens(field, &s) {
                         if tok == want {
                             return Ok((true, boost));
                         }
@@ -1775,6 +1775,7 @@ impl<'a> QueryCtx<'a> {
                         ctx.parseFloatValue(field, base, &def, v)
                     }
                 }
+                "keyword" => Ok(crate::fields::normalize_query_value(self.idx, field, v)),
                 _ => Ok(v.clone()),
             };
             res.map_err(|_| typed_value_error(&ftype, v))
@@ -2459,8 +2460,14 @@ impl<'a> QueryCtx<'a> {
         String::new()
     }
 
+    /// Query-time terms (see crate::analysis::search).
     pub fn analyze_field(&self, field: &str, opts: Option<&Map<String, Value>>, text: &str) -> Vec<String> {
-        let a = self.analyzer_name(field, opts);
+        self.query_tokens(field, opts, text)
+    }
+
+    /// Simple analysis by analyzer name, for analyzers the analysis module
+    /// can't build.
+    pub fn legacy_analyze(&self, a: &str, text: &str) -> Vec<String> {
         if a.is_empty() {
             return analyze(text);
         }
@@ -2491,6 +2498,13 @@ impl<'a> QueryCtx<'a> {
         qtokens: &[String],
         auto_phrase: bool,
     ) -> Option<(bool, f64)> {
+        // Synonym filters of analyzers the analysis module builds already
+        // expand the query terms.
+        if let crate::analysis::search::FieldAnalyzer::Resolved(_) =
+            self.field_analyzer(field, None, crate::analysis::search::Side::Search)
+        {
+            return None;
+        }
         let groups = synonym_groups(self.idx, field);
         if groups.is_empty() {
             return None;
@@ -2508,8 +2522,8 @@ impl<'a> QueryCtx<'a> {
         let mut doc_pos: Vec<(String, usize)> = Vec::new();
         for v in self.must_values(field) {
             let s = value_scalar_string(&v).unwrap_or_default();
-            doc_tokens.extend(self.analyze_field(field, None, &s));
-            doc_pos.extend(analyze_positions("", &s));
+            doc_tokens.extend(self.doc_tokens(field, &s));
+            doc_pos.extend(self.doc_positions(field, &s));
         }
         if auto_phrase {
             for g in matched {
@@ -2574,8 +2588,7 @@ impl<'a> QueryCtx<'a> {
                 .and_then(|v| v.as_str())
                 .map(|v| v.eq_ignore_ascii_case("all"))
                 .unwrap_or(false);
-            let an = self.analyzer_name(field, opts);
-            if all && an == "stop" && analyze_positions(&an, &text).is_empty() {
+            if all && self.query_tokens(field, opts, &text).is_empty() {
                 return Ok((true, boost));
             }
             return Ok((false, 0.0));
@@ -2700,15 +2713,7 @@ impl<'a> QueryCtx<'a> {
             }
             return Ok((false, 0.0));
         }
-        let qan = self.analyzer_name(field, opts);
-        let qtokens = if qan == "stop" {
-            analyze_positions(&qan, &text)
-                .into_iter()
-                .map(|(t, _)| t)
-                .collect::<Vec<_>>()
-        } else {
-            self.analyze_field(field, opts, &text)
-        };
+        let qtokens = self.query_tokens(field, opts, &text);
         if qtokens.is_empty() {
             let all = opts
                 .and_then(|m| m.get("zero_terms_query"))
@@ -2726,6 +2731,9 @@ impl<'a> QueryCtx<'a> {
             .unwrap_or(true);
         if let Some(r) = self.synonym_match(field, &qtokens, auto_syn) {
             return Ok(r);
+        }
+        if let Some(m) = self.graph_match(field, opts, &text, operator == "and", auto_syn) {
+            return Ok(if m { (true, boost) } else { (false, 0.0) });
         }
         let fuzz_spec = opts.and_then(|m| m.get("fuzziness"));
         let mut fuzz = Fuzz::None;
@@ -2769,17 +2777,7 @@ impl<'a> QueryCtx<'a> {
                 required = qtokens.len();
             }
         }
-        let dan = self.analyzer_name(field, None);
-        let doc_tokens = |s: &str| -> Vec<String> {
-            if dan == "stop" {
-                analyze_positions(&dan, s)
-                    .into_iter()
-                    .map(|(t, _)| t)
-                    .collect()
-            } else {
-                self.analyze_field(field, None, s)
-            }
-        };
+        let doc_tokens = |s: &str| -> Vec<String> { self.doc_tokens(field, s) };
         let mut cur_tokens: Vec<String> = Vec::new();
         for v in &vals {
             let s = value_scalar_string(v).unwrap_or_default();
@@ -2908,8 +2906,7 @@ impl<'a> QueryCtx<'a> {
             }
             return Ok((false, 0.0));
         }
-        let qan = self.analyzer_name(field, opts);
-        let qtokens = analyze_positions(&qan, &text);
+        let qtokens = self.query_positions(field, opts, &text, true);
         if qtokens.is_empty() {
             let all = opts
                 .and_then(|m| m.get("zero_terms_query"))
@@ -2928,7 +2925,9 @@ impl<'a> QueryCtx<'a> {
         ) {
             return Ok(r);
         }
-        let dan = self.analyzer_name(field, None);
+        if let Some(m) = self.graph_phrase_match(field, opts, &text, slop.max(0.0) as usize) {
+            return Ok(if m { (true, boost) } else { (false, 0.0) });
+        }
         let gap = mapping_field_def(self.idx, field)
             .and_then(|d| d.get("position_increment_gap"))
             .and_then(|v| v.as_i64())
@@ -2937,7 +2936,7 @@ impl<'a> QueryCtx<'a> {
         let mut base = 0usize;
         for v in self.must_values(field) {
             let s = value_scalar_string(&v).unwrap_or_default();
-            let part = analyze_positions(&dan, &s);
+            let part = self.doc_positions(field, &s);
             let mut max_pos = 0usize;
             for (tok, pos) in part {
                 dtokens.push((tok, pos + base));
@@ -3045,7 +3044,7 @@ impl<'a> QueryCtx<'a> {
     ) -> bool {
         for v in self.must_values(field) {
             let s = value_scalar_string(&v).unwrap_or_default();
-            for tok in self.analyze_field(field, None, &s) {
+            for tok in self.doc_tokens(field, &s) {
                 if tok == token || fuzzy_token_match(token, &tok, edits, prefix_length, transpositions) {
                     return true;
                 }
@@ -3356,7 +3355,7 @@ impl<'a> QueryCtx<'a> {
                         Some((k, v)) => (k.clone(), v.clone()),
                         None => return Err(ApiError::parsing("[match] query malformed")),
                     };
-                    validate_match_query(&field, &val)?;
+                    validate_match_query(self.idx, &field, &val)?;
                     return self.eval_match(&field, &val, 1.0);
                 }
                 "match_phrase" => {
@@ -3412,20 +3411,18 @@ impl<'a> QueryCtx<'a> {
                         .and_then(|v| v.as_i64())
                         .unwrap_or(50)
                         .max(0) as usize;
-                    let qan = self.analyzer_name(&field, popts);
-                    let qtokens = analyze_positions(&qan, &text);
+                    let qtokens = self.query_positions(&field, popts, &text, true);
                     if qtokens.is_empty() {
                         return Ok((false, 0.0));
                     }
                     let prefix = qtokens.last().map(|(t, _)| t.clone()).unwrap_or_default();
-                    let dan = self.analyzer_name(&field, None);
                     let resolved = resolve_alias_field(self.idx, &field);
                     let mut allowed: Vec<String> = Vec::new();
                     for dv in self.idx.doc_values.values() {
                         if let Some(vals) = dv.get(&resolved) {
                             for v in array_values(vals) {
                                 let s = value_scalar_string(&v).unwrap_or_default();
-                                for (tok, _) in analyze_positions(&dan, &s) {
+                                for (tok, _) in self.doc_positions(&field, &s) {
                                     if tok.starts_with(&prefix) && !allowed.contains(&tok) {
                                         allowed.push(tok);
                                     }
@@ -3438,7 +3435,7 @@ impl<'a> QueryCtx<'a> {
                     let mut doc_tokens: Vec<Vec<(String, usize)>> = Vec::new();
                     for v in self.must_values(&field) {
                         let s = value_scalar_string(&v).unwrap_or_default();
-                        doc_tokens.push(analyze_positions(&dan, &s));
+                        doc_tokens.push(self.doc_positions(&field, &s));
                     }
                     for part in doc_tokens {
                         if phrase_positions_match_prefix(&qtokens, &part, slop.max(0.0) as usize, &allowed) {
@@ -3527,8 +3524,8 @@ impl<'a> QueryCtx<'a> {
                 "geo_bounding_box" => return self.eval_geo_bounding_box(body),
                 "geo_polygon" => return self.eval_geo_polygon(body),
                 "geo_shape" => return self.eval_geo_shape(body),
-                "script" => return self.eval_script_query(body),
-                "script_score" => return self.eval_script_score(body),
+                "script" => return crate::script_ctx::script_query(self, body),
+                "script_score" => return crate::script_ctx::script_score_query(self, body),
                 "function_score" => return self.eval_function_score(body),
                 "query_string" => return self.eval_query_string(body, false),
                 "simple_query_string" => return self.eval_simple_query_string(body),
@@ -3585,7 +3582,7 @@ pub fn single_entry(m: &Map<String, Value>) -> Option<(&String, &Value)> {
     m.iter().next()
 }
 
-fn validate_match_query(field: &str, raw: &Value) -> Result<(), ApiError> {
+fn validate_match_query(idx: &Index, field: &str, raw: &Value) -> Result<(), ApiError> {
     let _ = field;
     if raw.is_null() {
         return Err(ApiError::parsing("No text specified for text query"));
@@ -3652,7 +3649,7 @@ fn validate_match_query(field: &str, raw: &Value) -> Result<(), ApiError> {
                     | "indonesian" | "irish" | "italian" | "latvian" | "lithuanian"
                     | "norwegian" | "persian" | "portuguese" | "romanian" | "russian"
                     | "sorani" | "spanish" | "swedish" | "turkish" | "thai"
-            );
+            ) || crate::analysis::analyzer_exists(idx, a);
             if !known {
                 let reason = format!("[match] analyzer [{}] not found", a);
                 let mut e = ApiError::new("search_phase_execution_exception", "all shards failed", 400);
@@ -3833,7 +3830,7 @@ fn tokenize_positions(text: &str) -> Vec<String> {
     analyze(text)
 }
 
-fn analyze_positions(analyzer: &str, text: &str) -> Vec<(String, usize)> {
+pub(crate) fn analyze_positions(analyzer: &str, text: &str) -> Vec<(String, usize)> {
     if analyzer == "keyword" {
         return vec![(text.to_string(), 0)];
     }

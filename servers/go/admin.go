@@ -88,7 +88,7 @@ var knownSettingRoots = map[string]bool{
 	"max_regex_length": true, "max_ngram_diff": true, "max_shingle_diff": true,
 	"max_refresh_listeners": true, "max_docvalue_fields_search": true,
 	"max_script_fields": true, "max_analyzed_offset": true, "max_auto_expand_replicas": true,
-	"hidden": true, "blocks": true, "analysis": true, "mapping": true, "routing": true,
+	"hidden": true, "blocks": true, "analysis": true, "analyze": true, "mapping": true, "routing": true,
 	"default_pipeline": true, "final_pipeline": true, "auto_expand_replicas": true,
 	"codec": true, "soft_deletes": true, "translog": true, "merge": true, "write": true,
 	"sort": true, "shard": true, "queries": true, "requests": true, "store": true,
@@ -693,6 +693,15 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 		if err != nil {
 			return nil, err
 		}
+		if list, ok := v.([]any); ok && strings.HasPrefix(k, "index.analysis.") {
+			// Analysis settings keep their lists (stopwords, synonyms, ...).
+			items := make([]any, 0, len(list))
+			for _, e := range list {
+				items = append(items, settingsValueString(e))
+			}
+			canonical[k] = items
+			continue
+		}
 		canonical[k] = val
 	}
 	if _, ok := canonical["index.number_of_shards"]; !ok {
@@ -726,6 +735,9 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 		return nil, &apiError{Type: "mapper_parsing_exception", Status: 400,
 			Reason:   "Failed to parse mapping [_doc]: " + reason,
 			CausedBy: &apiError{Type: "illegal_argument_exception", Reason: reason}}
+	}
+	if err := validateAnalysisSettings(canonical); err != nil {
+		return nil, err
 	}
 	if err := validateMappingFull(mergedMappings); err != nil {
 		return nil, err
@@ -1225,6 +1237,23 @@ func (s *Server) putSettingsAPI(w http.ResponseWriter, r *http.Request, spec str
 			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
 				Reason: "Can't update non dynamic settings [[" + strings.Join(closedOnly, ", ") + "]] for open indices [[" + idx.Name + "/" + idx.UUID + "]]"})
 			return
+		}
+		if len(closedOnly) > 0 {
+			merged := map[string]any{}
+			for k, v := range idx.Settings {
+				merged[k] = v
+			}
+			for k, v := range updates {
+				if v == nil {
+					delete(merged, k)
+				} else {
+					merged[k] = v
+				}
+			}
+			if err := validateAnalysisSettings(merged); err != nil {
+				writeError(w, err)
+				return
+			}
 		}
 		for k, v := range updates {
 			if preserve && settingPresent(idx, k) {

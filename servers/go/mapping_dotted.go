@@ -231,7 +231,7 @@ func builtinAnalyzer(name string) bool {
 		"french", "galician", "german", "greek", "hindi", "hungarian",
 		"indonesian", "irish", "italian", "latvian", "lithuanian",
 		"norwegian", "persian", "portuguese", "romanian", "russian",
-		"sorani", "spanish", "swedish", "thai", "turkish":
+		"sorani", "spanish", "swedish", "thai", "turkish", "chinese":
 		return true
 	}
 	return false
@@ -259,7 +259,7 @@ func settingsHasAnalyzer(settings map[string]any, key, name string) bool {
 }
 
 func settingsAnalyzerExists(settings map[string]any, name string) bool {
-	if builtinAnalyzer(name) {
+	if builtinAnalyzer(name) || name == "default" {
 		return true
 	}
 	return settingsHasAnalyzer(settings, "analyzer", name)
@@ -286,6 +286,26 @@ func validateMappingAnalyzers(props map[string]any, settings map[string]any) *ap
 				Reason:    "Failed to parse mapping [_doc]: " + reason,
 				RootCause: &apiError{Type: "mapper_parsing_exception", Reason: reason},
 				CausedBy:  &apiError{Type: "mapper_parsing_exception", Reason: reason}}
+		}
+		if t, _ := def["type"].(string); t == "keyword" {
+			for _, key := range []string{"analyzer", "search_analyzer", "search_quote_analyzer"} {
+				if _, ok := def[key]; ok {
+					reason := "unknown parameter [" + key + "] on mapper [" + name + "] of type [keyword]"
+					return &apiError{Type: "mapper_parsing_exception", Status: 400,
+						Reason:    "Failed to parse mapping [_doc]: " + reason,
+						RootCause: &apiError{Type: "mapper_parsing_exception", Reason: reason},
+						CausedBy:  &apiError{Type: "mapper_parsing_exception", Reason: reason}}
+				}
+			}
+		}
+		if t, _ := def["type"].(string); t == "text" || t == "match_only_text" {
+			// A search analyzer requires an index analyzer; OpenSearch
+			// records the default one.
+			_, hasSearch := def["search_analyzer"]
+			_, hasQuote := def["search_quote_analyzer"]
+			if _, ok := def["analyzer"]; !ok && (hasSearch || hasQuote) {
+				def["analyzer"] = "default"
+			}
 		}
 		for _, key := range []string{"analyzer", "search_analyzer", "search_quote_analyzer"} {
 			if a, ok := def[key].(string); ok && a != "" && !settingsAnalyzerExists(settings, a) {

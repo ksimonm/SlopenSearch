@@ -42,8 +42,14 @@ reference with `make ref-up` and `curl localhost:9290/...`.
 | `aggs.go`, `aggs_bucket.go`, `aggs_metric.go`, `aggs_significant.go`, `aggs_extra.go`, `suggest.go` | aggregations, suggesters |
 | `ingest.go`, `pipeline.go`, `ingest_processors.go`, `ingest_extra.go` | ingest pipelines and processors |
 | `cat.go`, `nodes.go`, `resp.go` | `_cat`, `_nodes`/`_cluster`, response formats (`filter_path`, YAML, ...) |
-| `painless.go`, `script_eval.go`, `scripts.go` | Painless/expression subset, stored scripts, `script_fields` |
-| `analysis.go` | `_analyze` and analyzers (mostly open work) |
+| `pl_lex.go`, `pl_parse.go`, `pl_check.go`, `pl_interp.go` | Painless: lexer, parser, static type checks, interpreter |
+| `pl_value.go`, `pl_lib.go`, `pl_time.go`, `pl_regex.go` | Painless runtime values (Java semantics), class library, `java.time`, regex limit |
+| `pl_api.go`, `script_ctx.go`, `script_meta.go` | script contexts, `_scripts/painless/_execute`, script errors, wiring into search/aggs/update/ingest |
+| `pl_expr.go`, `mustache.go` | Lucene expressions, mustache templates |
+| `painless.go`, `scripts.go`, `search_templates.go` | script queries, stored scripts, `script_fields`, search templates |
+| `analysis.go`, `analysis_chain.go`, `analyze_api.go` | analyzers, analysis chains (index/global/inline components, settings validation), the `_analyze` API with `explain` |
+| `tokenizers.go`, `filters.go`, `filters_pattern.go`, `synonyms.go`, `charfilter.go`, `asciifold_table.go` | tokenizers, token filters, synonym filters, char filters with Lucene offset correction |
+| `jregex.go` | backtracking `java.util.regex` subset (lookaround, possessive, `\p{..}`) for pattern components |
 
 ## Rules
 

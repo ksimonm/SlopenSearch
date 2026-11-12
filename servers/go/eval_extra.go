@@ -44,7 +44,7 @@ func (c *queryCtx) fieldMatchedCount(field string, terms []string) int {
 	if !ok {
 		return 0
 	}
-	analyzer := c.analyzerName(field, nil)
+	analyzer := c.indexAnalyzerName(field)
 	tf := map[string]int{}
 	for _, v := range vals {
 		s, _ := valueScalarString(v)
@@ -70,7 +70,7 @@ func (c *queryCtx) bm25FieldScore(field string, qtokens []string, operator strin
 	if ftype != "" && ftype != "text" && ftype != "match_only_text" && ftype != "search_as_you_type" {
 		return -1
 	}
-	analyzer := c.analyzerName(field, nil)
+	analyzer := c.indexAnalyzerName(field)
 	docTerms := func(vals []any) []string {
 		out := []string{}
 		for _, v := range vals {
@@ -297,7 +297,7 @@ func (c *queryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apiError) 
 			ok := false
 			usedBM25 := false
 			if !hasFuzz {
-				terms := c.analyzeField(name, nil, query)
+				terms := c.analyzeField(name, bm, query)
 				required := 1
 				if operator == "and" {
 					required = len(terms)
@@ -2687,6 +2687,7 @@ func percolateHighlights(c *queryCtx, query map[string]any, cfg *highlightConfig
 	for slot, docRaw := range docs {
 		local := *cfg
 		local.terms, local.queryFields, local.queryPatterns = terms, qfields, qpatterns
+		local.query = stored
 		rendered := local.render(c.idx, docRaw)
 		for name, val := range rendered {
 			if len(docs) == 1 {
@@ -3313,7 +3314,7 @@ func (c *queryCtx) intervalPositions(field string) []analyzedToken {
 	last := -1
 	for _, v := range vals {
 		s, _ := valueScalarString(v)
-		toks := analyzeTokensWithIndex(c.idx, c.analyzerName(field, nil), s)
+		toks := analyzeTokensWithIndex(c.idx, c.indexAnalyzerName(field), s)
 		base := 0
 		if last >= 0 {
 			base = last + gap + 1
@@ -3423,7 +3424,7 @@ func (c *queryCtx) intervalRule(rule map[string]any, positions []analyzedToken, 
 		if a, ok := bm["analyzer"].(string); ok {
 			analyzer = a
 		} else {
-			analyzer = c.analyzerName(field, nil)
+			analyzer = c.searchAnalyzerName(field, bm)
 		}
 		toks := analyzeTokensWithIndex(c.idx, analyzer, q)
 		terms := []string{}
@@ -4247,13 +4248,19 @@ func (c *queryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 		return pseudoRandom(c.id, seed), nil
 	}
 	if ss, ok := fn["script_score"].(map[string]any); ok {
-		sm, _ := ss["script"].(map[string]any)
-		src, _ := sm["source"].(string)
-		env := &scriptEnv{c: c, params: scriptParamsOf(sm), score: baseScore}
-		if v, err := env.evalScriptExpression(src); err == nil {
-			return scriptFloat(v), nil
+		cs, se, ae := prepareScript(ss["script"], "score")
+		if se != nil || ae != nil {
+			return 0, scriptErrForShard(c.idx, se, ae, true)
 		}
-		return 1, nil
+		v, rerr := cs.run(c, runOpts{score: float64(float32(baseScore))})
+		if rerr != nil {
+			return 0, scriptShardError(c.idx, rerr)
+		}
+		score := plF64(v)
+		if score < 0 {
+			return 0, plainShardError(c.idx, errBad("script score function must not produce negative scores, but got: ["+plFmtDouble(score)+"]"))
+		}
+		return float64(float32(score)), nil
 	}
 	for _, fnName := range []string{"gauss", "linear", "exp"} {
 		decRaw, ok := fn[fnName].(map[string]any)
@@ -5333,6 +5340,9 @@ func (c *queryCtx) evalQueryString(body any, simple bool) (bool, float64, *apiEr
 			return c.eval(map[string]any{"match_none": map[string]any{}})
 		}
 		return false, 0, qsParseError(query)
+	}
+	if qa, ok := bm["quote_analyzer"].(string); ok && qa != "" && !simple {
+		setPhraseAnalyzer(q, qa)
 	}
 	if simple {
 		if bq, ok := q["bool"].(map[string]any); ok {

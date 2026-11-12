@@ -811,6 +811,8 @@ func isKnownClusterSetting(key string) bool {
 }
 
 var clusterDefaults = map[string]any{
+	"script.painless.regex.enabled":       "limited",
+	"script.painless.regex.limit-factor":  "6",
 	"cluster.name":                        clusterName,
 	"discovery.type":                      "single-node",
 	"search.max_open_scroll_context":      "500",

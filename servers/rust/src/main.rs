@@ -1,4 +1,5 @@
 mod admin;
+mod analysis;
 mod aggs;
 mod alias;
 mod cat;
@@ -8,6 +9,7 @@ mod docs;
 mod errors;
 mod eval;
 mod eval_extra;
+mod expressions;
 mod fields;
 mod hashes;
 mod hdr;
@@ -20,6 +22,17 @@ mod meta;
 mod nodes;
 mod painless;
 mod painless_exec;
+mod pl_api;
+mod pl_check;
+mod pl_interp;
+mod pl_lex;
+mod pl_lib;
+mod pl_parse;
+mod pl_regex;
+mod pl_time;
+mod pl_value;
+mod script_ctx;
+mod script_meta;
 mod scripts;
 mod reindex;
 mod render;
@@ -367,7 +380,15 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
 
     let mut resp = {
         let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
-        dispatch(&mut guard, &req)
+        // Requests that may compile or run scripts get a large stack: the
+        // Painless parser, checker and interpreter recurse.
+        let scripted = req.body.windows(6).any(|w| w == b"script") || !guard.pipelines.is_empty();
+        if scripted {
+            let store: &mut Store = &mut guard;
+            crate::pl_api::run_with_stack(|| dispatch(store, &req))
+        } else {
+            dispatch(&mut guard, &req)
+        }
     };
 
     // Post-processing (mirrors Go ServeHTTP)
@@ -489,7 +510,7 @@ pub fn dispatch(store: &mut Store, req: &Req) -> axum::response::Response {
     match segs[0].as_str() {
         "_bulk" => return docs::handle_bulk(store, req, ""),
         "_mget" => return docs::handle_mget(store, req, ""),
-        "_analyze" => return docs::handle_analyze(store, req, ""),
+        "_analyze" => return analysis::api::handle_analyze(store, req, ""),
         "_search" => {
             if segs.len() >= 2 && segs[1] == "pipeline" {
                 return crate::ingest::handle_search_pipeline(store, req, &segs[2..]);
@@ -611,7 +632,7 @@ pub fn dispatch(store: &mut Store, req: &Req) -> axum::response::Response {
                 "PUT" => admin::put_settings_api(store, req, index),
                 _ => errors::method_not_allowed(req, &["GET", "PUT", "HEAD"]),
             },
-            "_analyze" => docs::handle_analyze(store, req, index),
+            "_analyze" => analysis::api::handle_analyze(store, req, index),
             "_bulk" => docs::handle_bulk(store, req, index),
             "_mget" => docs::handle_mget(store, req, index),
             "_termvectors" => docs::handle_termvectors(store, req, index, None),

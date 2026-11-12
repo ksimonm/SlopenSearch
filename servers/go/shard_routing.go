@@ -122,7 +122,7 @@ func searchShardMultiplier(idx *Index, id string, query map[string]any, dfs bool
 		found := false
 		for _, v := range vals {
 			s, _ := valueScalarString(v)
-			for _, tok := range qc.analyzeField(field, nil, s) {
+			for _, tok := range qc.analyzeDocField(field, s) {
 				for _, want := range tokens {
 					if tok == want {
 						found = true

@@ -31,6 +31,7 @@ type highlightConfig struct {
 	terms             map[string]bool
 	queryFields       map[string]bool
 	queryPatterns     []string
+	query             map[string]any
 }
 
 func parseHighlightConfig(body map[string]any, query map[string]any) (*highlightConfig, *apiError) {
@@ -40,6 +41,7 @@ func parseHighlightConfig(body map[string]any, query map[string]any) (*highlight
 	}
 	cfg := &highlightConfig{typ: "unified", pre: "<em>", post: "</em>", requireFieldMatch: true}
 	cfg.terms, cfg.queryFields, cfg.queryPatterns = queryHighlightInfo(query)
+	cfg.query = query
 	if v, ok := raw["type"].(string); ok && v != "" {
 		cfg.typ = v
 	}
@@ -361,8 +363,10 @@ func (cfg *highlightConfig) render(idx *Index, doc map[string]any) map[string]an
 				continue
 			}
 			terms, qfields, qpatterns := cfg.terms, cfg.queryFields, cfg.queryPatterns
+			query := cfg.query
 			if f.highlightQuery != nil {
 				terms, qfields, qpatterns = queryHighlightInfo(f.highlightQuery)
+				query = f.highlightQuery
 			}
 			require := cfg.requireFieldMatch
 			if f.requireMatch != nil {
@@ -377,7 +381,12 @@ func (cfg *highlightConfig) render(idx *Index, doc map[string]any) map[string]an
 					}
 				}
 			}
-			spans := hlTokenSpans(text, terms)
+			var spans []hlSpan
+			if ftype == "text" {
+				spans = hlAnalyzedSpans(idx, target, text, query)
+			} else {
+				spans = hlTokenSpans(text, terms)
+			}
 			if ftype == "keyword" && len(spans) == 0 {
 				for t := range terms {
 					if strings.EqualFold(text, t) {

@@ -103,7 +103,10 @@ Each file has a pytest marker, so an area can be run on its own (`ARGS="-m <mark
 | `scripting` | `test_43_scripting.py` | Painless, expressions, stored scripts, mustache |
 | `analysis` | `test_51_analysis.py` | analyzers, tokenizers, token and char filters |
 | `types` | `test_71_field_types.py` | field types and mapping parameters |
+| `knn` | `test_72_knn.py` | `knn_vector` mappings, knn query (filters, radial, nested), `knn_score` and painless vector functions |
+| `concurrency` | `test_61_concurrency.py` | parallel writes, optimistic concurrency, races with admin calls, alias swaps, scroll/PIT snapshots, load |
 | `i18n` | `test_80_languages.py` | ~60 scripts, language analyzers, Unicode corner cases |
+| `http` | `test_62_tasks_http.py` | async tasks (`wait_for_completion=false`, `_tasks`, `_rethrottle`, cancel), compression, content types, URL encoding, query-string and header handling |
 | `parity`, `mapping`, `smoke` | `test_00`–`test_90` | the original smaller suites |
 
 Opt-in suites that need more than one server process:

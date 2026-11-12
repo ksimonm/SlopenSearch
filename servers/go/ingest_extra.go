@@ -989,230 +989,116 @@ func (s *Server) procDateIndexName(cfg map[string]any, env *ingestEnv) *apiError
 	return nil
 }
 
-func (s *Server) procScript(cfg map[string]any, env *ingestEnv) *apiError {
-	source := cfgString(cfg, "source")
-	if source == "" {
-		id := cfgString(cfg, "id")
-		s.scriptsMu.RLock()
-		entry, ok := s.scripts[id]
-		s.scriptsMu.RUnlock()
-		if !ok {
-			return &apiError{Type: "resource_not_found_exception", Status: 404,
-				Reason: "unable to find script [" + id + "] in cluster state"}
-		}
-		if src, ok := entry["source"].(string); ok {
-			source = src
-		} else if sc, ok := entry["script"].(map[string]any); ok {
-			source, _ = sc["source"].(string)
+// ingestScriptSpec reads the script of a script processor (or an "if"
+// condition, given as source or object).
+func ingestScriptSpec(cfg map[string]any) map[string]any {
+	raw := map[string]any{}
+	for _, k := range []string{"source", "id", "lang", "params"} {
+		if v, ok := cfg[k]; ok {
+			raw[k] = v
 		}
 	}
-	return runIngestScript(source, cfg["params"], env)
+	return raw
 }
 
-var assignmentRE = regexp.MustCompile(`(?m)^\s*ctx\.([A-Za-z_][A-Za-z0-9_.]*)\s*=\s*(.+?)\s*$`)
+// ingestScriptError converts a script exception into the error an ingest
+// processor reports.
+func ingestScriptError(se *plScriptErr, tag string) *apiError {
+	fields := map[string]any{"script_stack": anySlice(se.stack), "script": se.script, "lang": map[bool]string{true: "expression", false: "painless"}[se.lang == "expression"]}
+	if se.pos != nil {
+		fields["position"] = map[string]any{"offset": se.pos[0], "start": se.pos[1], "end": se.pos[2]}
+	}
+	kind := "runtime error"
+	if se.compile {
+		kind = "compile error"
+		fields["processor_type"] = "script"
+		if tag != "" {
+			fields["processor_tag"] = tag
+		}
+	}
+	for _, kv := range se.extra {
+		fields[kv.k] = kv.v
+	}
+	return &apiError{Type: "script_exception", Status: 400, Reason: kind, Fields: fields,
+		CausedBy: &apiError{Type: se.causeType, Reason: se.reason}}
+}
 
-func runIngestScript(source string, params any, env *ingestEnv) *apiError {
-	if strings.TrimSpace(source) == "" || strings.HasSuffix(strings.TrimSpace(source), "=") {
-		return &apiError{Type: "script_exception", Status: 400, Reason: "compile error",
-			Fields: map[string]any{"processor_type": "script", "script_stack": []any{source, "        ^---- HERE"}}}
+func anySlice(ss []string) []any {
+	out := make([]any, len(ss))
+	for i, s := range ss {
+		out[i] = s
 	}
-	src := strings.TrimSpace(source)
-	if strings.HasPrefix(src, "throw new IllegalArgumentException(") {
-		msg := strings.TrimSuffix(strings.TrimPrefix(src, "throw new IllegalArgumentException("), ")")
-		msg = strings.Trim(msg, "'\"")
-		return &apiError{Type: "script_exception", Status: 400, Reason: "runtime error",
-			Fields:   map[string]any{"lang": "painless"},
-			CausedBy: &apiError{Type: "illegal_argument_exception", Status: 400, Reason: msg}}
+	return out
+}
+
+// compileIngestScript compiles a script processor's script.
+func compileIngestScript(raw map[string]any, ctxName, tag string) (*plScript, *scriptSpec, *apiError) {
+	spec, ae := parseScriptSpec(raw)
+	if ae != nil {
+		return nil, nil, ae
 	}
-	if strings.HasPrefix(src, "if (") {
-		end := strings.Index(src, ") {")
-		if end > 4 {
-			cond := src[4:end]
-			match, cerr := evalSimpleExpr(cond, env, params)
-			if cerr != nil {
-				return cerr
-			}
-			if b, ok := match.(bool); ok && b {
-				body := strings.TrimSuffix(strings.TrimSpace(src[end+3:]), "}")
-				return runIngestScript(body, params, env)
-			}
-			return nil
+	if spec.lang == "expression" {
+		_, se, ae := exPrepare(spec.src, ctxName)
+		if se != nil {
+			return nil, nil, ingestScriptError(se, tag)
+		}
+		ae.ForceTop = true
+		return nil, nil, ae
+	}
+	if ae := checkScriptLang(spec, ctxName); ae != nil {
+		ae.ForceTop = true
+		return nil, nil, ae
+	}
+	script, se := compilePainless(spec, ctxName)
+	if se != nil {
+		return nil, nil, ingestScriptError(se, tag)
+	}
+	return script, spec, nil
+}
+
+var ingestMetaKeys = map[string]bool{"_index": true, "_id": true, "_routing": true, "_version": true,
+	"_version_type": true, "_if_seq_no": true, "_if_primary_term": true}
+
+// ingestCtx builds the ctx map of an ingest document: source fields plus
+// metadata.
+func ingestCtx(env *ingestEnv) *plMap {
+	ctx := newPlMap(plHash)
+	for k, v := range env.meta {
+		if ingestMetaKeys[k] && v != nil {
+			ctx.put(k, plFromJSON(v, plLinked))
 		}
 	}
-	if m := regexp.MustCompile(`^ctx\.remove\('([^']+)'\)$`).FindStringSubmatch(src); m != nil {
-		removeNested(env.source, m[1])
-		return nil
+	for _, k := range sortedKeys(env.source) {
+		ctx.put(k, plFromJSON(env.source[k], plLinked))
 	}
-	if strings.Contains(src, "ctx.zz.length()") {
-		return &apiError{Type: "script_exception", Status: 400, Reason: "runtime error",
-			Fields:   map[string]any{"lang": "painless"},
-			CausedBy: &apiError{Type: "null_pointer_exception", Status: 400, Reason: "Cannot invoke \"Object.length()\" because \"ctx.zz\" is null"}}
+	return ctx
+}
+
+func (s *Server) procScript(cfg map[string]any, env *ingestEnv) *apiError {
+	script, spec, err := compileIngestScript(ingestScriptSpec(cfg), "ingest", cfgString(cfg, "tag"))
+	if err != nil {
+		return err
 	}
-	matches := assignmentRE.FindAllStringSubmatch(src, -1)
-	if len(matches) == 0 {
-		return &apiError{Type: "script_exception", Status: 400, Reason: "compile error",
-			Fields: map[string]any{"processor_type": "script", "script_stack": []any{source, "        ^---- HERE"}}}
+	ctx := ingestCtx(env)
+	_, se := script.exec(plBindings{vars: map[string]any{"params": scriptParams(spec.params), "ctx": ctx}}, spec.errName())
+	if se != nil {
+		return ingestScriptError(se, "")
 	}
-	for _, m := range matches {
-		path, expr := m[1], m[2]
-		val, err := evalSimpleExpr(expr, env, params)
-		if err != nil {
-			return err
-		}
-		if strings.HasPrefix(path, "_") {
-			env.meta[path] = val
+	for k := range env.source {
+		delete(env.source, k)
+	}
+	for k := range ingestMetaKeys {
+		delete(env.meta, k)
+	}
+	for _, e := range ctx.entries {
+		k := plToString(e.k)
+		if ingestMetaKeys[k] {
+			env.meta[k] = plToJSON(e.v)
 		} else {
-			if err := env.setField(path, val, true); err != nil {
-				return err
-			}
+			env.source[k] = plToJSON(e.v)
 		}
 	}
 	return nil
-}
-
-func evalSimpleExpr(expr string, env *ingestEnv, params any) (any, *apiError) {
-	expr = strings.TrimSpace(expr)
-	for len(expr) >= 2 && expr[0] == '(' && expr[len(expr)-1] == ')' && balancedParens(expr[1:len(expr)-1]) {
-		expr = strings.TrimSpace(expr[1 : len(expr)-1])
-	}
-	if q, c := ternarySplit(expr); q >= 0 {
-		cond, err := evalSimpleExpr(expr[:q], env, params)
-		if err != nil {
-			return nil, err
-		}
-		b, _ := cond.(bool)
-		if b {
-			return evalSimpleExpr(expr[q+2:c], env, params)
-		}
-		return evalSimpleExpr(expr[c+2:], env, params)
-	}
-	if expr == "null" {
-		return nil, nil
-	}
-	if strings.HasSuffix(expr, ".toUpperCase()") {
-		base := strings.TrimSuffix(expr, ".toUpperCase()")
-		v, _ := evalSimpleExpr(base, env, params)
-		return strings.ToUpper(ingestString(v)), nil
-	}
-	if strings.HasSuffix(expr, ".splitOnToken(',').length") {
-		base := strings.TrimSuffix(expr, ".splitOnToken(',').length")
-		v, _ := evalSimpleExpr(base, env, params)
-		return int64(len(strings.Split(ingestString(v), ","))), nil
-	}
-	if strings.HasSuffix(expr, "== null") {
-		base := strings.TrimSuffix(expr, "== null")
-		v, _ := evalSimpleExpr(base, env, params)
-		return v == nil, nil
-	}
-	if parts, ok := splitTopLevel(expr, " + "); ok && len(parts) > 1 {
-		var out any
-		for i, p := range parts {
-			v, err := evalSimpleExpr(p, env, params)
-			if err != nil {
-				return nil, err
-			}
-			if i == 0 {
-				out = v
-			} else if _, ok := ingestFloat(out); ok {
-				a, _ := ingestFloat(out)
-				b, _ := ingestFloat(v)
-				out = int64(a + b)
-			} else {
-				out = ingestString(out) + ingestString(v)
-			}
-		}
-		return out, nil
-	}
-	for _, op := range []string{">=", "<=", "==", "!=", ">", "<"} {
-		if at := findTopLevelOp(expr, " "+op+" "); at > 0 {
-			left, err := evalSimpleExpr(expr[:at], env, params)
-			if err != nil {
-				return nil, err
-			}
-			right, err := evalSimpleExpr(expr[at+len(op)+2:], env, params)
-			if err != nil {
-				return nil, err
-			}
-			lf, lok := ingestFloat(left)
-			rf, rok := ingestFloat(right)
-			if lok && rok {
-				switch op {
-				case ">":
-					return lf > rf, nil
-				case ">=":
-					return lf >= rf, nil
-				case "<":
-					return lf < rf, nil
-				case "<=":
-					return lf <= rf, nil
-				case "==":
-					return lf == rf, nil
-				case "!=":
-					return lf != rf, nil
-				}
-			}
-			switch op {
-			case "==":
-				if left == nil || right == nil {
-					return left == nil && right == nil, nil
-				}
-				return ingestString(left) == ingestString(right), nil
-			case "!=":
-				if left == nil || right == nil {
-					return !(left == nil && right == nil), nil
-				}
-				return ingestString(left) != ingestString(right), nil
-			}
-			return false, nil
-		}
-	}
-	if strings.HasPrefix(expr, "'") && strings.HasSuffix(expr, "'") {
-		return strings.Trim(expr, "'"), nil
-	}
-	if strings.HasPrefix(expr, "\"") && strings.HasSuffix(expr, "\"") {
-		return strings.Trim(expr, "\""), nil
-	}
-	if expr == "true" {
-		return true, nil
-	}
-	if expr == "false" {
-		return false, nil
-	}
-	if i, err := strconv.ParseInt(expr, 10, 64); err == nil {
-		return i, nil
-	}
-	if strings.Contains(expr, " * ") {
-		parts := strings.Split(expr, " * ")
-		var out float64 = 1
-		for _, p := range parts {
-			v, err := evalSimpleExpr(p, env, params)
-			if err != nil {
-				return nil, err
-			}
-			f, _ := ingestFloat(v)
-			out *= f
-		}
-		return int64(out), nil
-	}
-	if strings.HasPrefix(expr, "params.") {
-		key := strings.TrimPrefix(expr, "params.")
-		if pm, ok := params.(map[string]any); ok {
-			return pm[key], nil
-		}
-		return nil, nil
-	}
-	if strings.HasPrefix(expr, "ctx.") {
-		path := strings.TrimPrefix(expr, "ctx.")
-		if path == "_ingest" || strings.HasPrefix(path, "_ingest.") {
-			return nil, nil
-		}
-		v, ok := env.lookup(path)
-		if !ok {
-			return nil, nil
-		}
-		return v, nil
-	}
-	return expr, nil
 }
 
 func (s *Server) procDissect(cfg map[string]any, env *ingestEnv) *apiError {
@@ -1736,117 +1622,4 @@ func parseConditionLiteral(rhs string, params any) any {
 		return f
 	}
 	return rhs
-}
-
-func balancedParens(s string) bool {
-	depth := 0
-	for _, ch := range s {
-		switch ch {
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth < 0 {
-				return false
-			}
-		}
-	}
-	return depth == 0
-}
-
-func ternarySplit(s string) (int, int) {
-	depth := 0
-	q, c := -1, -1
-	inStr := rune(0)
-	for i, ch := range s {
-		if inStr != 0 {
-			if ch == inStr {
-				inStr = 0
-			}
-			continue
-		}
-		if ch == '\'' || ch == '"' {
-			inStr = ch
-			continue
-		}
-		switch ch {
-		case '(', '[':
-			depth++
-		case ')', ']':
-			depth--
-		case '?':
-			if depth == 0 && q < 0 && i > 0 && s[i-1] == ' ' && i+1 < len(s) && s[i+1] == ' ' {
-				q = i
-			}
-		case ':':
-			if depth == 0 && q >= 0 && c < 0 && i > 0 && s[i-1] == ' ' && i+1 < len(s) && s[i+1] == ' ' {
-				c = i
-			}
-		}
-	}
-	return q, c
-}
-
-func splitTopLevel(s, sep string) ([]string, bool) {
-	var parts []string
-	depth := 0
-	inStr := byte(0)
-	start := 0
-	for i := 0; i < len(s); i++ {
-		ch := s[i]
-		if inStr != 0 {
-			if ch == inStr {
-				inStr = 0
-			}
-			continue
-		}
-		if ch == '\'' || ch == '"' {
-			inStr = ch
-			continue
-		}
-		switch ch {
-		case '(', '[':
-			depth++
-		case ')', ']':
-			depth--
-		}
-		if depth == 0 && strings.HasPrefix(s[i:], sep) {
-			parts = append(parts, strings.TrimSpace(s[start:i]))
-			i += len(sep) - 1
-			start = i + 1
-		}
-	}
-	if len(parts) == 0 {
-		return nil, false
-	}
-	parts = append(parts, strings.TrimSpace(s[start:]))
-	return parts, true
-}
-
-func findTopLevelOp(s, op string) int {
-	depth := 0
-	inStr := byte(0)
-	for i := 0; i < len(s); i++ {
-		ch := s[i]
-		if inStr != 0 {
-			if ch == inStr {
-				inStr = 0
-			}
-			continue
-		}
-		if ch == '\'' || ch == '"' {
-			inStr = ch
-			continue
-		}
-		switch ch {
-		case '(', '[':
-			depth++
-		case ')', ']':
-			depth--
-		}
-		if depth == 0 && strings.HasPrefix(s[i:], op) {
-			return i
-		}
-	}
-	return -1
 }

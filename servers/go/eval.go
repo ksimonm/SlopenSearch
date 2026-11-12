@@ -2237,7 +2237,63 @@ func (c *queryCtx) fieldStrings(field string) ([]string, bool) {
 	return out, true
 }
 
+// analyzerName returns the search analyzer of field for a query.
 func (c *queryCtx) analyzerName(field string, opts any) string {
+	return c.searchAnalyzerName(field, opts)
+}
+
+// analyzeDocField analyzes a document value of field with its index analyzer.
+func (c *queryCtx) analyzeDocField(field, text string) []string {
+	return analyzeWithIndex(c.idx, c.indexAnalyzerName(field), text)
+}
+
+// indexAnalyzerName is the analyzer documents are indexed with.
+func (c *queryCtx) indexAnalyzerName(field string) string {
+	if c.idx == nil {
+		return ""
+	}
+	if def, ok := mappingFieldDef(c.idx, field); ok {
+		if a, ok := def["analyzer"].(string); ok && a != "" {
+			return a
+		}
+	}
+	if (analysisScope{idx: c.idx}).indexHasAnalyzer("default") {
+		return "default"
+	}
+	return ""
+}
+
+// searchAnalyzerName resolves the query analyzer like TextFieldMapper: the
+// query's analyzer, search_analyzer, analyzer, then the index defaults.
+func (c *queryCtx) searchAnalyzerName(field string, opts any) string {
+	if m, ok := opts.(map[string]any); ok {
+		if a, ok := m["analyzer"].(string); ok && a != "" {
+			return a
+		}
+	}
+	if c.idx == nil {
+		return ""
+	}
+	if def, ok := mappingFieldDef(c.idx, field); ok {
+		if a, ok := def["search_analyzer"].(string); ok && a != "" {
+			return a
+		}
+		if a, ok := def["analyzer"].(string); ok && a != "" {
+			return a
+		}
+	}
+	sc := analysisScope{idx: c.idx}
+	if sc.indexHasAnalyzer("default_search") {
+		return "default_search"
+	}
+	if sc.indexHasAnalyzer("default") {
+		return "default"
+	}
+	return ""
+}
+
+// quoteAnalyzerName is the analyzer of phrase queries (search_quote_analyzer).
+func (c *queryCtx) quoteAnalyzerName(field string, opts any) string {
 	if m, ok := opts.(map[string]any); ok {
 		if a, ok := m["analyzer"].(string); ok && a != "" {
 			return a
@@ -2245,15 +2301,44 @@ func (c *queryCtx) analyzerName(field string, opts any) string {
 	}
 	if c.idx != nil {
 		if def, ok := mappingFieldDef(c.idx, field); ok {
-			if a, ok := def["search_analyzer"].(string); ok && a != "" {
-				return a
-			}
-			if a, ok := def["analyzer"].(string); ok && a != "" {
+			if a, ok := def["search_quote_analyzer"].(string); ok && a != "" {
 				return a
 			}
 		}
 	}
-	return ""
+	if opts == nil {
+		opts = ""
+	}
+	return c.searchAnalyzerName(field, opts)
+}
+
+// setPhraseAnalyzer sets the analyzer of every match_phrase in a query.
+func setPhraseAnalyzer(q any, analyzer string) {
+	switch t := q.(type) {
+	case map[string]any:
+		for k, v := range t {
+			if k == "match_phrase" {
+				if fm, ok := v.(map[string]any); ok {
+					for f, fv := range fm {
+						switch x := fv.(type) {
+						case string:
+							fm[f] = map[string]any{"query": x, "analyzer": analyzer}
+						case map[string]any:
+							if _, has := x["analyzer"]; !has {
+								x["analyzer"] = analyzer
+							}
+						}
+					}
+				}
+				continue
+			}
+			setPhraseAnalyzer(v, analyzer)
+		}
+	case []any:
+		for _, e := range t {
+			setPhraseAnalyzer(e, analyzer)
+		}
+	}
 }
 
 func (c *queryCtx) analyzeField(field string, opts any, text string) []string {
@@ -2433,9 +2518,7 @@ func matchAnalyzerExists(idx *Index, name string) bool {
 		return true
 	}
 	if idx != nil {
-		if _, ok := findSetting(idx.Settings, "analysis.analyzer."+name); ok {
-			return true
-		}
+		return settingsHasAnalyzer(idx.Settings, "analyzer", name)
 	}
 	return false
 }
@@ -2443,7 +2526,7 @@ func matchAnalyzerExists(idx *Index, name string) bool {
 func (c *queryCtx) fieldHasAnalyzedTerm(field, term string) bool {
 	for _, v := range c.mustValues(field) {
 		s, _ := valueScalarString(v)
-		for _, tok := range c.analyzeField(field, nil, s) {
+		for _, tok := range c.analyzeDocField(field, s) {
 			if tok == term {
 				return true
 			}
@@ -2465,7 +2548,7 @@ func (c *queryCtx) phraseMatchesTerms(field string, terms []string) bool {
 	lastPos := -1
 	for _, v := range c.mustValues(field) {
 		s, _ := valueScalarString(v)
-		toks := analyzeTokensWithIndex(c.idx, c.analyzerName(field, nil), s)
+		toks := analyzeTokensWithIndex(c.idx, c.indexAnalyzerName(field), s)
 		base := 0
 		if lastPos >= 0 {
 			base = lastPos + gap + 1
@@ -2725,7 +2808,7 @@ func (c *queryCtx) evalMatch(field string, raw any, boost float64) (bool, float6
 	totalTokens := 0
 	for _, v := range vals {
 		s, _ := valueScalarString(v)
-		totalTokens += len(c.analyzeField(field, nil, s))
+		totalTokens += len(c.analyzeDocField(field, s))
 	}
 	norm := 1.0
 	if totalTokens > 0 {
@@ -2747,7 +2830,7 @@ func (c *queryCtx) evalMatch(field string, raw any, boost float64) (bool, float6
 		}
 		for _, v := range vals {
 			s, _ := valueScalarString(v)
-			for _, tok := range c.analyzeField(field, nil, s) {
+			for _, tok := range c.analyzeDocField(field, s) {
 				if tok == qt {
 					found = true
 					break
@@ -2878,7 +2961,7 @@ func (c *queryCtx) evalMatchPhrase(field string, raw any, boost, slop float64) (
 		}
 		return false, 0, nil
 	}
-	if alts, matched := synonymAlternatives(c.idx, c.analyzerName(field, opts), text); matched {
+	if alts, matched := synonymAlternatives(c.idx, c.quoteAnalyzerName(field, opts), text); matched {
 		for _, alt := range alts {
 			if c.phraseMatchesTerms(field, alt) {
 				return true, boost, nil
@@ -2886,7 +2969,7 @@ func (c *queryCtx) evalMatchPhrase(field string, raw any, boost, slop float64) (
 		}
 		return false, 0, nil
 	}
-	qtokens := analyzeTokensWithIndex(c.idx, c.analyzerName(field, opts), text)
+	qtokens := analyzeTokensWithIndex(c.idx, c.quoteAnalyzerName(field, opts), text)
 	if len(qtokens) == 0 {
 		if m, ok := opts.(map[string]any); ok {
 			if z, ok := m["zero_terms_query"].(string); ok && strings.EqualFold(z, "all") {
@@ -2899,7 +2982,7 @@ func (c *queryCtx) evalMatchPhrase(field string, raw any, boost, slop float64) (
 	vals := c.mustValues(field)
 	for _, v := range vals {
 		s, _ := valueScalarString(v)
-		totalTokens += len(c.analyzeField(field, nil, s))
+		totalTokens += len(c.analyzeDocField(field, s))
 	}
 	norm := 1.0
 	if totalTokens > 0 {
@@ -2913,7 +2996,7 @@ func (c *queryCtx) evalMatchPhrase(field string, raw any, boost, slop float64) (
 	lastPos := -1
 	for _, v := range vals {
 		s, _ := valueScalarString(v)
-		toks := analyzeTokensWithIndex(c.idx, c.analyzerName(field, nil), s)
+		toks := analyzeTokensWithIndex(c.idx, c.indexAnalyzerName(field), s)
 		base := 0
 		if lastPos >= 0 {
 			base = lastPos + gap + 1
@@ -3404,7 +3487,7 @@ func (c *queryCtx) eval(raw map[string]any) (bool, float64, *apiError) {
 				}
 				return false, 0, nil
 			}
-			qtokens := analyzeTokensWithIndex(c.idx, c.analyzerName(field, opts), text)
+			qtokens := analyzeTokensWithIndex(c.idx, c.quoteAnalyzerName(field, opts), text)
 			if len(qtokens) == 0 {
 				return false, 0, nil
 			}
@@ -3418,7 +3501,7 @@ func (c *queryCtx) eval(raw map[string]any) (bool, float64, *apiError) {
 			prefixes := map[string]bool{}
 			for _, v := range vals {
 				s, _ := valueScalarString(v)
-				toks := analyzeTokensWithIndex(c.idx, c.analyzerName(field, nil), s)
+				toks := analyzeTokensWithIndex(c.idx, c.indexAnalyzerName(field), s)
 				base := 0
 				if lastPos >= 0 {
 					base = lastPos + gap + 1
@@ -3444,7 +3527,7 @@ func (c *queryCtx) eval(raw map[string]any) (bool, float64, *apiError) {
 				for _, dv := range c.idx.DocValues {
 					for _, v := range dv[resolved] {
 						s, _ := valueScalarString(v)
-						for _, t := range analyzeTokensWithIndex(c.idx, c.analyzerName(field, nil), s) {
+						for _, t := range analyzeTokensWithIndex(c.idx, c.indexAnalyzerName(field), s) {
 							if strings.HasPrefix(t.term, qtokens[len(qtokens)-1].term) {
 								prefixes[t.term] = true
 							}

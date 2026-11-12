@@ -15,6 +15,10 @@ pub struct ApiError {
     pub top_type: Option<String>,
     pub top_reason: Option<String>,
     pub root_cause: Option<Box<ApiError>>,
+    /// A complete pre-rendered response body (e.g. shard failure envelopes).
+    pub raw: Option<Box<Value>>,
+    /// Fields of the top-level error only (not copied to root_cause).
+    pub top_fields: Map<String, Value>,
 }
 
 impl ApiError {
@@ -29,6 +33,8 @@ impl ApiError {
             top_type: None,
             top_reason: None,
             root_cause: None,
+            raw: None,
+            top_fields: Map::new(),
         }
     }
 
@@ -68,6 +74,9 @@ impl ApiError {
     }
 
     pub fn to_value(&self) -> Value {
+        if let Some(raw) = &self.raw {
+            return (**raw).clone();
+        }
         let (rc_type, rc_reason) = match &self.root_cause {
             Some(rc) => (rc.typ.clone(), rc.reason.clone()),
             None => (self.typ.clone(), self.reason.clone()),
@@ -119,6 +128,9 @@ impl ApiError {
             }
             if let Some(cb) = &self.caused_by {
                 obj.insert("caused_by".to_string(), nested_error_value(cb));
+            }
+            for (k, v) in &self.top_fields {
+                obj.insert(k.clone(), v.clone());
             }
         }
         json!({"error": err, "status": self.status})

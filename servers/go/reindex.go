@@ -135,10 +135,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 	}
 	opType, _ := destRaw["op_type"].(string)
 	versionType, _ := destRaw["version_type"].(string)
-	var scriptSrc string
-	if sc, ok := body["script"].(map[string]any); ok {
-		scriptSrc, _ = sc["source"].(string)
-	}
+	scriptRaw, hasScript := body["script"]
 	var query map[string]any
 	if q, ok := srcRaw["query"].(map[string]any); ok {
 		query = q
@@ -195,25 +192,52 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 	created, updated, deleted, noops, versionConflicts := 0, 0, 0, 0, 0
 	failures := []any{}
 	destIdx := s.indices[destName]
-	destUUID := "_na_"
-	if destIdx != nil {
-		destUUID = destIdx.UUID
-	}
 	destNameErr := validateIndexName(destName)
 	for _, it := range items {
 		doc := deepCopyJSON(it.doc).(map[string]any)
 		id := it.id
-		if scriptSrc != "" {
-			op := ""
-			runReindexScript(scriptSrc, doc, &id, &op)
-			if op == "noop" {
+		targetName := destName
+		if hasScript {
+			res, serr := runUpdateScriptCtx(scriptRaw, doc, it.idx.Name, id, -1, "index", it.idx.Routing[id])
+			if serr != nil {
+				if se, ok := serr.Extra.(*plScriptErr); ok {
+					writeJSON(w, 400, se.errorBody())
+					return
+				}
+				if serr.CausedBy != nil {
+					writeError(w, &apiError{Type: serr.CausedBy.Type, Status: 400, Reason: serr.CausedBy.Reason})
+					return
+				}
+				writeError(w, serr)
+				return
+			}
+			switch res.rawOp {
+			case "noop":
 				noops++
 				continue
-			}
-			if op == "delete" {
+			case "delete":
 				deleted++
 				continue
+			case "index", "create":
+			default:
+				writeError(w, errBad("Operation type ["+res.rawOp+"] not allowed, only [noop, index, delete] are allowed"))
+				return
 			}
+			doc = res.source
+			if res.id == nil {
+				id = s.nextID()
+			} else {
+				id = plToString(res.id)
+			}
+			if n := plToString(res.index); n != it.idx.Name && res.index != nil {
+				targetName = n
+			}
+		}
+		destName := targetName
+		destIdx := s.indices[targetName]
+		destUUID := "_na_"
+		if destIdx != nil {
+			destUUID = destIdx.UUID
 		}
 		if destIdx == nil {
 			if destNameErr != nil {
@@ -305,6 +329,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 		destIdx.Docs[id] = doc
 		destIdx.IndexTotal++
 	}
+	destIdx = s.indices[destName]
 	if destIdx != nil {
 		s.bumpState()
 	}
@@ -330,307 +355,4 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 		"throttled_until_millis": 0,
 		"failures":               failures,
 	})
-}
-
-// ---------------------------------------------------------------- reindex script
-
-func splitReindexStatements(s string) []string {
-	var out []string
-	depth := 0
-	start := 0
-	for i := 0; i < len(s); i++ {
-		switch s[i] {
-		case '{':
-			depth++
-		case '}':
-			depth--
-		case ';':
-			if depth == 0 {
-				st := strings.TrimSpace(s[start:i])
-				if st != "" {
-					out = append(out, st)
-				}
-				start = i + 1
-			}
-		}
-	}
-	st := strings.TrimSpace(s[start:])
-	if st != "" {
-		out = append(out, st)
-	}
-	return out
-}
-
-func matchCloseBrace(s string, open int) int {
-	depth := 0
-	for i := open; i < len(s); i++ {
-		switch s[i] {
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				return i
-			}
-		}
-	}
-	return len(s) - 1
-}
-
-func matchParen(s string, open int) int {
-	depth := 0
-	quote := byte(0)
-	for i := open; i < len(s); i++ {
-		c := s[i]
-		if quote != 0 {
-			if c == quote {
-				quote = 0
-			}
-			continue
-		}
-		switch c {
-		case '\'', '"':
-			quote = c
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth == 0 {
-				return i
-			}
-		}
-	}
-	return -1
-}
-
-func reindexSourceGet(doc map[string]any, ref string) (any, bool) {
-	ref = strings.TrimSpace(ref)
-	ref = strings.TrimPrefix(ref, "ctx._source.")
-	ref = strings.TrimPrefix(ref, "ctx._source")
-	ref = strings.Trim(ref, "[]'\"")
-	if ref == "" {
-		return nil, false
-	}
-	return fieldValue(doc, ref)
-}
-
-func reindexLiteral(tok string) (any, bool) {
-	tok = strings.TrimSpace(tok)
-	if len(tok) >= 2 && (tok[0] == '\'' || tok[0] == '"') && tok[len(tok)-1] == tok[0] {
-		return tok[1 : len(tok)-1], true
-	}
-	if f, err := strconv.ParseFloat(tok, 64); err == nil {
-		return f, true
-	}
-	return nil, false
-}
-
-func splitTopLevelExpr(expr string, op byte) []string {
-	var out []string
-	depth := 0
-	quote := byte(0)
-	start := 0
-	for i := 0; i < len(expr); i++ {
-		c := expr[i]
-		if quote != 0 {
-			if c == quote {
-				quote = 0
-			}
-			continue
-		}
-		switch c {
-		case '\'', '"':
-			quote = c
-		case '(', '[':
-			depth++
-		case ')', ']':
-			depth--
-		default:
-			if c == op && depth == 0 {
-				out = append(out, expr[start:i])
-				start = i + 1
-			}
-		}
-	}
-	out = append(out, expr[start:])
-	return out
-}
-
-func evalReindexExpr(expr string, doc map[string]any, id string) any {
-	expr = strings.TrimSpace(expr)
-	if expr == "ctx._id" || expr == "ctx.id" {
-		return id
-	}
-	if v, ok := reindexLiteral(expr); ok {
-		return v
-	}
-	if v, ok := reindexSourceGet(doc, expr); ok && strings.HasPrefix(strings.TrimSpace(expr), "ctx._source") {
-		return v
-	}
-	parts := splitTopLevelExpr(expr, '+')
-	if len(parts) > 1 {
-		out := ""
-		for _, p := range parts {
-			v := evalReindexExpr(p, doc, id)
-			out += settingsValueString(v)
-		}
-		return out
-	}
-	for _, opCh := range []byte{'*', '/', '-', '+'} {
-		sub := splitTopLevelExpr(expr, opCh)
-		if len(sub) == 2 {
-			lv := evalReindexExpr(sub[0], doc, id)
-			rv := evalReindexExpr(sub[1], doc, id)
-			lf, lok := toFloat(lv)
-			rf, rok := toFloat(rv)
-			if !lok || !rok {
-				if opCh == '+' {
-					return settingsValueString(lv) + settingsValueString(rv)
-				}
-				return lv
-			}
-			switch opCh {
-			case '*':
-				return lf * rf
-			case '/':
-				if rf != 0 {
-					return lf / rf
-				}
-				return lf
-			case '-':
-				return lf - rf
-			case '+':
-				return lf + rf
-			}
-		}
-	}
-	return expr
-}
-
-func evalReindexCond(cond string, doc map[string]any) bool {
-	for _, op := range []string{"==", "!=", ">=", "<=", ">", "<"} {
-		i := indexOutsideQuotes(cond, op)
-		if i < 0 {
-			continue
-		}
-		lhs := strings.TrimSpace(cond[:i])
-		rhs := strings.TrimSpace(cond[i+len(op):])
-		lv, lok := reindexSourceGet(doc, lhs)
-		rv, rok := reindexLiteral(rhs)
-		if !rok {
-			rv, rok = reindexSourceGet(doc, rhs)
-		}
-		if !lok || !rok {
-			return false
-		}
-		ls, lsok := lv.(string)
-		rs, rsok := rv.(string)
-		if lsok && rsok {
-			switch op {
-			case "==":
-				return ls == rs
-			case "!=":
-				return ls != rs
-			}
-			return false
-		}
-		lf, _ := toFloat(lv)
-		rf, _ := toFloat(rv)
-		switch op {
-		case "==":
-			return lf == rf
-		case "!=":
-			return lf != rf
-		case ">":
-			return lf > rf
-		case "<":
-			return lf < rf
-		case ">=":
-			return lf >= rf
-		case "<=":
-			return lf <= rf
-		}
-	}
-	return false
-}
-
-func indexOutsideQuotes(s, sub string) int {
-	quote := byte(0)
-	for i := 0; i+len(sub) <= len(s); i++ {
-		c := s[i]
-		if quote != 0 {
-			if c == quote {
-				quote = 0
-			}
-			continue
-		}
-		if c == '\'' || c == '"' {
-			quote = c
-			continue
-		}
-		if strings.HasPrefix(s[i:], sub) {
-			return i
-		}
-	}
-	return -1
-}
-
-// runReindexScript applies the (small) Painless subset used by reindex tests.
-func runReindexScript(code string, doc map[string]any, id *string, op *string) {
-	for _, st := range splitReindexStatements(code) {
-		execReindexStmt(st, doc, id, op)
-	}
-}
-
-func execReindexStmt(st string, doc map[string]any, id *string, op *string) {
-	if strings.HasPrefix(st, "if") {
-		open := strings.Index(st, "(")
-		if open < 0 {
-			return
-		}
-		close := matchParen(st, open)
-		if close < 0 {
-			return
-		}
-		cond := st[open+1 : close]
-		rest := strings.TrimSpace(st[close+1:])
-		body := ""
-		remainder := ""
-		if strings.HasPrefix(rest, "{") {
-			end := matchCloseBrace(rest, 0)
-			body = rest[1:end]
-			remainder = strings.TrimSpace(rest[end+1:])
-		} else {
-			body = rest
-		}
-		if evalReindexCond(cond, doc) {
-			runReindexScript(body, doc, id, op)
-		}
-		if remainder != "" {
-			runReindexScript(remainder, doc, id, op)
-		}
-		return
-	}
-	eq := indexOutsideQuotes(st, "=")
-	if eq < 0 {
-		return
-	}
-	lhs := strings.TrimSpace(st[:eq])
-	rhs := strings.TrimSpace(st[eq+1:])
-	lhs = strings.TrimPrefix(lhs, "ctx.")
-	switch lhs {
-	case "op":
-		if v, ok := reindexLiteral(rhs); ok {
-			*op = settingsValueString(v)
-		}
-	case "_id":
-		v := evalReindexExpr(rhs, doc, *id)
-		*id = settingsValueString(v)
-	default:
-		if strings.HasPrefix(lhs, "_source.") || strings.HasPrefix(lhs, "_source[") {
-			field := strings.TrimPrefix(lhs, "_source.")
-			field = strings.Trim(field, "[]'\"")
-			doc[field] = evalReindexExpr(rhs, doc, *id)
-		}
-	}
 }

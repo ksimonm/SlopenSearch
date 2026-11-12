@@ -130,8 +130,14 @@ func aggDocs(hits []aggHit) []map[string]any {
 	out := make([]map[string]any, 0, len(hits))
 	for _, h := range hits {
 		d := deepCopySource(h.doc).(map[string]any)
-		injectAliasValues(h.idx.Mappings, "", d)
-		injectAggDocValues(h, d)
+		// only root documents read their indexed values; nested elements
+		// (and documents already prepared by an outer aggregation) keep theirs
+		if _, nested := h.doc["__slop_nested_ctx"]; !nested {
+			if _, prepared := h.doc["__slop_id"]; !prepared {
+				injectAliasValues(h.idx.Mappings, "", d)
+				injectAggDocValues(h, d)
+			}
+		}
 		if h.id != "" {
 			d["__slop_id"] = h.id
 			d["__slop_score"] = h.score
@@ -340,6 +346,10 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *Ind
 	}
 	if t, ok := def["histogram"].(map[string]any); ok {
 		field, _ := toString(t["field"])
+		docs, field, err := scriptValueDocs(t, docs, idx, field)
+		if err != nil {
+			return nil, err
+		}
 		return histogramAgg(name, field, t, docs, idx, pathPrefix, subAggsOf(def), typed)
 	}
 	if t, ok := def["filter"].(map[string]any); ok {
@@ -491,7 +501,7 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *Ind
 		return topHitsAgg(t, docs, idx)
 	}
 	if t, ok := def["scripted_metric"].(map[string]any); ok {
-		return scriptedMetricAgg(t, docs, idx)
+		return scriptedMetric(name, t, docs, idx)
 	}
 	if _, ok := def["missing"].(map[string]any); ok {
 		t := def["missing"].(map[string]any)
@@ -509,6 +519,10 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *Ind
 	}
 	if t, ok := def["range"].(map[string]any); ok {
 		field, _ := toString(t["field"])
+		docs, field, err := scriptValueDocs(t, docs, idx, field)
+		if err != nil {
+			return nil, err
+		}
 		return rangeAggSpec(name, field, t, docs, idx, pathPrefix, subAggsOf(def), typed)
 	}
 	if t, ok := def["date_range"].(map[string]any); ok {
@@ -689,6 +703,10 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *Inde
 	field, _ := toString(spec["field"])
 	resolved := resolveField(field, pathPrefix)
 	ft, mapped := idx.FieldTypes[resolved]
+	if !mapped && resolved != field {
+		// inside a nested aggregation the mapping knows the full path
+		ft, mapped = idx.FieldTypes[field]
+	}
 	if !mapped {
 		ft = ""
 	}
@@ -791,6 +809,7 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *Inde
 		tb.docs = append(tb.docs, doc)
 	}
 	scriptSpec, hasScript := spec["script"]
+	var termsScript *compiledScript
 	joinField, _, hasJoin := findJoinField(idx)
 	joinType := ""
 	isJoinField := false
@@ -846,24 +865,23 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *Inde
 			}
 		}
 		if hasScript {
-			if field != "" && len(vals) > 0 {
-				src, _ := scriptText(scriptSpec)
-				for _, v := range vals {
-					if f, ok := toFloat(v); ok {
-						if strings.Contains(src, "_value") {
-							val := strings.ReplaceAll(src, "_value", strconv.FormatFloat(f, 'f', -1, 64))
-							if r, e := (&scriptEnv{}).evalScriptExpression(val); e == nil {
-								if f, ok := toFloat(r); ok {
-									addVal(f, d, false)
-								}
-							}
-						}
-					}
+			if termsScript == nil {
+				cs, serr := prepareAggScript(idx, scriptSpec)
+				if serr != nil {
+					return nil, serr
 				}
+				termsScript = cs
+			}
+			useField := field != ""
+			if useField && len(vals) == 0 {
 				continue
 			}
-			if r, ok := evalTermScript(d, idx, scriptSpec); ok {
-				addVal(r, d, false)
+			res, serr := aggScriptRun(termsScript, idx, d, vals, useField)
+			if serr != nil {
+				return nil, serr
+			}
+			for _, r := range res {
+				addVal(termsScriptKey(r, useField, valueType, termsScript.ex != nil), d, false)
 			}
 			continue
 		}
@@ -1019,6 +1037,12 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *Inde
 				return bv == nil
 			}
 			cmp := compareAggSortValues(av, bv)
+			if as, ok := av.(string); ok && o.field == "_key" {
+				if bs, ok := bv.(string); ok {
+					// string terms sort lexicographically, even when numeric-looking
+					cmp = strings.Compare(as, bs)
+				}
+			}
 			if cmp != 0 {
 				if o.desc {
 					return cmp > 0
@@ -1255,32 +1279,29 @@ func murmur3x86_32(data []byte, seed int32) int32 {
 	return h
 }
 
-func evalTermScript(doc map[string]any, idx *Index, raw any) (any, bool) {
-	src, _ := scriptText(raw)
-	if strings.Contains(src, "doc['color'].size()==0") {
-		v, ok := fieldValue(doc, "color")
-		if !ok || len(flattenTermValues(v)) == 0 {
-			return "none", true
-		}
-		s, _ := toString(v)
-		return strings.ToUpper(s), true
+// termsScriptKey converts a terms script value to a bucket key: without a
+// value_type, script values are terms (strings, Java formatting); value
+// scripts keep the numeric type of the field.
+func termsScriptKey(r any, valueScript bool, valueType string, expression bool) any {
+	if dv, ok := r.(*plDocValues); ok {
+		r = dv.vals
 	}
-	id, _ := doc["__slop_id"].(string)
-	qc := newQueryCtxForDoc(idx, id, doc)
-	env := &scriptEnv{c: qc}
-	if r, err := env.evalScriptExpression(src); err == nil {
-		if s, ok := r.(string); ok {
-			return s, true
-		}
-		if f, ok := toFloat(r); ok {
-			if f == 0 {
-				f = 0
+	if valueScript || valueType != "" {
+		if plIsNumber(r) {
+			if valueScript {
+				return plF64(r)
 			}
-			return strconv.FormatFloat(f, 'f', -1, 64), true
+			return plToJSON(r)
 		}
-		return r, true
+		return plToJSON(r)
 	}
-	return nil, false
+	if plIsNumber(r) || expression {
+		return plToString(r)
+	}
+	if s, ok := r.(string); ok {
+		return s
+	}
+	return plToString(r)
 }
 
 func loadAggLocation(tz string) (*time.Location, *apiError) {

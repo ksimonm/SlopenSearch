@@ -497,6 +497,15 @@ fn validate_processor(p: &Value, _top: bool) -> Result<(), ApiError> {
                 )
                 .field("processor_type", json!(typ)));
             }
+            if lang != "painless" {
+                let spec = crate::script_ctx::ScriptSpec {
+                    src: cfg_str(c, "source").unwrap_or("").to_string(),
+                    lang: lang.to_string(),
+                    id: None,
+                    params: Map::new(),
+                };
+                crate::script_ctx::check_lang(&spec, "ingest")?;
+            }
         }
         if let Some(src) = cfg_str(c, "source") {
             if let Err(mut e) = ingest_script::compile_check(src) {

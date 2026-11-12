@@ -2,7 +2,7 @@
 
 use crate::eval::{compare_any, integer_of, QueryCtx};
 use crate::resp::format_number;
-use crate::store::{to_f64, value_to_string};
+use crate::store::to_f64;
 use serde_json::{Map, Number, Value};
 
 pub struct ScriptEnv<'a, 'b> {
@@ -12,13 +12,29 @@ pub struct ScriptEnv<'a, 'b> {
 
 impl<'a, 'b> ScriptEnv<'a, 'b> {
     pub fn resolve_path(&self, path: &str) -> Value {
+        if path.starts_with("params[") {
+            let mut norm = String::from("params");
+            for seg in path["params".len()..].split(']') {
+                let seg = seg.trim_start_matches('.').trim_start_matches('[');
+                let seg = seg.trim_matches(|c| c == '\'' || c == '"');
+                if !seg.is_empty() {
+                    norm.push('.');
+                    norm.push_str(seg);
+                }
+            }
+            return self.resolve_path(&norm);
+        }
         if path.starts_with("doc[") {
             let i = match path.find(']') {
                 Some(i) => i,
                 None => return Value::Null,
             };
             let field = path[4..i].trim_matches(|c| c == '\'' || c == '"');
-            let (vals, _) = self.c.values(field);
+            let (mut vals, _) = self.c.values(field);
+            if i + 1 == path.len() {
+                vals.sort_by(|a, b| compare_any(a, b).cmp(&0));
+                return Value::Array(vals);
+            }
             if vals.is_empty() {
                 return Value::Null;
             }
@@ -56,6 +72,20 @@ impl<'a, 'b> ScriptEnv<'a, 'b> {
                 None => return Value::Null,
             };
             for seg in rest.split('.') {
+                match cur.get(seg) {
+                    Some(v) => cur = v,
+                    None => return Value::Null,
+                }
+            }
+            return cur.clone();
+        }
+        if let Some(key) = path.strip_prefix("params.") {
+            let mut segs = key.split('.');
+            let mut cur = match self.params.get(segs.next().unwrap_or("")) {
+                Some(v) => v,
+                None => return Value::Null,
+            };
+            for seg in segs {
                 match cur.get(seg) {
                     Some(v) => cur = v,
                     None => return Value::Null,
@@ -109,6 +139,7 @@ impl<'a, 'b> ScriptEnv<'a, 'b> {
             src: src.into_bytes(),
             pos: 0,
             env: self,
+            skip: 0,
         };
         let v = e2.parse_ternary()?;
         e2.skip_space();
@@ -118,6 +149,10 @@ impl<'a, 'b> ScriptEnv<'a, 'b> {
         Ok(v)
     }
 }
+
+/// Message of the illegal_state_exception raised by doc[...].value on a
+/// document without a value.
+pub const MISSING_DOC_VALUE: &str = "A document doesn't have a value for a field! Use doc[<field>].size()==0 to check if a document is missing a field!";
 
 pub fn script_float(v: &Value) -> f64 {
     if let Some(n) = integer_of(v) {
@@ -172,14 +207,29 @@ fn values_equal(a: &Value, b: &Value) -> bool {
     script_float(a) == script_float(b)
 }
 
+/// Both operands as integers (Painless integer arithmetic), if they are.
+fn int_pair(a: &Value, b: &Value) -> Option<(i64, i64)> {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) if !x.is_f64() && !y.is_f64() => Some((x.as_i64()?, y.as_i64()?)),
+        _ => None,
+    }
+}
+
 fn num_f64(f: f64) -> Value {
-    Number::from_f64(f).map(Value::Number).unwrap_or(Value::Null)
+    match Number::from_f64(f) {
+        Some(n) => Value::Number(n),
+        None if f.is_nan() => Value::String("NaN".to_string()),
+        None if f > 0.0 => Value::String("Infinity".to_string()),
+        None => Value::String("-Infinity".to_string()),
+    }
 }
 
 struct ExprEval<'a, 'b, 'c> {
     src: Vec<u8>,
     pos: usize,
     env: &'c ScriptEnv<'a, 'b>,
+    /// > 0 while parsing a branch that is not taken (no runtime errors).
+    skip: u32,
 }
 
 impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
@@ -208,15 +258,24 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
         }
     }
 
+    /// Parses a sub-expression whose value is not used.
+    fn skipped<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, String>) -> Result<T, String> {
+        self.skip += 1;
+        let r = f(self);
+        self.skip -= 1;
+        r
+    }
+
     fn parse_ternary(&mut self) -> Result<Value, String> {
         let cond = self.parse_or()?;
         if self.eat("?") {
-            let a = self.parse_ternary()?;
+            let take = truthy(&cond);
+            let a = if take { self.parse_ternary()? } else { self.skipped(|p| p.parse_ternary())? };
             if !self.eat(":") {
                 return Err("expected ':'".to_string());
             }
-            let b = self.parse_ternary()?;
-            if truthy(&cond) {
+            let b = if take { self.skipped(|p| p.parse_ternary())? } else { self.parse_ternary()? };
+            if take {
                 return Ok(a);
             }
             return Ok(b);
@@ -230,7 +289,7 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
             self.skip_space();
             if self.peek("||") {
                 self.pos += 2;
-                let right = self.parse_and()?;
+                let right = if truthy(&left) { self.skipped(|p| p.parse_and())? } else { self.parse_and()? };
                 left = Value::Bool(truthy(&left) || truthy(&right));
                 continue;
             }
@@ -250,7 +309,7 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
             self.skip_space();
             if self.peek("&&") {
                 self.pos += 2;
-                let right = self.parse_equality()?;
+                let right = if truthy(&left) { self.parse_equality()? } else { self.skipped(|p| p.parse_equality())? };
                 left = Value::Bool(truthy(&left) && truthy(&right));
                 continue;
             }
@@ -312,13 +371,18 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
                 if let Value::String(ls) = &left {
                     let rs = value_to_script_string(&right).unwrap_or_default();
                     left = Value::String(format!("{}{}", ls, rs));
+                } else if let Some((a, b)) = int_pair(&left, &right) {
+                    left = Value::Number(Number::from(a.wrapping_add(b)));
                 } else {
                     left = num_f64(script_float(&left) + script_float(&right));
                 }
             } else if self.peek("-") {
                 self.pos += 1;
                 let right = self.parse_multiplicative()?;
-                left = num_f64(script_float(&left) - script_float(&right));
+                left = match int_pair(&left, &right) {
+                    Some((a, b)) => Value::Number(Number::from(a.wrapping_sub(b))),
+                    None => num_f64(script_float(&left) - script_float(&right)),
+                };
             } else {
                 return Ok(left);
             }
@@ -332,20 +396,26 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
             if self.peek("*") {
                 self.pos += 1;
                 let right = self.parse_unary()?;
-                left = num_f64(script_float(&left) * script_float(&right));
+                left = match int_pair(&left, &right) {
+                    Some((a, b)) => Value::Number(Number::from(a.wrapping_mul(b))),
+                    None => num_f64(script_float(&left) * script_float(&right)),
+                };
             } else if self.peek("/") {
                 self.pos += 1;
                 let right = self.parse_unary()?;
-                let d = script_float(&right);
-                if d == 0.0 {
-                    left = num_f64(f64::INFINITY);
-                } else {
-                    left = num_f64(script_float(&left) / d);
-                }
+                left = match int_pair(&left, &right) {
+                    Some((_, 0)) => return Err("/ by zero".to_string()),
+                    Some((a, b)) => Value::Number(Number::from(a.wrapping_div(b))),
+                    None => num_f64(script_float(&left) / script_float(&right)),
+                };
             } else if self.peek("%") {
                 self.pos += 1;
                 let right = self.parse_unary()?;
-                left = num_f64(script_float(&left) % script_float(&right));
+                left = match int_pair(&left, &right) {
+                    Some((_, 0)) => return Err("/ by zero".to_string()),
+                    Some((a, b)) => Value::Number(Number::from(a.wrapping_rem(b))),
+                    None => num_f64(script_float(&left) % script_float(&right)),
+                };
             } else {
                 return Ok(left);
             }
@@ -380,6 +450,41 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
             return Ok(v);
         }
         let c = self.src[self.pos];
+        if c == b'[' {
+            // list literal [a, b] or map literal [k: v, ...] / [:]
+            self.pos += 1;
+            if self.eat(":") {
+                if !self.eat("]") {
+                    return Err("expected ']'".to_string());
+                }
+                return Ok(Value::Object(Map::new()));
+            }
+            let mut list = Vec::new();
+            let mut map = Map::new();
+            if self.eat("]") {
+                return Ok(Value::Array(list));
+            }
+            loop {
+                let v = self.parse_ternary()?;
+                if self.eat(":") {
+                    let val = self.parse_ternary()?;
+                    map.insert(value_to_script_string(&v).unwrap_or_default(), val);
+                } else {
+                    list.push(v);
+                }
+                if self.eat(",") {
+                    continue;
+                }
+                if !self.eat("]") {
+                    return Err("expected ']'".to_string());
+                }
+                break;
+            }
+            if !map.is_empty() {
+                return Ok(Value::Object(map));
+            }
+            return Ok(Value::Array(list));
+        }
         if c == b'\'' || c == b'"' {
             self.pos += 1;
             let start = self.pos;
@@ -408,6 +513,11 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
                 return Ok(Value::Number(Number::from(n)));
             }
             let text = String::from_utf8_lossy(&self.src[start..self.pos]).to_string();
+            if !text.contains('.') {
+                if let Ok(n) = text.parse::<i64>() {
+                    return Ok(Value::Number(Number::from(n)));
+                }
+            }
             let f: f64 = text.parse().unwrap_or(0.0);
             return Ok(num_f64(f));
         }
@@ -456,6 +566,12 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
                 }
                 let member = String::from_utf8_lossy(&self.src[fstart..self.pos]).to_string();
                 token = format!("{}.{}", token, member);
+                if token.starts_with("Math.")
+                    && self.src[self.pos..].starts_with(b"(")
+                    && !self.src[self.pos..].starts_with(b"()")
+                {
+                    break;
+                }
                 if self.pos < self.src.len() && self.src[self.pos] == b'(' {
                     self.pos += 1;
                     if !self.eat(")") {
@@ -479,6 +595,12 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
         }
         if self.pos < self.src.len() && self.src[self.pos] == b'(' {
             return self.eval_call(&token);
+        }
+        if self.skip == 0 && token.starts_with("doc[") && token.ends_with("].value") {
+            let field = Self::doc_field_of(&token);
+            if self.env.c.values(&field).0.is_empty() {
+                return Err(MISSING_DOC_VALUE.to_string());
+            }
         }
         let v = self.env.resolve_path(&token);
         if let Some(base) = token.strip_suffix(".size()") {
@@ -559,11 +681,15 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
             "Math.pow" if args.len() == 2 => Ok(num_f64(
                 script_float(&args[0]).powf(script_float(&args[1])),
             )),
-            _ => Err(format!("unknown function [{}]", fn_name)),
+            _ => match crate::script_ctx::score_function(fn_name, &args, self.env.c) {
+                Some(f) => Ok(num_f64(f)),
+                None => Err(format!("unknown function [{}]", fn_name)),
+            },
         }
     }
 }
 
+#[allow(dead_code)] // no longer used by _execute, which runs on the pl_* engine
 pub fn format_script_value(v: &Value) -> String {
     match v {
         Value::Null => "null".to_string(),
@@ -606,796 +732,6 @@ pub fn script_params_of(bm: &serde_json::Map<String, Value>) -> serde_json::Map<
         .unwrap_or_default()
 }
 
-fn script_doc_guard(src: &str, c: &QueryCtx) -> Result<(), String> {
-    let bytes = src.as_bytes();
-    let mut i = 0usize;
-    while let Some(pos) = src[i..].find("doc[") {
-        let start = i + pos + 4;
-        let mut j = start;
-        while j < bytes.len() && bytes[j] == b' ' {
-            j += 1;
-        }
-        if j < bytes.len() && (bytes[j] == b'\'' || bytes[j] == b'"') {
-            let q = bytes[j];
-            j += 1;
-            let fstart = j;
-            while j < bytes.len() && bytes[j] != q {
-                j += 1;
-            }
-            let field = &src[fstart..j];
-            let mut k = j + 1;
-            if k < bytes.len() && bytes[k] == b']' {
-                k += 1;
-            }
-            if src[k..].starts_with(".value") && !c.has_field(field) {
-                return Err(format!("No field found for [{}] in mapping", field));
-            }
-        }
-        i = start;
-    }
-    Ok(())
-}
-
-impl<'a> QueryCtx<'a> {
-    pub fn eval_script_query(&self, body: &Value) -> Result<(bool, f64), crate::errors::ApiError> {
-        let bm = match body.as_object() {
-            Some(m) => m,
-            None => return Err(crate::errors::ApiError::parsing("[script] query malformed")),
-        };
-        let mut src = bm
-            .get("script")
-            .and_then(|s| s.as_str())
-            .unwrap_or("")
-            .to_string();
-        if src.is_empty() {
-            if let Some(sm) = bm.get("script").and_then(|s| s.as_object()) {
-                src = sm
-                    .get("source")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if src.is_empty() {
-                    src = sm
-                        .get("script")
-                        .and_then(|s| s.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                }
-            }
-        }
-        if src.is_empty() {
-            if let Some(sm) = bm.get("script").and_then(|s| s.as_object()) {
-                src = sm
-                    .get("source")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("")
-                    .to_string();
-            }
-        }
-        let mut params = script_params_of(bm);
-        if let Some(sm) = bm.get("script").and_then(|s| s.as_object()) {
-            params = script_params_of(sm);
-        }
-        let env = ScriptEnv { c: self, params };
-        if let Err(e) = script_doc_guard(&src, self) {
-            return Err(crate::eval_extra::shard_error(
-                400,
-                "script_exception",
-                &format!("failed to create query: {}", e),
-            ));
-        }
-        match env.eval_script_expression(&src) {
-            Ok(v) => {
-                if truthy(&v) {
-                    let boost = bm.get("boost").and_then(to_f64).unwrap_or(1.0);
-                    Ok((true, boost))
-                } else {
-                    Ok((false, 0.0))
-                }
-            }
-            Err(e) => Err(crate::eval_extra::shard_error(
-                400,
-                "script_exception",
-                &format!("failed to create query: {}", e),
-            )),
-        }
-    }
-
-    pub fn eval_script_score(&self, body: &Value) -> Result<(bool, f64), crate::errors::ApiError> {
-        let bm = match body.as_object() {
-            Some(m) => m,
-            None => return Err(crate::errors::ApiError::parsing("[script_score] query malformed")),
-        };
-        let inner = match bm.get("query").and_then(|q| q.as_object()) {
-            Some(q) => q,
-            None => {
-                return Err(crate::errors::ApiError::parsing(
-                    "[script_score] requires 'query'",
-                ))
-            }
-        };
-        let (matched, base_score) = self.eval(inner)?;
-        if !matched {
-            return Ok((false, 0.0));
-        }
-        let sm = match bm.get("script").and_then(|s| s.as_object()) {
-            Some(s) => s,
-            None => return Ok((true, 1.0)),
-        };
-        let src = sm.get("source").and_then(|s| s.as_str()).unwrap_or("");
-        let mut params = script_params_of(sm);
-        params.insert("__score".to_string(), serde_json::json!(base_score));
-        let env = ScriptEnv { c: self, params };
-        if let Err(e) = script_doc_guard(src, self) {
-            return Err(crate::eval_extra::shard_error(
-                400,
-                "script_exception",
-                &format!("failed to create query: {}", e),
-            ));
-        }
-        let score = match env.eval_script_expression(src) {
-            Ok(v) => script_float(&v),
-            Err(e) => {
-                return Err(crate::eval_extra::shard_error(
-                    400,
-                    "script_exception",
-                    &format!("failed to create query: {}", e),
-                ))
-            }
-        };
-        if !score.is_finite() || score < 0.0 {
-            return Err(crate::eval_extra::shard_error(
-                400,
-                "illegal_argument_exception",
-                &format!("script_score script returned an invalid score [{:?}]", score),
-            ));
-        }
-        if let Some(min) = bm.get("min_score").and_then(to_f64) {
-            if score < min {
-                return Ok((false, 0.0));
-            }
-        }
-        Ok((true, score))
-    }
-}
-
 pub fn _value_to_script_string_public(v: &Value) -> Option<String> {
     value_to_script_string(v)
-}
-
-// ---------------------------------------------- scripted_metric mini-executor
-
-enum SmExpr {
-    Val(Value),
-    Array(Vec<SmExpr>),
-    MapLit(Vec<(String, SmExpr)>),
-    Path(String),
-    Call {
-        recv: String,
-        method: String,
-        args: Vec<SmExpr>,
-    },
-    Binary {
-        op: u8,
-        lhs: Box<SmExpr>,
-        rhs: Box<SmExpr>,
-    },
-}
-
-fn sm_ident_char(c: u8) -> bool {
-    c.is_ascii_alphanumeric() || c == b'_'
-}
-
-fn sm_len(v: &Value) -> Value {
-    match v {
-        Value::Array(a) => Value::Number(Number::from(a.len() as i64)),
-        Value::String(s) => Value::Number(Number::from(s.chars().count() as i64)),
-        Value::Object(m) => Value::Number(Number::from(m.len() as i64)),
-        _ => Value::Number(Number::from(0)),
-    }
-}
-
-fn sm_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
-    if let (Some(x), Some(y)) = (to_f64(a), to_f64(b)) {
-        return x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal);
-    }
-    value_to_string(a)
-        .unwrap_or_default()
-        .cmp(&value_to_string(b).unwrap_or_default())
-}
-
-fn sm_get_path(path: &str, locals: &Map<String, Value>, env: &ScriptEnv) -> Value {
-    if path.starts_with("doc") || path.starts_with("params") || path.starts_with("_value") {
-        return env.resolve_path(path);
-    }
-    let mut segs = path.split('.');
-    let head = segs.next().unwrap_or("");
-    let mut cur = match locals.get(head) {
-        Some(v) => v.clone(),
-        None => env.resolve_path(path),
-    };
-    for seg in segs {
-        cur = match cur {
-            Value::Object(m) => m.get(seg).cloned().unwrap_or(Value::Null),
-            Value::Array(a) => {
-                if seg == "length" {
-                    Value::Number(Number::from(a.len() as i64))
-                } else {
-                    Value::Null
-                }
-            }
-            _ => Value::Null,
-        };
-    }
-    cur
-}
-
-fn sm_path_slot<'a>(path: &str, locals: &'a mut Map<String, Value>) -> Option<&'a mut Value> {
-    let mut segs: Vec<&str> = path.split('.').collect();
-    if segs.is_empty() {
-        return None;
-    }
-    let head = segs.remove(0);
-    if !locals.contains_key(head) {
-        locals.insert(head.to_string(), Value::Object(Map::new()));
-    }
-    let mut cur = locals.get_mut(head)?;
-    for seg in segs {
-        match cur {
-            Value::Object(m) => {
-                if !m.contains_key(seg) {
-                    m.insert(seg.to_string(), Value::Object(Map::new()));
-                }
-                cur = m.get_mut(seg)?;
-            }
-            _ => return None,
-        }
-    }
-    Some(cur)
-}
-
-fn sm_eval(e: &SmExpr, locals: &Map<String, Value>, env: &ScriptEnv) -> Value {
-    match e {
-        SmExpr::Val(v) => v.clone(),
-        SmExpr::Array(items) => {
-            Value::Array(items.iter().map(|i| sm_eval(i, locals, env)).collect())
-        }
-        SmExpr::MapLit(entries) => {
-            let mut m = Map::new();
-            for (k, v) in entries {
-                m.insert(k.clone(), sm_eval(v, locals, env));
-            }
-            Value::Object(m)
-        }
-        SmExpr::Path(p) => sm_get_path(p, locals, env),
-        SmExpr::Call { recv, method, .. } => match method.as_str() {
-            "size" => sm_len(&sm_get_path(recv, locals, env)),
-            _ => Value::Null,
-        },
-        SmExpr::Binary { op, lhs, rhs } => {
-            let a = sm_eval(lhs, locals, env);
-            let b = sm_eval(rhs, locals, env);
-            match op {
-                b'+' => {
-                    if let Value::String(s) = &a {
-                        Value::String(format!(
-                            "{}{}",
-                            s,
-                            value_to_script_string(&b).unwrap_or_default()
-                        ))
-                    } else {
-                        num_f64(script_float(&a) + script_float(&b))
-                    }
-                }
-                b'-' => num_f64(script_float(&a) - script_float(&b)),
-                b'*' => num_f64(script_float(&a) * script_float(&b)),
-                b'/' => {
-                    let d = script_float(&b);
-                    if d == 0.0 {
-                        num_f64(f64::INFINITY)
-                    } else {
-                        num_f64(script_float(&a) / d)
-                    }
-                }
-                _ => Value::Null,
-            }
-        }
-    }
-}
-
-fn sm_exec_expr_stmt(e: &SmExpr, locals: &mut Map<String, Value>, env: &ScriptEnv) {
-    if let SmExpr::Call { recv, method, args } = e {
-        match method.as_str() {
-            "add" => {
-                let v = args
-                    .first()
-                    .map(|a| sm_eval(a, locals, env))
-                    .unwrap_or(Value::Null);
-                if let Some(slot) = sm_path_slot(recv, locals) {
-                    if let Value::Array(a) = slot {
-                        a.push(v);
-                    }
-                }
-            }
-            "addAll" => {
-                let v = args
-                    .first()
-                    .map(|a| sm_eval(a, locals, env))
-                    .unwrap_or(Value::Null);
-                if let Some(slot) = sm_path_slot(recv, locals) {
-                    if let Value::Array(a) = slot {
-                        if let Value::Array(src) = v {
-                            a.extend(src);
-                        }
-                    }
-                }
-            }
-            "sort" => {
-                if let Some(SmExpr::Path(p)) = args.first() {
-                    if let Some(slot) = sm_path_slot(p, locals) {
-                        if let Value::Array(a) = slot {
-                            a.sort_by(sm_cmp);
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-struct SmParser<'a> {
-    src: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> SmParser<'a> {
-    fn skip_ws(&mut self) {
-        while self.pos < self.src.len() && (self.src[self.pos] as char).is_whitespace() {
-            self.pos += 1;
-        }
-    }
-
-    fn peek(&self) -> u8 {
-        if self.pos < self.src.len() {
-            self.src[self.pos]
-        } else {
-            0
-        }
-    }
-
-    fn word_at(&self, kw: &str) -> bool {
-        let k = kw.as_bytes();
-        if self.pos + k.len() > self.src.len() || &self.src[self.pos..self.pos + k.len()] != k {
-            return false;
-        }
-        let after = self.pos + k.len();
-        after >= self.src.len() || !sm_ident_char(self.src[after])
-    }
-
-    fn eat(&mut self, ch: u8) -> bool {
-        self.skip_ws();
-        if self.peek() == ch {
-            self.pos += 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn exec_block(
-        &mut self,
-        locals: &mut Map<String, Value>,
-        env: &ScriptEnv,
-        in_brace: bool,
-    ) -> Result<Value, String> {
-        loop {
-            self.skip_ws();
-            if self.pos >= self.src.len() {
-                return Ok(Value::Null);
-            }
-            if self.peek() == b';' {
-                self.pos += 1;
-                continue;
-            }
-            if in_brace && self.peek() == b'}' {
-                self.pos += 1;
-                return Ok(Value::Null);
-            }
-            if self.word_at("for") {
-                self.pos += 3;
-                self.skip_ws();
-                if !self.eat(b'(') {
-                    return Err("expected '(' after for".to_string());
-                }
-                let hstart = self.pos;
-                while self.pos < self.src.len() && self.peek() != b')' {
-                    self.pos += 1;
-                }
-                let header = String::from_utf8_lossy(&self.src[hstart..self.pos]).to_string();
-                if self.pos < self.src.len() {
-                    self.pos += 1;
-                }
-                let mut parts = header.split_whitespace();
-                let var = parts.next().unwrap_or("").to_string();
-                let _in = parts.next().unwrap_or("");
-                let iter_src: String = parts.collect::<Vec<_>>().join(" ");
-                if var.is_empty() || iter_src.is_empty() {
-                    return Err(format!("bad for header [{}]", header));
-                }
-                let iter_expr = SmParser {
-                    src: iter_src.as_bytes(),
-                    pos: 0,
-                }
-                .parse_expr()?;
-                self.skip_ws();
-                if !self.eat(b'{') {
-                    return Err("expected '{' after for".to_string());
-                }
-                let bstart = self.pos;
-                let mut depth = 1i32;
-                while self.pos < self.src.len() && depth > 0 {
-                    match self.src[self.pos] {
-                        b'{' => depth += 1,
-                        b'}' => depth -= 1,
-                        _ => {}
-                    }
-                    self.pos += 1;
-                }
-                let bend = if self.pos > bstart {
-                    self.pos - 1
-                } else {
-                    self.pos
-                };
-                let body = String::from_utf8_lossy(&self.src[bstart..bend]).to_string();
-                let items = sm_eval(&iter_expr, locals, env);
-                let arr = match items {
-                    Value::Array(a) => a,
-                    other => vec![other],
-                };
-                for it in arr {
-                    locals.insert(var.clone(), it);
-                    exec_statements(&body, locals, env)?;
-                }
-                continue;
-            }
-            let start = self.pos;
-            let mut depth = 0i32;
-            while self.pos < self.src.len() {
-                match self.src[self.pos] {
-                    b'(' | b'[' => depth += 1,
-                    b')' | b']' => depth -= 1,
-                    b';' if depth == 0 => break,
-                    b'}' if depth == 0 && in_brace => break,
-                    _ => {}
-                }
-                self.pos += 1;
-            }
-            let text = String::from_utf8_lossy(&self.src[start..self.pos])
-                .trim()
-                .to_string();
-            if self.peek() == b';' {
-                self.pos += 1;
-            }
-            if text.is_empty() {
-                continue;
-            }
-            if let Some(v) = exec_stmt(&text, locals, env)? {
-                return Ok(v);
-            }
-        }
-    }
-
-    fn parse_expr(&mut self) -> Result<SmExpr, String> {
-        let mut l = self.parse_multiplicative()?;
-        loop {
-            self.skip_ws();
-            let c = self.peek();
-            if c == b'+' || c == b'-' {
-                if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
-                    break;
-                }
-                self.pos += 1;
-                let r = self.parse_multiplicative()?;
-                l = SmExpr::Binary {
-                    op: c,
-                    lhs: Box::new(l),
-                    rhs: Box::new(r),
-                };
-            } else {
-                break;
-            }
-        }
-        Ok(l)
-    }
-
-    fn parse_multiplicative(&mut self) -> Result<SmExpr, String> {
-        let mut l = self.parse_primary()?;
-        loop {
-            self.skip_ws();
-            let c = self.peek();
-            if c == b'*' || c == b'/' || c == b'%' {
-                self.pos += 1;
-                let r = self.parse_primary()?;
-                l = SmExpr::Binary {
-                    op: c,
-                    lhs: Box::new(l),
-                    rhs: Box::new(r),
-                };
-            } else {
-                break;
-            }
-        }
-        Ok(l)
-    }
-
-    fn parse_primary(&mut self) -> Result<SmExpr, String> {
-        self.skip_ws();
-        if self.pos >= self.src.len() {
-            return Err("unexpected end of expression".to_string());
-        }
-        let c = self.src[self.pos];
-        if c == b'(' {
-            self.pos += 1;
-            let e = self.parse_expr()?;
-            if !self.eat(b')') {
-                return Err("expected ')'".to_string());
-            }
-            return Ok(e);
-        }
-        if c == b'\'' || c == b'"' {
-            self.pos += 1;
-            let start = self.pos;
-            while self.pos < self.src.len() && self.src[self.pos] != c {
-                self.pos += 1;
-            }
-            let s = String::from_utf8_lossy(&self.src[start..self.pos]).to_string();
-            if self.pos < self.src.len() {
-                self.pos += 1;
-            }
-            return Ok(SmExpr::Val(Value::String(s)));
-        }
-        if c.is_ascii_digit() {
-            let start = self.pos;
-            while self.pos < self.src.len()
-                && (self.src[self.pos].is_ascii_digit() || self.src[self.pos] == b'.')
-            {
-                self.pos += 1;
-            }
-            if self.pos < self.src.len()
-                && (self.src[self.pos] == b'L' || self.src[self.pos] == b'l')
-            {
-                self.pos += 1;
-                let text = String::from_utf8_lossy(&self.src[start..self.pos - 1]).to_string();
-                let n: i64 = text.trim_end_matches('.').parse().unwrap_or(0);
-                return Ok(SmExpr::Val(Value::Number(Number::from(n))));
-            }
-            let text = String::from_utf8_lossy(&self.src[start..self.pos]).to_string();
-            let f: f64 = text.parse().unwrap_or(0.0);
-            return Ok(SmExpr::Val(num_f64(f)));
-        }
-        if c == b'[' {
-            return self.parse_bracket();
-        }
-        if c.is_ascii_alphabetic() || c == b'_' {
-            return self.parse_ident();
-        }
-        Err(format!("unexpected char [{}]", c as char))
-    }
-
-    fn parse_bracket(&mut self) -> Result<SmExpr, String> {
-        self.pos += 1;
-        self.skip_ws();
-        if self.peek() == b']' {
-            self.pos += 1;
-            return Ok(SmExpr::Array(vec![]));
-        }
-        let first = self.parse_expr()?;
-        self.skip_ws();
-        if self.peek() == b':' {
-            self.pos += 1;
-            let key = match &first {
-                SmExpr::Val(Value::String(s)) => s.clone(),
-                _ => return Err("map key must be a string literal".to_string()),
-            };
-            let mut entries = vec![(key, self.parse_expr()?)];
-            loop {
-                self.skip_ws();
-                if self.peek() == b',' {
-                    self.pos += 1;
-                    let ke = self.parse_expr()?;
-                    let k = match ke {
-                        SmExpr::Val(Value::String(s)) => s,
-                        _ => return Err("map key must be a string literal".to_string()),
-                    };
-                    if !self.eat(b':') {
-                        return Err("expected ':' in map literal".to_string());
-                    }
-                    entries.push((k, self.parse_expr()?));
-                    continue;
-                }
-                if self.peek() == b']' {
-                    self.pos += 1;
-                    break;
-                }
-                return Err("bad map literal".to_string());
-            }
-            return Ok(SmExpr::MapLit(entries));
-        }
-        let mut items = vec![first];
-        loop {
-            self.skip_ws();
-            if self.peek() == b',' {
-                self.pos += 1;
-                items.push(self.parse_expr()?);
-                continue;
-            }
-            if self.peek() == b']' {
-                self.pos += 1;
-                break;
-            }
-            return Err("bad array literal".to_string());
-        }
-        Ok(SmExpr::Array(items))
-    }
-
-    fn parse_ident(&mut self) -> Result<SmExpr, String> {
-        let start = self.pos;
-        while self.pos < self.src.len()
-            && (sm_ident_char(self.src[self.pos]) || self.src[self.pos] == b'.')
-        {
-            self.pos += 1;
-        }
-        let name = String::from_utf8_lossy(&self.src[start..self.pos]).to_string();
-        self.skip_ws();
-        if self.peek() != b'(' {
-            return Ok(SmExpr::Path(name));
-        }
-        self.pos += 1;
-        let mut args = Vec::new();
-        self.skip_ws();
-        if self.peek() != b')' {
-            loop {
-                args.push(self.parse_expr()?);
-                self.skip_ws();
-                if self.peek() == b',' {
-                    self.pos += 1;
-                    continue;
-                }
-                break;
-            }
-        }
-        self.skip_ws();
-        if !self.eat(b')') {
-            return Err("expected ')' after call args".to_string());
-        }
-        let (recv, method) = match name.rsplit_once('.') {
-            Some((r, m)) => (r.to_string(), m.to_string()),
-            None => (String::new(), name),
-        };
-        Ok(SmExpr::Call { recv, method, args })
-    }
-}
-
-fn sm_find_assign(text: &str) -> Option<(usize, u8)> {
-    let b = text.as_bytes();
-    let mut depth = 0i32;
-    let mut quote = 0u8;
-    let mut i = 0;
-    while i < b.len() {
-        let c = b[i];
-        if quote != 0 {
-            if c == quote {
-                quote = 0;
-            }
-            i += 1;
-            continue;
-        }
-        match c {
-            b'\'' | b'"' => quote = c,
-            b'(' | b'[' => depth += 1,
-            b')' | b']' => depth -= 1,
-            b'=' if depth == 0 && i + 1 < b.len() && b[i + 1] != b'=' => {
-                let prev = if i > 0 { b[i - 1] } else { 0 };
-                let op = if prev == b'+' {
-                    b'+'
-                } else if prev == b'-' {
-                    b'-'
-                } else if prev == b'=' || prev == b'!' || prev == b'<' || prev == b'>' {
-                    i += 1;
-                    continue;
-                } else {
-                    b'='
-                };
-                return Some((i, op));
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    None
-}
-
-fn exec_stmt(
-    text: &str,
-    locals: &mut Map<String, Value>,
-    env: &ScriptEnv,
-) -> Result<Option<Value>, String> {
-    let text = text.trim();
-    if text.is_empty() {
-        return Ok(None);
-    }
-    if let Some(rest) = text.strip_prefix("return") {
-        let boundary = rest
-            .as_bytes()
-            .first()
-            .map(|c| !sm_ident_char(*c))
-            .unwrap_or(true);
-        if boundary {
-            let e = SmParser {
-                src: rest.trim().as_bytes(),
-                pos: 0,
-            }
-            .parse_expr()?;
-            return Ok(Some(sm_eval(&e, locals, env)));
-        }
-    }
-    for kw in [
-        "double ", "int ", "long ", "float ", "short ", "byte ", "boolean ", "char ", "String ",
-        "List ", "Map ", "ArrayList ", "HashMap ", "def ", "var ",
-    ] {
-        if let Some(rest) = text.strip_prefix(kw) {
-            return exec_stmt(rest, locals, env);
-        }
-    }
-    if let Some((i, op)) = sm_find_assign(text) {
-        let (lhs, rhs) = if op == b'=' {
-            (text[..i].trim(), text[i + 1..].trim())
-        } else {
-            (text[..i - 1].trim(), text[i + 1..].trim())
-        };
-        let rexpr = SmParser {
-            src: rhs.as_bytes(),
-            pos: 0,
-        }
-        .parse_expr()?;
-        let val = sm_eval(&rexpr, locals, env);
-        let newv = if op == b'+' {
-            let cur = sm_get_path(lhs, locals, env);
-            if let Value::String(s) = &cur {
-                Value::String(format!(
-                    "{}{}",
-                    s,
-                    value_to_script_string(&val).unwrap_or_default()
-                ))
-            } else {
-                num_f64(script_float(&cur) + script_float(&val))
-            }
-        } else {
-            val
-        };
-        if let Some(slot) = sm_path_slot(lhs, locals) {
-            *slot = newv;
-        }
-        return Ok(None);
-    }
-    let e = SmParser {
-        src: text.as_bytes(),
-        pos: 0,
-    }
-    .parse_expr()?;
-    sm_exec_expr_stmt(&e, locals, env);
-    Ok(None)
-}
-
-pub fn exec_statements(
-    src: &str,
-    locals: &mut Map<String, Value>,
-    env: &ScriptEnv,
-) -> Result<Value, String> {
-    let mut p = SmParser {
-        src: src.as_bytes(),
-        pos: 0,
-    };
-    p.exec_block(locals, env, false)
 }
