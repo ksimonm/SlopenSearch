@@ -277,6 +277,11 @@ fn bad_param(req: &Req) -> Option<Response> {
         "index", "id", "routing", "preference", "realtime", "refresh", "stored_fields",
         "version", "version_type", "_source", "_source_includes", "_source_excludes",
     ];
+    if let Some(v) = req.param("realtime") {
+        if let Err(e) = crate::errors::strict_bool(v) {
+            return Some(err_response(e));
+        }
+    }
     let mut invalid: Vec<&str> = Vec::new();
     for (k, _) in &req.query {
         if !ALLOWED.contains(&k.as_str()) && !invalid.contains(&k.as_str()) {

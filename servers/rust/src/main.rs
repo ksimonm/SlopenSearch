@@ -403,6 +403,17 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
         }
     }
 
+    for flag in ["pretty", "human", "error_trace"] {
+        if let Some(v) = req.param(flag) {
+            if let Err(e) = errors::strict_bool(v) {
+                let mut resp = errors::err_response(e);
+                resp.headers_mut()
+                    .insert("x-opensearch-version", "OpenSearch/3.9.0 (opensearch)".parse().unwrap());
+                return resp;
+            }
+        }
+    }
+
     let mut resp = {
         let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
         // Requests that may compile or run scripts get a large stack: the
@@ -447,7 +458,7 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
             }
         }
         if !ordered || reencoded {
-            if pretty && status < 400 {
+            if pretty {
                 if let Ok(v) = serde_json::from_slice::<Value>(&body) {
                     body = pretty_json(&v).into_bytes();
                 }

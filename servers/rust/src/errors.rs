@@ -274,3 +274,16 @@ pub fn unrecognized_message(path: &str, invalid: &[&str], candidates: &[&str], k
     }
     msg
 }
+
+/// Booleans.parseBoolean: only "true", "false" and the empty value are accepted.
+pub fn strict_bool(v: &str) -> Result<bool, ApiError> {
+    match v {
+        "" | "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(ApiError::new(
+            "illegal_argument_exception",
+            &format!("Failed to parse value [{}] as only [true] or [false] are allowed.", v),
+            400,
+        )),
+    }
+}
