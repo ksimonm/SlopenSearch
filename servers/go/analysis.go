@@ -20,34 +20,6 @@ var englishStopWords = map[string]bool{
 	"to": true, "was": true, "will": true, "with": true, "were": true, "through": true,
 }
 
-func englishStem(word string) string {
-	w := strings.ToLower(word)
-	if len(w) <= 3 {
-		return w
-	}
-	switch {
-	case strings.HasSuffix(w, "ies") && len(w) > 4:
-		return w[:len(w)-3] + "i"
-	case strings.HasSuffix(w, "ing") && len(w) > 5:
-		w = w[:len(w)-3]
-		if len(w) > 2 && w[len(w)-1] == w[len(w)-2] && !strings.ContainsRune("aeiou", rune(w[len(w)-1])) {
-			w = w[:len(w)-1]
-		}
-		return w
-	case strings.HasSuffix(w, "ed") && len(w) > 4:
-		w = w[:len(w)-2]
-		if len(w) > 2 && w[len(w)-1] == w[len(w)-2] && !strings.ContainsRune("aeiou", rune(w[len(w)-1])) {
-			w = w[:len(w)-1]
-		}
-		return w
-	case strings.HasSuffix(w, "es") && len(w) > 3:
-		return w[:len(w)-2]
-	case strings.HasSuffix(w, "s") && !strings.HasSuffix(w, "ss") && len(w) > 3:
-		return w[:len(w)-1]
-	}
-	return w
-}
-
 func simpleAnalyze(text string) []string {
 	out := []string{}
 	var buf []rune
@@ -172,11 +144,9 @@ func tokenTypeForRunes(rs []rune) string {
 }
 
 func simpleCaseFold(s string) string {
-	s = strings.ToLower(s)
-	// Lucene's lowercase filter uses simple case folding: Greek capital sigma
-	// always maps to sigma, never to final sigma.
-	s = strings.ReplaceAll(s, "ς", "σ")
-	return s
+	// Lucene's LowerCaseFilter maps each code point with Java's
+	// Character.toLowerCase (capital sigma always becomes medial sigma).
+	return luceneLower(s)
 }
 
 // splitLongToken splits a token at maxLen UTF-16 code units.
@@ -219,6 +189,9 @@ func tokenizePositions(text string, simple bool) []analyzedToken {
 }
 
 func tokenizePositionsCase(text string, simple, lower bool, maxLen int) []analyzedToken {
+	if !simple {
+		return standardTokenizerTokens(text, lower, maxLen)
+	}
 	out := []analyzedToken{}
 	rs := []rune(text)
 	offs := make([]int, len(rs)+1)
@@ -535,53 +508,6 @@ func whitespaceAnalyzedTokens(text string) []analyzedToken {
 	return out
 }
 
-func cjkAnalyzedTokens(text string) []analyzedToken {
-	rs := []rune(text)
-	offs := make([]int, len(rs)+1)
-	for i, r := range rs {
-		offs[i+1] = offs[i] + runeWidth(r)
-	}
-	out := []analyzedToken{}
-	pos := 0
-	i := 0
-	for i < len(rs) {
-		r := rs[i]
-		if isHanRune(r) || isHangulRune(r) {
-			j := i
-			for j < len(rs) && (isHanRune(rs[j]) || isHangulRune(rs[j])) {
-				j++
-			}
-			runes := rs[i:j]
-			if len(runes) == 1 {
-				out = append(out, analyzedToken{term: strings.ToLower(string(runes[0])), start: offs[i], end: offs[i+1], pos: pos, typ: "<SINGLE>"})
-				pos++
-			} else {
-				for k := 0; k+1 < len(runes); k++ {
-					out = append(out, analyzedToken{term: strings.ToLower(string(runes[k : k+2])), start: offs[i+k], end: offs[i+k+2], pos: pos, typ: "<DOUBLE>"})
-					pos++
-				}
-			}
-			i = j
-			continue
-		}
-		// Non-CJK run: use the standard tokenizer with lowercasing.
-		j := i
-		for j < len(rs) && !isHanRune(rs[j]) && !isHangulRune(rs[j]) {
-			j++
-		}
-		for _, t := range tokenizePositions(string(rs[i:j]), false) {
-			delta := offs[i]
-			t.start += delta
-			t.end += delta
-			t.pos += pos
-			out = append(out, t)
-		}
-		pos += len(tokenizePositions(string(rs[i:j]), false))
-		i = j
-	}
-	return out
-}
-
 func paramInt(params map[string]any, key string, def int) int {
 	if params != nil {
 		if n, ok := toFloat(params[key]); ok {
@@ -663,25 +589,8 @@ func globalAnalyzerTokens(name, text string) ([]analyzedToken, bool) {
 		return fingerprintAnalyzedToken(text), true
 	case "lowercase":
 		return []analyzedToken{{term: strings.ToLower(text), start: 0, end: utf16Offset(text), pos: 0, typ: "word"}}, true
-	case "cjk":
-		return cjkAnalyzedTokens(text), true
-	case "english":
-		out := []analyzedToken{}
-		for _, t := range tokenizePositions(text, false) {
-			if englishStopWords[t.term] {
-				continue
-			}
-			t.term = englishStem(t.term)
-			out = append(out, t)
-		}
-		return out, true
 	}
-	if builtinAnalyzer(name) {
-		// Language analyzers share the standard tokenizer upstream; stemming is
-		// implemented separately where the language is supported.
-		return tokenizePositions(text, false), true
-	}
-	return nil, false
+	return languageAnalyzerTokens(name, text, nil)
 }
 
 // analyzeTokensWithIndex analyzes text with a named analyzer, resolving the
@@ -705,12 +614,6 @@ func analyzeTokensWithIndex(idx *Index, analyzer, text string) []analyzedToken {
 }
 
 func analyzeWithIndex(idx *Index, analyzer, text string) []string {
-	if c := prebuiltChain(analyzer); c != nil && c.builtin != "" && analyzer != "english" && analyzer != "cjk" &&
-		!(analysisScope{idx: idx}).indexHasAnalyzer(analyzer) {
-		// Language analyzers without a dedicated implementation keep the
-		// letter/digit tokenization used for query terms so far.
-		return analyzeWith(analyzer, text)
-	}
 	toks := analyzeTokensWithIndex(idx, analyzer, text)
 	out := make([]string, 0, len(toks))
 	for _, t := range toks {

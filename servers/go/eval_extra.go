@@ -2687,6 +2687,7 @@ func percolateHighlights(c *queryCtx, query map[string]any, cfg *highlightConfig
 	for slot, docRaw := range docs {
 		local := *cfg
 		local.terms, local.queryFields, local.queryPatterns = terms, qfields, qpatterns
+		local.query = stored
 		rendered := local.render(c.idx, docRaw)
 		for name, val := range rendered {
 			if len(docs) == 1 {

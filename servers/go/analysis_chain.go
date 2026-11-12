@@ -36,6 +36,8 @@ type analysisChain struct {
 	// keywordAttr reports whether a built-in analyzer carries the keyword
 	// attribute (stemming language analyzers).
 	keywordAttr bool
+	// params are the analyzer settings of a built-in language analyzer.
+	params map[string]any
 }
 
 // chainRun is the result of analyzing one text.
@@ -82,6 +84,12 @@ func copyTokens(toks []analyzedToken) []analyzedToken {
 // run analyzes one text. With stages set, every intermediate stream is kept.
 func (c *analysisChain) run(idx *Index, text string, stages bool) (chainRun, *apiError) {
 	res := chainRun{finalOffset: utf16Offset(text)}
+	if c.builtin != "" && isLanguageAnalyzer(c.builtin) {
+		toks, _ := languageAnalyzerTokens(c.builtin, text, c.params)
+		res.toks = toks
+		res.posCount = languageAnalyzerPositions(c.builtin, text, toks)
+		return res, nil
+	}
 	if c.builtin != "" {
 		toks, ok := globalAnalyzerTokens(c.builtin, text)
 		if !ok {
@@ -524,7 +532,7 @@ func (sc analysisScope) indexAnalyzerChain(name string) (*analysisChain, *apiErr
 		}
 		if c == nil {
 			// Language analyzers keep their prebuilt implementation.
-			c = &analysisChain{name: name, builtin: typ, keywordAttr: languageAnalyzerHasKeyword(typ)}
+			c = &analysisChain{name: name, builtin: typ, keywordAttr: languageAnalyzerHasKeyword(typ), params: p}
 		}
 		c.gap = gap
 		return c, nil
