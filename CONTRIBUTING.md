@@ -26,9 +26,10 @@ Rules:
 - Go: standard library only, `gofmt` clean. Rust: keep `cargo build` free of new warnings
   in the code you touch.
 
-Good areas to pick up: text analysis (`test_51`, `test_80`) and Painless (`test_43`)
-are the open work in both servers. The Go server is well ahead on text analysis, and
-the Rust server on Painless, so each is a ready-made reference for the other there.
+Good areas to pick up: the newest test files are the open work in both servers —
+suggesters (`test_50`), the HTTP layer and async tasks (`test_62`) and vector search
+(`test_72`). Where one server is ahead on a file, it is a ready-made reference for the
+other.
 
 ## Working with an AI coding agent
 
@@ -39,8 +40,8 @@ else. Start the agent in the repository root, pick a server and a test file, and
 
 | Server | Open test files |
 |---|---|
-| Go | `test_33_search_api`, `test_41_aggs_bucket`, `test_43_scripting`, `test_51_analysis`, `test_80_languages` |
-| Rust | `test_43_scripting`, `test_51_analysis`, `test_80_languages` |
+| Go | `test_50_suggester`, `test_61_concurrency`, `test_62_tasks_http`, `test_72_knn` |
+| Rust | `test_50_suggester`, `test_51_analysis`, `test_61_concurrency`, `test_62_tasks_http`, `test_72_knn`, `test_80_languages` |
 
 `make <server>-score` shows the current numbers.
 

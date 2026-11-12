@@ -19,12 +19,12 @@ SlopenSearch aims to speak the OpenSearch 3.9 REST API closely enough that an ex
 client does not notice the difference. There are two independent implementations, one in
 **Go** and one in **Rust**, and both are measured against the same black-box test suite.
 
-The suite *is* the specification: about 6,000 tests, each verified against a real
+The suite *is* the specification: about 6,700 tests, each verified against a real
 OpenSearch 3.9.0, pinning down status codes, error types, response shapes and quirks.
 
 ## Status
 
-Share of the suite passing (2026-11-10, `make go-score` / `make rust-score`):
+Share of the suite passing (2026-11-12, `make go-score` / `make rust-score`):
 
 | Area | Go | Rust |
 |---|---:|---:|
@@ -32,20 +32,24 @@ Share of the suite passing (2026-11-10, `make go-score` / `make rust-score`):
 | Index administration | 100% | 100% |
 | Documents, bulk, by-query | 100% | 100% |
 | Query DSL (full-text, term-level, compound, geo) | 100% | 100% |
-| Search API (sort, paging, highlight, scroll, PIT) | 99.8% | 100% |
+| Search API (sort, paging, highlight, scroll, PIT) | 100% | 100% |
 | Mappings and field types | 100% | 100% |
-| Aggregations | 99.6% | 100% |
-| Text analysis, languages | 57–66% | 6–40% |
+| Aggregations | 100% | 100% |
+| Text analysis, languages | 100% | 97–99% |
 | Ingest pipelines | 100% | 100% |
-| Scripting (Painless, search templates) | 18% | 29% |
-| **Total** | **85.1%** | **81.1%** |
+| Scripting (Painless, search templates) | 100% | 100% |
+| Suggesters | 46% | 42% |
+| Concurrency and load | 96% | 96% |
+| HTTP layer, async tasks | 89% | 57% |
+| Vector search (k-NN) | 48% | 33% |
+| **Total** | **96.8%** | **95.2%** |
 
-The Go server is now the further along, thanks to text analysis: it passes about two
-thirds of `test_51` and over half of `test_80`, where Rust is at 6% and 40%. Rust passes
-everything else in full; Go still misses a few tests in `test_33` and `test_41` and is
-behind on Painless.
-The remaining work is text analysis (`_analyze`, language analyzers, stemmers, token
-filters) and Painless. Both servers keep data in memory only.
+Both servers pass the original suite (everything up to `test_90`) in full or nearly so:
+Go all of it, Rust all but 18 tests in text analysis and languages. The open work is in
+the newest test files: the phrase and completion suggesters (`test_50`), `knn_score` and
+the Painless vector functions (`test_72`), long-running async tasks and, for Rust,
+compression and the task API (`test_62`), and a shard request cache (`test_61`).
+Both servers keep data in memory only.
 
 ## Quick start
 
@@ -101,12 +105,13 @@ Each file has a pytest marker, so an area can be run on its own (`ARGS="-m <mark
 | `search_api` | `test_33_search_api.py` | sort, paging, scroll, PIT, highlight, collapse, rescore, msearch, templates |
 | `aggs` | `test_41_aggs_bucket.py`, `test_42_aggs_metric.py` | bucket, metric and pipeline aggregations |
 | `scripting` | `test_43_scripting.py` | Painless, expressions, stored scripts, mustache |
+| — | `test_50_suggester.py` | term, phrase and completion suggesters (contexts, fuzzy, collate, errors) |
 | `analysis` | `test_51_analysis.py` | analyzers, tokenizers, token and char filters |
+| `concurrency` | `test_61_concurrency.py` | parallel writes, optimistic concurrency, races with admin calls, alias swaps, scroll/PIT snapshots, load |
+| `http` | `test_62_tasks_http.py` | async tasks (`wait_for_completion=false`, `_tasks`, `_rethrottle`, cancel), compression, content types, URL encoding, query-string and header handling |
 | `types` | `test_71_field_types.py` | field types and mapping parameters |
 | `knn` | `test_72_knn.py` | `knn_vector` mappings, knn query (filters, radial, nested), `knn_score` and painless vector functions |
-| `concurrency` | `test_61_concurrency.py` | parallel writes, optimistic concurrency, races with admin calls, alias swaps, scroll/PIT snapshots, load |
 | `i18n` | `test_80_languages.py` | ~60 scripts, language analyzers, Unicode corner cases |
-| `http` | `test_62_tasks_http.py` | async tasks (`wait_for_completion=false`, `_tasks`, `_rethrottle`, cancel), compression, content types, URL encoding, query-string and header handling |
 | `parity`, `mapping`, `smoke` | `test_00`–`test_90` | the original smaller suites |
 
 Opt-in suites that need more than one server process:

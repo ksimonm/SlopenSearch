@@ -45,10 +45,11 @@ reference with `make ref-up` and `curl localhost:9290/...`.
 
 ## Status
 
-81.1% of the suite passes (see the table in the [main README](../../README.md#status)),
-and every test file passes in full except three: text analysis (`test_51`, 6%),
-languages (`test_80`, 40%) and Painless scripting (`test_43`, 29%). All remaining
-failures are in those files; `make rust-test ARGS=tests/test_51_analysis.py` is the place
+95.2% of the suite passes (see the table in the [main README](../../README.md#status)).
+All of the original suite passes except 18 tests in text analysis (`test_51`) and
+languages (`test_80`); the open work is in the newer files: suggesters (`test_50`),
+the HTTP layer and async tasks (`test_62`), k-NN (`test_72`) and two concurrency tests
+(`test_61`). `make rust-test ARGS=tests/test_62_tasks_http.py` is a good place
 to start. The build still has many warnings; cleaning them up is welcome.
 
 ## Rules
