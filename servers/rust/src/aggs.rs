@@ -2956,100 +2956,13 @@ fn doc_script_vm(idx: &Index, doc: &Value) -> Map<String, Value> {
     }
 }
 
-fn scripted_metric_script(t: &Map<String, Value>, key: &str) -> Option<String> {
-    t.get(key).and_then(|v| {
-        if let Some(s) = v.as_str() {
-            Some(s.to_string())
-        } else {
-            v.as_object()
-                .and_then(|m| m.get("source"))
-                .and_then(|s| s.as_str())
-                .map(|s| s.to_string())
-        }
-    })
-}
-
 fn scripted_metric_agg(
     name: &str,
     t: &Map<String, Value>,
     docs: &[&Value],
     idx: &Index,
 ) -> Result<Value, ApiError> {
-    let map_src = match scripted_metric_script(t, "map_script") {
-        Some(s) => s,
-        None => {
-            return Err(ApiError::new(
-                "illegal_argument_exception",
-                "Required [map_script]",
-                400,
-            ))
-        }
-    };
-    let combine_src = match scripted_metric_script(t, "combine_script") {
-        Some(s) => s,
-        None => {
-            return Err(search_phase_illegal(&format!(
-                "[combineScript] must not be null: [{}]",
-                name
-            )))
-        }
-    };
-    let reduce_src = match scripted_metric_script(t, "reduce_script") {
-        Some(s) => s,
-        None => {
-            return Err(search_phase_illegal(&format!(
-                "[reduceScript] must not be null: [{}]",
-                name
-            )))
-        }
-    };
-    let init_src = scripted_metric_script(t, "init_script");
-    let params: Map<String, Value> = t
-        .get("params")
-        .and_then(|p| p.as_object())
-        .cloned()
-        .unwrap_or_default();
-    let script_err = |e: String| -> ApiError {
-        ApiError::new("search_phase_execution_exception", &e, 500)
-    };
-    let empty_doc = Value::Null;
-    let mut locals: Map<String, Value> = Map::new();
-    locals.insert("state".to_string(), Value::Object(Map::new()));
-    if let Some(src) = &init_src {
-        let ctx = QueryCtx::with_values(idx, "", &empty_doc, Map::new());
-        let env = crate::painless::ScriptEnv {
-            c: &ctx,
-            params: params.clone(),
-        };
-        crate::painless::exec_statements(src, &mut locals, &env).map_err(script_err)?;
-    }
-    for d in docs {
-        let vm = doc_script_vm(idx, d);
-        let ctx = QueryCtx::with_values(idx, "", d, vm);
-        let env = crate::painless::ScriptEnv {
-            c: &ctx,
-            params: params.clone(),
-        };
-        crate::painless::exec_statements(&map_src, &mut locals, &env).map_err(script_err)?;
-    }
-    let combined = {
-        let ctx = QueryCtx::with_values(idx, "", &empty_doc, Map::new());
-        let env = crate::painless::ScriptEnv {
-            c: &ctx,
-            params: params.clone(),
-        };
-        crate::painless::exec_statements(&combine_src, &mut locals, &env).map_err(script_err)?
-    };
-    locals.insert("states".to_string(), Value::Array(vec![combined]));
-    let result = {
-        let ctx = QueryCtx::with_values(idx, "", &empty_doc, Map::new());
-        let env = crate::painless::ScriptEnv {
-            c: &ctx,
-            params,
-        };
-        crate::painless::exec_statements(&reduce_src, &mut locals, &env).map_err(script_err)?
-    };
-    Ok(json!({"value": result}))
+    crate::script_ctx::scripted_metric(name, t, docs, idx, &|d| doc_script_vm(idx, d))
 }
 
 fn matrix_stats_agg(
@@ -5470,10 +5383,21 @@ fn terms_agg(
             }
         } else if script_only {
             let r = run_agg_script(idx, d, script_src.as_deref().unwrap(), &script_params, None)?;
-            match r {
-                Value::Null => vec![],
-                other => vec![Value::String(key_string(&other))],
-            }
+            let items = match r {
+                Value::Array(a) => a,
+                other => vec![other],
+            };
+            items
+                .into_iter()
+                .filter(|v| !v.is_null())
+                .map(|v| match &v {
+                    // a double script value keys as Java's Double.toString
+                    Value::Number(n) if n.is_f64() => {
+                        Value::String(java_double_string(n.as_f64().unwrap_or(0.0)))
+                    }
+                    other => Value::String(key_string(other)),
+                })
+                .collect()
         } else {
             let vals = doc_field_values(idx, d, &field, prefix);
             let mut eff: Vec<Value> = vals;
@@ -6435,6 +6359,50 @@ fn variable_width_histogram(
     Ok(json!({"buckets": out}))
 }
 
+/// Numeric values of a numeric bucket aggregation for each document: the
+/// field's values, or the values of its script when it has no field (or the
+/// field values passed through a value script).
+fn numeric_agg_values(
+    idx: &Index,
+    t: &Map<String, Value>,
+    docs: &[&Value],
+    field: &str,
+    prefix: &str,
+) -> Result<Vec<Vec<f64>>, ApiError> {
+    let script = agg_script_source(t);
+    let mut out = Vec::with_capacity(docs.len());
+    for d in docs {
+        let mut vals = Vec::new();
+        match &script {
+            Some(src) if field.is_empty() => {
+                let r = run_agg_script(idx, d, src, &Map::new(), None)?;
+                for v in values_of(Some(&r)) {
+                    if let Some(f) = to_f64(&v) {
+                        vals.push(f);
+                    }
+                }
+            }
+            Some(src) => {
+                for v in doc_field_values(idx, d, field, prefix) {
+                    let r = run_agg_script(idx, d, src, &Map::new(), Some(&v))?;
+                    if let Some(f) = to_f64(&r) {
+                        vals.push(f);
+                    }
+                }
+            }
+            None => {
+                for v in doc_field_values(idx, d, field, prefix) {
+                    if let Some(f) = to_f64(&v) {
+                        vals.push(f);
+                    }
+                }
+            }
+        }
+        out.push(vals);
+    }
+    Ok(out)
+}
+
 fn histogram_agg(
     name: &str,
     t: &Map<String, Value>,
@@ -6486,13 +6454,8 @@ fn histogram_agg(
         .unwrap_or(0);
     let keyed = t.get("keyed").and_then(|v| v.as_bool()).unwrap_or(false);
     let mut counts: HashMap<i64, Vec<&Value>> = HashMap::new();
-    for d in docs {
-        let mut vals: Vec<f64> = vec![];
-        for v in doc_field_values(idx, d, &field, prefix) {
-            if let Some(x) = to_f64(&v) {
-                vals.push(x);
-            }
-        }
+    let per_doc = numeric_agg_values(idx, t, docs, &field, prefix)?;
+    for (d, mut vals) in docs.iter().zip(per_doc) {
         if vals.is_empty() {
             if let Some(m) = missing {
                 vals.push(m);
@@ -7220,11 +7183,8 @@ fn range_agg(
             docs: vec![],
         });
     }
-    for d in docs {
-        let mut vals: Vec<f64> = doc_field_values(idx, d, &field, prefix)
-            .iter()
-            .filter_map(to_f64)
-            .collect();
+    let per_doc = numeric_agg_values(idx, t, docs, &field, prefix)?;
+    for (d, mut vals) in docs.iter().zip(per_doc) {
         if vals.is_empty() {
             if let Some(m) = missing {
                 vals.push(m);

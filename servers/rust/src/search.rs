@@ -3440,7 +3440,8 @@ pub fn run_search(
         )
     } else {
         None
-    };
+    }
+    .filter(|m| m.is_finite());
 
     let mut hits = vec![];
     for h in page {
@@ -3451,6 +3452,8 @@ pub fn run_search(
         };
         let score_val = if omit_scores {
             Value::Null
+        } else if !h.score.is_finite() {
+            crate::script_ctx::f64_value(h.score)
         } else {
             json!(h.score)
         };

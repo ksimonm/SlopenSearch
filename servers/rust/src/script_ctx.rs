@@ -63,8 +63,32 @@ impl ScriptSpec {
     }
 }
 
+/// Default of script.max_size_in_bytes.
+pub const MAX_INLINE_SIZE: usize = 65535;
+
+/// Rejects inline scripts above script.max_size_in_bytes.
+pub fn check_size(src: &str) -> Result<(), ApiError> {
+    if src.len() > MAX_INLINE_SIZE {
+        return Err(ApiError::bad(&format!(
+            "exceeded max allowed inline script size in bytes [{}] with size [{}] for script [{}]",
+            MAX_INLINE_SIZE,
+            src.len(),
+            src
+        )));
+    }
+    Ok(())
+}
+
 /// Reads a script given as a string or an object and resolves stored scripts.
 pub fn parse_spec(raw: &Value) -> Result<ScriptSpec, ApiError> {
+    let spec = parse_spec_inner(raw)?;
+    if spec.id.is_none() {
+        check_size(&spec.src)?;
+    }
+    Ok(spec)
+}
+
+fn parse_spec_inner(raw: &Value) -> Result<ScriptSpec, ApiError> {
     match raw {
         Value::String(s) => Ok(ScriptSpec { src: s.clone(), lang: "painless".into(), id: None, params: Map::new() }),
         Value::Object(t) => {
@@ -657,6 +681,66 @@ pub fn run_pipeline_script(raw: &Value, ctx_name: &str, vars: &Map<String, Value
     cs.run(None, &mut opts).map_err(|se| pipeline_script_error(&se))
 }
 
+/// Runs the init/map/combine/reduce scripts of a scripted_metric
+/// aggregation over the documents of one shard; `vm` computes the doc
+/// values of a document.
+pub fn scripted_metric(
+    name: &str,
+    spec: &Map<String, Value>,
+    docs: &[&Value],
+    idx: &Index,
+    vm: &dyn Fn(&Value) -> Map<String, Value>,
+) -> Result<Value, ApiError> {
+    if !spec.contains_key("map_script") {
+        return Err(ApiError::bad("Required [map_script]"));
+    }
+    for (key, label) in [("combine_script", "combineScript"), ("reduce_script", "reduceScript")] {
+        if !spec.contains_key(key) {
+            return Err(plain_shard_error(
+                idx,
+                &ApiError::bad(&format!("[{}] must not be null: [{}]", label, name)),
+            ));
+        }
+    }
+    let agg_params = spec.get("params").and_then(|p| p.as_object()).cloned().unwrap_or_default();
+    let prep = |key: &str, ctx_name: &str| -> Result<Compiled, ApiError> {
+        let mut cs = prepare(&spec[key], ctx_name).map_err(|e| err_for_shard(idx, e, false))?;
+        for (k, v) in &agg_params {
+            cs.spec.params.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        Ok(cs)
+    };
+    let mut vars = Map::new();
+    vars.insert("state".into(), Value::Object(Map::new()));
+    if spec.contains_key("init_script") {
+        let cs = prep("init_script", "aggs_init")?;
+        let mut o = RunOpts { vars, ..Default::default() };
+        cs.run(None, &mut o).map_err(|se| script_shard_error(idx, &se))?;
+        vars = o.vars;
+    }
+    let map_cs = prep("map_script", "aggs_map")?;
+    for d in docs {
+        let id = d.get("_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let qc = QueryCtx::with_values(idx, &id, d, vm(d));
+        let mut o = RunOpts {
+            vars,
+            score: d.get("_score").and_then(|s| s.as_f64()).unwrap_or(0.0),
+            ..Default::default()
+        };
+        map_cs.run(Some(&qc), &mut o).map_err(|se| script_shard_error(idx, &se))?;
+        vars = o.vars;
+    }
+    let comb_cs = prep("combine_script", "aggs_combine")?;
+    let mut o = RunOpts { vars, ..Default::default() };
+    let combined = comb_cs.run(None, &mut o).map_err(|se| script_shard_error(idx, &se))?;
+    let red_cs = prep("reduce_script", "aggs_reduce")?;
+    let mut rvars = Map::new();
+    rvars.insert("states".into(), Value::Array(vec![combined]));
+    let mut o = RunOpts { vars: rvars, ..Default::default() };
+    let res = red_cs.run(None, &mut o).map_err(|se| pipeline_script_error(&se))?;
+    Ok(json!({"value": res}))
+}
+
 // ---- update-context scripts (update, update_by_query, reindex) -----------
 
 /// What an update-context script did to its ctx.
@@ -860,10 +944,10 @@ fn painless_backend(cs: &Compiled, qc: Option<&QueryCtx>, o: &mut RunOpts) -> Re
         Some(q) => q,
         None => {
             skeleton = Index::skeleton("");
-            return run_toy(&QueryCtx::new(&skeleton, "", &empty), params, src, &mk_err);
+            return run_toy(&QueryCtx::new(&skeleton, "", &empty), params, src, &mk_err, &mut o.vars);
         }
     };
-    run_toy(q, params, src, &mk_err)
+    run_toy(q, params, src, &mk_err, &mut o.vars)
 }
 
 /// Runs a script that works on a `ctx` map (update context).
@@ -900,8 +984,21 @@ fn run_toy(
     params: Map<String, Value>,
     src: &str,
     mk_err: &dyn Fn(&str, &str) -> ScriptErr,
+    vars: &mut Map<String, Value>,
 ) -> Result<Value, ScriptErr> {
     let env = crate::painless::ScriptEnv { c: q, params };
+    if vars.contains_key("state") || vars.contains_key("states") {
+        // scripted_metric scripts: statements over shared state
+        let mut locals = vars.clone();
+        let r = crate::painless::exec_statements(src, &mut locals, &env)
+            .map_err(|m| mk_err("illegal_argument_exception", &m))?;
+        for k in ["state", "states"] {
+            if let Some(v) = locals.remove(k) {
+                vars.insert(k.to_string(), v);
+            }
+        }
+        return Ok(r);
+    }
     env.eval_script_expression(src).map_err(|m| {
         if m == crate::painless::MISSING_DOC_VALUE {
             let mut se = mk_err("illegal_state_exception", &m);

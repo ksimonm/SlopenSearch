@@ -139,6 +139,7 @@ impl<'a, 'b> ScriptEnv<'a, 'b> {
             src: src.into_bytes(),
             pos: 0,
             env: self,
+            skip: 0,
         };
         let v = e2.parse_ternary()?;
         e2.skip_space();
@@ -206,14 +207,29 @@ fn values_equal(a: &Value, b: &Value) -> bool {
     script_float(a) == script_float(b)
 }
 
+/// Both operands as integers (Painless integer arithmetic), if they are.
+fn int_pair(a: &Value, b: &Value) -> Option<(i64, i64)> {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) if !x.is_f64() && !y.is_f64() => Some((x.as_i64()?, y.as_i64()?)),
+        _ => None,
+    }
+}
+
 fn num_f64(f: f64) -> Value {
-    Number::from_f64(f).map(Value::Number).unwrap_or(Value::Null)
+    match Number::from_f64(f) {
+        Some(n) => Value::Number(n),
+        None if f.is_nan() => Value::String("NaN".to_string()),
+        None if f > 0.0 => Value::String("Infinity".to_string()),
+        None => Value::String("-Infinity".to_string()),
+    }
 }
 
 struct ExprEval<'a, 'b, 'c> {
     src: Vec<u8>,
     pos: usize,
     env: &'c ScriptEnv<'a, 'b>,
+    /// > 0 while parsing a branch that is not taken (no runtime errors).
+    skip: u32,
 }
 
 impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
@@ -242,15 +258,24 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
         }
     }
 
+    /// Parses a sub-expression whose value is not used.
+    fn skipped<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, String>) -> Result<T, String> {
+        self.skip += 1;
+        let r = f(self);
+        self.skip -= 1;
+        r
+    }
+
     fn parse_ternary(&mut self) -> Result<Value, String> {
         let cond = self.parse_or()?;
         if self.eat("?") {
-            let a = self.parse_ternary()?;
+            let take = truthy(&cond);
+            let a = if take { self.parse_ternary()? } else { self.skipped(|p| p.parse_ternary())? };
             if !self.eat(":") {
                 return Err("expected ':'".to_string());
             }
-            let b = self.parse_ternary()?;
-            if truthy(&cond) {
+            let b = if take { self.skipped(|p| p.parse_ternary())? } else { self.parse_ternary()? };
+            if take {
                 return Ok(a);
             }
             return Ok(b);
@@ -264,7 +289,7 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
             self.skip_space();
             if self.peek("||") {
                 self.pos += 2;
-                let right = self.parse_and()?;
+                let right = if truthy(&left) { self.skipped(|p| p.parse_and())? } else { self.parse_and()? };
                 left = Value::Bool(truthy(&left) || truthy(&right));
                 continue;
             }
@@ -284,7 +309,7 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
             self.skip_space();
             if self.peek("&&") {
                 self.pos += 2;
-                let right = self.parse_equality()?;
+                let right = if truthy(&left) { self.parse_equality()? } else { self.skipped(|p| p.parse_equality())? };
                 left = Value::Bool(truthy(&left) && truthy(&right));
                 continue;
             }
@@ -346,13 +371,18 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
                 if let Value::String(ls) = &left {
                     let rs = value_to_script_string(&right).unwrap_or_default();
                     left = Value::String(format!("{}{}", ls, rs));
+                } else if let Some((a, b)) = int_pair(&left, &right) {
+                    left = Value::Number(Number::from(a.wrapping_add(b)));
                 } else {
                     left = num_f64(script_float(&left) + script_float(&right));
                 }
             } else if self.peek("-") {
                 self.pos += 1;
                 let right = self.parse_multiplicative()?;
-                left = num_f64(script_float(&left) - script_float(&right));
+                left = match int_pair(&left, &right) {
+                    Some((a, b)) => Value::Number(Number::from(a.wrapping_sub(b))),
+                    None => num_f64(script_float(&left) - script_float(&right)),
+                };
             } else {
                 return Ok(left);
             }
@@ -366,20 +396,26 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
             if self.peek("*") {
                 self.pos += 1;
                 let right = self.parse_unary()?;
-                left = num_f64(script_float(&left) * script_float(&right));
+                left = match int_pair(&left, &right) {
+                    Some((a, b)) => Value::Number(Number::from(a.wrapping_mul(b))),
+                    None => num_f64(script_float(&left) * script_float(&right)),
+                };
             } else if self.peek("/") {
                 self.pos += 1;
                 let right = self.parse_unary()?;
-                let d = script_float(&right);
-                if d == 0.0 {
-                    left = num_f64(f64::INFINITY);
-                } else {
-                    left = num_f64(script_float(&left) / d);
-                }
+                left = match int_pair(&left, &right) {
+                    Some((_, 0)) => return Err("/ by zero".to_string()),
+                    Some((a, b)) => Value::Number(Number::from(a.wrapping_div(b))),
+                    None => num_f64(script_float(&left) / script_float(&right)),
+                };
             } else if self.peek("%") {
                 self.pos += 1;
                 let right = self.parse_unary()?;
-                left = num_f64(script_float(&left) % script_float(&right));
+                left = match int_pair(&left, &right) {
+                    Some((_, 0)) => return Err("/ by zero".to_string()),
+                    Some((a, b)) => Value::Number(Number::from(a.wrapping_rem(b))),
+                    None => num_f64(script_float(&left) % script_float(&right)),
+                };
             } else {
                 return Ok(left);
             }
@@ -560,7 +596,7 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
         if self.pos < self.src.len() && self.src[self.pos] == b'(' {
             return self.eval_call(&token);
         }
-        if token.starts_with("doc[") && token.ends_with("].value") {
+        if self.skip == 0 && token.starts_with("doc[") && token.ends_with("].value") {
             let field = Self::doc_field_of(&token);
             if self.env.c.values(&field).0.is_empty() {
                 return Err(MISSING_DOC_VALUE.to_string());

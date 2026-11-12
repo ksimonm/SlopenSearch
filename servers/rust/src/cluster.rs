@@ -886,6 +886,9 @@ fn cluster_defaults_for() -> Map<String, Value> {
     );
     d.insert("cluster.max_shards_per_node".into(), json!("1000"));
     d.insert("node.name".into(), json!(NODE_NAME));
+    d.insert("script.painless.regex.enabled".into(), json!("limited"));
+    d.insert("script.painless.regex.limit-factor".into(), json!("6"));
+    d.insert("script.max_size_in_bytes".into(), json!("65535"));
     d
 }
 
