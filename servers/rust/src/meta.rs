@@ -17,13 +17,13 @@ pub fn route_server_endpoints(store: &mut Store, req: &Req, segs: &[String]) -> 
         "_script_context" if segs.len() == 1 => {
             return Some(crate::errors::json_response(
                 200,
-                crate::scripts::script_context_response(),
+                crate::script_meta::script_context_listing(),
             ));
         }
         "_script_language" if segs.len() == 1 => {
             return Some(crate::errors::json_response(
                 200,
-                crate::scripts::script_language_response(),
+                crate::script_meta::script_language_listing(),
             ));
         }
         "_cluster" => {

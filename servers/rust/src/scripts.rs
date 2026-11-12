@@ -3,61 +3,6 @@ use crate::{Req, Store};
 use axum::response::Response;
 use serde_json::{json, Map, Value};
 
-pub const SCRIPT_CONTEXTS: &[(&str, &str, &[(&str, &str, &str)])] = &[
-    ("aggregation_selector", "boolean", &[("execute", "boolean", "java.util.Map")]),
-    ("aggs", "java.lang.Object", &[("execute", "java.lang.Object", "java.util.Map")]),
-    ("bucket_aggregation", "void", &[("execute", "void", "java.util.Map")]),
-    ("field", "java.lang.Object", &[("execute", "java.lang.Object", "java.util.Map")]),
-    ("filter", "boolean", &[("execute", "boolean", "java.util.Map")]),
-    ("ingest", "void", &[("execute", "void", "java.util.Map")]),
-    ("number_sort", "double", &[("execute", "double", "java.util.Map")]),
-    ("painless_test", "java.lang.Object", &[("execute", "java.lang.Object", "java.util.Map")]),
-    ("score", "double", &[("execute", "double", "java.util.Map"), ("get_score", "double", "")]),
-    ("string_sort", "java.lang.String", &[("execute", "java.lang.String", "java.util.Map")]),
-    ("template", "java.lang.String", &[("execute", "java.lang.String", "java.util.Map")]),
-    ("update", "void", &[("execute", "void", "java.util.Map")]),
-];
-
-pub fn script_context_response() -> Value {
-    let mut contexts: Vec<Value> = SCRIPT_CONTEXTS
-        .iter()
-        .map(|(name, rt, methods)| {
-            let ms: Vec<Value> = methods
-                .iter()
-                .map(|(m, mrt, params)| {
-                    let ps: Vec<Value> = if params.is_empty() {
-                        vec![]
-                    } else {
-                        params
-                            .split(',')
-                            .map(|p| json!({"type": p, "name": if *name == "ingest" { "ctx" } else { "args0" }}))
-                            .collect()
-                    };
-                    json!({"name": m, "return_type": mrt, "params": ps})
-                })
-                .collect();
-            let _ = rt;
-            json!({"name": name, "methods": ms})
-        })
-        .collect();
-    contexts.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
-    json!({"contexts": contexts})
-}
-
-pub fn script_language_response() -> Value {
-    json!({
-        "types_allowed": ["inline", "stored"],
-        "language_contexts": [
-            {"language": "expression", "contexts": ["aggs", "bucket_aggregation", "field", "filter", "number_sort", "score", "string_sort", "update"]},
-            {"language": "knn", "contexts": ["score"]},
-            {"language": "mustache", "contexts": ["template"]},
-            {"language": "opensearch_compounded_script", "contexts": ["aggs", "filter"]},
-            {"language": "painless", "contexts": ["aggs", "aggregation_selector", "bucket_aggregation", "field", "filter", "ingest", "number_sort", "painless_test", "score", "string_sort", "template", "update"]},
-            {"language": "ranklib", "contexts": ["ranklib"]}
-        ]
-    })
-}
-
 fn validate_script_for_context(source: &str, context: &str) -> Result<(), ApiError> {
     let known = [
         "aggs",
@@ -116,6 +61,12 @@ fn java_value(v: &Value) -> String {
 }
 
 pub fn handle_scripts(store: &mut Store, req: &Req, segs: &[String]) -> Response {
+    let resp = handle_scripts_inner(store, req, segs);
+    crate::script_ctx::sync_stored(&store.scripts);
+    resp
+}
+
+fn handle_scripts_inner(store: &mut Store, req: &Req, segs: &[String]) -> Response {
     if segs.is_empty() {
         if req.method == "GET" {
             let out: Map<String, Value> = store
