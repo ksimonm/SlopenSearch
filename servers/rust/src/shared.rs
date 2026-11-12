@@ -1130,10 +1130,6 @@ pub fn apply_mapper_defaults(props: &mut Map<String, Value>) {
                 m.entry("eager_global_ordinals".to_string())
                     .or_insert(Value::Bool(true));
             }
-            Some("knn_vector") => {
-                m.entry("doc_values".to_string())
-                    .or_insert(Value::Bool(true));
-            }
             Some("search_as_you_type") => {
                 m.entry("doc_values".to_string()).or_insert(Value::Bool(false));
                 m.entry("max_shingle_size".to_string()).or_insert(Value::Number(3.into()));
@@ -1845,7 +1841,7 @@ fn validate_props_shared(props: &Map<String, Value>) -> Result<(), String> {
             "include_in_root", "preserve_separators", "max_input_length",
             "search_analyzer", "quote_analyzer", "index_prefixes", "index_phrases",
             "dimension", "method", "model_id", "space_type", "ef_construction", "m",
-            "encoder",
+            "encoder", "data_type", "mode", "compression_level",
         ];
         for k in def.keys() {
             if !allowed.contains(&k.as_str()) {

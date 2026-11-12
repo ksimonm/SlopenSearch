@@ -3,6 +3,7 @@ mod analysis;
 mod aggs;
 mod alias;
 mod cat;
+mod knn;
 mod cluster;
 mod datastreams;
 mod docs;

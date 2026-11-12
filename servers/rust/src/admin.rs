@@ -204,6 +204,11 @@ pub fn create_index_internal(
     if let Some(props) = merged_mappings.get_mut("properties").and_then(|p| p.as_object_mut()) {
         crate::shared::expand_mapping_properties(props)?;
         crate::shared::apply_mapper_defaults(props);
+        let knn = canonical.get("index.knn").and_then(|v| v.as_str()) == Some("true");
+        crate::knn::normalize_knn_props(props, knn)?;
+        if knn && !canonical.contains_key("index.knn.derived_source.enabled") {
+            canonical.insert("index.knn.derived_source.enabled".to_string(), json!("true"));
+        }
     }
     validate_mapping_full(&Value::Object(merged_mappings.clone()))?;
     if let Some(props) = merged_mappings.get("properties").and_then(|p| p.as_object()) {
@@ -690,6 +695,10 @@ pub fn put_mapping_api(store: &mut Store, req: &Req, spec: &str) -> Response {
             .and_then(|p| p.as_object_mut())
         {
             crate::shared::apply_mapper_defaults(props);
+            let knn = idx.settings.get("index.knn").and_then(|v| v.as_str()) == Some("true");
+            if let Err(e) = crate::knn::normalize_knn_props(props, knn) {
+                return err_response(e);
+            }
         }
         let field_limit = crate::store::setting_int(&idx.settings, "mapping.total_fields.limit")
             .unwrap_or(1000);
@@ -958,7 +967,7 @@ pub fn put_settings_api(store: &mut Store, req: &Req, spec: &str) -> Response {
                     400,
                 ));
             }
-            if k == "index.number_of_shards" {
+            if k == "index.number_of_shards" || k == "index.knn" {
                 non_dynamic.push(k.clone());
                 continue;
             }
