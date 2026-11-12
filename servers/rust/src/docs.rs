@@ -3099,6 +3099,23 @@ struct TvToken {
     end: i64,
 }
 
+/// Term vector tokens under the field's analyzer, using the analysis module
+/// when it can build the analyzer.
+fn tv_tokens_idx(idx: &Index, analyzer: &str, text: &str) -> Vec<TvToken> {
+    if !analyzer.to_ascii_lowercase().contains("keyword") {
+        let ctx = crate::analysis::Ctx::for_index(idx);
+        if let Ok(Some(a)) = ctx.analyzer(analyzer) {
+            return a
+                .run(text)
+                .tokens
+                .into_iter()
+                .map(|t| TvToken { term: t.term, pos: t.pos as i64, start: t.start as i64, end: t.end as i64 })
+                .collect();
+        }
+    }
+    tv_tokens(analyzer, text)
+}
+
 fn tv_tokens(analyzer: &str, text: &str) -> Vec<TvToken> {
     let a = analyzer.to_ascii_lowercase();
     if a.contains("keyword") {
@@ -3180,7 +3197,7 @@ fn tv_index_stats_for_field(idx: &Index, field: &str) -> (Map<String, Value>, st
         if let Some(text) = tv_doc_text(doc, field) {
             doc_count += 1;
             let an = tv_field_analyzer(idx, field, None);
-            let toks = tv_tokens(&an, &text);
+            let toks = tv_tokens_idx(idx, &an, &text);
             sum_ttf += toks.len() as i64;
             let mut seen: std::collections::HashSet<String> = Default::default();
             for t in toks {
@@ -3330,7 +3347,7 @@ fn termvectors_one(
         let Some(text) = tv_doc_text(&doc, &field) else { continue };
         let analyzer = tv_field_analyzer(idx, &field, pf);
         let (fstats, df, ttf) = tv_index_stats_for_field(idx, &field);
-        let tokens = tv_tokens(&analyzer, &text);
+        let tokens = tv_tokens_idx(idx, &analyzer, &text);
         let mut grouped: std::collections::BTreeMap<String, Vec<TvToken>> = Default::default();
         for t in tokens {
             grouped.entry(t.term.clone()).or_default().push(t);

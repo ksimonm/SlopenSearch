@@ -576,6 +576,7 @@ pub fn is_known_index_setting(key: &str) -> bool {
             | "hidden"
             | "blocks"
             | "analysis"
+            | "analyze"
             | "mapping"
             | "routing"
             | "default_pipeline"
@@ -1136,6 +1137,17 @@ pub fn apply_mapper_defaults(props: &mut Map<String, Value>) {
             Some("search_as_you_type") => {
                 m.entry("doc_values".to_string()).or_insert(Value::Bool(false));
                 m.entry("max_shingle_size".to_string()).or_insert(Value::Number(3.into()));
+            }
+            Some("text") if m.contains_key("search_analyzer") && !m.contains_key("analyzer") => {
+                // A search analyzer implies the (default) index analyzer is shown.
+                let old = std::mem::take(m);
+                for (k, v) in old {
+                    let is_type = k == "type";
+                    m.insert(k, v);
+                    if is_type {
+                        m.insert("analyzer".to_string(), Value::String("default".to_string()));
+                    }
+                }
             }
             _ => {}
         }

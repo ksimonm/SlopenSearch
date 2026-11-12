@@ -1,4 +1,5 @@
 mod admin;
+mod analysis;
 mod aggs;
 mod alias;
 mod cat;
@@ -508,7 +509,7 @@ pub fn dispatch(store: &mut Store, req: &Req) -> axum::response::Response {
     match segs[0].as_str() {
         "_bulk" => return docs::handle_bulk(store, req, ""),
         "_mget" => return docs::handle_mget(store, req, ""),
-        "_analyze" => return docs::handle_analyze(store, req, ""),
+        "_analyze" => return analysis::api::handle_analyze(store, req, ""),
         "_search" => {
             if segs.len() >= 2 && segs[1] == "pipeline" {
                 return crate::ingest::handle_search_pipeline(store, req, &segs[2..]);
@@ -630,7 +631,7 @@ pub fn dispatch(store: &mut Store, req: &Req) -> axum::response::Response {
                 "PUT" => admin::put_settings_api(store, req, index),
                 _ => errors::method_not_allowed(req, &["GET", "PUT", "HEAD"]),
             },
-            "_analyze" => docs::handle_analyze(store, req, index),
+            "_analyze" => analysis::api::handle_analyze(store, req, index),
             "_bulk" => docs::handle_bulk(store, req, index),
             "_mget" => docs::handle_mget(store, req, index),
             "_termvectors" => docs::handle_termvectors(store, req, index, None),

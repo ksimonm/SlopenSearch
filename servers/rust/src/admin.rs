@@ -166,9 +166,13 @@ pub fn create_index_internal(
                 400,
             ));
         }
+        if k.starts_with("index.analysis.") && v.is_array() {
+            continue;
+        }
         let val = validate_setting_value(&k, &v, true)?;
         canonical.insert(k, Value::String(val));
     }
+    crate::analysis::settings::validate_index_analysis(&canonical)?;
     if !canonical.contains_key("index.number_of_shards") {
         canonical.insert("index.number_of_shards".to_string(), json!("1"));
     }
@@ -203,6 +207,7 @@ pub fn create_index_internal(
     }
     validate_mapping_full(&Value::Object(merged_mappings.clone()))?;
     if let Some(props) = merged_mappings.get("properties").and_then(|p| p.as_object()) {
+        crate::analysis::settings::validate_mapping_analysis(props, &canonical)?;
         validate_normalizers(props, &canonical)?;
     }
     let name_limit = crate::store::setting_int(&canonical, "mapping.field_name_length.limit")
@@ -992,6 +997,22 @@ pub fn put_settings_api(store: &mut Store, req: &Req, spec: &str) -> Response {
                 idx.name,
                 idx.uuid
             )));
+        }
+    }
+    if updates.keys().any(|k| k.starts_with("index.analysis.")) {
+        for name in &names {
+            let idx = &store.indices[name];
+            let mut merged = idx.settings.clone();
+            for (k, v) in &updates {
+                if v.is_null() {
+                    merged.remove(k);
+                } else if !(preserve && idx.settings.contains_key(k)) {
+                    merged.insert(k.clone(), v.clone());
+                }
+            }
+            if let Err(e) = crate::analysis::settings::validate_index_analysis(&merged) {
+                return err_response(e);
+            }
         }
     }
     for name in &names {
