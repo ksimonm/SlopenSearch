@@ -1,7 +1,10 @@
+// Code generated from Apache Lucene 10.5.1 pt/portuguese.rslp and gl/galician.rslp. DO NOT EDIT.
+
 package main
 
-// Code generated from Apache Lucene's RSLP rule resources. DO NOT EDIT.
-
+// rslpRule is one RSLPStemmerBase rule. exceptWhole holds RuleWithSetExceptions
+// entries (whole-term match, step type 1); exceptSuffix holds RuleWithSuffixExceptions
+// entries (term-suffix match, step type 0).
 type rslpRule struct {
 	suffix, replacement string
 	min                 int
@@ -9,6 +12,8 @@ type rslpRule struct {
 	exceptSuffix        []string
 }
 
+// rslpStep is one RSLP step; min is already resolved as in the Step constructor
+// (header value, or the minimum of rule.min+len(suffix) when the header says 0).
 type rslpStep struct {
 	name     string
 	min      int
@@ -39,7 +44,7 @@ var rslpGalician = []rslpStep{
 		{suffix: "ses", min: 2, replacement: "s"},
 		{suffix: "s", min: 2, replacement: "", exceptWhole: []string{"barbadés", "barcelonés", "cantonés", "gabonés", "llanés", "medinés", "escocés", "escocês", "francês", "barcelonês", "cantonês", "macramés", "reves", "barcelones", "cantones", "gabones", "llanes", "magallanes", "medines", "escoces", "frances", "xoves", "martes", "aliás", "pires", "lápis", "cais", "mais", "mas", "menos", "férias", "pêsames", "crúcis", "país", "cangas", "atenas", "asturias", "canarias", "filipinas", "honduras", "molucas", "caldas", "mascareñas", "micenas", "covarrubias", "psoas", "óculos", "nupcias", "xoves", "martes", "llanes"}},
 	}},
-	{name: "Unification", min: 0, suffixes: []string{}, rules: []rslpRule{
+	{name: "Unification", min: 3, suffixes: []string{}, rules: []rslpRule{
 		{suffix: "íssimo", min: 5, replacement: "ísimo"},
 		{suffix: "íssima", min: 5, replacement: "ísima"},
 		{suffix: "aço", min: 4, replacement: "azo"},
@@ -68,10 +73,10 @@ var rslpGalician = []rslpStep{
 		{suffix: "om", min: 3, replacement: "ón"},
 		{suffix: "m", min: 2, replacement: "n"},
 	}},
-	{name: "Adverb", min: 0, suffixes: []string{}, rules: []rslpRule{
+	{name: "Adverb", min: 9, suffixes: []string{}, rules: []rslpRule{
 		{suffix: "mente", min: 4, replacement: "", exceptSuffix: []string{"experimente", "vehemente", "sedimente"}},
 	}},
-	{name: "Augmentative", min: 0, suffixes: []string{}, rules: []rslpRule{
+	{name: "Augmentative", min: 5, suffixes: []string{}, rules: []rslpRule{
 		{suffix: "dísimo", min: 5, replacement: ""},
 		{suffix: "dísima", min: 5, replacement: ""},
 		{suffix: "bilísimo", min: 3, replacement: ""},
@@ -119,7 +124,7 @@ var rslpGalician = []rslpStep{
 		{suffix: "ello", min: 3, replacement: "", exceptWhole: []string{"alborello", "artello", "botello", "cachafello", "calello", "casarello", "cazabello", "cercello", "cocerello", "concello", "consello", "desparello", "escaravello", "espello", "fedello", "fervello", "gagafello", "gorrobello", "nortello", "pendello", "troupello", "trebello"}},
 		{suffix: "ella", min: 3, replacement: "", exceptWhole: []string{"alborella", "bertorella", "bocatella", "botella", "calella", "cercella", "gadella", "grosella", "lentella", "movella", "nocella", "noitevella", "parella", "pelella", "percebella", "segorella", "sabella"}},
 	}},
-	{name: "Noun", min: 0, suffixes: []string{}, rules: []rslpRule{
+	{name: "Noun", min: 4, suffixes: []string{}, rules: []rslpRule{
 		{suffix: "dade", min: 3, replacement: "", exceptSuffix: []string{"acridade", "calidade"}},
 		{suffix: "ificar", min: 2, replacement: ""},
 		{suffix: "eiro", min: 3, replacement: "", exceptSuffix: []string{"agoireiro", "bardalleiro", "braseiro", "barreiro", "canteiro", "capoeiro", "carneiro", "carteiro", "cinceiro", "faroleiro", "mareiro", "preguiceiro", "quinteiro", "raposeiro", "retranqueiro", "regueiro", "sineiro", "troleiro", "ventureiro"}},
@@ -180,7 +185,7 @@ var rslpGalician = []rslpStep{
 		{suffix: "isco", min: 4, replacement: ""},
 		{suffix: "ivo", min: 3, replacement: "", exceptSuffix: []string{"pasivo", "positivo", "passivo", "possessivo", "posesivo", "pexotarivo", "relativo"}},
 	}},
-	{name: "Verb", min: 0, suffixes: []string{}, rules: []rslpRule{
+	{name: "Verb", min: 2, suffixes: []string{}, rules: []rslpRule{
 		{suffix: "aba", min: 2, replacement: ""},
 		{suffix: "abade", min: 2, replacement: ""},
 		{suffix: "ábade", min: 2, replacement: ""},
@@ -346,7 +351,7 @@ var rslpGalician = []rslpStep{
 		{suffix: "tizar", min: 3, replacement: "", exceptSuffix: []string{"alfabetizar"}},
 		{suffix: "ondo", min: 3, replacement: ""},
 	}},
-	{name: "Vowel", min: 0, suffixes: []string{}, rules: []rslpRule{
+	{name: "Vowel", min: 4, suffixes: []string{}, rules: []rslpRule{
 		{suffix: "gue", min: 2, replacement: "g", exceptSuffix: []string{"azougue", "dengue", "merengue", "nurague", "merengue", "rengue"}},
 		{suffix: "que", min: 2, replacement: "c", exceptSuffix: []string{"alambique", "albaricoque", "abaroque", "alcrique", "almadraque", "almanaque", "arenque", "arinque", "baduloque", "ballestrinque", "betoque", "bivaque", "bloque", "bodaque", "bosque", "breque", "buque", "cacique", "cheque", "claque", "contradique", "coque", "croque", "dique", "duque", "enroque", "espeque", "estoque", "estoraque", "estraloque", "estrinque", "milicroque", "monicreque", "orinque", "arinque", "palenque", "parque", "penique", "picabeque", "pique", "psique", "raque", "remolque", "xeque", "repenique", "roque", "sotobosque", "tabique", "tanque", "toque", "traque", "truque", "vivaque", "xaque"}},
 		{suffix: "a", min: 3, replacement: "", exceptSuffix: []string{"amasadela", "cerva"}},
@@ -377,7 +382,7 @@ var rslpPortuguese = []rslpStep{
 		{suffix: "res", min: 3, replacement: "r", exceptWhole: []string{"árvores"}},
 		{suffix: "s", min: 2, replacement: "", exceptWhole: []string{"aliás", "pires", "lápis", "cais", "mais", "mas", "menos", "férias", "fezes", "pêsames", "crúcis", "gás", "atrás", "moisés", "através", "convés", "ês", "país", "após", "ambas", "ambos", "messias", "depois"}},
 	}},
-	{name: "Adverb", min: 0, suffixes: []string{}, rules: []rslpRule{
+	{name: "Adverb", min: 9, suffixes: []string{}, rules: []rslpRule{
 		{suffix: "mente", min: 4, replacement: "", exceptSuffix: []string{"experimente"}},
 	}},
 	{name: "Feminine", min: 3, suffixes: []string{"a", "ã"}, rules: []rslpRule{
@@ -397,7 +402,7 @@ var rslpPortuguese = []rslpStep{
 		{suffix: "iva", min: 3, replacement: "ivo", exceptWhole: []string{"saliva", "oliva"}},
 		{suffix: "eira", min: 3, replacement: "eiro", exceptWhole: []string{"beira", "cadeira", "frigideira", "bandeira", "feira", "capoeira", "barreira", "fronteira", "besteira", "poeira"}},
 	}},
-	{name: "Augmentative", min: 0, suffixes: []string{}, rules: []rslpRule{
+	{name: "Augmentative", min: 5, suffixes: []string{}, rules: []rslpRule{
 		{suffix: "díssimo", min: 5, replacement: ""},
 		{suffix: "abilíssimo", min: 5, replacement: ""},
 		{suffix: "íssimo", min: 3, replacement: ""},
@@ -422,7 +427,7 @@ var rslpPortuguese = []rslpStep{
 		{suffix: "zão", min: 2, replacement: "", exceptWhole: []string{"coalizão"}},
 		{suffix: "ão", min: 3, replacement: "", exceptWhole: []string{"camarão", "chimarrão", "canção", "coração", "embrião", "grotão", "glutão", "ficção", "fogão", "feição", "furacão", "gamão", "lampião", "leão", "macacão", "nação", "órfão", "orgão", "patrão", "portão", "quinhão", "rincão", "tração", "falcão", "espião", "mamão", "folião", "cordão", "aptidão", "campeão", "colchão", "limão", "leilão", "melão", "barão", "milhão", "bilhão", "fusão", "cristão", "ilusão", "capitão", "estação", "senão"}},
 	}},
-	{name: "Noun", min: 0, suffixes: []string{}, rules: []rslpRule{
+	{name: "Noun", min: 4, suffixes: []string{}, rules: []rslpRule{
 		{suffix: "encialista", min: 4, replacement: ""},
 		{suffix: "alista", min: 5, replacement: ""},
 		{suffix: "agem", min: 3, replacement: "", exceptSuffix: []string{"coragem", "chantagem", "vantagem", "carruagem"}},
@@ -508,7 +513,7 @@ var rslpPortuguese = []rslpStep{
 		{suffix: "ivismo", min: 4, replacement: ""},
 		{suffix: "ismo", min: 3, replacement: "", exceptSuffix: []string{"cinismo"}},
 	}},
-	{name: "Verb", min: 0, suffixes: []string{}, rules: []rslpRule{
+	{name: "Verb", min: 4, suffixes: []string{}, rules: []rslpRule{
 		{suffix: "aríamo", min: 2, replacement: ""},
 		{suffix: "ássemo", min: 2, replacement: ""},
 		{suffix: "eríamo", min: 2, replacement: ""},
@@ -611,7 +616,7 @@ var rslpPortuguese = []rslpStep{
 		{suffix: "ou", min: 3, replacement: ""},
 		{suffix: "i", min: 3, replacement: ""},
 	}},
-	{name: "Vowel", min: 0, suffixes: []string{}, rules: []rslpRule{
+	{name: "Vowel", min: 4, suffixes: []string{}, rules: []rslpRule{
 		{suffix: "bil", min: 2, replacement: "vel"},
 		{suffix: "gue", min: 2, replacement: "g", exceptSuffix: []string{"gangue", "jegue"}},
 		{suffix: "á", min: 3, replacement: ""},

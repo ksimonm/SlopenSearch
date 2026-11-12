@@ -231,7 +231,7 @@ func builtinAnalyzer(name string) bool {
 		"french", "galician", "german", "greek", "hindi", "hungarian",
 		"indonesian", "irish", "italian", "latvian", "lithuanian",
 		"norwegian", "persian", "portuguese", "romanian", "russian",
-		"sorani", "spanish", "swedish", "thai", "turkish":
+		"sorani", "spanish", "swedish", "thai", "turkish", "chinese":
 		return true
 	}
 	return false

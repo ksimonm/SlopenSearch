@@ -3244,2525 +3244,6 @@ func (z *danishStemmer) stem() {
 	return
 }
 
-type dutchStemmer struct {
-	snowball
-	I_p1, I_p2   int
-	S_ch, S_x    []rune
-	LS_ch, LS_x  int
-	B_GE_removed bool
-}
-
-func newDutch() *dutchStemmer { return &dutchStemmer{} }
-
-var dut_a_0 = []among{
-	{"a", -1, 1, ""},
-	{"e", -1, 2, ""},
-	{"o", -1, 1, ""},
-	{"u", -1, 1, ""},
-	{"\u00E0", -1, 1, ""},
-	{"\u00E1", -1, 1, ""},
-	{"\u00E2", -1, 1, ""},
-	{"\u00E4", -1, 1, ""},
-	{"\u00E8", -1, 2, ""},
-	{"\u00E9", -1, 2, ""},
-	{"\u00EA", -1, 2, ""},
-	{"e\u00EB", -1, 3, ""},
-	{"i\u00EB", -1, 4, ""},
-	{"\u00F2", -1, 1, ""},
-	{"\u00F3", -1, 1, ""},
-	{"\u00F4", -1, 1, ""},
-	{"\u00F6", -1, 1, ""},
-	{"\u00F9", -1, 1, ""},
-	{"\u00FA", -1, 1, ""},
-	{"\u00FB", -1, 1, ""},
-	{"\u00FC", -1, 1, ""},
-}
-var dut_a_1 = []among{
-	{"nde", -1, 8, ""},
-	{"en", -1, 7, ""},
-	{"s", -1, 2, ""},
-	{"'s", 2, 1, ""},
-	{"es", 2, 4, ""},
-	{"ies", 4, 3, ""},
-	{"aus", 2, 6, ""},
-	{"\u00E9s", 2, 5, ""},
-}
-var dut_a_2 = []among{
-	{"de", -1, 5, ""},
-	{"ge", -1, 2, ""},
-	{"ische", -1, 4, ""},
-	{"je", -1, 1, ""},
-	{"lijke", -1, 3, ""},
-	{"le", -1, 9, ""},
-	{"ene", -1, 10, ""},
-	{"re", -1, 8, ""},
-	{"se", -1, 7, ""},
-	{"te", -1, 6, ""},
-	{"ieve", -1, 11, ""},
-}
-var dut_a_3 = []among{
-	{"heid", -1, 3, ""},
-	{"fie", -1, 7, ""},
-	{"gie", -1, 8, ""},
-	{"atie", -1, 1, ""},
-	{"isme", -1, 5, ""},
-	{"ing", -1, 5, ""},
-	{"arij", -1, 6, ""},
-	{"erij", -1, 5, ""},
-	{"sel", -1, 3, ""},
-	{"rder", -1, 4, ""},
-	{"ster", -1, 3, ""},
-	{"iteit", -1, 2, ""},
-	{"dst", -1, 10, ""},
-	{"tst", -1, 9, ""},
-}
-var dut_a_4 = []among{
-	{"end", -1, 9, ""},
-	{"atief", -1, 2, ""},
-	{"erig", -1, 9, ""},
-	{"achtig", -1, 3, ""},
-	{"ioneel", -1, 1, ""},
-	{"baar", -1, 3, ""},
-	{"laar", -1, 5, ""},
-	{"naar", -1, 4, ""},
-	{"raar", -1, 6, ""},
-	{"eriger", -1, 9, ""},
-	{"achtiger", -1, 3, ""},
-	{"lijker", -1, 8, ""},
-	{"tant", -1, 7, ""},
-	{"erigst", -1, 9, ""},
-	{"achtigst", -1, 3, ""},
-	{"lijkst", -1, 8, ""},
-}
-var dut_a_5 = []among{
-	{"ig", -1, 1, ""},
-	{"iger", -1, 1, ""},
-	{"igst", -1, 1, ""},
-}
-var dut_a_6 = []among{
-	{"ft", -1, 2, ""},
-	{"kt", -1, 1, ""},
-	{"pt", -1, 3, ""},
-}
-var dut_a_7 = []among{
-	{"bb", -1, 1, ""},
-	{"cc", -1, 2, ""},
-	{"dd", -1, 3, ""},
-	{"ff", -1, 4, ""},
-	{"gg", -1, 5, ""},
-	{"hh", -1, 6, ""},
-	{"jj", -1, 7, ""},
-	{"kk", -1, 8, ""},
-	{"ll", -1, 9, ""},
-	{"mm", -1, 10, ""},
-	{"nn", -1, 11, ""},
-	{"pp", -1, 12, ""},
-	{"qq", -1, 13, ""},
-	{"rr", -1, 14, ""},
-	{"ss", -1, 15, ""},
-	{"tt", -1, 16, ""},
-	{"v", -1, 4, ""},
-	{"vv", 16, 17, ""},
-	{"ww", -1, 18, ""},
-	{"xx", -1, 19, ""},
-	{"z", -1, 15, ""},
-	{"zz", 20, 20, ""},
-}
-var dut_a_8 = []among{
-	{"d", -1, 1, ""},
-	{"t", -1, 2, ""},
-}
-var dut_a_9 = []among{
-	{"", -1, -1, ""},
-	{"eft", 0, 1, ""},
-	{"vaa", 0, 1, ""},
-	{"val", 0, 1, ""},
-	{"vali", 3, -1, ""},
-	{"vare", 0, 1, ""},
-}
-var dut_a_10 = []among{
-	{"\u00EB", -1, 1, ""},
-	{"\u00EF", -1, 2, ""},
-}
-var dut_a_11 = []among{
-	{"\u00EB", -1, 1, ""},
-	{"\u00EF", -1, 2, ""},
-}
-var dut_g_E = []byte{1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 120}
-var dut_g_AIOU = []byte{1, 65, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 11, 120, 46, 15}
-var dut_g_AEIOU = []byte{17, 65, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 139, 127, 46, 15}
-var dut_g_v = []byte{17, 65, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 139, 127, 46, 15}
-var dut_g_v_WX = []byte{17, 65, 208, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 139, 127, 46, 15}
-
-func (z *dutchStemmer) r_R1() bool {
-	return z.I_p1 <= z.cursor
-}
-func (z *dutchStemmer) r_R2() bool {
-	return z.I_p2 <= z.cursor
-}
-func (z *dutchStemmer) r_V() bool {
-	v_1 := z.limit - z.cursor
-	{
-		v_2 := z.limit - z.cursor
-		{
-			if !(z.inGroupingB(dut_g_v, 97, 252)) {
-				goto lab1_end
-			}
-			goto lab0_end
-		}
-	lab1_end:
-		;
-		z.cursor = z.limit - v_2
-		if !(z.eqSB("ij")) {
-			return false
-		}
-	}
-lab0_end:
-	;
-	z.cursor = z.limit - v_1
-	return true
-}
-func (z *dutchStemmer) r_VX() bool {
-	v_1 := z.limit - z.cursor
-	if z.cursor <= z.limitBackward {
-		return false
-	}
-	z.cursor--
-	{
-		v_2 := z.limit - z.cursor
-		{
-			if !(z.inGroupingB(dut_g_v, 97, 252)) {
-				goto lab1_end
-			}
-			goto lab0_end
-		}
-	lab1_end:
-		;
-		z.cursor = z.limit - v_2
-		if !(z.eqSB("ij")) {
-			return false
-		}
-	}
-lab0_end:
-	;
-	z.cursor = z.limit - v_1
-	return true
-}
-func (z *dutchStemmer) r_C() bool {
-	v_1 := z.limit - z.cursor
-	{
-		v_2 := z.limit - z.cursor
-		{
-			if !(z.eqSB("ij")) {
-				goto lab0_end
-			}
-			return false
-		}
-	lab0_end:
-		;
-		z.cursor = z.limit - v_2
-	}
-	if !(z.outGroupingB(dut_g_v, 97, 252)) {
-		return false
-	}
-	z.cursor = z.limit - v_1
-	return true
-}
-func (z *dutchStemmer) r_lengthen_V() bool {
-	var among_var int
-	v_1 := z.limit - z.cursor
-	{
-		if !(z.outGroupingB(dut_g_v_WX, 97, 252)) {
-			goto lab0_end
-		}
-		z.ket = z.cursor
-		among_var = z.findAmongB(dut_a_0)
-		if among_var == 0 {
-			goto lab0_end
-		}
-		z.bra = z.cursor
-		switch among_var {
-		case 1:
-			v_2 := z.limit - z.cursor
-			{
-				v_3 := z.limit - z.cursor
-				{
-					if !(z.outGroupingB(dut_g_AEIOU, 97, 252)) {
-						goto lab2_end
-					}
-					goto lab1_end
-				}
-			lab2_end:
-				;
-				z.cursor = z.limit - v_3
-				if z.cursor > z.limitBackward {
-					goto lab0_end
-				}
-			}
-		lab1_end:
-			;
-			z.cursor = z.limit - v_2
-			z.sliceCheck()
-			if len(z.S_ch) < z.ket-z.bra {
-				z.S_ch = append([]rune(nil), z.current[z.bra:z.ket]...)
-			} else {
-				z.S_ch = append(z.S_ch[:0], z.current[z.bra:z.ket]...)
-			}
-			z.LS_ch = z.ket - z.bra
-			{
-				c := z.cursor
-				z.insert(z.cursor, z.cursor, string(z.S_ch[:z.LS_ch]))
-				z.cursor = c
-			}
-			break
-		case 2:
-			v_4 := z.limit - z.cursor
-			{
-				v_5 := z.limit - z.cursor
-				{
-					if !(z.outGroupingB(dut_g_AEIOU, 97, 252)) {
-						goto lab4_end
-					}
-					goto lab3_end
-				}
-			lab4_end:
-				;
-				z.cursor = z.limit - v_5
-				if z.cursor > z.limitBackward {
-					goto lab0_end
-				}
-			}
-		lab3_end:
-			;
-			{
-				v_6 := z.limit - z.cursor
-				{
-					{
-						v_7 := z.limit - z.cursor
-						{
-							if !(z.inGroupingB(dut_g_AIOU, 97, 252)) {
-								goto lab7_end
-							}
-							goto lab6_end
-						}
-					lab7_end:
-						;
-						z.cursor = z.limit - v_7
-						if !(z.inGroupingB(dut_g_E, 101, 235)) {
-							goto lab5_end
-						}
-						if z.cursor > z.limitBackward {
-							goto lab5_end
-						}
-					}
-				lab6_end:
-					;
-					goto lab0_end
-				}
-			lab5_end:
-				;
-				z.cursor = z.limit - v_6
-			}
-			{
-				v_8 := z.limit - z.cursor
-				{
-					if z.cursor <= z.limitBackward {
-						goto lab8_end
-					}
-					z.cursor--
-					if !(z.inGroupingB(dut_g_AIOU, 97, 252)) {
-						goto lab8_end
-					}
-					if !(z.outGroupingB(dut_g_AEIOU, 97, 252)) {
-						goto lab8_end
-					}
-					goto lab0_end
-				}
-			lab8_end:
-				;
-				z.cursor = z.limit - v_8
-			}
-			z.cursor = z.limit - v_4
-			z.sliceCheck()
-			if len(z.S_ch) < z.ket-z.bra {
-				z.S_ch = append([]rune(nil), z.current[z.bra:z.ket]...)
-			} else {
-				z.S_ch = append(z.S_ch[:0], z.current[z.bra:z.ket]...)
-			}
-			z.LS_ch = z.ket - z.bra
-			{
-				c := z.cursor
-				z.insert(z.cursor, z.cursor, string(z.S_ch[:z.LS_ch]))
-				z.cursor = c
-			}
-			break
-		case 3:
-			z.sliceFrom("e\u00EBe")
-			break
-		case 4:
-			z.sliceFrom("iee")
-			break
-		}
-	}
-lab0_end:
-	;
-	z.cursor = z.limit - v_1
-	return true
-}
-func (z *dutchStemmer) r_Step_1() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(dut_a_1)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	switch among_var {
-	case 1:
-		z.sliceDel()
-		break
-	case 2:
-		if !z.r_R1() {
-			return false
-		}
-		{
-			v_1 := z.limit - z.cursor
-			{
-				if !(z.eqSB("t")) {
-					goto lab0_end
-				}
-				if !z.r_R1() {
-					goto lab0_end
-				}
-				return false
-			}
-		lab0_end:
-			;
-			z.cursor = z.limit - v_1
-		}
-		if !z.r_C() {
-			return false
-		}
-		z.sliceDel()
-		break
-	case 3:
-		if !z.r_R1() {
-			return false
-		}
-		z.sliceFrom("ie")
-		break
-	case 4:
-		{
-			v_2 := z.limit - z.cursor
-			{
-				v_3 := z.limit - z.cursor
-				if !(z.eqSB("ar")) {
-					goto lab2_end
-				}
-				if !z.r_R1() {
-					goto lab2_end
-				}
-				if !z.r_C() {
-					goto lab2_end
-				}
-				z.cursor = z.limit - v_3
-				z.sliceDel()
-				z.r_lengthen_V()
-				goto lab1_end
-			}
-		lab2_end:
-			;
-			z.cursor = z.limit - v_2
-			{
-				v_4 := z.limit - z.cursor
-				if !(z.eqSB("er")) {
-					goto lab3_end
-				}
-				if !z.r_R1() {
-					goto lab3_end
-				}
-				if !z.r_C() {
-					goto lab3_end
-				}
-				z.cursor = z.limit - v_4
-				z.sliceDel()
-				goto lab1_end
-			}
-		lab3_end:
-			;
-			z.cursor = z.limit - v_2
-			if !z.r_R1() {
-				return false
-			}
-			if !z.r_C() {
-				return false
-			}
-			z.sliceFrom("e")
-		}
-	lab1_end:
-		;
-		break
-	case 5:
-		if !z.r_R1() {
-			return false
-		}
-		z.sliceFrom("\u00E9")
-		break
-	case 6:
-		if !z.r_R1() {
-			return false
-		}
-		if !z.r_V() {
-			return false
-		}
-		z.sliceFrom("au")
-		break
-	case 7:
-		{
-			v_5 := z.limit - z.cursor
-			{
-				if !(z.eqSB("hed")) {
-					goto lab5_end
-				}
-				if !z.r_R1() {
-					goto lab5_end
-				}
-				z.bra = z.cursor
-				z.sliceFrom("heid")
-				goto lab4_end
-			}
-		lab5_end:
-			;
-			z.cursor = z.limit - v_5
-			{
-				if !(z.eqSB("nd")) {
-					goto lab6_end
-				}
-				z.sliceDel()
-				goto lab4_end
-			}
-		lab6_end:
-			;
-			z.cursor = z.limit - v_5
-			{
-				if !(z.eqSB("d")) {
-					goto lab7_end
-				}
-				if !z.r_R1() {
-					goto lab7_end
-				}
-				if !z.r_C() {
-					goto lab7_end
-				}
-				z.bra = z.cursor
-				z.sliceDel()
-				goto lab4_end
-			}
-		lab7_end:
-			;
-			z.cursor = z.limit - v_5
-			{
-				{
-					v_6 := z.limit - z.cursor
-					{
-						if !(z.eqSB("i")) {
-							goto lab10_end
-						}
-						goto lab9_end
-					}
-				lab10_end:
-					;
-					z.cursor = z.limit - v_6
-					if !(z.eqSB("j")) {
-						goto lab8_end
-					}
-				}
-			lab9_end:
-				;
-				if !z.r_V() {
-					goto lab8_end
-				}
-				z.sliceDel()
-				goto lab4_end
-			}
-		lab8_end:
-			;
-			z.cursor = z.limit - v_5
-			if !z.r_R1() {
-				return false
-			}
-			if !z.r_C() {
-				return false
-			}
-			z.sliceDel()
-			z.r_lengthen_V()
-		}
-	lab4_end:
-		;
-		break
-	case 8:
-		z.sliceFrom("nd")
-		break
-	}
-	return true
-}
-func (z *dutchStemmer) r_Step_2() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(dut_a_2)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	switch among_var {
-	case 1:
-		{
-			v_1 := z.limit - z.cursor
-			{
-				if !(z.eqSB("'t")) {
-					goto lab1_end
-				}
-				z.bra = z.cursor
-				z.sliceDel()
-				goto lab0_end
-			}
-		lab1_end:
-			;
-			z.cursor = z.limit - v_1
-			{
-				if !(z.eqSB("et")) {
-					goto lab2_end
-				}
-				z.bra = z.cursor
-				if !z.r_R1() {
-					goto lab2_end
-				}
-				if !z.r_C() {
-					goto lab2_end
-				}
-				z.sliceDel()
-				goto lab0_end
-			}
-		lab2_end:
-			;
-			z.cursor = z.limit - v_1
-			{
-				if !(z.eqSB("rnt")) {
-					goto lab3_end
-				}
-				z.bra = z.cursor
-				z.sliceFrom("rn")
-				goto lab0_end
-			}
-		lab3_end:
-			;
-			z.cursor = z.limit - v_1
-			{
-				if !(z.eqSB("t")) {
-					goto lab4_end
-				}
-				z.bra = z.cursor
-				if !z.r_R1() {
-					goto lab4_end
-				}
-				if !z.r_VX() {
-					goto lab4_end
-				}
-				z.sliceDel()
-				goto lab0_end
-			}
-		lab4_end:
-			;
-			z.cursor = z.limit - v_1
-			{
-				if !(z.eqSB("ink")) {
-					goto lab5_end
-				}
-				z.bra = z.cursor
-				z.sliceFrom("ing")
-				goto lab0_end
-			}
-		lab5_end:
-			;
-			z.cursor = z.limit - v_1
-			{
-				if !(z.eqSB("mp")) {
-					goto lab6_end
-				}
-				z.bra = z.cursor
-				z.sliceFrom("m")
-				goto lab0_end
-			}
-		lab6_end:
-			;
-			z.cursor = z.limit - v_1
-			{
-				if !(z.eqSB("'")) {
-					goto lab7_end
-				}
-				z.bra = z.cursor
-				if !z.r_R1() {
-					goto lab7_end
-				}
-				z.sliceDel()
-				goto lab0_end
-			}
-		lab7_end:
-			;
-			z.cursor = z.limit - v_1
-			z.bra = z.cursor
-			if !z.r_R1() {
-				return false
-			}
-			if !z.r_C() {
-				return false
-			}
-			z.sliceDel()
-		}
-	lab0_end:
-		;
-		break
-	case 2:
-		if !z.r_R1() {
-			return false
-		}
-		z.sliceFrom("g")
-		break
-	case 3:
-		if !z.r_R1() {
-			return false
-		}
-		z.sliceFrom("lijk")
-		break
-	case 4:
-		if !z.r_R1() {
-			return false
-		}
-		z.sliceFrom("isch")
-		break
-	case 5:
-		if !z.r_R1() {
-			return false
-		}
-		if !z.r_C() {
-			return false
-		}
-		z.sliceDel()
-		break
-	case 6:
-		if !z.r_R1() {
-			return false
-		}
-		z.sliceFrom("t")
-		break
-	case 7:
-		if !z.r_R1() {
-			return false
-		}
-		z.sliceFrom("s")
-		break
-	case 8:
-		if !z.r_R1() {
-			return false
-		}
-		z.sliceFrom("r")
-		break
-	case 9:
-		if !z.r_R1() {
-			return false
-		}
-		z.sliceDel()
-		z.insert(z.cursor, z.cursor, "l")
-		z.r_lengthen_V()
-		break
-	case 10:
-		if !z.r_R1() {
-			return false
-		}
-		if !z.r_C() {
-			return false
-		}
-		z.sliceDel()
-		z.insert(z.cursor, z.cursor, "en")
-		z.r_lengthen_V()
-		break
-	case 11:
-		if !z.r_R1() {
-			return false
-		}
-		if !z.r_C() {
-			return false
-		}
-		z.sliceFrom("ief")
-		break
-	}
-	return true
-}
-func (z *dutchStemmer) r_Step_3() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(dut_a_3)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	switch among_var {
-	case 1:
-		if !z.r_R1() {
-			return false
-		}
-		z.sliceFrom("eer")
-		break
-	case 2:
-		if !z.r_R1() {
-			return false
-		}
-		z.sliceDel()
-		z.r_lengthen_V()
-		break
-	case 3:
-		if !z.r_R1() {
-			return false
-		}
-		z.sliceDel()
-		break
-	case 4:
-		z.sliceFrom("r")
-		break
-	case 5:
-		{
-			v_1 := z.limit - z.cursor
-			{
-				if !(z.eqSB("ild")) {
-					goto lab1_end
-				}
-				z.sliceFrom("er")
-				goto lab0_end
-			}
-		lab1_end:
-			;
-			z.cursor = z.limit - v_1
-			if !z.r_R1() {
-				return false
-			}
-			z.sliceDel()
-			z.r_lengthen_V()
-		}
-	lab0_end:
-		;
-		break
-	case 6:
-		if !z.r_R1() {
-			return false
-		}
-		if !z.r_C() {
-			return false
-		}
-		z.sliceFrom("aar")
-		break
-	case 7:
-		if !z.r_R2() {
-			return false
-		}
-		z.sliceDel()
-		z.insert(z.cursor, z.cursor, "f")
-		z.r_lengthen_V()
-		break
-	case 8:
-		if !z.r_R2() {
-			return false
-		}
-		z.sliceDel()
-		z.insert(z.cursor, z.cursor, "g")
-		z.r_lengthen_V()
-		break
-	case 9:
-		if !z.r_R1() {
-			return false
-		}
-		if !z.r_C() {
-			return false
-		}
-		z.sliceFrom("t")
-		break
-	case 10:
-		if !z.r_R1() {
-			return false
-		}
-		if !z.r_C() {
-			return false
-		}
-		z.sliceFrom("d")
-		break
-	}
-	return true
-}
-func (z *dutchStemmer) r_Step_4() bool {
-	var among_var int
-	{
-		v_1 := z.limit - z.cursor
-		{
-			z.ket = z.cursor
-			among_var = z.findAmongB(dut_a_4)
-			if among_var == 0 {
-				goto lab1_end
-			}
-			z.bra = z.cursor
-			switch among_var {
-			case 1:
-				if !z.r_R1() {
-					goto lab1_end
-				}
-				z.sliceFrom("ie")
-				break
-			case 2:
-				if !z.r_R1() {
-					goto lab1_end
-				}
-				z.sliceFrom("eer")
-				break
-			case 3:
-				if !z.r_R1() {
-					goto lab1_end
-				}
-				z.sliceDel()
-				break
-			case 4:
-				if !z.r_R1() {
-					goto lab1_end
-				}
-				if !z.r_V() {
-					goto lab1_end
-				}
-				z.sliceFrom("n")
-				break
-			case 5:
-				if !z.r_R1() {
-					goto lab1_end
-				}
-				if !z.r_V() {
-					goto lab1_end
-				}
-				z.sliceFrom("l")
-				break
-			case 6:
-				if !z.r_R1() {
-					goto lab1_end
-				}
-				if !z.r_V() {
-					goto lab1_end
-				}
-				z.sliceFrom("r")
-				break
-			case 7:
-				if !z.r_R1() {
-					goto lab1_end
-				}
-				z.sliceFrom("teer")
-				break
-			case 8:
-				if !z.r_R1() {
-					goto lab1_end
-				}
-				z.sliceFrom("lijk")
-				break
-			case 9:
-				if !z.r_R1() {
-					goto lab1_end
-				}
-				if !z.r_C() {
-					goto lab1_end
-				}
-				z.sliceDel()
-				z.r_lengthen_V()
-				break
-			}
-			goto lab0_end
-		}
-	lab1_end:
-		;
-		z.cursor = z.limit - v_1
-		z.ket = z.cursor
-		if z.findAmongB(dut_a_5) == 0 {
-			return false
-		}
-		z.bra = z.cursor
-		if !z.r_R1() {
-			return false
-		}
-		{
-			v_2 := z.limit - z.cursor
-			{
-				if !(z.eqSB("inn")) {
-					goto lab2_end
-				}
-				if z.cursor > z.limitBackward {
-					goto lab2_end
-				}
-				return false
-			}
-		lab2_end:
-			;
-			z.cursor = z.limit - v_2
-		}
-		if !z.r_C() {
-			return false
-		}
-		z.sliceDel()
-		z.r_lengthen_V()
-	}
-lab0_end:
-	;
-	return true
-}
-func (z *dutchStemmer) r_Step_7() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(dut_a_6)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	switch among_var {
-	case 1:
-		z.sliceFrom("k")
-		break
-	case 2:
-		z.sliceFrom("f")
-		break
-	case 3:
-		z.sliceFrom("p")
-		break
-	}
-	return true
-}
-func (z *dutchStemmer) r_Step_6() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(dut_a_7)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	switch among_var {
-	case 1:
-		z.sliceFrom("b")
-		break
-	case 2:
-		z.sliceFrom("c")
-		break
-	case 3:
-		z.sliceFrom("d")
-		break
-	case 4:
-		z.sliceFrom("f")
-		break
-	case 5:
-		z.sliceFrom("g")
-		break
-	case 6:
-		z.sliceFrom("h")
-		break
-	case 7:
-		z.sliceFrom("j")
-		break
-	case 8:
-		z.sliceFrom("k")
-		break
-	case 9:
-		z.sliceFrom("l")
-		break
-	case 10:
-		z.sliceFrom("m")
-		break
-	case 11:
-		{
-			v_1 := z.limit - z.cursor
-			{
-				if !(z.eqSB("i")) {
-					goto lab0_end
-				}
-				if z.cursor > z.limitBackward {
-					goto lab0_end
-				}
-				return false
-			}
-		lab0_end:
-			;
-			z.cursor = z.limit - v_1
-		}
-		z.sliceFrom("n")
-		break
-	case 12:
-		z.sliceFrom("p")
-		break
-	case 13:
-		z.sliceFrom("q")
-		break
-	case 14:
-		z.sliceFrom("r")
-		break
-	case 15:
-		z.sliceFrom("s")
-		break
-	case 16:
-		z.sliceFrom("t")
-		break
-	case 17:
-		z.sliceFrom("v")
-		break
-	case 18:
-		z.sliceFrom("w")
-		break
-	case 19:
-		z.sliceFrom("x")
-		break
-	case 20:
-		z.sliceFrom("z")
-		break
-	}
-	return true
-}
-func (z *dutchStemmer) r_Step_1c() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(dut_a_8)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	if !z.r_R1() {
-		return false
-	}
-	if !z.r_C() {
-		return false
-	}
-	switch among_var {
-	case 1:
-		{
-			v_1 := z.limit - z.cursor
-			{
-				if !(z.eqSB("n")) {
-					goto lab0_end
-				}
-				if !z.r_R1() {
-					goto lab0_end
-				}
-				return false
-			}
-		lab0_end:
-			;
-			z.cursor = z.limit - v_1
-		}
-		{
-			v_2 := z.limit - z.cursor
-			{
-				if !(z.eqSB("in")) {
-					goto lab2_end
-				}
-				if z.cursor > z.limitBackward {
-					goto lab2_end
-				}
-				z.sliceFrom("n")
-				goto lab1_end
-			}
-		lab2_end:
-			;
-			z.cursor = z.limit - v_2
-			z.sliceDel()
-		}
-	lab1_end:
-		;
-		break
-	case 2:
-		{
-			v_3 := z.limit - z.cursor
-			{
-				if !(z.eqSB("h")) {
-					goto lab3_end
-				}
-				if !z.r_R1() {
-					goto lab3_end
-				}
-				return false
-			}
-		lab3_end:
-			;
-			z.cursor = z.limit - v_3
-		}
-		{
-			v_4 := z.limit - z.cursor
-			{
-				if !(z.eqSB("en")) {
-					goto lab4_end
-				}
-				if z.cursor > z.limitBackward {
-					goto lab4_end
-				}
-				return false
-			}
-		lab4_end:
-			;
-			z.cursor = z.limit - v_4
-		}
-		z.sliceDel()
-		break
-	}
-	return true
-}
-func (z *dutchStemmer) r_Lose_prefix() bool {
-	var among_var int
-	z.bra = z.cursor
-	if !(z.eqS("ge")) {
-		return false
-	}
-	z.ket = z.cursor
-	v_1 := z.cursor
-	{
-		c := z.cursor + 3
-		if c > z.limit {
-			return false
-		}
-		z.cursor = c
-	}
-	z.cursor = v_1
-	v_2 := z.cursor
-golab0:
-	for {
-		v_3 := z.cursor
-		{
-			{
-				v_4 := z.cursor
-				{
-					if !(z.eqS("ij")) {
-						goto lab3_end
-					}
-					goto lab2_end
-				}
-			lab3_end:
-				;
-				z.cursor = v_4
-				if !(z.inGrouping(dut_g_v, 97, 252)) {
-					goto lab1_end
-				}
-			}
-		lab2_end:
-			;
-			break golab0
-		}
-	lab1_end:
-		;
-		z.cursor = v_3
-		if z.cursor >= z.limit {
-			return false
-		}
-		z.cursor++
-	}
-	for {
-		v_5 := z.cursor
-		{
-			{
-				v_6 := z.cursor
-				{
-					if !(z.eqS("ij")) {
-						goto lab6_end
-					}
-					goto lab5_end
-				}
-			lab6_end:
-				;
-				z.cursor = v_6
-				if !(z.inGrouping(dut_g_v, 97, 252)) {
-					goto lab4_end
-				}
-			}
-		lab5_end:
-			;
-			continue
-		}
-	lab4_end:
-		;
-		z.cursor = v_5
-		break
-	}
-	{
-		if z.cursor < z.limit {
-			goto lab7_end
-		}
-		return false
-	}
-lab7_end:
-	;
-	z.cursor = v_2
-	among_var = z.findAmong(dut_a_9)
-	switch among_var {
-	case 1:
-		return false
-	}
-	z.B_GE_removed = true
-	z.sliceDel()
-	v_7 := z.cursor
-	{
-		z.bra = z.cursor
-		among_var = z.findAmong(dut_a_10)
-		if among_var == 0 {
-			goto lab8_end
-		}
-		z.ket = z.cursor
-		switch among_var {
-		case 1:
-			z.sliceFrom("e")
-			break
-		case 2:
-			z.sliceFrom("i")
-			break
-		}
-	}
-lab8_end:
-	;
-	z.cursor = v_7
-	return true
-}
-func (z *dutchStemmer) r_Lose_infix() bool {
-	var among_var int
-	if z.cursor >= z.limit {
-		return false
-	}
-	z.cursor++
-golab0:
-	for {
-		{
-			z.bra = z.cursor
-			if !(z.eqS("ge")) {
-				goto lab1_end
-			}
-			z.ket = z.cursor
-			break golab0
-		}
-	lab1_end:
-		;
-		if z.cursor >= z.limit {
-			return false
-		}
-		z.cursor++
-	}
-	v_1 := z.cursor
-	{
-		c := z.cursor + 3
-		if c > z.limit {
-			return false
-		}
-		z.cursor = c
-	}
-	z.cursor = v_1
-	v_2 := z.cursor
-golab2:
-	for {
-		v_3 := z.cursor
-		{
-			{
-				v_4 := z.cursor
-				{
-					if !(z.eqS("ij")) {
-						goto lab5_end
-					}
-					goto lab4_end
-				}
-			lab5_end:
-				;
-				z.cursor = v_4
-				if !(z.inGrouping(dut_g_v, 97, 252)) {
-					goto lab3_end
-				}
-			}
-		lab4_end:
-			;
-			break golab2
-		}
-	lab3_end:
-		;
-		z.cursor = v_3
-		if z.cursor >= z.limit {
-			return false
-		}
-		z.cursor++
-	}
-	for {
-		v_5 := z.cursor
-		{
-			{
-				v_6 := z.cursor
-				{
-					if !(z.eqS("ij")) {
-						goto lab8_end
-					}
-					goto lab7_end
-				}
-			lab8_end:
-				;
-				z.cursor = v_6
-				if !(z.inGrouping(dut_g_v, 97, 252)) {
-					goto lab6_end
-				}
-			}
-		lab7_end:
-			;
-			continue
-		}
-	lab6_end:
-		;
-		z.cursor = v_5
-		break
-	}
-	{
-		if z.cursor < z.limit {
-			goto lab9_end
-		}
-		return false
-	}
-lab9_end:
-	;
-	z.cursor = v_2
-	z.B_GE_removed = true
-	z.sliceDel()
-	v_7 := z.cursor
-	{
-		z.bra = z.cursor
-		among_var = z.findAmong(dut_a_11)
-		if among_var == 0 {
-			goto lab10_end
-		}
-		z.ket = z.cursor
-		switch among_var {
-		case 1:
-			z.sliceFrom("e")
-			break
-		case 2:
-			z.sliceFrom("i")
-			break
-		}
-	}
-lab10_end:
-	;
-	z.cursor = v_7
-	return true
-}
-func (z *dutchStemmer) r_measure() bool {
-	z.I_p1 = z.limit
-	z.I_p2 = z.limit
-	v_1 := z.cursor
-	{
-		for {
-			{
-				if !(z.outGrouping(dut_g_v, 97, 252)) {
-					goto lab1_end
-				}
-				continue
-			}
-		lab1_end:
-			;
-			break
-		}
-		{
-			v_2 := 1
-			for {
-				v_3 := z.cursor
-				{
-					{
-						v_4 := z.cursor
-						{
-							if !(z.eqS("ij")) {
-								goto lab4_end
-							}
-							goto lab3_end
-						}
-					lab4_end:
-						;
-						z.cursor = v_4
-						if !(z.inGrouping(dut_g_v, 97, 252)) {
-							goto lab2_end
-						}
-					}
-				lab3_end:
-					;
-					v_2--
-					continue
-				}
-			lab2_end:
-				;
-				z.cursor = v_3
-				break
-			}
-			if v_2 > 0 {
-				goto lab0_end
-			}
-		}
-		if !(z.outGrouping(dut_g_v, 97, 252)) {
-			goto lab0_end
-		}
-		z.I_p1 = z.cursor
-		for {
-			{
-				if !(z.outGrouping(dut_g_v, 97, 252)) {
-					goto lab5_end
-				}
-				continue
-			}
-		lab5_end:
-			;
-			break
-		}
-		{
-			v_5 := 1
-			for {
-				v_6 := z.cursor
-				{
-					{
-						v_7 := z.cursor
-						{
-							if !(z.eqS("ij")) {
-								goto lab8_end
-							}
-							goto lab7_end
-						}
-					lab8_end:
-						;
-						z.cursor = v_7
-						if !(z.inGrouping(dut_g_v, 97, 252)) {
-							goto lab6_end
-						}
-					}
-				lab7_end:
-					;
-					v_5--
-					continue
-				}
-			lab6_end:
-				;
-				z.cursor = v_6
-				break
-			}
-			if v_5 > 0 {
-				goto lab0_end
-			}
-		}
-		if !(z.outGrouping(dut_g_v, 97, 252)) {
-			goto lab0_end
-		}
-		z.I_p2 = z.cursor
-	}
-lab0_end:
-	;
-	z.cursor = v_1
-	return true
-}
-func (z *dutchStemmer) stem() {
-	var B_stemmed bool
-	B_stemmed = false
-	z.r_measure()
-	z.limitBackward = z.cursor
-	z.cursor = z.limit
-	v_1 := z.limit - z.cursor
-	{
-		if !z.r_Step_1() {
-			goto lab0_end
-		}
-		B_stemmed = true
-	}
-lab0_end:
-	;
-	z.cursor = z.limit - v_1
-	v_2 := z.limit - z.cursor
-	{
-		if !z.r_Step_2() {
-			goto lab1_end
-		}
-		B_stemmed = true
-	}
-lab1_end:
-	;
-	z.cursor = z.limit - v_2
-	v_3 := z.limit - z.cursor
-	{
-		if !z.r_Step_3() {
-			goto lab2_end
-		}
-		B_stemmed = true
-	}
-lab2_end:
-	;
-	z.cursor = z.limit - v_3
-	v_4 := z.limit - z.cursor
-	{
-		if !z.r_Step_4() {
-			goto lab3_end
-		}
-		B_stemmed = true
-	}
-lab3_end:
-	;
-	z.cursor = z.limit - v_4
-	z.cursor = z.limitBackward
-	z.B_GE_removed = false
-	v_5 := z.cursor
-	{
-		v_6 := z.cursor
-		if !z.r_Lose_prefix() {
-			goto lab4_end
-		}
-		z.cursor = v_6
-		z.r_measure()
-	}
-lab4_end:
-	;
-	z.cursor = v_5
-	z.limitBackward = z.cursor
-	z.cursor = z.limit
-	v_7 := z.limit - z.cursor
-	{
-		if !z.B_GE_removed {
-			goto lab5_end
-		}
-		B_stemmed = true
-		if !z.r_Step_1c() {
-			goto lab5_end
-		}
-	}
-lab5_end:
-	;
-	z.cursor = z.limit - v_7
-	z.cursor = z.limitBackward
-	z.B_GE_removed = false
-	v_8 := z.cursor
-	{
-		v_9 := z.cursor
-		if !z.r_Lose_infix() {
-			goto lab6_end
-		}
-		z.cursor = v_9
-		z.r_measure()
-	}
-lab6_end:
-	;
-	z.cursor = v_8
-	z.limitBackward = z.cursor
-	z.cursor = z.limit
-	v_10 := z.limit - z.cursor
-	{
-		if !z.B_GE_removed {
-			goto lab7_end
-		}
-		B_stemmed = true
-		if !z.r_Step_1c() {
-			goto lab7_end
-		}
-	}
-lab7_end:
-	;
-	z.cursor = z.limit - v_10
-	z.cursor = z.limitBackward
-	z.limitBackward = z.cursor
-	z.cursor = z.limit
-	v_11 := z.limit - z.cursor
-	{
-		if !z.r_Step_7() {
-			goto lab8_end
-		}
-		B_stemmed = true
-	}
-lab8_end:
-	;
-	z.cursor = z.limit - v_11
-	v_12 := z.limit - z.cursor
-	{
-		if !B_stemmed {
-			goto lab9_end
-		}
-		if !z.r_Step_6() {
-			goto lab9_end
-		}
-	}
-lab9_end:
-	;
-	z.cursor = z.limit - v_12
-	z.cursor = z.limitBackward
-	return
-}
-
-type englishStemmer struct {
-	snowball
-	I_p1, I_p2  int
-	S_ch, S_x   []rune
-	LS_ch, LS_x int
-	B_Y_found   bool
-}
-
-func newEnglish() *englishStemmer { return &englishStemmer{} }
-
-var eng_a_0 = []among{
-	{"arsen", -1, -1, ""},
-	{"commun", -1, -1, ""},
-	{"emerg", -1, -1, ""},
-	{"gener", -1, -1, ""},
-	{"inter", -1, -1, ""},
-	{"later", -1, -1, ""},
-	{"organ", -1, -1, ""},
-	{"past", -1, -1, ""},
-	{"univers", -1, -1, ""},
-}
-var eng_a_1 = []among{
-	{"'", -1, 1, ""},
-	{"'s'", 0, 1, ""},
-	{"'s", -1, 1, ""},
-}
-var eng_a_2 = []among{
-	{"ied", -1, 2, ""},
-	{"s", -1, 3, ""},
-	{"ies", 1, 2, ""},
-	{"sses", 1, 1, ""},
-	{"ss", 1, -1, ""},
-	{"us", 1, -1, ""},
-}
-var eng_a_3 = []among{
-	{"succ", -1, 1, ""},
-	{"proc", -1, 1, ""},
-	{"exc", -1, 1, ""},
-}
-var eng_a_4 = []among{
-	{"even", -1, 2, ""},
-	{"cann", -1, 2, ""},
-	{"inn", -1, 2, ""},
-	{"earr", -1, 2, ""},
-	{"herr", -1, 2, ""},
-	{"out", -1, 2, ""},
-	{"y", -1, 1, ""},
-}
-var eng_a_5 = []among{
-	{"", -1, -1, ""},
-	{"ed", 0, 2, ""},
-	{"eed", 1, 1, ""},
-	{"ing", 0, 3, ""},
-	{"edly", 0, 2, ""},
-	{"eedly", 4, 1, ""},
-	{"ingly", 0, 2, ""},
-}
-var eng_a_6 = []among{
-	{"", -1, 3, ""},
-	{"bb", 0, 2, ""},
-	{"dd", 0, 2, ""},
-	{"ff", 0, 2, ""},
-	{"gg", 0, 2, ""},
-	{"bl", 0, 1, ""},
-	{"mm", 0, 2, ""},
-	{"nn", 0, 2, ""},
-	{"pp", 0, 2, ""},
-	{"rr", 0, 2, ""},
-	{"at", 0, 1, ""},
-	{"tt", 0, 2, ""},
-	{"iz", 0, 1, ""},
-}
-var eng_a_7 = []among{
-	{"anci", -1, 3, ""},
-	{"enci", -1, 2, ""},
-	{"ogi", -1, 14, ""},
-	{"li", -1, 16, ""},
-	{"bli", 3, 12, ""},
-	{"abli", 4, 4, ""},
-	{"alli", 3, 8, ""},
-	{"fulli", 3, 9, ""},
-	{"lessli", 3, 15, ""},
-	{"ousli", 3, 10, ""},
-	{"entli", 3, 5, ""},
-	{"aliti", -1, 8, ""},
-	{"biliti", -1, 12, ""},
-	{"iviti", -1, 11, ""},
-	{"tional", -1, 1, ""},
-	{"ational", 14, 7, ""},
-	{"alism", -1, 8, ""},
-	{"ation", -1, 7, ""},
-	{"ization", 17, 6, ""},
-	{"izer", -1, 6, ""},
-	{"ator", -1, 7, ""},
-	{"iveness", -1, 11, ""},
-	{"fulness", -1, 9, ""},
-	{"ousness", -1, 10, ""},
-	{"ogist", -1, 13, ""},
-}
-var eng_a_8 = []among{
-	{"icate", -1, 4, ""},
-	{"ative", -1, 6, ""},
-	{"alize", -1, 3, ""},
-	{"iciti", -1, 4, ""},
-	{"ical", -1, 4, ""},
-	{"tional", -1, 1, ""},
-	{"ational", 5, 2, ""},
-	{"ful", -1, 5, ""},
-	{"ness", -1, 5, ""},
-}
-var eng_a_9 = []among{
-	{"ic", -1, 1, ""},
-	{"ance", -1, 1, ""},
-	{"ence", -1, 1, ""},
-	{"able", -1, 1, ""},
-	{"ible", -1, 1, ""},
-	{"ate", -1, 1, ""},
-	{"ive", -1, 1, ""},
-	{"ize", -1, 1, ""},
-	{"iti", -1, 1, ""},
-	{"al", -1, 1, ""},
-	{"ism", -1, 1, ""},
-	{"ion", -1, 2, ""},
-	{"er", -1, 1, ""},
-	{"ous", -1, 1, ""},
-	{"ant", -1, 1, ""},
-	{"ent", -1, 1, ""},
-	{"ment", 15, 1, ""},
-	{"ement", 16, 1, ""},
-}
-var eng_a_10 = []among{
-	{"e", -1, 1, ""},
-	{"l", -1, 2, ""},
-}
-var eng_a_11 = []among{
-	{"andes", -1, -1, ""},
-	{"atlas", -1, -1, ""},
-	{"bias", -1, -1, ""},
-	{"cosmos", -1, -1, ""},
-	{"early", -1, 6, ""},
-	{"gently", -1, 4, ""},
-	{"howe", -1, -1, ""},
-	{"idly", -1, 3, ""},
-	{"news", -1, -1, ""},
-	{"only", -1, 7, ""},
-	{"singly", -1, 8, ""},
-	{"skies", -1, 2, ""},
-	{"skis", -1, 1, ""},
-	{"sky", -1, -1, ""},
-	{"ugly", -1, 5, ""},
-}
-var eng_g_aeo = []byte{17, 64}
-var eng_g_v = []byte{17, 65, 16, 1}
-var eng_g_v_WXY = []byte{1, 17, 65, 208, 1}
-var eng_g_valid_LI = []byte{55, 141, 2}
-
-func (z *englishStemmer) r_prelude() bool {
-	z.B_Y_found = false
-	v_1 := z.cursor
-	{
-		z.bra = z.cursor
-		if !(z.eqS("'")) {
-			goto lab0_end
-		}
-		z.ket = z.cursor
-		z.sliceDel()
-	}
-lab0_end:
-	;
-	z.cursor = v_1
-	v_2 := z.cursor
-	{
-		z.bra = z.cursor
-		if !(z.eqS("y")) {
-			goto lab1_end
-		}
-		z.ket = z.cursor
-		z.sliceFrom("Y")
-		z.B_Y_found = true
-	}
-lab1_end:
-	;
-	z.cursor = v_2
-	v_3 := z.cursor
-	{
-		for {
-			v_4 := z.cursor
-			{
-			golab4:
-				for {
-					v_5 := z.cursor
-					{
-						if !(z.inGrouping(eng_g_v, 97, 121)) {
-							goto lab5_end
-						}
-						z.bra = z.cursor
-						if !(z.eqS("y")) {
-							goto lab5_end
-						}
-						z.ket = z.cursor
-						z.cursor = v_5
-						break golab4
-					}
-				lab5_end:
-					;
-					z.cursor = v_5
-					if z.cursor >= z.limit {
-						goto lab3_end
-					}
-					z.cursor++
-				}
-				z.sliceFrom("Y")
-				z.B_Y_found = true
-				continue
-			}
-		lab3_end:
-			;
-			z.cursor = v_4
-			break
-		}
-	}
-	z.cursor = v_3
-	return true
-}
-func (z *englishStemmer) r_mark_regions() bool {
-	z.I_p1 = z.limit
-	z.I_p2 = z.limit
-	v_1 := z.cursor
-	{
-		{
-			v_2 := z.cursor
-			{
-				if z.findAmong(eng_a_0) == 0 {
-					goto lab2_end
-				}
-				goto lab1_end
-			}
-		lab2_end:
-			;
-			z.cursor = v_2
-			if !z.goOutGrouping(eng_g_v, 97, 121) {
-				goto lab0_end
-			}
-			z.cursor++
-			if !z.goInGrouping(eng_g_v, 97, 121) {
-				goto lab0_end
-			}
-			z.cursor++
-		}
-	lab1_end:
-		;
-		z.I_p1 = z.cursor
-		if !z.goOutGrouping(eng_g_v, 97, 121) {
-			goto lab0_end
-		}
-		z.cursor++
-		if !z.goInGrouping(eng_g_v, 97, 121) {
-			goto lab0_end
-		}
-		z.cursor++
-		z.I_p2 = z.cursor
-	}
-lab0_end:
-	;
-	z.cursor = v_1
-	return true
-}
-func (z *englishStemmer) r_shortv() bool {
-	{
-		v_1 := z.limit - z.cursor
-		{
-			if !(z.outGroupingB(eng_g_v_WXY, 89, 121)) {
-				goto lab1_end
-			}
-			if !(z.inGroupingB(eng_g_v, 97, 121)) {
-				goto lab1_end
-			}
-			if !(z.outGroupingB(eng_g_v, 97, 121)) {
-				goto lab1_end
-			}
-			goto lab0_end
-		}
-	lab1_end:
-		;
-		z.cursor = z.limit - v_1
-		{
-			if !(z.outGroupingB(eng_g_v, 97, 121)) {
-				goto lab2_end
-			}
-			if !(z.inGroupingB(eng_g_v, 97, 121)) {
-				goto lab2_end
-			}
-			if z.cursor > z.limitBackward {
-				goto lab2_end
-			}
-			goto lab0_end
-		}
-	lab2_end:
-		;
-		z.cursor = z.limit - v_1
-		if !(z.eqSB("past")) {
-			return false
-		}
-	}
-lab0_end:
-	;
-	return true
-}
-func (z *englishStemmer) r_R1() bool {
-	return z.I_p1 <= z.cursor
-}
-func (z *englishStemmer) r_R2() bool {
-	return z.I_p2 <= z.cursor
-}
-func (z *englishStemmer) r_Step_1a() bool {
-	var among_var int
-	v_1 := z.limit - z.cursor
-	{
-		z.ket = z.cursor
-		if z.findAmongB(eng_a_1) == 0 {
-			z.cursor = z.limit - v_1
-			goto lab0_end
-		}
-		z.bra = z.cursor
-		z.sliceDel()
-	}
-lab0_end:
-	;
-	z.ket = z.cursor
-	among_var = z.findAmongB(eng_a_2)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	switch among_var {
-	case 1:
-		z.sliceFrom("ss")
-		break
-	case 2:
-		{
-			v_2 := z.limit - z.cursor
-			{
-				{
-					c := z.cursor - 2
-					if c < z.limitBackward {
-						goto lab2_end
-					}
-					z.cursor = c
-				}
-				z.sliceFrom("i")
-				goto lab1_end
-			}
-		lab2_end:
-			;
-			z.cursor = z.limit - v_2
-			z.sliceFrom("ie")
-		}
-	lab1_end:
-		;
-		break
-	case 3:
-		if z.cursor <= z.limitBackward {
-			return false
-		}
-		z.cursor--
-		if !z.goOutGroupingB(eng_g_v, 97, 121) {
-			return false
-		}
-		z.cursor--
-		z.sliceDel()
-		break
-	}
-	return true
-}
-func (z *englishStemmer) r_Step_1b() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(eng_a_5)
-	z.bra = z.cursor
-	{
-		v_1 := z.limit - z.cursor
-		{
-			switch among_var {
-			case 1:
-				v_2 := z.limit - z.cursor
-				{
-					if !z.r_R1() {
-						goto lab2_end
-					}
-					{
-						v_3 := z.limit - z.cursor
-						{
-							if z.findAmongB(eng_a_3) == 0 {
-								goto lab4_end
-							}
-							if z.cursor > z.limitBackward {
-								goto lab4_end
-							}
-							goto lab3_end
-						}
-					lab4_end:
-						;
-						z.cursor = z.limit - v_3
-						z.sliceFrom("ee")
-					}
-				lab3_end:
-				}
-			lab2_end:
-				;
-				z.cursor = z.limit - v_2
-				break
-			case 2:
-				goto lab1_end
-			case 3:
-				among_var = z.findAmongB(eng_a_4)
-				if among_var == 0 {
-					goto lab1_end
-				}
-				switch among_var {
-				case 1:
-					v_4 := z.limit - z.cursor
-					if !(z.outGroupingB(eng_g_v, 97, 121)) {
-						goto lab1_end
-					}
-					if z.cursor > z.limitBackward {
-						goto lab1_end
-					}
-					z.cursor = z.limit - v_4
-					z.bra = z.cursor
-					z.sliceFrom("ie")
-					break
-				case 2:
-					if z.cursor > z.limitBackward {
-						goto lab1_end
-					}
-					break
-				}
-				break
-			}
-			goto lab0_end
-		}
-	lab1_end:
-		;
-		z.cursor = z.limit - v_1
-		v_5 := z.limit - z.cursor
-		if !z.goOutGroupingB(eng_g_v, 97, 121) {
-			return false
-		}
-		z.cursor--
-		z.cursor = z.limit - v_5
-		z.sliceDel()
-		z.ket = z.cursor
-		z.bra = z.cursor
-		v_6 := z.limit - z.cursor
-		among_var = z.findAmongB(eng_a_6)
-		switch among_var {
-		case 1:
-			z.sliceFrom("e")
-			return false
-		case 2:
-			{
-				v_7 := z.limit - z.cursor
-				{
-					if !(z.inGroupingB(eng_g_aeo, 97, 111)) {
-						goto lab5_end
-					}
-					if z.cursor > z.limitBackward {
-						goto lab5_end
-					}
-					return false
-				}
-			lab5_end:
-				;
-				z.cursor = z.limit - v_7
-			}
-			break
-		case 3:
-			if z.cursor != z.I_p1 {
-				return false
-			}
-			v_8 := z.limit - z.cursor
-			if !z.r_shortv() {
-				return false
-			}
-			z.cursor = z.limit - v_8
-			z.sliceFrom("e")
-			return false
-		}
-		z.cursor = z.limit - v_6
-		z.ket = z.cursor
-		if z.cursor <= z.limitBackward {
-			return false
-		}
-		z.cursor--
-		z.bra = z.cursor
-		z.sliceDel()
-	}
-lab0_end:
-	;
-	return true
-}
-func (z *englishStemmer) r_Step_1c() bool {
-	z.ket = z.cursor
-	{
-		v_1 := z.limit - z.cursor
-		{
-			if !(z.eqSB("y")) {
-				goto lab1_end
-			}
-			goto lab0_end
-		}
-	lab1_end:
-		;
-		z.cursor = z.limit - v_1
-		if !(z.eqSB("Y")) {
-			return false
-		}
-	}
-lab0_end:
-	;
-	z.bra = z.cursor
-	if !(z.outGroupingB(eng_g_v, 97, 121)) {
-		return false
-	}
-	{
-		if z.cursor > z.limitBackward {
-			goto lab2_end
-		}
-		return false
-	}
-lab2_end:
-	;
-	z.sliceFrom("i")
-	return true
-}
-func (z *englishStemmer) r_Step_2() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(eng_a_7)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	if !z.r_R1() {
-		return false
-	}
-	switch among_var {
-	case 1:
-		z.sliceFrom("tion")
-		break
-	case 2:
-		z.sliceFrom("ence")
-		break
-	case 3:
-		z.sliceFrom("ance")
-		break
-	case 4:
-		z.sliceFrom("able")
-		break
-	case 5:
-		z.sliceFrom("ent")
-		break
-	case 6:
-		z.sliceFrom("ize")
-		break
-	case 7:
-		z.sliceFrom("ate")
-		break
-	case 8:
-		z.sliceFrom("al")
-		break
-	case 9:
-		z.sliceFrom("ful")
-		break
-	case 10:
-		z.sliceFrom("ous")
-		break
-	case 11:
-		z.sliceFrom("ive")
-		break
-	case 12:
-		z.sliceFrom("ble")
-		break
-	case 13:
-		z.sliceFrom("og")
-		break
-	case 14:
-		if !(z.eqSB("l")) {
-			return false
-		}
-		z.sliceFrom("og")
-		break
-	case 15:
-		z.sliceFrom("less")
-		break
-	case 16:
-		if !(z.inGroupingB(eng_g_valid_LI, 99, 116)) {
-			return false
-		}
-		z.sliceDel()
-		break
-	}
-	return true
-}
-func (z *englishStemmer) r_Step_3() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(eng_a_8)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	if !z.r_R1() {
-		return false
-	}
-	switch among_var {
-	case 1:
-		z.sliceFrom("tion")
-		break
-	case 2:
-		z.sliceFrom("ate")
-		break
-	case 3:
-		z.sliceFrom("al")
-		break
-	case 4:
-		z.sliceFrom("ic")
-		break
-	case 5:
-		z.sliceDel()
-		break
-	case 6:
-		if !z.r_R2() {
-			return false
-		}
-		z.sliceDel()
-		break
-	}
-	return true
-}
-func (z *englishStemmer) r_Step_4() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(eng_a_9)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	if !z.r_R2() {
-		return false
-	}
-	switch among_var {
-	case 1:
-		z.sliceDel()
-		break
-	case 2:
-		{
-			v_1 := z.limit - z.cursor
-			{
-				if !(z.eqSB("s")) {
-					goto lab1_end
-				}
-				goto lab0_end
-			}
-		lab1_end:
-			;
-			z.cursor = z.limit - v_1
-			if !(z.eqSB("t")) {
-				return false
-			}
-		}
-	lab0_end:
-		;
-		z.sliceDel()
-		break
-	}
-	return true
-}
-func (z *englishStemmer) r_Step_5() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(eng_a_10)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	switch among_var {
-	case 1:
-		{
-			{
-				if !z.r_R2() {
-					goto lab1_end
-				}
-				goto lab0_end
-			}
-		lab1_end:
-			;
-			if !z.r_R1() {
-				return false
-			}
-			{
-				v_1 := z.limit - z.cursor
-				{
-					if !z.r_shortv() {
-						goto lab2_end
-					}
-					return false
-				}
-			lab2_end:
-				;
-				z.cursor = z.limit - v_1
-			}
-		}
-	lab0_end:
-		;
-		z.sliceDel()
-		break
-	case 2:
-		if !z.r_R2() {
-			return false
-		}
-		if !(z.eqSB("l")) {
-			return false
-		}
-		z.sliceDel()
-		break
-	}
-	return true
-}
-func (z *englishStemmer) r_exception1() bool {
-	var among_var int
-	z.bra = z.cursor
-	among_var = z.findAmong(eng_a_11)
-	if among_var == 0 {
-		return false
-	}
-	z.ket = z.cursor
-	if z.cursor < z.limit {
-		return false
-	}
-	switch among_var {
-	case 1:
-		z.sliceFrom("ski")
-		break
-	case 2:
-		z.sliceFrom("sky")
-		break
-	case 3:
-		z.sliceFrom("idl")
-		break
-	case 4:
-		z.sliceFrom("gentl")
-		break
-	case 5:
-		z.sliceFrom("ugli")
-		break
-	case 6:
-		z.sliceFrom("earli")
-		break
-	case 7:
-		z.sliceFrom("onli")
-		break
-	case 8:
-		z.sliceFrom("singl")
-		break
-	}
-	return true
-}
-func (z *englishStemmer) r_postlude() bool {
-	if !z.B_Y_found {
-		return false
-	}
-	for {
-		v_1 := z.cursor
-		{
-		golab1:
-			for {
-				v_2 := z.cursor
-				{
-					z.bra = z.cursor
-					if !(z.eqS("Y")) {
-						goto lab2_end
-					}
-					z.ket = z.cursor
-					z.cursor = v_2
-					break golab1
-				}
-			lab2_end:
-				;
-				z.cursor = v_2
-				if z.cursor >= z.limit {
-					goto lab0_end
-				}
-				z.cursor++
-			}
-			z.sliceFrom("y")
-			continue
-		}
-	lab0_end:
-		;
-		z.cursor = v_1
-		break
-	}
-	return true
-}
-func (z *englishStemmer) stem() {
-	{
-		v_1 := z.cursor
-		{
-			if !z.r_exception1() {
-				goto lab1_end
-			}
-			goto lab0_end
-		}
-	lab1_end:
-		;
-		z.cursor = v_1
-		{
-			{
-				v_2 := z.cursor
-				{
-					{
-						c := z.cursor + 3
-						if c > z.limit {
-							goto lab3_end
-						}
-						z.cursor = c
-					}
-					goto lab2_end
-				}
-			lab3_end:
-				;
-				z.cursor = v_2
-			}
-			goto lab0_end
-		}
-	lab2_end:
-		;
-		z.cursor = v_1
-		z.r_prelude()
-		z.r_mark_regions()
-		z.limitBackward = z.cursor
-		z.cursor = z.limit
-		v_3 := z.limit - z.cursor
-		z.r_Step_1a()
-		z.cursor = z.limit - v_3
-		v_4 := z.limit - z.cursor
-		z.r_Step_1b()
-		z.cursor = z.limit - v_4
-		v_5 := z.limit - z.cursor
-		z.r_Step_1c()
-		z.cursor = z.limit - v_5
-		v_6 := z.limit - z.cursor
-		z.r_Step_2()
-		z.cursor = z.limit - v_6
-		v_7 := z.limit - z.cursor
-		z.r_Step_3()
-		z.cursor = z.limit - v_7
-		v_8 := z.limit - z.cursor
-		z.r_Step_4()
-		z.cursor = z.limit - v_8
-		v_9 := z.limit - z.cursor
-		z.r_Step_5()
-		z.cursor = z.limit - v_9
-		z.cursor = z.limitBackward
-		v_10 := z.cursor
-		z.r_postlude()
-		z.cursor = v_10
-	}
-lab0_end:
-	;
-	return
-}
-
 type estonianStemmer struct {
 	snowball
 	I_p1, I_p2  int
@@ -7263,3940 +4744,6 @@ lab0_end:
 	return
 }
 
-type frenchStemmer struct {
-	snowball
-	I_p1, I_p2  int
-	S_ch, S_x   []rune
-	LS_ch, LS_x int
-	I_pV        int
-}
-
-func newFrench() *frenchStemmer { return &frenchStemmer{} }
-
-var fre_a_0 = []among{
-	{"col", -1, -1, ""},
-	{"ni", -1, 1, ""},
-	{"par", -1, -1, ""},
-	{"tap", -1, -1, ""},
-}
-var fre_a_1 = []among{
-	{"", -1, 7, ""},
-	{"H", 0, 6, ""},
-	{"He", 1, 4, ""},
-	{"Hi", 1, 5, ""},
-	{"I", 0, 1, ""},
-	{"U", 0, 2, ""},
-	{"Y", 0, 3, ""},
-}
-var fre_a_2 = []among{
-	{"iqU", -1, 3, ""},
-	{"abl", -1, 3, ""},
-	{"I\u00E8r", -1, 4, ""},
-	{"i\u00E8r", -1, 4, ""},
-	{"eus", -1, 2, ""},
-	{"iv", -1, 1, ""},
-}
-var fre_a_3 = []among{
-	{"ic", -1, 2, ""},
-	{"abil", -1, 1, ""},
-	{"iv", -1, 3, ""},
-}
-var fre_a_4 = []among{
-	{"iqUe", -1, 1, ""},
-	{"atrice", -1, 2, ""},
-	{"ance", -1, 1, ""},
-	{"ence", -1, 5, ""},
-	{"logie", -1, 3, ""},
-	{"able", -1, 1, ""},
-	{"isme", -1, 1, ""},
-	{"euse", -1, 12, ""},
-	{"iste", -1, 1, ""},
-	{"ive", -1, 8, ""},
-	{"if", -1, 8, ""},
-	{"usion", -1, 4, ""},
-	{"ation", -1, 2, ""},
-	{"ution", -1, 4, ""},
-	{"ateur", -1, 2, ""},
-	{"iqUes", -1, 1, ""},
-	{"atrices", -1, 2, ""},
-	{"ances", -1, 1, ""},
-	{"ences", -1, 5, ""},
-	{"logies", -1, 3, ""},
-	{"ables", -1, 1, ""},
-	{"ismes", -1, 1, ""},
-	{"euses", -1, 12, ""},
-	{"istes", -1, 1, ""},
-	{"ives", -1, 8, ""},
-	{"ifs", -1, 8, ""},
-	{"usions", -1, 4, ""},
-	{"ations", -1, 2, ""},
-	{"utions", -1, 4, ""},
-	{"ateurs", -1, 2, ""},
-	{"ments", -1, 16, ""},
-	{"ements", 30, 6, ""},
-	{"issements", 31, 13, ""},
-	{"it\u00E9s", -1, 7, ""},
-	{"ment", -1, 16, ""},
-	{"ement", 34, 6, ""},
-	{"issement", 35, 13, ""},
-	{"amment", 34, 14, ""},
-	{"emment", 34, 15, ""},
-	{"aux", -1, 10, ""},
-	{"eaux", 39, 9, ""},
-	{"eux", -1, 1, ""},
-	{"oux", -1, 11, ""},
-	{"it\u00E9", -1, 7, ""},
-}
-var fre_a_5 = []among{
-	{"ira", -1, 1, ""},
-	{"ie", -1, 1, ""},
-	{"isse", -1, 1, ""},
-	{"issante", -1, 1, ""},
-	{"i", -1, 1, ""},
-	{"irai", 4, 1, ""},
-	{"ir", -1, 1, ""},
-	{"iras", -1, 1, ""},
-	{"ies", -1, 1, ""},
-	{"\u00EEmes", -1, 1, ""},
-	{"isses", -1, 1, ""},
-	{"issantes", -1, 1, ""},
-	{"\u00EEtes", -1, 1, ""},
-	{"is", -1, 1, ""},
-	{"irais", 13, 1, ""},
-	{"issais", 13, 1, ""},
-	{"irions", -1, 1, ""},
-	{"issions", -1, 1, ""},
-	{"irons", -1, 1, ""},
-	{"issons", -1, 1, ""},
-	{"issants", -1, 1, ""},
-	{"it", -1, 1, ""},
-	{"irait", 21, 1, ""},
-	{"issait", 21, 1, ""},
-	{"issant", -1, 1, ""},
-	{"iraIent", -1, 1, ""},
-	{"issaIent", -1, 1, ""},
-	{"irent", -1, 1, ""},
-	{"issent", -1, 1, ""},
-	{"iront", -1, 1, ""},
-	{"\u00EEt", -1, 1, ""},
-	{"iriez", -1, 1, ""},
-	{"issiez", -1, 1, ""},
-	{"irez", -1, 1, ""},
-	{"issez", -1, 1, ""},
-}
-var fre_a_6 = []among{
-	{"al", -1, 1, ""},
-	{"\u00E9pl", -1, -1, ""},
-	{"auv", -1, -1, ""},
-}
-var fre_a_7 = []among{
-	{"a", -1, 3, ""},
-	{"era", 0, 2, ""},
-	{"aise", -1, 4, ""},
-	{"asse", -1, 3, ""},
-	{"ante", -1, 3, ""},
-	{"\u00E9e", -1, 2, ""},
-	{"ai", -1, 3, ""},
-	{"erai", 6, 2, ""},
-	{"er", -1, 2, ""},
-	{"as", -1, 3, ""},
-	{"eras", 9, 2, ""},
-	{"\u00E2mes", -1, 3, ""},
-	{"aises", -1, 4, ""},
-	{"asses", -1, 3, ""},
-	{"antes", -1, 3, ""},
-	{"\u00E2tes", -1, 3, ""},
-	{"\u00E9es", -1, 2, ""},
-	{"ais", -1, 4, ""},
-	{"eais", 17, 2, ""},
-	{"erais", 17, 2, ""},
-	{"ions", -1, 1, ""},
-	{"erions", 20, 2, ""},
-	{"assions", 20, 3, ""},
-	{"erons", -1, 2, ""},
-	{"ants", -1, 3, ""},
-	{"\u00E9s", -1, 2, ""},
-	{"ait", -1, 3, ""},
-	{"erait", 26, 2, ""},
-	{"ant", -1, 3, ""},
-	{"aIent", -1, 3, ""},
-	{"eraIent", 29, 2, ""},
-	{"\u00E8rent", -1, 2, ""},
-	{"assent", -1, 3, ""},
-	{"eront", -1, 2, ""},
-	{"\u00E2t", -1, 3, ""},
-	{"ez", -1, 2, ""},
-	{"iez", 35, 2, ""},
-	{"eriez", 36, 2, ""},
-	{"assiez", 36, 3, ""},
-	{"erez", 35, 2, ""},
-	{"\u00E9", -1, 2, ""},
-}
-var fre_a_8 = []among{
-	{"e", -1, 3, ""},
-	{"I\u00E8re", 0, 2, ""},
-	{"i\u00E8re", 0, 2, ""},
-	{"ion", -1, 1, ""},
-	{"Ier", -1, 2, ""},
-	{"ier", -1, 2, ""},
-}
-var fre_a_9 = []among{
-	{"ell", -1, -1, ""},
-	{"eill", -1, -1, ""},
-	{"enn", -1, -1, ""},
-	{"onn", -1, -1, ""},
-	{"ett", -1, -1, ""},
-}
-var fre_g_v = []byte{17, 65, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 130, 103, 8, 5}
-var fre_g_oux_ending = []byte{65, 85}
-var fre_g_elision_char = []byte{131, 14, 3}
-var fre_g_keep_with_s = []byte{1, 65, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128}
-
-func (z *frenchStemmer) r_elisions() bool {
-	z.bra = z.cursor
-	{
-		v_1 := z.cursor
-		{
-			if !(z.inGrouping(fre_g_elision_char, 99, 116)) {
-				goto lab1_end
-			}
-			goto lab0_end
-		}
-	lab1_end:
-		;
-		z.cursor = v_1
-		if !(z.eqS("qu")) {
-			return false
-		}
-	}
-lab0_end:
-	;
-	if !(z.eqS("'")) {
-		return false
-	}
-	z.ket = z.cursor
-	{
-		if z.cursor < z.limit {
-			goto lab2_end
-		}
-		return false
-	}
-lab2_end:
-	;
-	z.sliceDel()
-	return true
-}
-func (z *frenchStemmer) r_prelude() bool {
-	for {
-		v_1 := z.cursor
-		{
-		golab1:
-			for {
-				v_2 := z.cursor
-				{
-					{
-						v_3 := z.cursor
-						{
-							if !(z.inGrouping(fre_g_v, 97, 251)) {
-								goto lab4_end
-							}
-							z.bra = z.cursor
-							{
-								v_4 := z.cursor
-								{
-									if !(z.eqS("u")) {
-										goto lab6_end
-									}
-									z.ket = z.cursor
-									if !(z.inGrouping(fre_g_v, 97, 251)) {
-										goto lab6_end
-									}
-									z.sliceFrom("U")
-									goto lab5_end
-								}
-							lab6_end:
-								;
-								z.cursor = v_4
-								{
-									if !(z.eqS("i")) {
-										goto lab7_end
-									}
-									z.ket = z.cursor
-									if !(z.inGrouping(fre_g_v, 97, 251)) {
-										goto lab7_end
-									}
-									z.sliceFrom("I")
-									goto lab5_end
-								}
-							lab7_end:
-								;
-								z.cursor = v_4
-								if !(z.eqS("y")) {
-									goto lab4_end
-								}
-								z.ket = z.cursor
-								z.sliceFrom("Y")
-							}
-						lab5_end:
-							;
-							goto lab3_end
-						}
-					lab4_end:
-						;
-						z.cursor = v_3
-						{
-							z.bra = z.cursor
-							if !(z.eqS("\u00EB")) {
-								goto lab8_end
-							}
-							z.ket = z.cursor
-							z.sliceFrom("He")
-							goto lab3_end
-						}
-					lab8_end:
-						;
-						z.cursor = v_3
-						{
-							z.bra = z.cursor
-							if !(z.eqS("\u00EF")) {
-								goto lab9_end
-							}
-							z.ket = z.cursor
-							z.sliceFrom("Hi")
-							goto lab3_end
-						}
-					lab9_end:
-						;
-						z.cursor = v_3
-						{
-							z.bra = z.cursor
-							if !(z.eqS("y")) {
-								goto lab10_end
-							}
-							z.ket = z.cursor
-							if !(z.inGrouping(fre_g_v, 97, 251)) {
-								goto lab10_end
-							}
-							z.sliceFrom("Y")
-							goto lab3_end
-						}
-					lab10_end:
-						;
-						z.cursor = v_3
-						if !(z.eqS("q")) {
-							goto lab2_end
-						}
-						z.bra = z.cursor
-						if !(z.eqS("u")) {
-							goto lab2_end
-						}
-						z.ket = z.cursor
-						z.sliceFrom("U")
-					}
-				lab3_end:
-					;
-					z.cursor = v_2
-					break golab1
-				}
-			lab2_end:
-				;
-				z.cursor = v_2
-				if z.cursor >= z.limit {
-					goto lab0_end
-				}
-				z.cursor++
-			}
-			continue
-		}
-	lab0_end:
-		;
-		z.cursor = v_1
-		break
-	}
-	return true
-}
-func (z *frenchStemmer) r_mark_regions() bool {
-	var among_var int
-	z.I_pV = z.limit
-	z.I_p1 = z.limit
-	z.I_p2 = z.limit
-	v_1 := z.cursor
-	{
-		{
-			v_2 := z.cursor
-			{
-				if !(z.inGrouping(fre_g_v, 97, 251)) {
-					goto lab2_end
-				}
-				if !(z.inGrouping(fre_g_v, 97, 251)) {
-					goto lab2_end
-				}
-				if z.cursor >= z.limit {
-					goto lab2_end
-				}
-				z.cursor++
-				goto lab1_end
-			}
-		lab2_end:
-			;
-			z.cursor = v_2
-			{
-				among_var = z.findAmong(fre_a_0)
-				if among_var == 0 {
-					goto lab3_end
-				}
-				switch among_var {
-				case 1:
-					if !(z.inGrouping(fre_g_v, 97, 251)) {
-						goto lab3_end
-					}
-					break
-				}
-				goto lab1_end
-			}
-		lab3_end:
-			;
-			z.cursor = v_2
-			if z.cursor >= z.limit {
-				goto lab0_end
-			}
-			z.cursor++
-			if !z.goOutGrouping(fre_g_v, 97, 251) {
-				goto lab0_end
-			}
-			z.cursor++
-		}
-	lab1_end:
-		;
-		z.I_pV = z.cursor
-	}
-lab0_end:
-	;
-	z.cursor = v_1
-	v_3 := z.cursor
-	{
-		if !z.goOutGrouping(fre_g_v, 97, 251) {
-			goto lab4_end
-		}
-		z.cursor++
-		if !z.goInGrouping(fre_g_v, 97, 251) {
-			goto lab4_end
-		}
-		z.cursor++
-		z.I_p1 = z.cursor
-		if !z.goOutGrouping(fre_g_v, 97, 251) {
-			goto lab4_end
-		}
-		z.cursor++
-		if !z.goInGrouping(fre_g_v, 97, 251) {
-			goto lab4_end
-		}
-		z.cursor++
-		z.I_p2 = z.cursor
-	}
-lab4_end:
-	;
-	z.cursor = v_3
-	return true
-}
-func (z *frenchStemmer) r_postlude() bool {
-	var among_var int
-	for {
-		v_1 := z.cursor
-		{
-			z.bra = z.cursor
-			among_var = z.findAmong(fre_a_1)
-			z.ket = z.cursor
-			switch among_var {
-			case 1:
-				z.sliceFrom("i")
-				break
-			case 2:
-				z.sliceFrom("u")
-				break
-			case 3:
-				z.sliceFrom("y")
-				break
-			case 4:
-				z.sliceFrom("\u00EB")
-				break
-			case 5:
-				z.sliceFrom("\u00EF")
-				break
-			case 6:
-				z.sliceDel()
-				break
-			case 7:
-				if z.cursor >= z.limit {
-					goto lab0_end
-				}
-				z.cursor++
-				break
-			}
-			continue
-		}
-	lab0_end:
-		;
-		z.cursor = v_1
-		break
-	}
-	return true
-}
-func (z *frenchStemmer) r_RV() bool {
-	return z.I_pV <= z.cursor
-}
-func (z *frenchStemmer) r_R1() bool {
-	return z.I_p1 <= z.cursor
-}
-func (z *frenchStemmer) r_R2() bool {
-	return z.I_p2 <= z.cursor
-}
-func (z *frenchStemmer) r_standard_suffix() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(fre_a_4)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	switch among_var {
-	case 1:
-		if !z.r_R2() {
-			return false
-		}
-		z.sliceDel()
-		break
-	case 2:
-		if !z.r_R2() {
-			return false
-		}
-		z.sliceDel()
-		v_1 := z.limit - z.cursor
-		{
-			z.ket = z.cursor
-			if !(z.eqSB("ic")) {
-				z.cursor = z.limit - v_1
-				goto lab0_end
-			}
-			z.bra = z.cursor
-			{
-				v_2 := z.limit - z.cursor
-				{
-					if !z.r_R2() {
-						goto lab2_end
-					}
-					z.sliceDel()
-					goto lab1_end
-				}
-			lab2_end:
-				;
-				z.cursor = z.limit - v_2
-				z.sliceFrom("iqU")
-			}
-		lab1_end:
-		}
-	lab0_end:
-		;
-		break
-	case 3:
-		if !z.r_R2() {
-			return false
-		}
-		z.sliceFrom("log")
-		break
-	case 4:
-		if !z.r_R2() {
-			return false
-		}
-		z.sliceFrom("u")
-		break
-	case 5:
-		if !z.r_R2() {
-			return false
-		}
-		z.sliceFrom("ent")
-		break
-	case 6:
-		if !z.r_RV() {
-			return false
-		}
-		z.sliceDel()
-		v_3 := z.limit - z.cursor
-		{
-			z.ket = z.cursor
-			among_var = z.findAmongB(fre_a_2)
-			if among_var == 0 {
-				z.cursor = z.limit - v_3
-				goto lab3_end
-			}
-			z.bra = z.cursor
-			switch among_var {
-			case 1:
-				if !z.r_R2() {
-					z.cursor = z.limit - v_3
-					goto lab3_end
-				}
-				z.sliceDel()
-				z.ket = z.cursor
-				if !(z.eqSB("at")) {
-					z.cursor = z.limit - v_3
-					goto lab3_end
-				}
-				z.bra = z.cursor
-				if !z.r_R2() {
-					z.cursor = z.limit - v_3
-					goto lab3_end
-				}
-				z.sliceDel()
-				break
-			case 2:
-				{
-					v_4 := z.limit - z.cursor
-					{
-						if !z.r_R2() {
-							goto lab5_end
-						}
-						z.sliceDel()
-						goto lab4_end
-					}
-				lab5_end:
-					;
-					z.cursor = z.limit - v_4
-					if !z.r_R1() {
-						z.cursor = z.limit - v_3
-						goto lab3_end
-					}
-					z.sliceFrom("eux")
-				}
-			lab4_end:
-				;
-				break
-			case 3:
-				if !z.r_R2() {
-					z.cursor = z.limit - v_3
-					goto lab3_end
-				}
-				z.sliceDel()
-				break
-			case 4:
-				if !z.r_RV() {
-					z.cursor = z.limit - v_3
-					goto lab3_end
-				}
-				z.sliceFrom("i")
-				break
-			}
-		}
-	lab3_end:
-		;
-		break
-	case 7:
-		if !z.r_R2() {
-			return false
-		}
-		z.sliceDel()
-		v_5 := z.limit - z.cursor
-		{
-			z.ket = z.cursor
-			among_var = z.findAmongB(fre_a_3)
-			if among_var == 0 {
-				z.cursor = z.limit - v_5
-				goto lab6_end
-			}
-			z.bra = z.cursor
-			switch among_var {
-			case 1:
-				{
-					v_6 := z.limit - z.cursor
-					{
-						if !z.r_R2() {
-							goto lab8_end
-						}
-						z.sliceDel()
-						goto lab7_end
-					}
-				lab8_end:
-					;
-					z.cursor = z.limit - v_6
-					z.sliceFrom("abl")
-				}
-			lab7_end:
-				;
-				break
-			case 2:
-				{
-					v_7 := z.limit - z.cursor
-					{
-						if !z.r_R2() {
-							goto lab10_end
-						}
-						z.sliceDel()
-						goto lab9_end
-					}
-				lab10_end:
-					;
-					z.cursor = z.limit - v_7
-					z.sliceFrom("iqU")
-				}
-			lab9_end:
-				;
-				break
-			case 3:
-				if !z.r_R2() {
-					z.cursor = z.limit - v_5
-					goto lab6_end
-				}
-				z.sliceDel()
-				break
-			}
-		}
-	lab6_end:
-		;
-		break
-	case 8:
-		if !z.r_R2() {
-			return false
-		}
-		z.sliceDel()
-		v_8 := z.limit - z.cursor
-		{
-			z.ket = z.cursor
-			if !(z.eqSB("at")) {
-				z.cursor = z.limit - v_8
-				goto lab11_end
-			}
-			z.bra = z.cursor
-			if !z.r_R2() {
-				z.cursor = z.limit - v_8
-				goto lab11_end
-			}
-			z.sliceDel()
-			z.ket = z.cursor
-			if !(z.eqSB("ic")) {
-				z.cursor = z.limit - v_8
-				goto lab11_end
-			}
-			z.bra = z.cursor
-			{
-				v_9 := z.limit - z.cursor
-				{
-					if !z.r_R2() {
-						goto lab13_end
-					}
-					z.sliceDel()
-					goto lab12_end
-				}
-			lab13_end:
-				;
-				z.cursor = z.limit - v_9
-				z.sliceFrom("iqU")
-			}
-		lab12_end:
-		}
-	lab11_end:
-		;
-		break
-	case 9:
-		z.sliceFrom("eau")
-		break
-	case 10:
-		if !z.r_R1() {
-			return false
-		}
-		z.sliceFrom("al")
-		break
-	case 11:
-		if !(z.inGroupingB(fre_g_oux_ending, 98, 112)) {
-			return false
-		}
-		z.sliceFrom("ou")
-		break
-	case 12:
-		{
-			v_10 := z.limit - z.cursor
-			{
-				if !z.r_R2() {
-					goto lab15_end
-				}
-				z.sliceDel()
-				goto lab14_end
-			}
-		lab15_end:
-			;
-			z.cursor = z.limit - v_10
-			if !z.r_R1() {
-				return false
-			}
-			z.sliceFrom("eux")
-		}
-	lab14_end:
-		;
-		break
-	case 13:
-		if !z.r_R1() {
-			return false
-		}
-		if !(z.outGroupingB(fre_g_v, 97, 251)) {
-			return false
-		}
-		z.sliceDel()
-		break
-	case 14:
-		if !z.r_RV() {
-			return false
-		}
-		z.sliceFrom("ant")
-		return false
-	case 15:
-		if !z.r_RV() {
-			return false
-		}
-		z.sliceFrom("ent")
-		return false
-	case 16:
-		v_11 := z.limit - z.cursor
-		if !(z.inGroupingB(fre_g_v, 97, 251)) {
-			return false
-		}
-		if !z.r_RV() {
-			return false
-		}
-		z.cursor = z.limit - v_11
-		z.sliceDel()
-		return false
-	}
-	return true
-}
-func (z *frenchStemmer) r_i_verb_suffix() bool {
-	if z.cursor < z.I_pV {
-		return false
-	}
-	v_1 := z.limitBackward
-	z.limitBackward = z.I_pV
-	z.ket = z.cursor
-	if z.findAmongB(fre_a_5) == 0 {
-		z.limitBackward = v_1
-		return false
-	}
-	z.bra = z.cursor
-	{
-		v_2 := z.limit - z.cursor
-		{
-			if !(z.eqSB("H")) {
-				goto lab0_end
-			}
-			z.limitBackward = v_1
-			return false
-		}
-	lab0_end:
-		;
-		z.cursor = z.limit - v_2
-	}
-	if !(z.outGroupingB(fre_g_v, 97, 251)) {
-		z.limitBackward = v_1
-		return false
-	}
-	z.sliceDel()
-	z.limitBackward = v_1
-	return true
-}
-func (z *frenchStemmer) r_verb_suffix() bool {
-	var among_var int
-	if z.cursor < z.I_pV {
-		return false
-	}
-	v_1 := z.limitBackward
-	z.limitBackward = z.I_pV
-	z.ket = z.cursor
-	among_var = z.findAmongB(fre_a_7)
-	if among_var == 0 {
-		z.limitBackward = v_1
-		return false
-	}
-	z.bra = z.cursor
-	z.limitBackward = v_1
-	switch among_var {
-	case 1:
-		if !z.r_R2() {
-			return false
-		}
-		z.sliceDel()
-		break
-	case 2:
-		z.sliceDel()
-		break
-	case 3:
-		v_2 := z.limit - z.cursor
-		{
-			if !(z.eqSB("e")) {
-				z.cursor = z.limit - v_2
-				goto lab0_end
-			}
-			if !z.r_RV() {
-				z.cursor = z.limit - v_2
-				goto lab0_end
-			}
-			z.bra = z.cursor
-		}
-	lab0_end:
-		;
-		z.sliceDel()
-		break
-	case 4:
-		{
-			v_3 := z.limit - z.cursor
-			{
-				among_var = z.findAmongB(fre_a_6)
-				if among_var == 0 {
-					goto lab1_end
-				}
-				switch among_var {
-				case 1:
-					if z.cursor <= z.limitBackward {
-						goto lab1_end
-					}
-					z.cursor--
-					if z.cursor > z.limitBackward {
-						goto lab1_end
-					}
-					break
-				}
-				return false
-			}
-		lab1_end:
-			;
-			z.cursor = z.limit - v_3
-		}
-		z.sliceDel()
-		break
-	}
-	return true
-}
-func (z *frenchStemmer) r_residual_suffix() bool {
-	var among_var int
-	v_1 := z.limit - z.cursor
-	{
-		z.ket = z.cursor
-		if !(z.eqSB("s")) {
-			z.cursor = z.limit - v_1
-			goto lab0_end
-		}
-		z.bra = z.cursor
-		v_2 := z.limit - z.cursor
-		{
-			v_3 := z.limit - z.cursor
-			{
-				if !(z.eqSB("Hi")) {
-					goto lab2_end
-				}
-				goto lab1_end
-			}
-		lab2_end:
-			;
-			z.cursor = z.limit - v_3
-			if !(z.outGroupingB(fre_g_keep_with_s, 97, 232)) {
-				z.cursor = z.limit - v_1
-				goto lab0_end
-			}
-		}
-	lab1_end:
-		;
-		z.cursor = z.limit - v_2
-		z.sliceDel()
-	}
-lab0_end:
-	;
-	if z.cursor < z.I_pV {
-		return false
-	}
-	v_4 := z.limitBackward
-	z.limitBackward = z.I_pV
-	z.ket = z.cursor
-	among_var = z.findAmongB(fre_a_8)
-	if among_var == 0 {
-		z.limitBackward = v_4
-		return false
-	}
-	z.bra = z.cursor
-	switch among_var {
-	case 1:
-		if !z.r_R2() {
-			z.limitBackward = v_4
-			return false
-		}
-		{
-			v_5 := z.limit - z.cursor
-			{
-				if !(z.eqSB("s")) {
-					goto lab4_end
-				}
-				goto lab3_end
-			}
-		lab4_end:
-			;
-			z.cursor = z.limit - v_5
-			if !(z.eqSB("t")) {
-				z.limitBackward = v_4
-				return false
-			}
-		}
-	lab3_end:
-		;
-		z.sliceDel()
-		break
-	case 2:
-		z.sliceFrom("i")
-		break
-	case 3:
-		z.sliceDel()
-		break
-	}
-	z.limitBackward = v_4
-	return true
-}
-func (z *frenchStemmer) r_un_double() bool {
-	v_1 := z.limit - z.cursor
-	if z.findAmongB(fre_a_9) == 0 {
-		return false
-	}
-	z.cursor = z.limit - v_1
-	z.ket = z.cursor
-	if z.cursor <= z.limitBackward {
-		return false
-	}
-	z.cursor--
-	z.bra = z.cursor
-	z.sliceDel()
-	return true
-}
-func (z *frenchStemmer) r_un_accent() bool {
-	{
-		v_1 := 1
-		for {
-			{
-				if !(z.outGroupingB(fre_g_v, 97, 251)) {
-					goto lab0_end
-				}
-				v_1--
-				continue
-			}
-		lab0_end:
-			;
-			break
-		}
-		if v_1 > 0 {
-			return false
-		}
-	}
-	z.ket = z.cursor
-	{
-		v_2 := z.limit - z.cursor
-		{
-			if !(z.eqSB("\u00E9")) {
-				goto lab2_end
-			}
-			goto lab1_end
-		}
-	lab2_end:
-		;
-		z.cursor = z.limit - v_2
-		if !(z.eqSB("\u00E8")) {
-			return false
-		}
-	}
-lab1_end:
-	;
-	z.bra = z.cursor
-	z.sliceFrom("e")
-	return true
-}
-func (z *frenchStemmer) stem() {
-	v_1 := z.cursor
-	z.r_elisions()
-	z.cursor = v_1
-	v_2 := z.cursor
-	z.r_prelude()
-	z.cursor = v_2
-	z.r_mark_regions()
-	z.limitBackward = z.cursor
-	z.cursor = z.limit
-	v_3 := z.limit - z.cursor
-	{
-		{
-			v_4 := z.limit - z.cursor
-			{
-				v_5 := z.limit - z.cursor
-				{
-					v_6 := z.limit - z.cursor
-					{
-						if !z.r_standard_suffix() {
-							goto lab4_end
-						}
-						goto lab3_end
-					}
-				lab4_end:
-					;
-					z.cursor = z.limit - v_6
-					{
-						if !z.r_i_verb_suffix() {
-							goto lab5_end
-						}
-						goto lab3_end
-					}
-				lab5_end:
-					;
-					z.cursor = z.limit - v_6
-					if !z.r_verb_suffix() {
-						goto lab2_end
-					}
-				}
-			lab3_end:
-				;
-				z.cursor = z.limit - v_5
-				v_7 := z.limit - z.cursor
-				{
-					z.ket = z.cursor
-					{
-						v_8 := z.limit - z.cursor
-						{
-							if !(z.eqSB("Y")) {
-								goto lab8_end
-							}
-							z.bra = z.cursor
-							z.sliceFrom("i")
-							goto lab7_end
-						}
-					lab8_end:
-						;
-						z.cursor = z.limit - v_8
-						if !(z.eqSB("\u00E7")) {
-							z.cursor = z.limit - v_7
-							goto lab6_end
-						}
-						z.bra = z.cursor
-						z.sliceFrom("c")
-					}
-				lab7_end:
-				}
-			lab6_end:
-				;
-				goto lab1_end
-			}
-		lab2_end:
-			;
-			z.cursor = z.limit - v_4
-			if !z.r_residual_suffix() {
-				goto lab0_end
-			}
-		}
-	lab1_end:
-	}
-lab0_end:
-	;
-	z.cursor = z.limit - v_3
-	v_9 := z.limit - z.cursor
-	z.r_un_double()
-	z.cursor = z.limit - v_9
-	v_10 := z.limit - z.cursor
-	z.r_un_accent()
-	z.cursor = z.limit - v_10
-	z.cursor = z.limitBackward
-	v_11 := z.cursor
-	z.r_postlude()
-	z.cursor = v_11
-	return
-}
-
-type germanStemmer struct {
-	snowball
-	I_p1, I_p2  int
-	S_ch, S_x   []rune
-	LS_ch, LS_x int
-}
-
-func newGerman() *germanStemmer { return &germanStemmer{} }
-
-var ger_a_0 = []among{
-	{"", -1, 5, ""},
-	{"ae", 0, 2, ""},
-	{"oe", 0, 3, ""},
-	{"qu", 0, -1, ""},
-	{"ue", 0, 4, ""},
-	{"\u00DF", 0, 1, ""},
-}
-var ger_a_1 = []among{
-	{"", -1, 5, ""},
-	{"U", 0, 2, ""},
-	{"Y", 0, 1, ""},
-	{"\u00E4", 0, 3, ""},
-	{"\u00F6", 0, 4, ""},
-	{"\u00FC", 0, 2, ""},
-}
-var ger_a_2 = []among{
-	{"e", -1, 3, ""},
-	{"em", -1, 1, ""},
-	{"en", -1, 3, ""},
-	{"erinnen", 2, 2, ""},
-	{"erin", -1, 2, ""},
-	{"ln", -1, 5, ""},
-	{"ern", -1, 2, ""},
-	{"er", -1, 2, ""},
-	{"s", -1, 4, ""},
-	{"es", 8, 3, ""},
-	{"lns", 8, 5, ""},
-}
-var ger_a_3 = []among{
-	{"tick", -1, -1, ""},
-	{"plan", -1, -1, ""},
-	{"geordn", -1, -1, ""},
-	{"intern", -1, -1, ""},
-	{"tr", -1, -1, ""},
-}
-var ger_a_4 = []among{
-	{"en", -1, 1, ""},
-	{"er", -1, 1, ""},
-	{"et", -1, 3, ""},
-	{"st", -1, 2, ""},
-	{"est", 3, 1, ""},
-}
-var ger_a_5 = []among{
-	{"ig", -1, 1, ""},
-	{"lich", -1, 1, ""},
-}
-var ger_a_6 = []among{
-	{"end", -1, 1, ""},
-	{"ig", -1, 2, ""},
-	{"ung", -1, 1, ""},
-	{"lich", -1, 3, ""},
-	{"isch", -1, 2, ""},
-	{"ik", -1, 2, ""},
-	{"heit", -1, 3, ""},
-	{"keit", -1, 4, ""},
-}
-var ger_g_v = []byte{17, 65, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 32, 8}
-var ger_g_et_ending = []byte{1, 128, 198, 227, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128}
-var ger_g_s_ending = []byte{117, 30, 5}
-var ger_g_st_ending = []byte{117, 30, 4}
-
-func (z *germanStemmer) r_prelude() bool {
-	var among_var int
-	v_1 := z.cursor
-	for {
-		v_2 := z.cursor
-		{
-		golab1:
-			for {
-				v_3 := z.cursor
-				{
-					if !(z.inGrouping(ger_g_v, 97, 252)) {
-						goto lab2_end
-					}
-					z.bra = z.cursor
-					{
-						v_4 := z.cursor
-						{
-							if !(z.eqS("u")) {
-								goto lab4_end
-							}
-							z.ket = z.cursor
-							if !(z.inGrouping(ger_g_v, 97, 252)) {
-								goto lab4_end
-							}
-							z.sliceFrom("U")
-							goto lab3_end
-						}
-					lab4_end:
-						;
-						z.cursor = v_4
-						if !(z.eqS("y")) {
-							goto lab2_end
-						}
-						z.ket = z.cursor
-						if !(z.inGrouping(ger_g_v, 97, 252)) {
-							goto lab2_end
-						}
-						z.sliceFrom("Y")
-					}
-				lab3_end:
-					;
-					z.cursor = v_3
-					break golab1
-				}
-			lab2_end:
-				;
-				z.cursor = v_3
-				if z.cursor >= z.limit {
-					goto lab0_end
-				}
-				z.cursor++
-			}
-			continue
-		}
-	lab0_end:
-		;
-		z.cursor = v_2
-		break
-	}
-	z.cursor = v_1
-	for {
-		v_5 := z.cursor
-		{
-			z.bra = z.cursor
-			among_var = z.findAmong(ger_a_0)
-			z.ket = z.cursor
-			switch among_var {
-			case 1:
-				z.sliceFrom("ss")
-				break
-			case 2:
-				z.sliceFrom("\u00E4")
-				break
-			case 3:
-				z.sliceFrom("\u00F6")
-				break
-			case 4:
-				z.sliceFrom("\u00FC")
-				break
-			case 5:
-				if z.cursor >= z.limit {
-					goto lab5_end
-				}
-				z.cursor++
-				break
-			}
-			continue
-		}
-	lab5_end:
-		;
-		z.cursor = v_5
-		break
-	}
-	return true
-}
-func (z *germanStemmer) r_mark_regions() bool {
-	var I_x int
-	z.I_p1 = z.limit
-	z.I_p2 = z.limit
-	v_1 := z.cursor
-	{
-		c := z.cursor + 3
-		if c > z.limit {
-			return false
-		}
-		z.cursor = c
-	}
-	I_x = z.cursor
-	z.cursor = v_1
-	if !z.goOutGrouping(ger_g_v, 97, 252) {
-		return false
-	}
-	z.cursor++
-	if !z.goInGrouping(ger_g_v, 97, 252) {
-		return false
-	}
-	z.cursor++
-	z.I_p1 = z.cursor
-	{
-		if z.I_p1 >= I_x {
-			goto lab0_end
-		}
-		z.I_p1 = I_x
-	}
-lab0_end:
-	;
-	if !z.goOutGrouping(ger_g_v, 97, 252) {
-		return false
-	}
-	z.cursor++
-	if !z.goInGrouping(ger_g_v, 97, 252) {
-		return false
-	}
-	z.cursor++
-	z.I_p2 = z.cursor
-	return true
-}
-func (z *germanStemmer) r_postlude() bool {
-	var among_var int
-	for {
-		v_1 := z.cursor
-		{
-			z.bra = z.cursor
-			among_var = z.findAmong(ger_a_1)
-			z.ket = z.cursor
-			switch among_var {
-			case 1:
-				z.sliceFrom("y")
-				break
-			case 2:
-				z.sliceFrom("u")
-				break
-			case 3:
-				z.sliceFrom("a")
-				break
-			case 4:
-				z.sliceFrom("o")
-				break
-			case 5:
-				if z.cursor >= z.limit {
-					goto lab0_end
-				}
-				z.cursor++
-				break
-			}
-			continue
-		}
-	lab0_end:
-		;
-		z.cursor = v_1
-		break
-	}
-	return true
-}
-func (z *germanStemmer) r_R1() bool {
-	return z.I_p1 <= z.cursor
-}
-func (z *germanStemmer) r_R2() bool {
-	return z.I_p2 <= z.cursor
-}
-func (z *germanStemmer) r_standard_suffix() bool {
-	var among_var int
-	v_1 := z.limit - z.cursor
-	{
-		z.ket = z.cursor
-		among_var = z.findAmongB(ger_a_2)
-		if among_var == 0 {
-			goto lab0_end
-		}
-		z.bra = z.cursor
-		if !z.r_R1() {
-			goto lab0_end
-		}
-		switch among_var {
-		case 1:
-			{
-				v_2 := z.limit - z.cursor
-				{
-					if !(z.eqSB("syst")) {
-						goto lab1_end
-					}
-					goto lab0_end
-				}
-			lab1_end:
-				;
-				z.cursor = z.limit - v_2
-			}
-			z.sliceDel()
-			break
-		case 2:
-			z.sliceDel()
-			break
-		case 3:
-			z.sliceDel()
-			v_3 := z.limit - z.cursor
-			{
-				z.ket = z.cursor
-				if !(z.eqSB("s")) {
-					z.cursor = z.limit - v_3
-					goto lab2_end
-				}
-				z.bra = z.cursor
-				if !(z.eqSB("nis")) {
-					z.cursor = z.limit - v_3
-					goto lab2_end
-				}
-				z.sliceDel()
-			}
-		lab2_end:
-			;
-			break
-		case 4:
-			if !(z.inGroupingB(ger_g_s_ending, 98, 116)) {
-				goto lab0_end
-			}
-			z.sliceDel()
-			break
-		case 5:
-			z.sliceFrom("l")
-			break
-		}
-	}
-lab0_end:
-	;
-	z.cursor = z.limit - v_1
-	v_4 := z.limit - z.cursor
-	{
-		z.ket = z.cursor
-		among_var = z.findAmongB(ger_a_4)
-		if among_var == 0 {
-			goto lab3_end
-		}
-		z.bra = z.cursor
-		if !z.r_R1() {
-			goto lab3_end
-		}
-		switch among_var {
-		case 1:
-			z.sliceDel()
-			break
-		case 2:
-			if !(z.inGroupingB(ger_g_st_ending, 98, 116)) {
-				goto lab3_end
-			}
-			{
-				c := z.cursor - 3
-				if c < z.limitBackward {
-					goto lab3_end
-				}
-				z.cursor = c
-			}
-			z.sliceDel()
-			break
-		case 3:
-			v_5 := z.limit - z.cursor
-			if !(z.inGroupingB(ger_g_et_ending, 85, 228)) {
-				goto lab3_end
-			}
-			z.cursor = z.limit - v_5
-			{
-				v_6 := z.limit - z.cursor
-				{
-					if z.findAmongB(ger_a_3) == 0 {
-						goto lab4_end
-					}
-					goto lab3_end
-				}
-			lab4_end:
-				;
-				z.cursor = z.limit - v_6
-			}
-			z.sliceDel()
-			break
-		}
-	}
-lab3_end:
-	;
-	z.cursor = z.limit - v_4
-	v_7 := z.limit - z.cursor
-	{
-		z.ket = z.cursor
-		among_var = z.findAmongB(ger_a_6)
-		if among_var == 0 {
-			goto lab5_end
-		}
-		z.bra = z.cursor
-		if !z.r_R2() {
-			goto lab5_end
-		}
-		switch among_var {
-		case 1:
-			z.sliceDel()
-			v_8 := z.limit - z.cursor
-			{
-				z.ket = z.cursor
-				if !(z.eqSB("ig")) {
-					z.cursor = z.limit - v_8
-					goto lab6_end
-				}
-				z.bra = z.cursor
-				{
-					v_9 := z.limit - z.cursor
-					{
-						if !(z.eqSB("e")) {
-							goto lab7_end
-						}
-						z.cursor = z.limit - v_8
-						goto lab6_end
-					}
-				lab7_end:
-					;
-					z.cursor = z.limit - v_9
-				}
-				if !z.r_R2() {
-					z.cursor = z.limit - v_8
-					goto lab6_end
-				}
-				z.sliceDel()
-			}
-		lab6_end:
-			;
-			break
-		case 2:
-			{
-				v_10 := z.limit - z.cursor
-				{
-					if !(z.eqSB("e")) {
-						goto lab8_end
-					}
-					goto lab5_end
-				}
-			lab8_end:
-				;
-				z.cursor = z.limit - v_10
-			}
-			z.sliceDel()
-			break
-		case 3:
-			z.sliceDel()
-			v_11 := z.limit - z.cursor
-			{
-				z.ket = z.cursor
-				{
-					v_12 := z.limit - z.cursor
-					{
-						if !(z.eqSB("er")) {
-							goto lab11_end
-						}
-						goto lab10_end
-					}
-				lab11_end:
-					;
-					z.cursor = z.limit - v_12
-					if !(z.eqSB("en")) {
-						z.cursor = z.limit - v_11
-						goto lab9_end
-					}
-				}
-			lab10_end:
-				;
-				z.bra = z.cursor
-				if !z.r_R1() {
-					z.cursor = z.limit - v_11
-					goto lab9_end
-				}
-				z.sliceDel()
-			}
-		lab9_end:
-			;
-			break
-		case 4:
-			z.sliceDel()
-			v_13 := z.limit - z.cursor
-			{
-				z.ket = z.cursor
-				if z.findAmongB(ger_a_5) == 0 {
-					z.cursor = z.limit - v_13
-					goto lab12_end
-				}
-				z.bra = z.cursor
-				if !z.r_R2() {
-					z.cursor = z.limit - v_13
-					goto lab12_end
-				}
-				z.sliceDel()
-			}
-		lab12_end:
-			;
-			break
-		}
-	}
-lab5_end:
-	;
-	z.cursor = z.limit - v_7
-	return true
-}
-func (z *germanStemmer) stem() {
-	v_1 := z.cursor
-	z.r_prelude()
-	z.cursor = v_1
-	v_2 := z.cursor
-	z.r_mark_regions()
-	z.cursor = v_2
-	z.limitBackward = z.cursor
-	z.cursor = z.limit
-	z.r_standard_suffix()
-	z.cursor = z.limitBackward
-	v_3 := z.cursor
-	z.r_postlude()
-	z.cursor = v_3
-	return
-}
-
-type greekStemmer struct {
-	snowball
-	I_p1, I_p2  int
-	S_ch, S_x   []rune
-	LS_ch, LS_x int
-	B_test1     bool
-}
-
-func newGreek() *greekStemmer { return &greekStemmer{} }
-
-var gre_a_0 = []among{
-	{"", -1, 25, ""},
-	{"\u0386", 0, 1, ""},
-	{"\u0388", 0, 5, ""},
-	{"\u0389", 0, 7, ""},
-	{"\u038A", 0, 9, ""},
-	{"\u038C", 0, 15, ""},
-	{"\u038E", 0, 20, ""},
-	{"\u038F", 0, 24, ""},
-	{"\u0390", 0, 7, ""},
-	{"\u0391", 0, 1, ""},
-	{"\u0392", 0, 2, ""},
-	{"\u0393", 0, 3, ""},
-	{"\u0394", 0, 4, ""},
-	{"\u0395", 0, 5, ""},
-	{"\u0396", 0, 6, ""},
-	{"\u0397", 0, 7, ""},
-	{"\u0398", 0, 8, ""},
-	{"\u0399", 0, 9, ""},
-	{"\u039A", 0, 10, ""},
-	{"\u039B", 0, 11, ""},
-	{"\u039C", 0, 12, ""},
-	{"\u039D", 0, 13, ""},
-	{"\u039E", 0, 14, ""},
-	{"\u039F", 0, 15, ""},
-	{"\u03A0", 0, 16, ""},
-	{"\u03A1", 0, 17, ""},
-	{"\u03A3", 0, 18, ""},
-	{"\u03A4", 0, 19, ""},
-	{"\u03A5", 0, 20, ""},
-	{"\u03A6", 0, 21, ""},
-	{"\u03A7", 0, 22, ""},
-	{"\u03A8", 0, 23, ""},
-	{"\u03A9", 0, 24, ""},
-	{"\u03AA", 0, 9, ""},
-	{"\u03AB", 0, 20, ""},
-	{"\u03AC", 0, 1, ""},
-	{"\u03AD", 0, 5, ""},
-	{"\u03AE", 0, 7, ""},
-	{"\u03AF", 0, 9, ""},
-	{"\u03B0", 0, 20, ""},
-	{"\u03C2", 0, 18, ""},
-	{"\u03CA", 0, 7, ""},
-	{"\u03CB", 0, 20, ""},
-	{"\u03CC", 0, 15, ""},
-	{"\u03CD", 0, 20, ""},
-	{"\u03CE", 0, 24, ""},
-}
-var gre_a_1 = []among{
-	{"\u03C3\u03BA\u03B1\u03B3\u03B9\u03B1", -1, 2, ""},
-	{"\u03C6\u03B1\u03B3\u03B9\u03B1", -1, 1, ""},
-	{"\u03BF\u03BB\u03BF\u03B3\u03B9\u03B1", -1, 3, ""},
-	{"\u03C3\u03BF\u03B3\u03B9\u03B1", -1, 4, ""},
-	{"\u03C4\u03B1\u03C4\u03BF\u03B3\u03B9\u03B1", -1, 5, ""},
-	{"\u03BA\u03C1\u03B5\u03B1\u03C4\u03B1", -1, 6, ""},
-	{"\u03C0\u03B5\u03C1\u03B1\u03C4\u03B1", -1, 7, ""},
-	{"\u03C4\u03B5\u03C1\u03B1\u03C4\u03B1", -1, 8, ""},
-	{"\u03B3\u03B5\u03B3\u03BF\u03BD\u03BF\u03C4\u03B1", -1, 11, ""},
-	{"\u03BA\u03B1\u03B8\u03B5\u03C3\u03C4\u03C9\u03C4\u03B1", -1, 10, ""},
-	{"\u03C6\u03C9\u03C4\u03B1", -1, 9, ""},
-	{"\u03C0\u03B5\u03C1\u03B1\u03C4\u03B7", -1, 7, ""},
-	{"\u03C3\u03BA\u03B1\u03B3\u03B9\u03C9\u03BD", -1, 2, ""},
-	{"\u03C6\u03B1\u03B3\u03B9\u03C9\u03BD", -1, 1, ""},
-	{"\u03BF\u03BB\u03BF\u03B3\u03B9\u03C9\u03BD", -1, 3, ""},
-	{"\u03C3\u03BF\u03B3\u03B9\u03C9\u03BD", -1, 4, ""},
-	{"\u03C4\u03B1\u03C4\u03BF\u03B3\u03B9\u03C9\u03BD", -1, 5, ""},
-	{"\u03BA\u03C1\u03B5\u03B1\u03C4\u03C9\u03BD", -1, 6, ""},
-	{"\u03C0\u03B5\u03C1\u03B1\u03C4\u03C9\u03BD", -1, 7, ""},
-	{"\u03C4\u03B5\u03C1\u03B1\u03C4\u03C9\u03BD", -1, 8, ""},
-	{"\u03B3\u03B5\u03B3\u03BF\u03BD\u03BF\u03C4\u03C9\u03BD", -1, 11, ""},
-	{"\u03BA\u03B1\u03B8\u03B5\u03C3\u03C4\u03C9\u03C4\u03C9\u03BD", -1, 10, ""},
-	{"\u03C6\u03C9\u03C4\u03C9\u03BD", -1, 9, ""},
-	{"\u03BA\u03C1\u03B5\u03B1\u03C3", -1, 6, ""},
-	{"\u03C0\u03B5\u03C1\u03B1\u03C3", -1, 7, ""},
-	{"\u03C4\u03B5\u03C1\u03B1\u03C3", -1, 8, ""},
-	{"\u03B3\u03B5\u03B3\u03BF\u03BD\u03BF\u03C3", -1, 11, ""},
-	{"\u03BA\u03C1\u03B5\u03B1\u03C4\u03BF\u03C3", -1, 6, ""},
-	{"\u03C0\u03B5\u03C1\u03B1\u03C4\u03BF\u03C3", -1, 7, ""},
-	{"\u03C4\u03B5\u03C1\u03B1\u03C4\u03BF\u03C3", -1, 8, ""},
-	{"\u03B3\u03B5\u03B3\u03BF\u03BD\u03BF\u03C4\u03BF\u03C3", -1, 11, ""},
-	{"\u03BA\u03B1\u03B8\u03B5\u03C3\u03C4\u03C9\u03C4\u03BF\u03C3", -1, 10, ""},
-	{"\u03C6\u03C9\u03C4\u03BF\u03C3", -1, 9, ""},
-	{"\u03BA\u03B1\u03B8\u03B5\u03C3\u03C4\u03C9\u03C3", -1, 10, ""},
-	{"\u03C6\u03C9\u03C3", -1, 9, ""},
-	{"\u03C3\u03BA\u03B1\u03B3\u03B9\u03BF\u03C5", -1, 2, ""},
-	{"\u03C6\u03B1\u03B3\u03B9\u03BF\u03C5", -1, 1, ""},
-	{"\u03BF\u03BB\u03BF\u03B3\u03B9\u03BF\u03C5", -1, 3, ""},
-	{"\u03C3\u03BF\u03B3\u03B9\u03BF\u03C5", -1, 4, ""},
-	{"\u03C4\u03B1\u03C4\u03BF\u03B3\u03B9\u03BF\u03C5", -1, 5, ""},
-}
-var gre_a_2 = []among{
-	{"\u03C0\u03B1", -1, 1, ""},
-	{"\u03BE\u03B1\u03BD\u03B1\u03C0\u03B1", 0, 1, ""},
-	{"\u03B5\u03C0\u03B1", 0, 1, ""},
-	{"\u03C0\u03B5\u03C1\u03B9\u03C0\u03B1", 0, 1, ""},
-	{"\u03B1\u03BD\u03B1\u03BC\u03C0\u03B1", 0, 1, ""},
-	{"\u03B5\u03BC\u03C0\u03B1", 0, 1, ""},
-	{"\u03B2", -1, 2, ""},
-	{"\u03B4\u03B1\u03BD\u03B5", -1, 1, ""},
-	{"\u03B2\u03B1\u03B8\u03C5\u03C1\u03B9", -1, 2, ""},
-	{"\u03B2\u03B1\u03C1\u03BA", -1, 2, ""},
-	{"\u03BC\u03B1\u03C1\u03BA", -1, 2, ""},
-	{"\u03BB", -1, 2, ""},
-	{"\u03BC", -1, 2, ""},
-	{"\u03BA\u03BF\u03C1\u03BD", -1, 2, ""},
-	{"\u03B1\u03B8\u03C1\u03BF", -1, 1, ""},
-	{"\u03C3\u03C5\u03BD\u03B1\u03B8\u03C1\u03BF", 14, 1, ""},
-	{"\u03C0", -1, 2, ""},
-	{"\u03B9\u03BC\u03C0", 16, 2, ""},
-	{"\u03C1", -1, 2, ""},
-	{"\u03BC\u03B1\u03C1", 18, 2, ""},
-	{"\u03B1\u03BC\u03C0\u03B1\u03C1", 18, 2, ""},
-	{"\u03B3\u03BA\u03C1", 18, 2, ""},
-	{"\u03B2\u03BF\u03BB\u03B2\u03BF\u03C1", 18, 2, ""},
-	{"\u03B3\u03BB\u03C5\u03BA\u03BF\u03C1", 18, 2, ""},
-	{"\u03C0\u03B9\u03C0\u03B5\u03C1\u03BF\u03C1", 18, 2, ""},
-	{"\u03C0\u03C1", 18, 2, ""},
-	{"\u03BC\u03C0\u03C1", 25, 2, ""},
-	{"\u03B1\u03C1\u03C1", 18, 2, ""},
-	{"\u03B3\u03BB\u03C5\u03BA\u03C5\u03C1", 18, 2, ""},
-	{"\u03C0\u03BF\u03BB\u03C5\u03C1", 18, 2, ""},
-	{"\u03BB\u03BF\u03C5", -1, 2, ""},
-}
-var gre_a_3 = []among{
-	{"\u03B9\u03B6\u03B1", -1, 1, ""},
-	{"\u03B9\u03B6\u03B5", -1, 1, ""},
-	{"\u03B9\u03B6\u03B1\u03BC\u03B5", -1, 1, ""},
-	{"\u03B9\u03B6\u03BF\u03C5\u03BC\u03B5", -1, 1, ""},
-	{"\u03B9\u03B6\u03B1\u03BD\u03B5", -1, 1, ""},
-	{"\u03B9\u03B6\u03BF\u03C5\u03BD\u03B5", -1, 1, ""},
-	{"\u03B9\u03B6\u03B1\u03C4\u03B5", -1, 1, ""},
-	{"\u03B9\u03B6\u03B5\u03C4\u03B5", -1, 1, ""},
-	{"\u03B9\u03B6\u03B5\u03B9", -1, 1, ""},
-	{"\u03B9\u03B6\u03B1\u03BD", -1, 1, ""},
-	{"\u03B9\u03B6\u03BF\u03C5\u03BD", -1, 1, ""},
-	{"\u03B9\u03B6\u03B5\u03C3", -1, 1, ""},
-	{"\u03B9\u03B6\u03B5\u03B9\u03C3", -1, 1, ""},
-	{"\u03B9\u03B6\u03C9", -1, 1, ""},
-}
-var gre_a_4 = []among{
-	{"\u03B2\u03B9", -1, 1, ""},
-	{"\u03BB\u03B9", -1, 1, ""},
-	{"\u03B1\u03BB", -1, 1, ""},
-	{"\u03B5\u03BD", -1, 1, ""},
-	{"\u03C3", -1, 1, ""},
-	{"\u03C7", -1, 1, ""},
-	{"\u03C5\u03C8", -1, 1, ""},
-	{"\u03B6\u03C9", -1, 1, ""},
-}
-var gre_a_5 = []among{
-	{"\u03C9\u03B8\u03B7\u03BA\u03B1", -1, 1, ""},
-	{"\u03C9\u03B8\u03B7\u03BA\u03B5", -1, 1, ""},
-	{"\u03C9\u03B8\u03B7\u03BA\u03B1\u03BC\u03B5", -1, 1, ""},
-	{"\u03C9\u03B8\u03B7\u03BA\u03B1\u03BD\u03B5", -1, 1, ""},
-	{"\u03C9\u03B8\u03B7\u03BA\u03B1\u03C4\u03B5", -1, 1, ""},
-	{"\u03C9\u03B8\u03B7\u03BA\u03B1\u03BD", -1, 1, ""},
-	{"\u03C9\u03B8\u03B7\u03BA\u03B5\u03C3", -1, 1, ""},
-}
-var gre_a_6 = []among{
-	{"\u03BE\u03B1\u03BD\u03B1\u03C0\u03B1", -1, 1, ""},
-	{"\u03B5\u03C0\u03B1", -1, 1, ""},
-	{"\u03C0\u03B5\u03C1\u03B9\u03C0\u03B1", -1, 1, ""},
-	{"\u03B1\u03BD\u03B1\u03BC\u03C0\u03B1", -1, 1, ""},
-	{"\u03B5\u03BC\u03C0\u03B1", -1, 1, ""},
-	{"\u03C7\u03B1\u03C1\u03C4\u03BF\u03C0\u03B1", -1, 1, ""},
-	{"\u03B5\u03BE\u03B1\u03C1\u03C7\u03B1", -1, 1, ""},
-	{"\u03B3\u03B5", -1, 2, ""},
-	{"\u03B3\u03BA\u03B5", -1, 2, ""},
-	{"\u03BA\u03BB\u03B5", -1, 1, ""},
-	{"\u03B5\u03BA\u03BB\u03B5", 9, 1, ""},
-	{"\u03B1\u03C0\u03B5\u03BA\u03BB\u03B5", 10, 1, ""},
-	{"\u03B1\u03C0\u03BF\u03BA\u03BB\u03B5", 9, 1, ""},
-	{"\u03B5\u03C3\u03C9\u03BA\u03BB\u03B5", 9, 1, ""},
-	{"\u03B4\u03B1\u03BD\u03B5", -1, 1, ""},
-	{"\u03C0\u03B5", -1, 1, ""},
-	{"\u03B5\u03C0\u03B5", 15, 1, ""},
-	{"\u03BC\u03B5\u03C4\u03B5\u03C0\u03B5", 16, 1, ""},
-	{"\u03B5\u03C3\u03B5", -1, 1, ""},
-	{"\u03B3\u03BA", -1, 2, ""},
-	{"\u03BC", -1, 2, ""},
-	{"\u03C0\u03BF\u03C5\u03BA\u03B1\u03BC", 20, 2, ""},
-	{"\u03BA\u03BF\u03BC", 20, 2, ""},
-	{"\u03B1\u03BD", -1, 2, ""},
-	{"\u03BF\u03BB\u03BF", -1, 2, ""},
-	{"\u03B1\u03B8\u03C1\u03BF", -1, 1, ""},
-	{"\u03C3\u03C5\u03BD\u03B1\u03B8\u03C1\u03BF", 25, 1, ""},
-	{"\u03C0", -1, 2, ""},
-	{"\u03BB\u03B1\u03C1", -1, 2, ""},
-	{"\u03B4\u03B7\u03BC\u03BF\u03BA\u03C1\u03B1\u03C4", -1, 2, ""},
-	{"\u03B1\u03C6", -1, 2, ""},
-	{"\u03B3\u03B9\u03B3\u03B1\u03BD\u03C4\u03BF\u03B1\u03C6", 30, 2, ""},
-}
-var gre_a_7 = []among{
-	{"\u03B9\u03C3\u03B1", -1, 1, ""},
-	{"\u03B9\u03C3\u03B1\u03BC\u03B5", -1, 1, ""},
-	{"\u03B9\u03C3\u03B1\u03BD\u03B5", -1, 1, ""},
-	{"\u03B9\u03C3\u03B5", -1, 1, ""},
-	{"\u03B9\u03C3\u03B1\u03C4\u03B5", -1, 1, ""},
-	{"\u03B9\u03C3\u03B1\u03BD", -1, 1, ""},
-	{"\u03B9\u03C3\u03B5\u03C3", -1, 1, ""},
-}
-var gre_a_8 = []among{
-	{"\u03BE\u03B1\u03BD\u03B1\u03C0\u03B1", -1, 1, ""},
-	{"\u03B5\u03C0\u03B1", -1, 1, ""},
-	{"\u03C0\u03B5\u03C1\u03B9\u03C0\u03B1", -1, 1, ""},
-	{"\u03B1\u03BD\u03B1\u03BC\u03C0\u03B1", -1, 1, ""},
-	{"\u03B5\u03BC\u03C0\u03B1", -1, 1, ""},
-	{"\u03C7\u03B1\u03C1\u03C4\u03BF\u03C0\u03B1", -1, 1, ""},
-	{"\u03B5\u03BE\u03B1\u03C1\u03C7\u03B1", -1, 1, ""},
-	{"\u03BA\u03BB\u03B5", -1, 1, ""},
-	{"\u03B5\u03BA\u03BB\u03B5", 7, 1, ""},
-	{"\u03B1\u03C0\u03B5\u03BA\u03BB\u03B5", 8, 1, ""},
-	{"\u03B1\u03C0\u03BF\u03BA\u03BB\u03B5", 7, 1, ""},
-	{"\u03B5\u03C3\u03C9\u03BA\u03BB\u03B5", 7, 1, ""},
-	{"\u03B4\u03B1\u03BD\u03B5", -1, 1, ""},
-	{"\u03C0\u03B5", -1, 1, ""},
-	{"\u03B5\u03C0\u03B5", 13, 1, ""},
-	{"\u03BC\u03B5\u03C4\u03B5\u03C0\u03B5", 14, 1, ""},
-	{"\u03B5\u03C3\u03B5", -1, 1, ""},
-	{"\u03B1\u03B8\u03C1\u03BF", -1, 1, ""},
-	{"\u03C3\u03C5\u03BD\u03B1\u03B8\u03C1\u03BF", 17, 1, ""},
-}
-var gre_a_9 = []among{
-	{"\u03B9\u03C3\u03BF\u03C5\u03BC\u03B5", -1, 1, ""},
-	{"\u03B9\u03C3\u03BF\u03C5\u03BD\u03B5", -1, 1, ""},
-	{"\u03B9\u03C3\u03B5\u03C4\u03B5", -1, 1, ""},
-	{"\u03B9\u03C3\u03B5\u03B9", -1, 1, ""},
-	{"\u03B9\u03C3\u03BF\u03C5\u03BD", -1, 1, ""},
-	{"\u03B9\u03C3\u03B5\u03B9\u03C3", -1, 1, ""},
-	{"\u03B9\u03C3\u03C9", -1, 1, ""},
-}
-var gre_a_10 = []among{
-	{"\u03B1\u03C4\u03B1", -1, 2, ""},
-	{"\u03C6\u03B1", -1, 2, ""},
-	{"\u03B7\u03C6\u03B1", 1, 2, ""},
-	{"\u03BC\u03B5\u03B3", -1, 2, ""},
-	{"\u03BB\u03C5\u03B3", -1, 2, ""},
-	{"\u03B7\u03B4", -1, 2, ""},
-	{"\u03BA\u03BB\u03B5", -1, 1, ""},
-	{"\u03B5\u03C3\u03C9\u03BA\u03BB\u03B5", 6, 1, ""},
-	{"\u03C0\u03BB\u03B5", -1, 1, ""},
-	{"\u03B4\u03B1\u03BD\u03B5", -1, 1, ""},
-	{"\u03C3\u03B5", -1, 1, ""},
-	{"\u03B1\u03C3\u03B5", 10, 1, ""},
-	{"\u03BA\u03B1\u03B8", -1, 2, ""},
-	{"\u03B5\u03C7\u03B8", -1, 2, ""},
-	{"\u03BA\u03B1\u03BA", -1, 2, ""},
-	{"\u03BC\u03B1\u03BA", -1, 2, ""},
-	{"\u03C3\u03BA", -1, 2, ""},
-	{"\u03C6\u03B9\u03BB", -1, 2, ""},
-	{"\u03BA\u03C5\u03BB", -1, 2, ""},
-	{"\u03BC", -1, 2, ""},
-	{"\u03B3\u03B5\u03BC", 19, 2, ""},
-	{"\u03B1\u03C7\u03BD", -1, 2, ""},
-	{"\u03C3\u03C5\u03BD\u03B1\u03B8\u03C1\u03BF", -1, 1, ""},
-	{"\u03C0", -1, 2, ""},
-	{"\u03B1\u03C0", 23, 2, ""},
-	{"\u03B5\u03BC\u03C0", 23, 2, ""},
-	{"\u03B5\u03C5\u03C0", 23, 2, ""},
-	{"\u03B1\u03C1", -1, 2, ""},
-	{"\u03B1\u03BF\u03C1", -1, 2, ""},
-	{"\u03B3\u03C5\u03C1", -1, 2, ""},
-	{"\u03C7\u03C1", -1, 2, ""},
-	{"\u03C7\u03C9\u03C1", -1, 2, ""},
-	{"\u03BA\u03C4", -1, 2, ""},
-	{"\u03B1\u03BA\u03C4", 32, 2, ""},
-	{"\u03C7\u03C4", -1, 2, ""},
-	{"\u03B1\u03C7\u03C4", 34, 2, ""},
-	{"\u03C4\u03B1\u03C7", -1, 2, ""},
-	{"\u03C3\u03C7", -1, 2, ""},
-	{"\u03B1\u03C3\u03C7", 37, 2, ""},
-	{"\u03C5\u03C8", -1, 2, ""},
-}
-var gre_a_11 = []among{
-	{"\u03B9\u03C3\u03C4\u03B1", -1, 1, ""},
-	{"\u03B9\u03C3\u03C4\u03B5", -1, 1, ""},
-	{"\u03B9\u03C3\u03C4\u03B7", -1, 1, ""},
-	{"\u03B9\u03C3\u03C4\u03BF\u03B9", -1, 1, ""},
-	{"\u03B9\u03C3\u03C4\u03C9\u03BD", -1, 1, ""},
-	{"\u03B9\u03C3\u03C4\u03BF", -1, 1, ""},
-	{"\u03B9\u03C3\u03C4\u03B5\u03C3", -1, 1, ""},
-	{"\u03B9\u03C3\u03C4\u03B7\u03C3", -1, 1, ""},
-	{"\u03B9\u03C3\u03C4\u03BF\u03C3", -1, 1, ""},
-	{"\u03B9\u03C3\u03C4\u03BF\u03C5\u03C3", -1, 1, ""},
-	{"\u03B9\u03C3\u03C4\u03BF\u03C5", -1, 1, ""},
-}
-var gre_a_12 = []among{
-	{"\u03B5\u03B3\u03BA\u03BB\u03B5", -1, 1, ""},
-	{"\u03B1\u03C0\u03BF\u03BA\u03BB\u03B5", -1, 1, ""},
-	{"\u03B4\u03B1\u03BD\u03B5", -1, 2, ""},
-	{"\u03B1\u03BD\u03C4\u03B9\u03B4\u03B1\u03BD\u03B5", 2, 2, ""},
-	{"\u03C3\u03B5", -1, 1, ""},
-	{"\u03BC\u03B5\u03C4\u03B1\u03C3\u03B5", 4, 1, ""},
-	{"\u03BC\u03B9\u03BA\u03C1\u03BF\u03C3\u03B5", 4, 1, ""},
-}
-var gre_a_13 = []among{
-	{"\u03B1\u03C4\u03BF\u03BC\u03B9\u03BA", -1, 2, ""},
-	{"\u03B5\u03B8\u03BD\u03B9\u03BA", -1, 4, ""},
-	{"\u03C4\u03BF\u03C0\u03B9\u03BA", -1, 7, ""},
-	{"\u03B5\u03BA\u03BB\u03B5\u03BA\u03C4\u03B9\u03BA", -1, 5, ""},
-	{"\u03C3\u03BA\u03B5\u03C0\u03C4\u03B9\u03BA", -1, 6, ""},
-	{"\u03B3\u03BD\u03C9\u03C3\u03C4\u03B9\u03BA", -1, 3, ""},
-	{"\u03B1\u03B3\u03BD\u03C9\u03C3\u03C4\u03B9\u03BA", 5, 1, ""},
-	{"\u03B1\u03BB\u03B5\u03BE\u03B1\u03BD\u03B4\u03C1\u03B9\u03BD", -1, 8, ""},
-	{"\u03B8\u03B5\u03B1\u03C4\u03C1\u03B9\u03BD", -1, 10, ""},
-	{"\u03B2\u03C5\u03B6\u03B1\u03BD\u03C4\u03B9\u03BD", -1, 9, ""},
-}
-var gre_a_14 = []among{
-	{"\u03B9\u03C3\u03BC\u03BF\u03B9", -1, 1, ""},
-	{"\u03B9\u03C3\u03BC\u03C9\u03BD", -1, 1, ""},
-	{"\u03B9\u03C3\u03BC\u03BF", -1, 1, ""},
-	{"\u03B9\u03C3\u03BC\u03BF\u03C3", -1, 1, ""},
-	{"\u03B9\u03C3\u03BC\u03BF\u03C5\u03C3", -1, 1, ""},
-	{"\u03B9\u03C3\u03BC\u03BF\u03C5", -1, 1, ""},
-}
-var gre_a_15 = []among{
-	{"\u03C3", -1, 1, ""},
-	{"\u03C7", -1, 1, ""},
-}
-var gre_a_16 = []among{
-	{"\u03BF\u03C5\u03B4\u03B1\u03BA\u03B9\u03B1", -1, 1, ""},
-	{"\u03B1\u03C1\u03B1\u03BA\u03B9\u03B1", -1, 1, ""},
-	{"\u03BF\u03C5\u03B4\u03B1\u03BA\u03B9", -1, 1, ""},
-	{"\u03B1\u03C1\u03B1\u03BA\u03B9", -1, 1, ""},
-}
-var gre_a_17 = []among{
-	{"\u03B2", -1, 2, ""},
-	{"\u03B2\u03B1\u03BC\u03B2", 0, 1, ""},
-	{"\u03C3\u03BB\u03BF\u03B2", 0, 1, ""},
-	{"\u03C4\u03C3\u03B5\u03C7\u03BF\u03C3\u03BB\u03BF\u03B2", 2, 1, ""},
-	{"\u03BA\u03B1\u03C1\u03B4", -1, 2, ""},
-	{"\u03B6", -1, 2, ""},
-	{"\u03C4\u03B6", 5, 1, ""},
-	{"\u03BA", -1, 1, ""},
-	{"\u03BA\u03B1\u03C0\u03B1\u03BA", 7, 1, ""},
-	{"\u03C3\u03BF\u03BA", 7, 1, ""},
-	{"\u03C3\u03BA", 7, 1, ""},
-	{"\u03B2\u03B1\u03BB", -1, 2, ""},
-	{"\u03BC\u03B1\u03BB", -1, 1, ""},
-	{"\u03B3\u03BB", -1, 2, ""},
-	{"\u03C4\u03C1\u03B9\u03C0\u03BF\u03BB", -1, 2, ""},
-	{"\u03C0\u03BB", -1, 1, ""},
-	{"\u03BB\u03BF\u03C5\u03BB", -1, 1, ""},
-	{"\u03C6\u03C5\u03BB", -1, 1, ""},
-	{"\u03BA\u03B1\u03B9\u03BC", -1, 1, ""},
-	{"\u03BA\u03BB\u03B9\u03BC", -1, 1, ""},
-	{"\u03C6\u03B1\u03C1\u03BC", -1, 1, ""},
-	{"\u03B3\u03B9\u03B1\u03BD", -1, 2, ""},
-	{"\u03C3\u03C0\u03B1\u03BD", -1, 1, ""},
-	{"\u03B7\u03B3\u03BF\u03C5\u03BC\u03B5\u03BD", -1, 2, ""},
-	{"\u03BA\u03BF\u03BD", -1, 1, ""},
-	{"\u03BC\u03B1\u03BA\u03C1\u03C5\u03BD", -1, 2, ""},
-	{"\u03C0", -1, 2, ""},
-	{"\u03BA\u03B1\u03C4\u03C1\u03B1\u03C0", 26, 1, ""},
-	{"\u03C1", -1, 1, ""},
-	{"\u03B2\u03C1", 28, 1, ""},
-	{"\u03BB\u03B1\u03B2\u03C1", 29, 1, ""},
-	{"\u03B1\u03BC\u03B2\u03C1", 29, 1, ""},
-	{"\u03BC\u03B5\u03C1", 28, 1, ""},
-	{"\u03C0\u03B1\u03C4\u03B5\u03C1", 28, 2, ""},
-	{"\u03B1\u03BD\u03B8\u03C1", 28, 1, ""},
-	{"\u03BA\u03BF\u03C1", 28, 1, ""},
-	{"\u03C3", -1, 1, ""},
-	{"\u03BD\u03B1\u03B3\u03BA\u03B1\u03C3", 36, 1, ""},
-	{"\u03C4\u03BF\u03C3", 36, 2, ""},
-	{"\u03BC\u03BF\u03C5\u03C3\u03C4", -1, 1, ""},
-	{"\u03C1\u03C5", -1, 1, ""},
-	{"\u03C6", -1, 1, ""},
-	{"\u03C3\u03C6", 41, 1, ""},
-	{"\u03B1\u03BB\u03B9\u03C3\u03C6", 42, 1, ""},
-	{"\u03BD\u03C5\u03C6", 41, 2, ""},
-	{"\u03C7", -1, 1, ""},
-}
-var gre_a_18 = []among{
-	{"\u03B1\u03BA\u03B9\u03B1", -1, 1, ""},
-	{"\u03B1\u03C1\u03B1\u03BA\u03B9\u03B1", 0, 1, ""},
-	{"\u03B9\u03C4\u03C3\u03B1", -1, 1, ""},
-	{"\u03B1\u03BA\u03B9", -1, 1, ""},
-	{"\u03B1\u03C1\u03B1\u03BA\u03B9", 3, 1, ""},
-	{"\u03B9\u03C4\u03C3\u03C9\u03BD", -1, 1, ""},
-	{"\u03B9\u03C4\u03C3\u03B1\u03C3", -1, 1, ""},
-	{"\u03B9\u03C4\u03C3\u03B5\u03C3", -1, 1, ""},
-}
-var gre_a_19 = []among{
-	{"\u03C8\u03B1\u03BB", -1, 1, ""},
-	{"\u03B1\u03B9\u03C6\u03BD", -1, 1, ""},
-	{"\u03BF\u03BB\u03BF", -1, 1, ""},
-	{"\u03B9\u03C1", -1, 1, ""},
-}
-var gre_a_20 = []among{
-	{"\u03B5", -1, 1, ""},
-	{"\u03C0\u03B1\u03B9\u03C7\u03BD", -1, 1, ""},
-}
-var gre_a_21 = []among{
-	{"\u03B9\u03B4\u03B9\u03B1", -1, 1, ""},
-	{"\u03B9\u03B4\u03B9\u03C9\u03BD", -1, 1, ""},
-	{"\u03B9\u03B4\u03B9\u03BF", -1, 1, ""},
-}
-var gre_a_22 = []among{
-	{"\u03B9\u03B2", -1, 1, ""},
-	{"\u03B4", -1, 1, ""},
-	{"\u03C6\u03C1\u03B1\u03B3\u03BA", -1, 1, ""},
-	{"\u03BB\u03C5\u03BA", -1, 1, ""},
-	{"\u03BF\u03B2\u03B5\u03BB", -1, 1, ""},
-	{"\u03BC\u03B7\u03BD", -1, 1, ""},
-	{"\u03C1", -1, 1, ""},
-}
-var gre_a_23 = []among{
-	{"\u03B9\u03C3\u03BA\u03B5", -1, 1, ""},
-	{"\u03B9\u03C3\u03BA\u03BF", -1, 1, ""},
-	{"\u03B9\u03C3\u03BA\u03BF\u03C3", -1, 1, ""},
-	{"\u03B9\u03C3\u03BA\u03BF\u03C5", -1, 1, ""},
-}
-var gre_a_24 = []among{
-	{"\u03B1\u03B4\u03C9\u03BD", -1, 1, ""},
-	{"\u03B1\u03B4\u03B5\u03C3", -1, 1, ""},
-}
-var gre_a_25 = []among{
-	{"\u03B3\u03B9\u03B1\u03B3\u03B9", -1, -1, ""},
-	{"\u03B8\u03B5\u03B9", -1, -1, ""},
-	{"\u03BF\u03BA", -1, -1, ""},
-	{"\u03BC\u03B1\u03BC", -1, -1, ""},
-	{"\u03BC\u03B1\u03BD", -1, -1, ""},
-	{"\u03BC\u03C0\u03B1\u03BC\u03C0", -1, -1, ""},
-	{"\u03C0\u03B5\u03B8\u03B5\u03C1", -1, -1, ""},
-	{"\u03C0\u03B1\u03C4\u03B5\u03C1", -1, -1, ""},
-	{"\u03BA\u03C5\u03C1", -1, -1, ""},
-	{"\u03BD\u03C4\u03B1\u03BD\u03C4", -1, -1, ""},
-}
-var gre_a_26 = []among{
-	{"\u03B5\u03B4\u03C9\u03BD", -1, 1, ""},
-	{"\u03B5\u03B4\u03B5\u03C3", -1, 1, ""},
-}
-var gre_a_27 = []among{
-	{"\u03BC\u03B9\u03BB", -1, 1, ""},
-	{"\u03B4\u03B1\u03C0", -1, 1, ""},
-	{"\u03B3\u03B7\u03C0", -1, 1, ""},
-	{"\u03B9\u03C0", -1, 1, ""},
-	{"\u03B5\u03BC\u03C0", -1, 1, ""},
-	{"\u03BF\u03C0", -1, 1, ""},
-	{"\u03BA\u03C1\u03B1\u03C3\u03C0", -1, 1, ""},
-	{"\u03C5\u03C0", -1, 1, ""},
-}
-var gre_a_28 = []among{
-	{"\u03BF\u03C5\u03B4\u03C9\u03BD", -1, 1, ""},
-	{"\u03BF\u03C5\u03B4\u03B5\u03C3", -1, 1, ""},
-}
-var gre_a_29 = []among{
-	{"\u03C4\u03C1\u03B1\u03B3", -1, 1, ""},
-	{"\u03C6\u03B5", -1, 1, ""},
-	{"\u03BA\u03B1\u03BB\u03B9\u03B1\u03BA", -1, 1, ""},
-	{"\u03B1\u03C1\u03BA", -1, 1, ""},
-	{"\u03C3\u03BA", -1, 1, ""},
-	{"\u03C0\u03B5\u03C4\u03B1\u03BB", -1, 1, ""},
-	{"\u03B2\u03B5\u03BB", -1, 1, ""},
-	{"\u03BB\u03BF\u03C5\u03BB", -1, 1, ""},
-	{"\u03C6\u03BB", -1, 1, ""},
-	{"\u03C7\u03BD", -1, 1, ""},
-	{"\u03C0\u03BB\u03B5\u03BE", -1, 1, ""},
-	{"\u03C3\u03C0", -1, 1, ""},
-	{"\u03C6\u03C1", -1, 1, ""},
-	{"\u03C3", -1, 1, ""},
-	{"\u03BB\u03B9\u03C7", -1, 1, ""},
-}
-var gre_a_30 = []among{
-	{"\u03B5\u03C9\u03BD", -1, 1, ""},
-	{"\u03B5\u03C9\u03C3", -1, 1, ""},
-}
-var gre_a_31 = []among{
-	{"\u03B4", -1, 1, ""},
-	{"\u03B9\u03B4", 0, 1, ""},
-	{"\u03B8", -1, 1, ""},
-	{"\u03B3\u03B1\u03BB", -1, 1, ""},
-	{"\u03B5\u03BB", -1, 1, ""},
-	{"\u03BD", -1, 1, ""},
-	{"\u03C0", -1, 1, ""},
-	{"\u03C0\u03B1\u03C1", -1, 1, ""},
-}
-var gre_a_32 = []among{
-	{"\u03B9\u03B1", -1, 1, ""},
-	{"\u03B9\u03C9\u03BD", -1, 1, ""},
-	{"\u03B9\u03BF\u03C5", -1, 1, ""},
-}
-var gre_a_33 = []among{
-	{"\u03B9\u03BA\u03B1", -1, 1, ""},
-	{"\u03B9\u03BA\u03C9\u03BD", -1, 1, ""},
-	{"\u03B9\u03BA\u03BF", -1, 1, ""},
-	{"\u03B9\u03BA\u03BF\u03C5", -1, 1, ""},
-}
-var gre_a_34 = []among{
-	{"\u03B1\u03B4", -1, 1, ""},
-	{"\u03C3\u03C5\u03BD\u03B1\u03B4", 0, 1, ""},
-	{"\u03BA\u03B1\u03C4\u03B1\u03B4", 0, 1, ""},
-	{"\u03B1\u03BD\u03C4\u03B9\u03B4", -1, 1, ""},
-	{"\u03B5\u03BD\u03B4", -1, 1, ""},
-	{"\u03C6\u03C5\u03BB\u03BF\u03B4", -1, 1, ""},
-	{"\u03C5\u03C0\u03BF\u03B4", -1, 1, ""},
-	{"\u03C0\u03C1\u03C9\u03C4\u03BF\u03B4", -1, 1, ""},
-	{"\u03B5\u03BE\u03C9\u03B4", -1, 1, ""},
-	{"\u03B7\u03B8", -1, 1, ""},
-	{"\u03B1\u03BD\u03B7\u03B8", 9, 1, ""},
-	{"\u03BE\u03B9\u03BA", -1, 1, ""},
-	{"\u03B1\u03BB", -1, 1, ""},
-	{"\u03B1\u03BC\u03BC\u03BF\u03C7\u03B1\u03BB", 12, 1, ""},
-	{"\u03C3\u03C5\u03BD\u03BF\u03BC\u03B7\u03BB", -1, 1, ""},
-	{"\u03BC\u03C0\u03BF\u03BB", -1, 1, ""},
-	{"\u03BC\u03BF\u03C5\u03BB", -1, 1, ""},
-	{"\u03C4\u03C3\u03B1\u03BC", -1, 1, ""},
-	{"\u03B2\u03C1\u03C9\u03BC", -1, 1, ""},
-	{"\u03B1\u03BC\u03B1\u03BD", -1, 1, ""},
-	{"\u03BC\u03C0\u03B1\u03BD", -1, 1, ""},
-	{"\u03BA\u03B1\u03BB\u03BB\u03B9\u03BD", -1, 1, ""},
-	{"\u03C0\u03BF\u03C3\u03C4\u03B5\u03BB\u03BD", -1, 1, ""},
-	{"\u03C6\u03B9\u03BB\u03BF\u03BD", -1, 1, ""},
-	{"\u03BA\u03B1\u03BB\u03C0", -1, 1, ""},
-	{"\u03B3\u03B5\u03C1", -1, 1, ""},
-	{"\u03C7\u03B1\u03C3", -1, 1, ""},
-	{"\u03BC\u03C0\u03BF\u03C3", -1, 1, ""},
-	{"\u03C0\u03BB\u03B9\u03B1\u03C4\u03C3", -1, 1, ""},
-	{"\u03C0\u03B5\u03C4\u03C3", -1, 1, ""},
-	{"\u03C0\u03B9\u03C4\u03C3", -1, 1, ""},
-	{"\u03C6\u03C5\u03C3", -1, 1, ""},
-	{"\u03BC\u03C0\u03B1\u03B3\u03B9\u03B1\u03C4", -1, 1, ""},
-	{"\u03BD\u03B9\u03C4", -1, 1, ""},
-	{"\u03C0\u03B9\u03BA\u03B1\u03BD\u03C4", -1, 1, ""},
-	{"\u03C3\u03B5\u03C1\u03C4", -1, 1, ""},
-}
-var gre_a_35 = []among{
-	{"\u03B1\u03B3\u03B1\u03BC\u03B5", -1, 1, ""},
-	{"\u03B7\u03BA\u03B1\u03BC\u03B5", -1, 1, ""},
-	{"\u03B7\u03B8\u03B7\u03BA\u03B1\u03BC\u03B5", 1, 1, ""},
-	{"\u03B7\u03C3\u03B1\u03BC\u03B5", -1, 1, ""},
-	{"\u03BF\u03C5\u03C3\u03B1\u03BC\u03B5", -1, 1, ""},
-}
-var gre_a_36 = []among{
-	{"\u03B2\u03BF\u03C5\u03B2", -1, 1, ""},
-	{"\u03BE\u03B5\u03B8", -1, 1, ""},
-	{"\u03C0\u03B5\u03B8", -1, 1, ""},
-	{"\u03B1\u03C0\u03BF\u03B8", -1, 1, ""},
-	{"\u03B1\u03C0\u03BF\u03BA", -1, 1, ""},
-	{"\u03BF\u03C5\u03BB", -1, 1, ""},
-	{"\u03B1\u03BD\u03B1\u03C0", -1, 1, ""},
-	{"\u03C0\u03B9\u03BA\u03C1", -1, 1, ""},
-	{"\u03C0\u03BF\u03C4", -1, 1, ""},
-	{"\u03B1\u03C0\u03BF\u03C3\u03C4", -1, 1, ""},
-	{"\u03C7", -1, 1, ""},
-	{"\u03C3\u03B9\u03C7", 10, 1, ""},
-}
-var gre_a_37 = []among{
-	{"\u03C4\u03C1", -1, 1, ""},
-	{"\u03C4\u03C3", -1, 1, ""},
-}
-var gre_a_38 = []among{
-	{"\u03B1\u03B3\u03B1\u03BD\u03B5", -1, 1, ""},
-	{"\u03B7\u03BA\u03B1\u03BD\u03B5", -1, 1, ""},
-	{"\u03B7\u03B8\u03B7\u03BA\u03B1\u03BD\u03B5", 1, 1, ""},
-	{"\u03B7\u03C3\u03B1\u03BD\u03B5", -1, 1, ""},
-	{"\u03BF\u03C5\u03C3\u03B1\u03BD\u03B5", -1, 1, ""},
-	{"\u03BF\u03BD\u03C4\u03B1\u03BD\u03B5", -1, 1, ""},
-	{"\u03B9\u03BF\u03BD\u03C4\u03B1\u03BD\u03B5", 5, 1, ""},
-	{"\u03BF\u03C5\u03BD\u03C4\u03B1\u03BD\u03B5", -1, 1, ""},
-	{"\u03B9\u03BF\u03C5\u03BD\u03C4\u03B1\u03BD\u03B5", 7, 1, ""},
-	{"\u03BF\u03C4\u03B1\u03BD\u03B5", -1, 1, ""},
-	{"\u03B9\u03BF\u03C4\u03B1\u03BD\u03B5", 9, 1, ""},
-}
-var gre_a_39 = []among{
-	{"\u03C4\u03B1\u03B2", -1, 1, ""},
-	{"\u03BD\u03C4\u03B1\u03B2", 0, 1, ""},
-	{"\u03C8\u03B7\u03BB\u03BF\u03C4\u03B1\u03B2", 0, 1, ""},
-	{"\u03BB\u03B9\u03B2", -1, 1, ""},
-	{"\u03BA\u03BB\u03B9\u03B2", 3, 1, ""},
-	{"\u03BE\u03B7\u03C1\u03BF\u03BA\u03BB\u03B9\u03B2", 4, 1, ""},
-	{"\u03B3", -1, 1, ""},
-	{"\u03B1\u03B3", 6, 1, ""},
-	{"\u03C4\u03C1\u03B1\u03B3", 7, 1, ""},
-	{"\u03C4\u03C3\u03B1\u03B3", 7, 1, ""},
-	{"\u03B1\u03B8\u03B9\u03B3\u03B3", 6, 1, ""},
-	{"\u03C4\u03C3\u03B9\u03B3\u03B3", 6, 1, ""},
-	{"\u03B1\u03C4\u03C3\u03B9\u03B3\u03B3", 11, 1, ""},
-	{"\u03C3\u03C4\u03B5\u03B3", 6, 1, ""},
-	{"\u03B1\u03C0\u03B7\u03B3", 6, 1, ""},
-	{"\u03C3\u03B9\u03B3", 6, 1, ""},
-	{"\u03B1\u03BD\u03BF\u03C1\u03B3", 6, 1, ""},
-	{"\u03B5\u03BD\u03BF\u03C1\u03B3", 6, 1, ""},
-	{"\u03BA\u03B1\u03BB\u03C0\u03BF\u03C5\u03B6", -1, 1, ""},
-	{"\u03B8", -1, 1, ""},
-	{"\u03BC\u03C9\u03B1\u03BC\u03B5\u03B8", 19, 1, ""},
-	{"\u03C0\u03B9\u03B8", 19, 1, ""},
-	{"\u03B1\u03C0\u03B9\u03B8", 21, 1, ""},
-	{"\u03B4\u03B5\u03BA", -1, 1, ""},
-	{"\u03C0\u03B5\u03BB\u03B5\u03BA", -1, 1, ""},
-	{"\u03B9\u03BA", -1, 1, ""},
-	{"\u03B1\u03BD\u03B9\u03BA", 25, 1, ""},
-	{"\u03B2\u03BF\u03C5\u03BB\u03BA", -1, 1, ""},
-	{"\u03B2\u03B1\u03C3\u03BA", -1, 1, ""},
-	{"\u03B2\u03C1\u03B1\u03C7\u03C5\u03BA", -1, 1, ""},
-	{"\u03B3\u03B1\u03BB", -1, 1, ""},
-	{"\u03BA\u03B1\u03C4\u03B1\u03B3\u03B1\u03BB", 30, 1, ""},
-	{"\u03BF\u03BB\u03BF\u03B3\u03B1\u03BB", 30, 1, ""},
-	{"\u03B2\u03B1\u03B8\u03C5\u03B3\u03B1\u03BB", 30, 1, ""},
-	{"\u03BC\u03B5\u03BB", -1, 1, ""},
-	{"\u03BA\u03B1\u03C3\u03C4\u03B5\u03BB", -1, 1, ""},
-	{"\u03C0\u03BF\u03C1\u03C4\u03BF\u03BB", -1, 1, ""},
-	{"\u03C0\u03BB", -1, 1, ""},
-	{"\u03B4\u03B9\u03C0\u03BB", 37, 1, ""},
-	{"\u03BB\u03B1\u03BF\u03C0\u03BB", 37, 1, ""},
-	{"\u03C8\u03C5\u03C7\u03BF\u03C0\u03BB", 37, 1, ""},
-	{"\u03BF\u03C5\u03BB", -1, 1, ""},
-	{"\u03BC", -1, 1, ""},
-	{"\u03BF\u03BB\u03B9\u03B3\u03BF\u03B4\u03B1\u03BC", 42, 1, ""},
-	{"\u03BC\u03BF\u03C5\u03C3\u03BF\u03C5\u03BB\u03BC", 42, 1, ""},
-	{"\u03B4\u03C1\u03B1\u03B4\u03BF\u03C5\u03BC", 42, 1, ""},
-	{"\u03B2\u03C1\u03B1\u03C7\u03BC", 42, 1, ""},
-	{"\u03BD", -1, 1, ""},
-	{"\u03B1\u03BC\u03B5\u03C1\u03B9\u03BA\u03B1\u03BD", 47, 1, ""},
-	{"\u03C0", -1, 1, ""},
-	{"\u03B1\u03B4\u03B1\u03C0", 49, 1, ""},
-	{"\u03C7\u03B1\u03BC\u03B7\u03BB\u03BF\u03B4\u03B1\u03C0", 49, 1, ""},
-	{"\u03C0\u03BF\u03BB\u03C5\u03B4\u03B1\u03C0", 49, 1, ""},
-	{"\u03BA\u03BF\u03C0", 49, 1, ""},
-	{"\u03C5\u03C0\u03BF\u03BA\u03BF\u03C0", 53, 1, ""},
-	{"\u03C4\u03C3\u03BF\u03C0", 49, 1, ""},
-	{"\u03C3\u03C0", 49, 1, ""},
-	{"\u03B5\u03C1", -1, 1, ""},
-	{"\u03B3\u03B5\u03C1", 57, 1, ""},
-	{"\u03B2\u03B5\u03C4\u03B5\u03C1", 57, 1, ""},
-	{"\u03BB\u03BF\u03C5\u03B8\u03B7\u03C1", -1, 1, ""},
-	{"\u03BA\u03BF\u03C1\u03BC\u03BF\u03C1", -1, 1, ""},
-	{"\u03C0\u03B5\u03C1\u03B9\u03C4\u03C1", -1, 1, ""},
-	{"\u03BF\u03C5\u03C1", -1, 1, ""},
-	{"\u03C3", -1, 1, ""},
-	{"\u03B2\u03B1\u03C3", 64, 1, ""},
-	{"\u03C0\u03BF\u03BB\u03B9\u03C3", 64, 1, ""},
-	{"\u03C3\u03B1\u03C1\u03B1\u03BA\u03B1\u03C4\u03C3", 64, 1, ""},
-	{"\u03B8\u03C5\u03C3", 64, 1, ""},
-	{"\u03B4\u03B9\u03B1\u03C4", -1, 1, ""},
-	{"\u03C0\u03BB\u03B1\u03C4", -1, 1, ""},
-	{"\u03C4\u03C3\u03B1\u03C1\u03BB\u03B1\u03C4", -1, 1, ""},
-	{"\u03C4\u03B5\u03C4", -1, 1, ""},
-	{"\u03C0\u03BF\u03C5\u03C1\u03B9\u03C4", -1, 1, ""},
-	{"\u03C3\u03BF\u03C5\u03BB\u03C4", -1, 1, ""},
-	{"\u03BC\u03B1\u03B9\u03BD\u03C4", -1, 1, ""},
-	{"\u03B6\u03C9\u03BD\u03C4", -1, 1, ""},
-	{"\u03BA\u03B1\u03C3\u03C4", -1, 1, ""},
-	{"\u03C6", -1, 1, ""},
-	{"\u03B4\u03B9\u03B1\u03C6", 78, 1, ""},
-	{"\u03C3\u03C4\u03B5\u03C6", 78, 1, ""},
-	{"\u03C6\u03C9\u03C4\u03BF\u03C3\u03C4\u03B5\u03C6", 80, 1, ""},
-	{"\u03C0\u03B5\u03C1\u03B7\u03C6", 78, 1, ""},
-	{"\u03C5\u03C0\u03B5\u03C1\u03B7\u03C6", 82, 1, ""},
-	{"\u03BA\u03BF\u03B9\u03BB\u03B1\u03C1\u03C6", 78, 1, ""},
-	{"\u03C0\u03B5\u03BD\u03C4\u03B1\u03C1\u03C6", 78, 1, ""},
-	{"\u03BF\u03C1\u03C6", 78, 1, ""},
-	{"\u03C7", -1, 1, ""},
-	{"\u03B1\u03BC\u03B7\u03C7", 87, 1, ""},
-	{"\u03B2\u03B9\u03BF\u03BC\u03B7\u03C7", 87, 1, ""},
-	{"\u03BC\u03B5\u03B3\u03BB\u03BF\u03B2\u03B9\u03BF\u03BC\u03B7\u03C7", 89, 1, ""},
-	{"\u03BA\u03B1\u03C0\u03BD\u03BF\u03B2\u03B9\u03BF\u03BC\u03B7\u03C7", 89, 1, ""},
-	{"\u03BC\u03B9\u03BA\u03C1\u03BF\u03B2\u03B9\u03BF\u03BC\u03B7\u03C7", 89, 1, ""},
-	{"\u03C0\u03BF\u03BB\u03C5\u03BC\u03B7\u03C7", 87, 1, ""},
-	{"\u03BB\u03B9\u03C7", 87, 1, ""},
-}
-var gre_a_40 = []among{
-	{"\u03B5\u03BD\u03B4", -1, 1, ""},
-	{"\u03C3\u03C5\u03BD\u03B4", -1, 1, ""},
-	{"\u03BF\u03B4", -1, 1, ""},
-	{"\u03B4\u03B9\u03B1\u03B8", -1, 1, ""},
-	{"\u03BA\u03B1\u03B8", -1, 1, ""},
-	{"\u03C1\u03B1\u03B8", -1, 1, ""},
-	{"\u03C4\u03B1\u03B8", -1, 1, ""},
-	{"\u03C4\u03B9\u03B8", -1, 1, ""},
-	{"\u03B5\u03BA\u03B8", -1, 1, ""},
-	{"\u03B5\u03BD\u03B8", -1, 1, ""},
-	{"\u03C3\u03C5\u03BD\u03B8", -1, 1, ""},
-	{"\u03C1\u03BF\u03B8", -1, 1, ""},
-	{"\u03C5\u03C0\u03B5\u03C1\u03B8", -1, 1, ""},
-	{"\u03C3\u03B8", -1, 1, ""},
-	{"\u03B5\u03C5\u03B8", -1, 1, ""},
-	{"\u03B1\u03C1\u03BA", -1, 1, ""},
-	{"\u03C9\u03C6\u03B5\u03BB", -1, 1, ""},
-	{"\u03B2\u03BF\u03BB", -1, 1, ""},
-	{"\u03B1\u03B9\u03BD", -1, 1, ""},
-	{"\u03C0\u03BF\u03BD", -1, 1, ""},
-	{"\u03C1\u03BF\u03BD", -1, 1, ""},
-	{"\u03C3\u03C5\u03BD", -1, 1, ""},
-	{"\u03B2\u03B1\u03C1", -1, 1, ""},
-	{"\u03B2\u03C1", -1, 1, ""},
-	{"\u03B1\u03B9\u03C1", -1, 1, ""},
-	{"\u03C6\u03BF\u03C1", -1, 1, ""},
-	{"\u03B5\u03C5\u03C1", -1, 1, ""},
-	{"\u03C0\u03C5\u03C1", -1, 1, ""},
-	{"\u03C7\u03C9\u03C1", -1, 1, ""},
-	{"\u03BD\u03B5\u03C4", -1, 1, ""},
-	{"\u03C3\u03C7", -1, 1, ""},
-}
-var gre_a_41 = []among{
-	{"\u03C0\u03B1\u03B3", -1, 1, ""},
-	{"\u03B4", -1, 1, ""},
-	{"\u03B1\u03B4", 1, 1, ""},
-	{"\u03B8", -1, 1, ""},
-	{"\u03B1\u03B8", 3, 1, ""},
-	{"\u03C4\u03BF\u03BA", -1, 1, ""},
-	{"\u03C3\u03BA", -1, 1, ""},
-	{"\u03C0\u03B1\u03C1\u03B1\u03BA\u03B1\u03BB", -1, 1, ""},
-	{"\u03C3\u03BA\u03B5\u03BB", -1, 1, ""},
-	{"\u03B1\u03C0\u03BB", -1, 1, ""},
-	{"\u03B5\u03BC", -1, 1, ""},
-	{"\u03B1\u03BD", -1, 1, ""},
-	{"\u03B2\u03B5\u03BD", -1, 1, ""},
-	{"\u03B2\u03B1\u03C1\u03BF\u03BD", -1, 1, ""},
-	{"\u03BA\u03BF\u03C0", -1, 1, ""},
-	{"\u03C3\u03B5\u03C1\u03C0", -1, 1, ""},
-	{"\u03B1\u03B2\u03B1\u03C1", -1, 1, ""},
-	{"\u03B5\u03BD\u03B1\u03C1", -1, 1, ""},
-	{"\u03B1\u03B2\u03C1", -1, 1, ""},
-	{"\u03BC\u03C0\u03BF\u03C1", -1, 1, ""},
-	{"\u03B8\u03B1\u03C1\u03C1", -1, 1, ""},
-	{"\u03BD\u03C4\u03C1", -1, 1, ""},
-	{"\u03C5", -1, 1, ""},
-	{"\u03BD\u03B9\u03C6", -1, 1, ""},
-	{"\u03C3\u03C5\u03C1\u03C6", -1, 1, ""},
-}
-var gre_a_42 = []among{
-	{"\u03BF\u03BD\u03C4\u03B1\u03C3", -1, 1, ""},
-	{"\u03C9\u03BD\u03C4\u03B1\u03C3", -1, 1, ""},
-}
-var gre_a_43 = []among{
-	{"\u03BF\u03BC\u03B1\u03C3\u03C4\u03B5", -1, 1, ""},
-	{"\u03B9\u03BF\u03BC\u03B1\u03C3\u03C4\u03B5", 0, 1, ""},
-}
-var gre_a_44 = []among{
-	{"\u03C0", -1, 1, ""},
-	{"\u03B1\u03C0", 0, 1, ""},
-	{"\u03B1\u03BA\u03B1\u03C4\u03B1\u03C0", 1, 1, ""},
-	{"\u03C3\u03C5\u03BC\u03C0", 0, 1, ""},
-	{"\u03B1\u03C3\u03C5\u03BC\u03C0", 3, 1, ""},
-	{"\u03B1\u03BC\u03B5\u03C4\u03B1\u03BC\u03C6", -1, 1, ""},
-}
-var gre_a_45 = []among{
-	{"\u03B6", -1, 1, ""},
-	{"\u03B1\u03BB", -1, 1, ""},
-	{"\u03C0\u03B1\u03C1\u03B1\u03BA\u03B1\u03BB", 1, 1, ""},
-	{"\u03B5\u03BA\u03C4\u03B5\u03BB", -1, 1, ""},
-	{"\u03BC", -1, 1, ""},
-	{"\u03BE", -1, 1, ""},
-	{"\u03C0\u03C1\u03BF", -1, 1, ""},
-	{"\u03B1\u03C1", -1, 1, ""},
-	{"\u03BD\u03B9\u03C3", -1, 1, ""},
-}
-var gre_a_46 = []among{
-	{"\u03B7\u03B8\u03B7\u03BA\u03B1", -1, 1, ""},
-	{"\u03B7\u03B8\u03B7\u03BA\u03B5", -1, 1, ""},
-	{"\u03B7\u03B8\u03B7\u03BA\u03B5\u03C3", -1, 1, ""},
-}
-var gre_a_47 = []among{
-	{"\u03C0\u03B9\u03B8", -1, 1, ""},
-	{"\u03BF\u03B8", -1, 1, ""},
-	{"\u03BD\u03B1\u03C1\u03B8", -1, 1, ""},
-	{"\u03C3\u03BA\u03BF\u03C5\u03BB", -1, 1, ""},
-	{"\u03C3\u03BA\u03C9\u03BB", -1, 1, ""},
-	{"\u03C3\u03C6", -1, 1, ""},
-}
-var gre_a_48 = []among{
-	{"\u03B8", -1, 1, ""},
-	{"\u03B4\u03B9\u03B1\u03B8", 0, 1, ""},
-	{"\u03C0\u03B1\u03C1\u03B1\u03BA\u03B1\u03C4\u03B1\u03B8", 0, 1, ""},
-	{"\u03C3\u03C5\u03BD\u03B8", 0, 1, ""},
-	{"\u03C0\u03C1\u03BF\u03C3\u03B8", 0, 1, ""},
-}
-var gre_a_49 = []among{
-	{"\u03B7\u03BA\u03B1", -1, 1, ""},
-	{"\u03B7\u03BA\u03B5", -1, 1, ""},
-	{"\u03B7\u03BA\u03B5\u03C3", -1, 1, ""},
-}
-var gre_a_50 = []among{
-	{"\u03C6\u03B1\u03B3", -1, 1, ""},
-	{"\u03BB\u03B7\u03B3", -1, 1, ""},
-	{"\u03C6\u03C1\u03C5\u03B4", -1, 1, ""},
-	{"\u03BC\u03B1\u03BD\u03C4\u03B9\u03BB", -1, 1, ""},
-	{"\u03BC\u03B1\u03BB\u03BB", -1, 1, ""},
-	{"\u03BF\u03BC", -1, 1, ""},
-	{"\u03B2\u03BB\u03B5\u03C0", -1, 1, ""},
-	{"\u03C0\u03BF\u03B4\u03B1\u03C1", -1, 1, ""},
-	{"\u03BA\u03C5\u03BC\u03B1\u03C4", -1, 1, ""},
-	{"\u03C0\u03C1\u03C9\u03C4", -1, 1, ""},
-	{"\u03BB\u03B1\u03C7", -1, 1, ""},
-	{"\u03C0\u03B1\u03BD\u03C4\u03B1\u03C7", -1, 1, ""},
-}
-var gre_a_51 = []among{
-	{"\u03C4\u03C3\u03B1", -1, 1, ""},
-	{"\u03C7\u03B1\u03B4", -1, 1, ""},
-	{"\u03BC\u03B5\u03B4", -1, 1, ""},
-	{"\u03BB\u03B1\u03BC\u03C0\u03B9\u03B4", -1, 1, ""},
-	{"\u03B4\u03B5", -1, 1, ""},
-	{"\u03C0\u03BB\u03B5", -1, 1, ""},
-	{"\u03BC\u03B5\u03C3\u03B1\u03B6", -1, 1, ""},
-	{"\u03B4\u03B5\u03C3\u03C0\u03BF\u03B6", -1, 1, ""},
-	{"\u03B1\u03B9\u03B8", -1, 1, ""},
-	{"\u03C6\u03B1\u03C1\u03BC\u03B1\u03BA", -1, 1, ""},
-	{"\u03B1\u03B3\u03BA", -1, 1, ""},
-	{"\u03B1\u03BD\u03B7\u03BA", -1, 1, ""},
-	{"\u03BB", -1, 1, ""},
-	{"\u03BC", -1, 1, ""},
-	{"\u03B1\u03BC", 13, 1, ""},
-	{"\u03B2\u03C1\u03BF\u03BC", 13, 1, ""},
-	{"\u03C5\u03C0\u03BF\u03C4\u03B5\u03B9\u03BD", -1, 1, ""},
-	{"\u03B5\u03BA\u03BB\u03B9\u03C0", -1, 1, ""},
-	{"\u03C1", -1, 1, ""},
-	{"\u03B5\u03BD\u03B4\u03B9\u03B1\u03C6\u03B5\u03C1", 18, 1, ""},
-	{"\u03B1\u03BD\u03B1\u03C1\u03C1", 18, 1, ""},
-	{"\u03C0\u03B1\u03C4", -1, 1, ""},
-	{"\u03BA\u03B1\u03B8\u03B1\u03C1\u03B5\u03C5", -1, 1, ""},
-	{"\u03B4\u03B5\u03C5\u03C4\u03B5\u03C1\u03B5\u03C5", -1, 1, ""},
-	{"\u03BB\u03B5\u03C7", -1, 1, ""},
-}
-var gre_a_52 = []among{
-	{"\u03BF\u03C5\u03C3\u03B1", -1, 1, ""},
-	{"\u03BF\u03C5\u03C3\u03B5", -1, 1, ""},
-	{"\u03BF\u03C5\u03C3\u03B5\u03C3", -1, 1, ""},
-}
-var gre_a_53 = []among{
-	{"\u03C0\u03B5\u03BB", -1, 1, ""},
-	{"\u03BB\u03BB", -1, 1, ""},
-	{"\u03C3\u03BC\u03B7\u03BD", -1, 1, ""},
-	{"\u03C1\u03C0", -1, 1, ""},
-	{"\u03C0\u03C1", -1, 1, ""},
-	{"\u03C6\u03C1", -1, 1, ""},
-	{"\u03C7\u03BF\u03C1\u03C4", -1, 1, ""},
-	{"\u03BF\u03C6", -1, 1, ""},
-	{"\u03C8\u03BF\u03C6", 7, -1, ""},
-	{"\u03C3\u03C6", -1, 1, ""},
-	{"\u03BB\u03BF\u03C7", -1, 1, ""},
-	{"\u03BD\u03B1\u03C5\u03BB\u03BF\u03C7", 10, -1, ""},
-}
-var gre_a_54 = []among{
-	{"\u03B1\u03BC\u03B1\u03BB\u03BB\u03B9", -1, 1, ""},
-	{"\u03BB", -1, 1, ""},
-	{"\u03B1\u03BC\u03B1\u03BB", 1, 1, ""},
-	{"\u03BC", -1, 1, ""},
-	{"\u03BF\u03C5\u03BB\u03B1\u03BC", 3, 1, ""},
-	{"\u03B5\u03BD", -1, 1, ""},
-	{"\u03B4\u03B5\u03C1\u03B2\u03B5\u03BD", 5, 1, ""},
-	{"\u03C0", -1, 1, ""},
-	{"\u03B1\u03B5\u03B9\u03C0", 7, 1, ""},
-	{"\u03B1\u03C1\u03C4\u03B9\u03C0", 7, 1, ""},
-	{"\u03C3\u03C5\u03BC\u03C0", 7, 1, ""},
-	{"\u03BD\u03B5\u03BF\u03C0", 7, 1, ""},
-	{"\u03BA\u03C1\u03BF\u03BA\u03B1\u03BB\u03BF\u03C0", 7, 1, ""},
-	{"\u03BF\u03BB\u03BF\u03C0", 7, 1, ""},
-	{"\u03C0\u03C1\u03BF\u03C3\u03C9\u03C0\u03BF\u03C0", 7, 1, ""},
-	{"\u03C3\u03B9\u03B4\u03B7\u03C1\u03BF\u03C0", 7, 1, ""},
-	{"\u03B4\u03C1\u03BF\u03C3\u03BF\u03C0", 7, 1, ""},
-	{"\u03B1\u03C3\u03C0", 7, 1, ""},
-	{"\u03B1\u03BD\u03C5\u03C0", 7, 1, ""},
-	{"\u03C1", -1, 1, ""},
-	{"\u03B1\u03C3\u03C0\u03B1\u03C1", 19, 1, ""},
-	{"\u03C7\u03B1\u03C1", 19, 1, ""},
-	{"\u03B1\u03C7\u03B1\u03C1", 21, 1, ""},
-	{"\u03B1\u03C0\u03B5\u03C1", 19, 1, ""},
-	{"\u03C4\u03C1", 19, 1, ""},
-	{"\u03BF\u03C5\u03C1", 19, 1, ""},
-	{"\u03C4", -1, 1, ""},
-	{"\u03B4\u03B9\u03B1\u03C4", 26, 1, ""},
-	{"\u03B5\u03C0\u03B9\u03C4", 26, 1, ""},
-	{"\u03C3\u03C5\u03BD\u03C4", 26, 1, ""},
-	{"\u03BF\u03BC\u03BF\u03C4", 26, 1, ""},
-	{"\u03BD\u03BF\u03BC\u03BF\u03C4", 30, 1, ""},
-	{"\u03B1\u03C0\u03BF\u03C4", 26, 1, ""},
-	{"\u03C5\u03C0\u03BF\u03C4", 26, 1, ""},
-	{"\u03B1\u03B2\u03B1\u03C3\u03C4", 26, 1, ""},
-	{"\u03B1\u03B9\u03BC\u03BF\u03C3\u03C4", 26, 1, ""},
-	{"\u03C0\u03C1\u03BF\u03C3\u03C4", 26, 1, ""},
-	{"\u03B1\u03BD\u03C5\u03C3\u03C4", 26, 1, ""},
-	{"\u03BD\u03B1\u03C5", -1, 1, ""},
-	{"\u03B1\u03C6", -1, 1, ""},
-	{"\u03BE\u03B5\u03C6", -1, 1, ""},
-	{"\u03B1\u03B4\u03B7\u03C6", -1, 1, ""},
-	{"\u03C0\u03B1\u03BC\u03C6", -1, 1, ""},
-	{"\u03C0\u03BF\u03BB\u03C5\u03C6", -1, 1, ""},
-}
-var gre_a_55 = []among{
-	{"\u03B1\u03B3\u03B1", -1, 1, ""},
-	{"\u03B1\u03B3\u03B5", -1, 1, ""},
-	{"\u03B1\u03B3\u03B5\u03C3", -1, 1, ""},
-}
-var gre_a_56 = []among{
-	{"\u03B7\u03C3\u03B1", -1, 1, ""},
-	{"\u03B7\u03C3\u03B5", -1, 1, ""},
-	{"\u03B7\u03C3\u03BF\u03C5", -1, 1, ""},
-}
-var gre_a_57 = []among{
-	{"\u03BD", -1, 1, ""},
-	{"\u03B4\u03C9\u03B4\u03B5\u03BA\u03B1\u03BD", 0, 1, ""},
-	{"\u03B5\u03C0\u03C4\u03B1\u03BD", 0, 1, ""},
-	{"\u03BC\u03B5\u03B3\u03B1\u03BB\u03BF\u03BD", 0, 1, ""},
-	{"\u03B5\u03C1\u03B7\u03BC\u03BF\u03BD", 0, 1, ""},
-	{"\u03C7\u03B5\u03C1\u03C3\u03BF\u03BD", 0, 1, ""},
-}
-var gre_a_58 = []among{
-	{"\u03C3\u03B2", -1, 1, ""},
-	{"\u03B1\u03C3\u03B2", 0, 1, ""},
-	{"\u03B1\u03C0\u03BB", -1, 1, ""},
-	{"\u03B1\u03B5\u03B9\u03BC\u03BD", -1, 1, ""},
-	{"\u03C7\u03C1", -1, 1, ""},
-	{"\u03B1\u03C7\u03C1", 4, 1, ""},
-	{"\u03BA\u03BF\u03B9\u03BD\u03BF\u03C7\u03C1", 4, 1, ""},
-	{"\u03B4\u03C5\u03C3\u03C7\u03C1", 4, 1, ""},
-	{"\u03B5\u03C5\u03C7\u03C1", 4, 1, ""},
-	{"\u03C0\u03B1\u03BB\u03B9\u03BC\u03C8", -1, 1, ""},
-}
-var gre_a_59 = []among{
-	{"\u03BF\u03C5\u03BD\u03B5", -1, 1, ""},
-	{"\u03B7\u03B8\u03BF\u03C5\u03BD\u03B5", 0, 1, ""},
-	{"\u03B7\u03C3\u03BF\u03C5\u03BD\u03B5", 0, 1, ""},
-}
-var gre_a_60 = []among{
-	{"\u03C3\u03C0\u03B9", -1, 1, ""},
-	{"\u03BD", -1, 1, ""},
-	{"\u03B5\u03BE\u03C9\u03BD", 1, 1, ""},
-	{"\u03C1", -1, 1, ""},
-	{"\u03C3\u03C4\u03C1\u03B1\u03B2\u03BF\u03BC\u03BF\u03C5\u03C4\u03C3", -1, 1, ""},
-	{"\u03BA\u03B1\u03BA\u03BF\u03BC\u03BF\u03C5\u03C4\u03C3", -1, 1, ""},
-}
-var gre_a_61 = []among{
-	{"\u03BF\u03C5\u03BC\u03B5", -1, 1, ""},
-	{"\u03B7\u03B8\u03BF\u03C5\u03BC\u03B5", 0, 1, ""},
-	{"\u03B7\u03C3\u03BF\u03C5\u03BC\u03B5", 0, 1, ""},
-}
-var gre_a_62 = []among{
-	{"\u03B1\u03B6", -1, 1, ""},
-	{"\u03C9\u03C1\u03B9\u03BF\u03C0\u03BB", -1, 1, ""},
-	{"\u03B1\u03C3\u03BF\u03C5\u03C3", -1, 1, ""},
-	{"\u03C0\u03B1\u03C1\u03B1\u03C3\u03BF\u03C5\u03C3", 2, 1, ""},
-	{"\u03B1\u03BB\u03BB\u03BF\u03C3\u03BF\u03C5\u03C3", -1, 1, ""},
-	{"\u03C6", -1, 1, ""},
-	{"\u03C7", -1, 1, ""},
-}
-var gre_a_63 = []among{
-	{"\u03BC\u03B1\u03C4\u03B1", -1, 1, ""},
-	{"\u03BC\u03B1\u03C4\u03C9\u03BD", -1, 1, ""},
-	{"\u03BC\u03B1\u03C4\u03BF\u03C3", -1, 1, ""},
-}
-var gre_a_64 = []among{
-	{"\u03B1", -1, 1, ""},
-	{"\u03B9\u03BF\u03C5\u03BC\u03B1", 0, 1, ""},
-	{"\u03BF\u03BC\u03BF\u03C5\u03BD\u03B1", 0, 1, ""},
-	{"\u03B9\u03BF\u03BC\u03BF\u03C5\u03BD\u03B1", 2, 1, ""},
-	{"\u03BF\u03C3\u03BF\u03C5\u03BD\u03B1", 0, 1, ""},
-	{"\u03B9\u03BF\u03C3\u03BF\u03C5\u03BD\u03B1", 4, 1, ""},
-	{"\u03B5", -1, 1, ""},
-	{"\u03B1\u03B3\u03B1\u03C4\u03B5", 6, 1, ""},
-	{"\u03B7\u03BA\u03B1\u03C4\u03B5", 6, 1, ""},
-	{"\u03B7\u03B8\u03B7\u03BA\u03B1\u03C4\u03B5", 8, 1, ""},
-	{"\u03B7\u03C3\u03B1\u03C4\u03B5", 6, 1, ""},
-	{"\u03BF\u03C5\u03C3\u03B1\u03C4\u03B5", 6, 1, ""},
-	{"\u03B5\u03B9\u03C4\u03B5", 6, 1, ""},
-	{"\u03B7\u03B8\u03B5\u03B9\u03C4\u03B5", 12, 1, ""},
-	{"\u03B9\u03B5\u03BC\u03B1\u03C3\u03C4\u03B5", 6, 1, ""},
-	{"\u03BF\u03C5\u03BC\u03B1\u03C3\u03C4\u03B5", 6, 1, ""},
-	{"\u03B9\u03BF\u03C5\u03BC\u03B1\u03C3\u03C4\u03B5", 15, 1, ""},
-	{"\u03B9\u03B5\u03C3\u03B1\u03C3\u03C4\u03B5", 6, 1, ""},
-	{"\u03BF\u03C3\u03B1\u03C3\u03C4\u03B5", 6, 1, ""},
-	{"\u03B9\u03BF\u03C3\u03B1\u03C3\u03C4\u03B5", 18, 1, ""},
-	{"\u03B7", -1, 1, ""},
-	{"\u03B9", -1, 1, ""},
-	{"\u03B1\u03BC\u03B1\u03B9", 21, 1, ""},
-	{"\u03B9\u03B5\u03BC\u03B1\u03B9", 21, 1, ""},
-	{"\u03BF\u03BC\u03B1\u03B9", 21, 1, ""},
-	{"\u03BF\u03C5\u03BC\u03B1\u03B9", 21, 1, ""},
-	{"\u03B1\u03C3\u03B1\u03B9", 21, 1, ""},
-	{"\u03B5\u03C3\u03B1\u03B9", 21, 1, ""},
-	{"\u03B9\u03B5\u03C3\u03B1\u03B9", 27, 1, ""},
-	{"\u03B1\u03C4\u03B1\u03B9", 21, 1, ""},
-	{"\u03B5\u03C4\u03B1\u03B9", 21, 1, ""},
-	{"\u03B9\u03B5\u03C4\u03B1\u03B9", 30, 1, ""},
-	{"\u03BF\u03BD\u03C4\u03B1\u03B9", 21, 1, ""},
-	{"\u03BF\u03C5\u03BD\u03C4\u03B1\u03B9", 21, 1, ""},
-	{"\u03B9\u03BF\u03C5\u03BD\u03C4\u03B1\u03B9", 33, 1, ""},
-	{"\u03B5\u03B9", 21, 1, ""},
-	{"\u03B1\u03B5\u03B9", 35, 1, ""},
-	{"\u03B7\u03B8\u03B5\u03B9", 35, 1, ""},
-	{"\u03B7\u03C3\u03B5\u03B9", 35, 1, ""},
-	{"\u03BF\u03B9", 21, 1, ""},
-	{"\u03B1\u03BD", -1, 1, ""},
-	{"\u03B1\u03B3\u03B1\u03BD", 40, 1, ""},
-	{"\u03B7\u03BA\u03B1\u03BD", 40, 1, ""},
-	{"\u03B7\u03B8\u03B7\u03BA\u03B1\u03BD", 42, 1, ""},
-	{"\u03B7\u03C3\u03B1\u03BD", 40, 1, ""},
-	{"\u03BF\u03C5\u03C3\u03B1\u03BD", 40, 1, ""},
-	{"\u03BF\u03BD\u03C4\u03BF\u03C5\u03C3\u03B1\u03BD", 45, 1, ""},
-	{"\u03B9\u03BF\u03BD\u03C4\u03BF\u03C5\u03C3\u03B1\u03BD", 46, 1, ""},
-	{"\u03BF\u03BD\u03C4\u03B1\u03BD", 40, 1, ""},
-	{"\u03B9\u03BF\u03BD\u03C4\u03B1\u03BD", 48, 1, ""},
-	{"\u03BF\u03C5\u03BD\u03C4\u03B1\u03BD", 40, 1, ""},
-	{"\u03B9\u03BF\u03C5\u03BD\u03C4\u03B1\u03BD", 50, 1, ""},
-	{"\u03BF\u03C4\u03B1\u03BD", 40, 1, ""},
-	{"\u03B9\u03BF\u03C4\u03B1\u03BD", 52, 1, ""},
-	{"\u03BF\u03BC\u03B1\u03C3\u03C4\u03B1\u03BD", 40, 1, ""},
-	{"\u03B9\u03BF\u03BC\u03B1\u03C3\u03C4\u03B1\u03BD", 54, 1, ""},
-	{"\u03BF\u03C3\u03B1\u03C3\u03C4\u03B1\u03BD", 40, 1, ""},
-	{"\u03B9\u03BF\u03C3\u03B1\u03C3\u03C4\u03B1\u03BD", 56, 1, ""},
-	{"\u03BF\u03C5\u03BD", -1, 1, ""},
-	{"\u03B7\u03B8\u03BF\u03C5\u03BD", 58, 1, ""},
-	{"\u03BF\u03BC\u03BF\u03C5\u03BD", 58, 1, ""},
-	{"\u03B9\u03BF\u03BC\u03BF\u03C5\u03BD", 60, 1, ""},
-	{"\u03B7\u03C3\u03BF\u03C5\u03BD", 58, 1, ""},
-	{"\u03BF\u03C3\u03BF\u03C5\u03BD", 58, 1, ""},
-	{"\u03B9\u03BF\u03C3\u03BF\u03C5\u03BD", 63, 1, ""},
-	{"\u03C9\u03BD", -1, 1, ""},
-	{"\u03B7\u03B4\u03C9\u03BD", 65, 1, ""},
-	{"\u03BF", -1, 1, ""},
-	{"\u03B1\u03C3", -1, 1, ""},
-	{"\u03B5\u03C3", -1, 1, ""},
-	{"\u03B7\u03B4\u03B5\u03C3", 69, 1, ""},
-	{"\u03B7\u03C3\u03B5\u03C3", 69, 1, ""},
-	{"\u03B7\u03C3", -1, 1, ""},
-	{"\u03B5\u03B9\u03C3", -1, 1, ""},
-	{"\u03B7\u03B8\u03B5\u03B9\u03C3", 73, 1, ""},
-	{"\u03BF\u03C3", -1, 1, ""},
-	{"\u03C5\u03C3", -1, 1, ""},
-	{"\u03BF\u03C5\u03C3", 76, 1, ""},
-	{"\u03C5", -1, 1, ""},
-	{"\u03BF\u03C5", 78, 1, ""},
-	{"\u03C9", -1, 1, ""},
-	{"\u03B1\u03C9", 80, 1, ""},
-	{"\u03B7\u03B8\u03C9", 80, 1, ""},
-	{"\u03B7\u03C3\u03C9", 80, 1, ""},
-}
-var gre_a_65 = []among{
-	{"\u03BF\u03C4\u03B5\u03C1", -1, 1, ""},
-	{"\u03B5\u03C3\u03C4\u03B5\u03C1", -1, 1, ""},
-	{"\u03C5\u03C4\u03B5\u03C1", -1, 1, ""},
-	{"\u03C9\u03C4\u03B5\u03C1", -1, 1, ""},
-	{"\u03BF\u03C4\u03B1\u03C4", -1, 1, ""},
-	{"\u03B5\u03C3\u03C4\u03B1\u03C4", -1, 1, ""},
-	{"\u03C5\u03C4\u03B1\u03C4", -1, 1, ""},
-	{"\u03C9\u03C4\u03B1\u03C4", -1, 1, ""},
-}
-var gre_g_v = []byte{81, 65, 16, 1}
-var gre_g_v2 = []byte{81, 65, 0, 1}
-
-func (z *greekStemmer) r_has_min_length() bool {
-	return z.length >= 3
-}
-func (z *greekStemmer) r_tolower() bool {
-	var among_var int
-	for {
-		v_1 := z.limit - z.cursor
-		{
-			z.ket = z.cursor
-			among_var = z.findAmongB(gre_a_0)
-			z.bra = z.cursor
-			switch among_var {
-			case 1:
-				z.sliceFrom("\u03B1")
-				break
-			case 2:
-				z.sliceFrom("\u03B2")
-				break
-			case 3:
-				z.sliceFrom("\u03B3")
-				break
-			case 4:
-				z.sliceFrom("\u03B4")
-				break
-			case 5:
-				z.sliceFrom("\u03B5")
-				break
-			case 6:
-				z.sliceFrom("\u03B6")
-				break
-			case 7:
-				z.sliceFrom("\u03B7")
-				break
-			case 8:
-				z.sliceFrom("\u03B8")
-				break
-			case 9:
-				z.sliceFrom("\u03B9")
-				break
-			case 10:
-				z.sliceFrom("\u03BA")
-				break
-			case 11:
-				z.sliceFrom("\u03BB")
-				break
-			case 12:
-				z.sliceFrom("\u03BC")
-				break
-			case 13:
-				z.sliceFrom("\u03BD")
-				break
-			case 14:
-				z.sliceFrom("\u03BE")
-				break
-			case 15:
-				z.sliceFrom("\u03BF")
-				break
-			case 16:
-				z.sliceFrom("\u03C0")
-				break
-			case 17:
-				z.sliceFrom("\u03C1")
-				break
-			case 18:
-				z.sliceFrom("\u03C3")
-				break
-			case 19:
-				z.sliceFrom("\u03C4")
-				break
-			case 20:
-				z.sliceFrom("\u03C5")
-				break
-			case 21:
-				z.sliceFrom("\u03C6")
-				break
-			case 22:
-				z.sliceFrom("\u03C7")
-				break
-			case 23:
-				z.sliceFrom("\u03C8")
-				break
-			case 24:
-				z.sliceFrom("\u03C9")
-				break
-			case 25:
-				if z.cursor <= z.limitBackward {
-					goto lab0_end
-				}
-				z.cursor--
-				break
-			}
-			continue
-		}
-	lab0_end:
-		;
-		z.cursor = z.limit - v_1
-		break
-	}
-	return true
-}
-func (z *greekStemmer) r_step_1() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(gre_a_1)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	switch among_var {
-	case 1:
-		z.sliceFrom("\u03C6\u03B1")
-		break
-	case 2:
-		z.sliceFrom("\u03C3\u03BA\u03B1")
-		break
-	case 3:
-		z.sliceFrom("\u03BF\u03BB\u03BF")
-		break
-	case 4:
-		z.sliceFrom("\u03C3\u03BF")
-		break
-	case 5:
-		z.sliceFrom("\u03C4\u03B1\u03C4\u03BF")
-		break
-	case 6:
-		z.sliceFrom("\u03BA\u03C1\u03B5")
-		break
-	case 7:
-		z.sliceFrom("\u03C0\u03B5\u03C1")
-		break
-	case 8:
-		z.sliceFrom("\u03C4\u03B5\u03C1")
-		break
-	case 9:
-		z.sliceFrom("\u03C6\u03C9")
-		break
-	case 10:
-		z.sliceFrom("\u03BA\u03B1\u03B8\u03B5\u03C3\u03C4")
-		break
-	case 11:
-		z.sliceFrom("\u03B3\u03B5\u03B3\u03BF\u03BD")
-		break
-	}
-	z.B_test1 = false
-	return true
-}
-func (z *greekStemmer) r_step_s1() bool {
-	var among_var int
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_3) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	z.ket = z.cursor
-	z.bra = z.cursor
-	among_var = z.findAmongB(gre_a_2)
-	if among_var == 0 {
-		return false
-	}
-	if z.cursor > z.limitBackward {
-		return false
-	}
-	switch among_var {
-	case 1:
-		z.sliceFrom("\u03B9")
-		break
-	case 2:
-		z.sliceFrom("\u03B9\u03B6")
-		break
-	}
-	return true
-}
-func (z *greekStemmer) r_step_s2() bool {
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_5) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	z.ket = z.cursor
-	z.bra = z.cursor
-	if z.findAmongB(gre_a_4) == 0 {
-		return false
-	}
-	if z.cursor > z.limitBackward {
-		return false
-	}
-	z.sliceFrom("\u03C9\u03BD")
-	return true
-}
-func (z *greekStemmer) r_step_s3() bool {
-	var among_var int
-	{
-		v_1 := z.limit - z.cursor
-		{
-			z.ket = z.cursor
-			if !(z.eqSB("\u03B9\u03C3\u03B1")) {
-				goto lab1_end
-			}
-			z.bra = z.cursor
-			if z.cursor > z.limitBackward {
-				goto lab1_end
-			}
-			z.sliceFrom("\u03B9\u03C3")
-			goto lab0_end
-		}
-	lab1_end:
-		;
-		z.cursor = z.limit - v_1
-		z.ket = z.cursor
-	}
-lab0_end:
-	;
-	if z.findAmongB(gre_a_7) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	z.ket = z.cursor
-	z.bra = z.cursor
-	among_var = z.findAmongB(gre_a_6)
-	if among_var == 0 {
-		return false
-	}
-	if z.cursor > z.limitBackward {
-		return false
-	}
-	switch among_var {
-	case 1:
-		z.sliceFrom("\u03B9")
-		break
-	case 2:
-		z.sliceFrom("\u03B9\u03C3")
-		break
-	}
-	return true
-}
-func (z *greekStemmer) r_step_s4() bool {
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_9) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	z.ket = z.cursor
-	z.bra = z.cursor
-	if z.findAmongB(gre_a_8) == 0 {
-		return false
-	}
-	if z.cursor > z.limitBackward {
-		return false
-	}
-	z.sliceFrom("\u03B9")
-	return true
-}
-func (z *greekStemmer) r_step_s5() bool {
-	var among_var int
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_11) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	z.ket = z.cursor
-	z.bra = z.cursor
-	among_var = z.findAmongB(gre_a_10)
-	if among_var == 0 {
-		return false
-	}
-	if z.cursor > z.limitBackward {
-		return false
-	}
-	switch among_var {
-	case 1:
-		z.sliceFrom("\u03B9")
-		break
-	case 2:
-		z.sliceFrom("\u03B9\u03C3\u03C4")
-		break
-	}
-	return true
-}
-func (z *greekStemmer) r_step_s6() bool {
-	var among_var int
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_14) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	{
-		v_1 := z.limit - z.cursor
-		{
-			z.ket = z.cursor
-			z.bra = z.cursor
-			among_var = z.findAmongB(gre_a_12)
-			if among_var == 0 {
-				goto lab1_end
-			}
-			if z.cursor > z.limitBackward {
-				goto lab1_end
-			}
-			switch among_var {
-			case 1:
-				z.sliceFrom("\u03B9\u03C3\u03BC")
-				break
-			case 2:
-				z.sliceFrom("\u03B9")
-				break
-			}
-			goto lab0_end
-		}
-	lab1_end:
-		;
-		z.cursor = z.limit - v_1
-		z.ket = z.cursor
-		among_var = z.findAmongB(gre_a_13)
-		if among_var == 0 {
-			return false
-		}
-		z.bra = z.cursor
-		switch among_var {
-		case 1:
-			z.sliceFrom("\u03B1\u03B3\u03BD\u03C9\u03C3\u03C4")
-			break
-		case 2:
-			z.sliceFrom("\u03B1\u03C4\u03BF\u03BC")
-			break
-		case 3:
-			z.sliceFrom("\u03B3\u03BD\u03C9\u03C3\u03C4")
-			break
-		case 4:
-			z.sliceFrom("\u03B5\u03B8\u03BD")
-			break
-		case 5:
-			z.sliceFrom("\u03B5\u03BA\u03BB\u03B5\u03BA\u03C4")
-			break
-		case 6:
-			z.sliceFrom("\u03C3\u03BA\u03B5\u03C0\u03C4")
-			break
-		case 7:
-			z.sliceFrom("\u03C4\u03BF\u03C0")
-			break
-		case 8:
-			z.sliceFrom("\u03B1\u03BB\u03B5\u03BE\u03B1\u03BD\u03B4\u03C1")
-			break
-		case 9:
-			z.sliceFrom("\u03B2\u03C5\u03B6\u03B1\u03BD\u03C4")
-			break
-		case 10:
-			z.sliceFrom("\u03B8\u03B5\u03B1\u03C4\u03C1")
-			break
-		}
-	}
-lab0_end:
-	;
-	return true
-}
-func (z *greekStemmer) r_step_s7() bool {
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_16) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	z.ket = z.cursor
-	z.bra = z.cursor
-	if z.findAmongB(gre_a_15) == 0 {
-		return false
-	}
-	if z.cursor > z.limitBackward {
-		return false
-	}
-	z.sliceFrom("\u03B1\u03C1\u03B1\u03BA")
-	return true
-}
-func (z *greekStemmer) r_step_s8() bool {
-	var among_var int
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_18) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	{
-		v_1 := z.limit - z.cursor
-		{
-			z.ket = z.cursor
-			z.bra = z.cursor
-			among_var = z.findAmongB(gre_a_17)
-			if among_var == 0 {
-				goto lab1_end
-			}
-			if z.cursor > z.limitBackward {
-				goto lab1_end
-			}
-			switch among_var {
-			case 1:
-				z.sliceFrom("\u03B1\u03BA")
-				break
-			case 2:
-				z.sliceFrom("\u03B9\u03C4\u03C3")
-				break
-			}
-			goto lab0_end
-		}
-	lab1_end:
-		;
-		z.cursor = z.limit - v_1
-		z.ket = z.cursor
-		z.bra = z.cursor
-		if !(z.eqSB("\u03BA\u03BF\u03C1")) {
-			return false
-		}
-		z.sliceFrom("\u03B9\u03C4\u03C3")
-	}
-lab0_end:
-	;
-	return true
-}
-func (z *greekStemmer) r_step_s9() bool {
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_21) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	{
-		v_1 := z.limit - z.cursor
-		{
-			z.ket = z.cursor
-			z.bra = z.cursor
-			if z.findAmongB(gre_a_19) == 0 {
-				goto lab1_end
-			}
-			if z.cursor > z.limitBackward {
-				goto lab1_end
-			}
-			z.sliceFrom("\u03B9\u03B4")
-			goto lab0_end
-		}
-	lab1_end:
-		;
-		z.cursor = z.limit - v_1
-		z.ket = z.cursor
-		z.bra = z.cursor
-		if z.findAmongB(gre_a_20) == 0 {
-			return false
-		}
-		z.sliceFrom("\u03B9\u03B4")
-	}
-lab0_end:
-	;
-	return true
-}
-func (z *greekStemmer) r_step_s10() bool {
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_23) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	z.ket = z.cursor
-	z.bra = z.cursor
-	if z.findAmongB(gre_a_22) == 0 {
-		return false
-	}
-	if z.cursor > z.limitBackward {
-		return false
-	}
-	z.sliceFrom("\u03B9\u03C3\u03BA")
-	return true
-}
-func (z *greekStemmer) r_step_2a() bool {
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_24) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	{
-		v_1 := z.limit - z.cursor
-		{
-			if z.findAmongB(gre_a_25) == 0 {
-				goto lab0_end
-			}
-			return false
-		}
-	lab0_end:
-		;
-		z.cursor = z.limit - v_1
-	}
-	{
-		c := z.cursor
-		z.insert(z.cursor, z.cursor, "\u03B1\u03B4")
-		z.cursor = c
-	}
-	return true
-}
-func (z *greekStemmer) r_step_2b() bool {
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_26) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.ket = z.cursor
-	z.bra = z.cursor
-	if z.findAmongB(gre_a_27) == 0 {
-		return false
-	}
-	z.sliceFrom("\u03B5\u03B4")
-	return true
-}
-func (z *greekStemmer) r_step_2c() bool {
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_28) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.ket = z.cursor
-	z.bra = z.cursor
-	if z.findAmongB(gre_a_29) == 0 {
-		return false
-	}
-	z.sliceFrom("\u03BF\u03C5\u03B4")
-	return true
-}
-func (z *greekStemmer) r_step_2d() bool {
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_30) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	z.ket = z.cursor
-	z.bra = z.cursor
-	if z.findAmongB(gre_a_31) == 0 {
-		return false
-	}
-	if z.cursor > z.limitBackward {
-		return false
-	}
-	z.sliceFrom("\u03B5")
-	return true
-}
-func (z *greekStemmer) r_step_3() bool {
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_32) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	z.ket = z.cursor
-	z.bra = z.cursor
-	if !(z.inGroupingB(gre_g_v, 945, 969)) {
-		return false
-	}
-	z.sliceFrom("\u03B9")
-	return true
-}
-func (z *greekStemmer) r_step_4() bool {
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_33) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	{
-		v_1 := z.limit - z.cursor
-		{
-			z.ket = z.cursor
-			z.bra = z.cursor
-			if !(z.inGroupingB(gre_g_v, 945, 969)) {
-				goto lab1_end
-			}
-			z.sliceFrom("\u03B9\u03BA")
-			goto lab0_end
-		}
-	lab1_end:
-		;
-		z.cursor = z.limit - v_1
-		z.ket = z.cursor
-	}
-lab0_end:
-	;
-	z.bra = z.cursor
-	if z.findAmongB(gre_a_34) == 0 {
-		return false
-	}
-	if z.cursor > z.limitBackward {
-		return false
-	}
-	z.sliceFrom("\u03B9\u03BA")
-	return true
-}
-func (z *greekStemmer) r_step_5a() bool {
-	v_1 := z.limit - z.cursor
-	{
-		z.ket = z.cursor
-		if !(z.eqSB("\u03B1\u03B3\u03B1\u03BC\u03B5")) {
-			goto lab0_end
-		}
-		z.bra = z.cursor
-		if z.cursor > z.limitBackward {
-			goto lab0_end
-		}
-		z.sliceFrom("\u03B1\u03B3\u03B1\u03BC")
-	}
-lab0_end:
-	;
-	z.cursor = z.limit - v_1
-	v_2 := z.limit - z.cursor
-	{
-		z.ket = z.cursor
-		if z.findAmongB(gre_a_35) == 0 {
-			goto lab1_end
-		}
-		z.bra = z.cursor
-		z.sliceDel()
-		z.B_test1 = false
-	}
-lab1_end:
-	;
-	z.cursor = z.limit - v_2
-	z.ket = z.cursor
-	if !(z.eqSB("\u03B1\u03BC\u03B5")) {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	z.ket = z.cursor
-	z.bra = z.cursor
-	if z.findAmongB(gre_a_36) == 0 {
-		return false
-	}
-	if z.cursor > z.limitBackward {
-		return false
-	}
-	z.sliceFrom("\u03B1\u03BC")
-	return true
-}
-func (z *greekStemmer) r_step_5b() bool {
-	v_1 := z.limit - z.cursor
-	{
-		z.ket = z.cursor
-		if z.findAmongB(gre_a_38) == 0 {
-			goto lab0_end
-		}
-		z.bra = z.cursor
-		z.sliceDel()
-		z.B_test1 = false
-		z.ket = z.cursor
-		z.bra = z.cursor
-		if z.findAmongB(gre_a_37) == 0 {
-			goto lab0_end
-		}
-		if z.cursor > z.limitBackward {
-			goto lab0_end
-		}
-		z.sliceFrom("\u03B1\u03B3\u03B1\u03BD")
-	}
-lab0_end:
-	;
-	z.cursor = z.limit - v_1
-	z.ket = z.cursor
-	if !(z.eqSB("\u03B1\u03BD\u03B5")) {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	{
-		v_2 := z.limit - z.cursor
-		{
-			z.ket = z.cursor
-			z.bra = z.cursor
-			if !(z.inGroupingB(gre_g_v2, 945, 969)) {
-				goto lab2_end
-			}
-			z.sliceFrom("\u03B1\u03BD")
-			goto lab1_end
-		}
-	lab2_end:
-		;
-		z.cursor = z.limit - v_2
-		z.ket = z.cursor
-	}
-lab1_end:
-	;
-	z.bra = z.cursor
-	if z.findAmongB(gre_a_39) == 0 {
-		return false
-	}
-	if z.cursor > z.limitBackward {
-		return false
-	}
-	z.sliceFrom("\u03B1\u03BD")
-	return true
-}
-func (z *greekStemmer) r_step_5c() bool {
-	v_1 := z.limit - z.cursor
-	{
-		z.ket = z.cursor
-		if !(z.eqSB("\u03B7\u03C3\u03B5\u03C4\u03B5")) {
-			goto lab0_end
-		}
-		z.bra = z.cursor
-		z.sliceDel()
-		z.B_test1 = false
-	}
-lab0_end:
-	;
-	z.cursor = z.limit - v_1
-	z.ket = z.cursor
-	if !(z.eqSB("\u03B5\u03C4\u03B5")) {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	{
-		v_2 := z.limit - z.cursor
-		{
-			z.ket = z.cursor
-			z.bra = z.cursor
-			if !(z.inGroupingB(gre_g_v2, 945, 969)) {
-				goto lab2_end
-			}
-			z.sliceFrom("\u03B5\u03C4")
-			goto lab1_end
-		}
-	lab2_end:
-		;
-		z.cursor = z.limit - v_2
-		{
-			z.ket = z.cursor
-			z.bra = z.cursor
-			if z.findAmongB(gre_a_40) == 0 {
-				goto lab3_end
-			}
-			z.sliceFrom("\u03B5\u03C4")
-			goto lab1_end
-		}
-	lab3_end:
-		;
-		z.cursor = z.limit - v_2
-		z.ket = z.cursor
-	}
-lab1_end:
-	;
-	z.bra = z.cursor
-	if z.findAmongB(gre_a_41) == 0 {
-		return false
-	}
-	if z.cursor > z.limitBackward {
-		return false
-	}
-	z.sliceFrom("\u03B5\u03C4")
-	return true
-}
-func (z *greekStemmer) r_step_5d() bool {
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_42) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	{
-		v_1 := z.limit - z.cursor
-		{
-			z.ket = z.cursor
-			z.bra = z.cursor
-			if !(z.eqSB("\u03B1\u03C1\u03C7")) {
-				goto lab1_end
-			}
-			if z.cursor > z.limitBackward {
-				goto lab1_end
-			}
-			z.sliceFrom("\u03BF\u03BD\u03C4")
-			goto lab0_end
-		}
-	lab1_end:
-		;
-		z.cursor = z.limit - v_1
-		z.ket = z.cursor
-		z.bra = z.cursor
-		if !(z.eqSB("\u03BA\u03C1\u03B5")) {
-			return false
-		}
-		z.sliceFrom("\u03C9\u03BD\u03C4")
-	}
-lab0_end:
-	;
-	return true
-}
-func (z *greekStemmer) r_step_5e() bool {
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_43) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	z.ket = z.cursor
-	z.bra = z.cursor
-	if !(z.eqSB("\u03BF\u03BD")) {
-		return false
-	}
-	if z.cursor > z.limitBackward {
-		return false
-	}
-	z.sliceFrom("\u03BF\u03BC\u03B1\u03C3\u03C4")
-	return true
-}
-func (z *greekStemmer) r_step_5f() bool {
-	v_1 := z.limit - z.cursor
-	{
-		z.ket = z.cursor
-		if !(z.eqSB("\u03B9\u03B5\u03C3\u03C4\u03B5")) {
-			goto lab0_end
-		}
-		z.bra = z.cursor
-		z.sliceDel()
-		z.B_test1 = false
-		z.ket = z.cursor
-		z.bra = z.cursor
-		if z.findAmongB(gre_a_44) == 0 {
-			goto lab0_end
-		}
-		if z.cursor > z.limitBackward {
-			goto lab0_end
-		}
-		z.sliceFrom("\u03B9\u03B5\u03C3\u03C4")
-	}
-lab0_end:
-	;
-	z.cursor = z.limit - v_1
-	z.ket = z.cursor
-	if !(z.eqSB("\u03B5\u03C3\u03C4\u03B5")) {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	z.ket = z.cursor
-	z.bra = z.cursor
-	if z.findAmongB(gre_a_45) == 0 {
-		return false
-	}
-	if z.cursor > z.limitBackward {
-		return false
-	}
-	z.sliceFrom("\u03B9\u03B5\u03C3\u03C4")
-	return true
-}
-func (z *greekStemmer) r_step_5g() bool {
-	v_1 := z.limit - z.cursor
-	{
-		z.ket = z.cursor
-		if z.findAmongB(gre_a_46) == 0 {
-			goto lab0_end
-		}
-		z.bra = z.cursor
-		z.sliceDel()
-		z.B_test1 = false
-	}
-lab0_end:
-	;
-	z.cursor = z.limit - v_1
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_49) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	{
-		v_2 := z.limit - z.cursor
-		{
-			z.ket = z.cursor
-			z.bra = z.cursor
-			if z.findAmongB(gre_a_47) == 0 {
-				goto lab2_end
-			}
-			z.sliceFrom("\u03B7\u03BA")
-			goto lab1_end
-		}
-	lab2_end:
-		;
-		z.cursor = z.limit - v_2
-		z.ket = z.cursor
-		z.bra = z.cursor
-		if z.findAmongB(gre_a_48) == 0 {
-			return false
-		}
-		if z.cursor > z.limitBackward {
-			return false
-		}
-		z.sliceFrom("\u03B7\u03BA")
-	}
-lab1_end:
-	;
-	return true
-}
-func (z *greekStemmer) r_step_5h() bool {
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_52) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	{
-		v_1 := z.limit - z.cursor
-		{
-			z.ket = z.cursor
-			z.bra = z.cursor
-			if z.findAmongB(gre_a_50) == 0 {
-				goto lab1_end
-			}
-			z.sliceFrom("\u03BF\u03C5\u03C3")
-			goto lab0_end
-		}
-	lab1_end:
-		;
-		z.cursor = z.limit - v_1
-		z.ket = z.cursor
-		z.bra = z.cursor
-		if z.findAmongB(gre_a_51) == 0 {
-			return false
-		}
-		if z.cursor > z.limitBackward {
-			return false
-		}
-		z.sliceFrom("\u03BF\u03C5\u03C3")
-	}
-lab0_end:
-	;
-	return true
-}
-func (z *greekStemmer) r_step_5i() bool {
-	var among_var int
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_55) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	{
-		v_1 := z.limit - z.cursor
-		{
-			z.ket = z.cursor
-			z.bra = z.cursor
-			if !(z.eqSB("\u03BA\u03BF\u03BB\u03BB")) {
-				goto lab1_end
-			}
-			z.sliceFrom("\u03B1\u03B3")
-			goto lab0_end
-		}
-	lab1_end:
-		;
-		z.cursor = z.limit - v_1
-		{
-			v_2 := z.limit - z.cursor
-			{
-				z.ket = z.cursor
-				z.bra = z.cursor
-				among_var = z.findAmongB(gre_a_53)
-				if among_var == 0 {
-					goto lab3_end
-				}
-				switch among_var {
-				case 1:
-					z.sliceFrom("\u03B1\u03B3")
-					break
-				}
-				goto lab2_end
-			}
-		lab3_end:
-			;
-			z.cursor = z.limit - v_2
-			z.ket = z.cursor
-			z.bra = z.cursor
-			if z.findAmongB(gre_a_54) == 0 {
-				return false
-			}
-			if z.cursor > z.limitBackward {
-				return false
-			}
-			z.sliceFrom("\u03B1\u03B3")
-		}
-	lab2_end:
-	}
-lab0_end:
-	;
-	return true
-}
-func (z *greekStemmer) r_step_5j() bool {
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_56) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	z.ket = z.cursor
-	z.bra = z.cursor
-	if z.findAmongB(gre_a_57) == 0 {
-		return false
-	}
-	if z.cursor > z.limitBackward {
-		return false
-	}
-	z.sliceFrom("\u03B7\u03C3")
-	return true
-}
-func (z *greekStemmer) r_step_5k() bool {
-	z.ket = z.cursor
-	if !(z.eqSB("\u03B7\u03C3\u03C4\u03B5")) {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	z.ket = z.cursor
-	z.bra = z.cursor
-	if z.findAmongB(gre_a_58) == 0 {
-		return false
-	}
-	if z.cursor > z.limitBackward {
-		return false
-	}
-	z.sliceFrom("\u03B7\u03C3\u03C4")
-	return true
-}
-func (z *greekStemmer) r_step_5l() bool {
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_59) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	z.ket = z.cursor
-	z.bra = z.cursor
-	if z.findAmongB(gre_a_60) == 0 {
-		return false
-	}
-	if z.cursor > z.limitBackward {
-		return false
-	}
-	z.sliceFrom("\u03BF\u03C5\u03BD")
-	return true
-}
-func (z *greekStemmer) r_step_5m() bool {
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_61) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	z.B_test1 = false
-	z.ket = z.cursor
-	z.bra = z.cursor
-	if z.findAmongB(gre_a_62) == 0 {
-		return false
-	}
-	if z.cursor > z.limitBackward {
-		return false
-	}
-	z.sliceFrom("\u03BF\u03C5\u03BC")
-	return true
-}
-func (z *greekStemmer) r_step_6() bool {
-	v_1 := z.limit - z.cursor
-	{
-		z.ket = z.cursor
-		if z.findAmongB(gre_a_63) == 0 {
-			goto lab0_end
-		}
-		z.bra = z.cursor
-		z.sliceFrom("\u03BC\u03B1")
-	}
-lab0_end:
-	;
-	z.cursor = z.limit - v_1
-	if !z.B_test1 {
-		return false
-	}
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_64) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	return true
-}
-func (z *greekStemmer) r_step_7() bool {
-	z.ket = z.cursor
-	if z.findAmongB(gre_a_65) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceDel()
-	return true
-}
-func (z *greekStemmer) stem() {
-	z.limitBackward = z.cursor
-	z.cursor = z.limit
-	v_1 := z.limit - z.cursor
-	z.r_tolower()
-	z.cursor = z.limit - v_1
-	if !z.r_has_min_length() {
-		return
-	}
-	z.B_test1 = true
-	v_2 := z.limit - z.cursor
-	z.r_step_1()
-	z.cursor = z.limit - v_2
-	v_3 := z.limit - z.cursor
-	z.r_step_s1()
-	z.cursor = z.limit - v_3
-	v_4 := z.limit - z.cursor
-	z.r_step_s2()
-	z.cursor = z.limit - v_4
-	v_5 := z.limit - z.cursor
-	z.r_step_s3()
-	z.cursor = z.limit - v_5
-	v_6 := z.limit - z.cursor
-	z.r_step_s4()
-	z.cursor = z.limit - v_6
-	v_7 := z.limit - z.cursor
-	z.r_step_s5()
-	z.cursor = z.limit - v_7
-	v_8 := z.limit - z.cursor
-	z.r_step_s6()
-	z.cursor = z.limit - v_8
-	v_9 := z.limit - z.cursor
-	z.r_step_s7()
-	z.cursor = z.limit - v_9
-	v_10 := z.limit - z.cursor
-	z.r_step_s8()
-	z.cursor = z.limit - v_10
-	v_11 := z.limit - z.cursor
-	z.r_step_s9()
-	z.cursor = z.limit - v_11
-	v_12 := z.limit - z.cursor
-	z.r_step_s10()
-	z.cursor = z.limit - v_12
-	v_13 := z.limit - z.cursor
-	z.r_step_2a()
-	z.cursor = z.limit - v_13
-	v_14 := z.limit - z.cursor
-	z.r_step_2b()
-	z.cursor = z.limit - v_14
-	v_15 := z.limit - z.cursor
-	z.r_step_2c()
-	z.cursor = z.limit - v_15
-	v_16 := z.limit - z.cursor
-	z.r_step_2d()
-	z.cursor = z.limit - v_16
-	v_17 := z.limit - z.cursor
-	z.r_step_3()
-	z.cursor = z.limit - v_17
-	v_18 := z.limit - z.cursor
-	z.r_step_4()
-	z.cursor = z.limit - v_18
-	v_19 := z.limit - z.cursor
-	z.r_step_5a()
-	z.cursor = z.limit - v_19
-	v_20 := z.limit - z.cursor
-	z.r_step_5b()
-	z.cursor = z.limit - v_20
-	v_21 := z.limit - z.cursor
-	z.r_step_5c()
-	z.cursor = z.limit - v_21
-	v_22 := z.limit - z.cursor
-	z.r_step_5d()
-	z.cursor = z.limit - v_22
-	v_23 := z.limit - z.cursor
-	z.r_step_5e()
-	z.cursor = z.limit - v_23
-	v_24 := z.limit - z.cursor
-	z.r_step_5f()
-	z.cursor = z.limit - v_24
-	v_25 := z.limit - z.cursor
-	z.r_step_5g()
-	z.cursor = z.limit - v_25
-	v_26 := z.limit - z.cursor
-	z.r_step_5h()
-	z.cursor = z.limit - v_26
-	v_27 := z.limit - z.cursor
-	z.r_step_5j()
-	z.cursor = z.limit - v_27
-	v_28 := z.limit - z.cursor
-	z.r_step_5i()
-	z.cursor = z.limit - v_28
-	v_29 := z.limit - z.cursor
-	z.r_step_5k()
-	z.cursor = z.limit - v_29
-	v_30 := z.limit - z.cursor
-	z.r_step_5l()
-	z.cursor = z.limit - v_30
-	v_31 := z.limit - z.cursor
-	z.r_step_5m()
-	z.cursor = z.limit - v_31
-	v_32 := z.limit - z.cursor
-	z.r_step_6()
-	z.cursor = z.limit - v_32
-	v_33 := z.limit - z.cursor
-	z.r_step_7()
-	z.cursor = z.limit - v_33
-	z.cursor = z.limitBackward
-	return
-}
-
 type hindiStemmer struct {
 	snowball
 	I_p1, I_p2  int
@@ -11364,513 +4911,6 @@ func (z *hindiStemmer) stem() {
 	}
 	z.bra = z.cursor
 	z.sliceDel()
-	z.cursor = z.limitBackward
-	return
-}
-
-type hungarianStemmer struct {
-	snowball
-	I_p1, I_p2  int
-	S_ch, S_x   []rune
-	LS_ch, LS_x int
-}
-
-func newHungarian() *hungarianStemmer { return &hungarianStemmer{} }
-
-var hun_a_0 = []among{
-	{"\u00E1", -1, 1, ""},
-	{"\u00E9", -1, 2, ""},
-}
-var hun_a_1 = []among{
-	{"bb", -1, -1, ""},
-	{"cc", -1, -1, ""},
-	{"dd", -1, -1, ""},
-	{"ff", -1, -1, ""},
-	{"gg", -1, -1, ""},
-	{"jj", -1, -1, ""},
-	{"kk", -1, -1, ""},
-	{"ll", -1, -1, ""},
-	{"mm", -1, -1, ""},
-	{"nn", -1, -1, ""},
-	{"pp", -1, -1, ""},
-	{"rr", -1, -1, ""},
-	{"ccs", -1, -1, ""},
-	{"ss", -1, -1, ""},
-	{"zzs", -1, -1, ""},
-	{"tt", -1, -1, ""},
-	{"vv", -1, -1, ""},
-	{"ggy", -1, -1, ""},
-	{"lly", -1, -1, ""},
-	{"nny", -1, -1, ""},
-	{"tty", -1, -1, ""},
-	{"ssz", -1, -1, ""},
-	{"zz", -1, -1, ""},
-}
-var hun_a_2 = []among{
-	{"al", -1, 1, ""},
-	{"el", -1, 1, ""},
-}
-var hun_a_3 = []among{
-	{"ba", -1, -1, ""},
-	{"ra", -1, -1, ""},
-	{"be", -1, -1, ""},
-	{"re", -1, -1, ""},
-	{"ig", -1, -1, ""},
-	{"nak", -1, -1, ""},
-	{"nek", -1, -1, ""},
-	{"val", -1, -1, ""},
-	{"vel", -1, -1, ""},
-	{"ul", -1, -1, ""},
-	{"n\u00E1l", -1, -1, ""},
-	{"n\u00E9l", -1, -1, ""},
-	{"b\u00F3l", -1, -1, ""},
-	{"r\u00F3l", -1, -1, ""},
-	{"t\u00F3l", -1, -1, ""},
-	{"\u00FCl", -1, -1, ""},
-	{"b\u0151l", -1, -1, ""},
-	{"r\u0151l", -1, -1, ""},
-	{"t\u0151l", -1, -1, ""},
-	{"n", -1, -1, ""},
-	{"an", 19, -1, ""},
-	{"ban", 20, -1, ""},
-	{"en", 19, -1, ""},
-	{"ben", 22, -1, ""},
-	{"k\u00E9ppen", 22, -1, ""},
-	{"on", 19, -1, ""},
-	{"\u00F6n", 19, -1, ""},
-	{"k\u00E9pp", -1, -1, ""},
-	{"kor", -1, -1, ""},
-	{"t", -1, -1, ""},
-	{"at", 29, -1, ""},
-	{"et", 29, -1, ""},
-	{"k\u00E9nt", 29, -1, ""},
-	{"ank\u00E9nt", 32, -1, ""},
-	{"enk\u00E9nt", 32, -1, ""},
-	{"onk\u00E9nt", 32, -1, ""},
-	{"ot", 29, -1, ""},
-	{"\u00E9rt", 29, -1, ""},
-	{"\u00F6t", 29, -1, ""},
-	{"hez", -1, -1, ""},
-	{"hoz", -1, -1, ""},
-	{"h\u00F6z", -1, -1, ""},
-	{"v\u00E1", -1, -1, ""},
-	{"v\u00E9", -1, -1, ""},
-}
-var hun_a_4 = []among{
-	{"\u00E1n", -1, 2, ""},
-	{"\u00E9n", -1, 1, ""},
-	{"\u00E1nk\u00E9nt", -1, 2, ""},
-}
-var hun_a_5 = []among{
-	{"stul", -1, 1, ""},
-	{"astul", 0, 1, ""},
-	{"\u00E1stul", 0, 2, ""},
-	{"st\u00FCl", -1, 1, ""},
-	{"est\u00FCl", 3, 1, ""},
-	{"\u00E9st\u00FCl", 3, 3, ""},
-}
-var hun_a_6 = []among{
-	{"\u00E1", -1, 1, ""},
-	{"\u00E9", -1, 1, ""},
-}
-var hun_a_7 = []among{
-	{"k", -1, 3, ""},
-	{"ak", 0, 3, ""},
-	{"ek", 0, 3, ""},
-	{"ok", 0, 3, ""},
-	{"\u00E1k", 0, 1, ""},
-	{"\u00E9k", 0, 2, ""},
-	{"\u00F6k", 0, 3, ""},
-}
-var hun_a_8 = []among{
-	{"\u00E9i", -1, 1, ""},
-	{"\u00E1\u00E9i", 0, 3, ""},
-	{"\u00E9\u00E9i", 0, 2, ""},
-	{"\u00E9", -1, 1, ""},
-	{"k\u00E9", 3, 1, ""},
-	{"ak\u00E9", 4, 1, ""},
-	{"ek\u00E9", 4, 1, ""},
-	{"ok\u00E9", 4, 1, ""},
-	{"\u00E1k\u00E9", 4, 3, ""},
-	{"\u00E9k\u00E9", 4, 2, ""},
-	{"\u00F6k\u00E9", 4, 1, ""},
-	{"\u00E9\u00E9", 3, 2, ""},
-}
-var hun_a_9 = []among{
-	{"a", -1, 1, ""},
-	{"ja", 0, 1, ""},
-	{"d", -1, 1, ""},
-	{"ad", 2, 1, ""},
-	{"ed", 2, 1, ""},
-	{"od", 2, 1, ""},
-	{"\u00E1d", 2, 2, ""},
-	{"\u00E9d", 2, 3, ""},
-	{"\u00F6d", 2, 1, ""},
-	{"e", -1, 1, ""},
-	{"je", 9, 1, ""},
-	{"nk", -1, 1, ""},
-	{"unk", 11, 1, ""},
-	{"\u00E1nk", 11, 2, ""},
-	{"\u00E9nk", 11, 3, ""},
-	{"\u00FCnk", 11, 1, ""},
-	{"uk", -1, 1, ""},
-	{"juk", 16, 1, ""},
-	{"\u00E1juk", 17, 2, ""},
-	{"\u00FCk", -1, 1, ""},
-	{"j\u00FCk", 19, 1, ""},
-	{"\u00E9j\u00FCk", 20, 3, ""},
-	{"m", -1, 1, ""},
-	{"am", 22, 1, ""},
-	{"em", 22, 1, ""},
-	{"om", 22, 1, ""},
-	{"\u00E1m", 22, 2, ""},
-	{"\u00E9m", 22, 3, ""},
-	{"o", -1, 1, ""},
-	{"\u00E1", -1, 2, ""},
-	{"\u00E9", -1, 3, ""},
-}
-var hun_a_10 = []among{
-	{"id", -1, 1, ""},
-	{"aid", 0, 1, ""},
-	{"jaid", 1, 1, ""},
-	{"eid", 0, 1, ""},
-	{"jeid", 3, 1, ""},
-	{"\u00E1id", 0, 2, ""},
-	{"\u00E9id", 0, 3, ""},
-	{"i", -1, 1, ""},
-	{"ai", 7, 1, ""},
-	{"jai", 8, 1, ""},
-	{"ei", 7, 1, ""},
-	{"jei", 10, 1, ""},
-	{"\u00E1i", 7, 2, ""},
-	{"\u00E9i", 7, 3, ""},
-	{"itek", -1, 1, ""},
-	{"eitek", 14, 1, ""},
-	{"jeitek", 15, 1, ""},
-	{"\u00E9itek", 14, 3, ""},
-	{"ik", -1, 1, ""},
-	{"aik", 18, 1, ""},
-	{"jaik", 19, 1, ""},
-	{"eik", 18, 1, ""},
-	{"jeik", 21, 1, ""},
-	{"\u00E1ik", 18, 2, ""},
-	{"\u00E9ik", 18, 3, ""},
-	{"ink", -1, 1, ""},
-	{"aink", 25, 1, ""},
-	{"jaink", 26, 1, ""},
-	{"eink", 25, 1, ""},
-	{"jeink", 28, 1, ""},
-	{"\u00E1ink", 25, 2, ""},
-	{"\u00E9ink", 25, 3, ""},
-	{"aitok", -1, 1, ""},
-	{"jaitok", 32, 1, ""},
-	{"\u00E1itok", -1, 2, ""},
-	{"im", -1, 1, ""},
-	{"aim", 35, 1, ""},
-	{"jaim", 36, 1, ""},
-	{"eim", 35, 1, ""},
-	{"jeim", 38, 1, ""},
-	{"\u00E1im", 35, 2, ""},
-	{"\u00E9im", 35, 3, ""},
-}
-var hun_g_v = []byte{17, 65, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 17, 36, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1}
-
-func (z *hungarianStemmer) r_mark_regions() bool {
-	z.I_p1 = z.limit
-	{
-		v_1 := z.cursor
-		{
-			if !(z.inGrouping(hun_g_v, 97, 369)) {
-				goto lab1_end
-			}
-			v_2 := z.cursor
-			{
-				if !z.goInGrouping(hun_g_v, 97, 369) {
-					goto lab2_end
-				}
-				z.cursor++
-				z.I_p1 = z.cursor
-			}
-		lab2_end:
-			;
-			z.cursor = v_2
-			goto lab0_end
-		}
-	lab1_end:
-		;
-		z.cursor = v_1
-		if !z.goOutGrouping(hun_g_v, 97, 369) {
-			return false
-		}
-		z.cursor++
-		z.I_p1 = z.cursor
-	}
-lab0_end:
-	;
-	return true
-}
-func (z *hungarianStemmer) r_R1() bool {
-	return z.I_p1 <= z.cursor
-}
-func (z *hungarianStemmer) r_v_ending() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(hun_a_0)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	if !z.r_R1() {
-		return false
-	}
-	switch among_var {
-	case 1:
-		z.sliceFrom("a")
-		break
-	case 2:
-		z.sliceFrom("e")
-		break
-	}
-	return true
-}
-func (z *hungarianStemmer) r_double() bool {
-	v_1 := z.limit - z.cursor
-	if z.findAmongB(hun_a_1) == 0 {
-		return false
-	}
-	z.cursor = z.limit - v_1
-	return true
-}
-func (z *hungarianStemmer) r_undouble() bool {
-	if z.cursor <= z.limitBackward {
-		return false
-	}
-	z.cursor--
-	z.ket = z.cursor
-	if z.cursor <= z.limitBackward {
-		return false
-	}
-	z.cursor--
-	z.bra = z.cursor
-	z.sliceDel()
-	return true
-}
-func (z *hungarianStemmer) r_instrum() bool {
-	z.ket = z.cursor
-	if z.findAmongB(hun_a_2) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	if !z.r_R1() {
-		return false
-	}
-	if !z.r_double() {
-		return false
-	}
-	z.sliceDel()
-	return z.r_undouble()
-}
-func (z *hungarianStemmer) r_case() bool {
-	z.ket = z.cursor
-	if z.findAmongB(hun_a_3) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	if !z.r_R1() {
-		return false
-	}
-	z.sliceDel()
-	return z.r_v_ending()
-}
-func (z *hungarianStemmer) r_case_special() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(hun_a_4)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	if !z.r_R1() {
-		return false
-	}
-	switch among_var {
-	case 1:
-		z.sliceFrom("e")
-		break
-	case 2:
-		z.sliceFrom("a")
-		break
-	}
-	return true
-}
-func (z *hungarianStemmer) r_case_other() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(hun_a_5)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	if !z.r_R1() {
-		return false
-	}
-	switch among_var {
-	case 1:
-		z.sliceDel()
-		break
-	case 2:
-		z.sliceFrom("a")
-		break
-	case 3:
-		z.sliceFrom("e")
-		break
-	}
-	return true
-}
-func (z *hungarianStemmer) r_factive() bool {
-	z.ket = z.cursor
-	if z.findAmongB(hun_a_6) == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	if !z.r_R1() {
-		return false
-	}
-	if !z.r_double() {
-		return false
-	}
-	z.sliceDel()
-	return z.r_undouble()
-}
-func (z *hungarianStemmer) r_plural() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(hun_a_7)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	if !z.r_R1() {
-		return false
-	}
-	switch among_var {
-	case 1:
-		z.sliceFrom("a")
-		break
-	case 2:
-		z.sliceFrom("e")
-		break
-	case 3:
-		z.sliceDel()
-		break
-	}
-	return true
-}
-func (z *hungarianStemmer) r_owned() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(hun_a_8)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	if !z.r_R1() {
-		return false
-	}
-	switch among_var {
-	case 1:
-		z.sliceDel()
-		break
-	case 2:
-		z.sliceFrom("e")
-		break
-	case 3:
-		z.sliceFrom("a")
-		break
-	}
-	return true
-}
-func (z *hungarianStemmer) r_sing_owner() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(hun_a_9)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	if !z.r_R1() {
-		return false
-	}
-	switch among_var {
-	case 1:
-		z.sliceDel()
-		break
-	case 2:
-		z.sliceFrom("a")
-		break
-	case 3:
-		z.sliceFrom("e")
-		break
-	}
-	return true
-}
-func (z *hungarianStemmer) r_plur_owner() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(hun_a_10)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	if !z.r_R1() {
-		return false
-	}
-	switch among_var {
-	case 1:
-		z.sliceDel()
-		break
-	case 2:
-		z.sliceFrom("a")
-		break
-	case 3:
-		z.sliceFrom("e")
-		break
-	}
-	return true
-}
-func (z *hungarianStemmer) stem() {
-	v_1 := z.cursor
-	z.r_mark_regions()
-	z.cursor = v_1
-	z.limitBackward = z.cursor
-	z.cursor = z.limit
-	v_2 := z.limit - z.cursor
-	z.r_instrum()
-	z.cursor = z.limit - v_2
-	v_3 := z.limit - z.cursor
-	z.r_case()
-	z.cursor = z.limit - v_3
-	v_4 := z.limit - z.cursor
-	z.r_case_special()
-	z.cursor = z.limit - v_4
-	v_5 := z.limit - z.cursor
-	z.r_case_other()
-	z.cursor = z.limit - v_5
-	v_6 := z.limit - z.cursor
-	z.r_factive()
-	z.cursor = z.limit - v_6
-	v_7 := z.limit - z.cursor
-	z.r_owned()
-	z.cursor = z.limit - v_7
-	v_8 := z.limit - z.cursor
-	z.r_sing_owner()
-	z.cursor = z.limit - v_8
-	v_9 := z.limit - z.cursor
-	z.r_plur_owner()
-	z.cursor = z.limit - v_9
-	v_10 := z.limit - z.cursor
-	z.r_plural()
-	z.cursor = z.limit - v_10
 	z.cursor = z.limitBackward
 	return
 }
@@ -13347,696 +6387,6 @@ lab0_end:
 	v_6 := z.cursor
 	z.r_postlude()
 	z.cursor = v_6
-	return
-}
-
-type lithuanianStemmer struct {
-	snowball
-	I_p1, I_p2  int
-	S_ch, S_x   []rune
-	LS_ch, LS_x int
-}
-
-func newLithuanian() *lithuanianStemmer { return &lithuanianStemmer{} }
-
-var lit_a_0 = []among{
-	{"a", -1, -1, ""},
-	{"ia", 0, -1, ""},
-	{"osna", 0, -1, ""},
-	{"iosna", 2, -1, ""},
-	{"uosna", 2, -1, ""},
-	{"iuosna", 4, -1, ""},
-	{"ysna", 0, -1, ""},
-	{"\u0117sna", 0, -1, ""},
-	{"e", -1, -1, ""},
-	{"ie", 8, -1, ""},
-	{"enie", 9, -1, ""},
-	{"oje", 8, -1, ""},
-	{"ioje", 11, -1, ""},
-	{"uje", 8, -1, ""},
-	{"iuje", 13, -1, ""},
-	{"yje", 8, -1, ""},
-	{"enyje", 15, -1, ""},
-	{"\u0117je", 8, -1, ""},
-	{"ame", 8, -1, ""},
-	{"iame", 18, -1, ""},
-	{"sime", 8, -1, ""},
-	{"ome", 8, -1, ""},
-	{"\u0117me", 8, -1, ""},
-	{"tum\u0117me", 22, -1, ""},
-	{"ose", 8, -1, ""},
-	{"iose", 24, -1, ""},
-	{"uose", 24, -1, ""},
-	{"iuose", 26, -1, ""},
-	{"yse", 8, -1, ""},
-	{"enyse", 28, -1, ""},
-	{"\u0117se", 8, -1, ""},
-	{"ate", 8, -1, ""},
-	{"iate", 31, -1, ""},
-	{"ite", 8, -1, ""},
-	{"kite", 33, -1, ""},
-	{"site", 33, -1, ""},
-	{"ote", 8, -1, ""},
-	{"tute", 8, -1, ""},
-	{"\u0117te", 8, -1, ""},
-	{"tum\u0117te", 38, -1, ""},
-	{"i", -1, -1, ""},
-	{"ai", 40, -1, ""},
-	{"iai", 41, -1, ""},
-	{"ei", 40, -1, ""},
-	{"tumei", 43, -1, ""},
-	{"ki", 40, -1, ""},
-	{"imi", 40, -1, ""},
-	{"umi", 40, -1, ""},
-	{"iumi", 47, -1, ""},
-	{"si", 40, -1, ""},
-	{"asi", 49, -1, ""},
-	{"iasi", 50, -1, ""},
-	{"esi", 49, -1, ""},
-	{"iesi", 52, -1, ""},
-	{"siesi", 53, -1, ""},
-	{"isi", 49, -1, ""},
-	{"aisi", 55, -1, ""},
-	{"eisi", 55, -1, ""},
-	{"tumeisi", 57, -1, ""},
-	{"uisi", 55, -1, ""},
-	{"osi", 49, -1, ""},
-	{"\u0117josi", 60, -1, ""},
-	{"uosi", 60, -1, ""},
-	{"iuosi", 62, -1, ""},
-	{"siuosi", 63, -1, ""},
-	{"usi", 49, -1, ""},
-	{"ausi", 65, -1, ""},
-	{"\u010Diausi", 66, -1, ""},
-	{"\u0105si", 49, -1, ""},
-	{"\u0117si", 49, -1, ""},
-	{"\u0173si", 49, -1, ""},
-	{"t\u0173si", 70, -1, ""},
-	{"ti", 40, -1, ""},
-	{"enti", 72, -1, ""},
-	{"inti", 72, -1, ""},
-	{"oti", 72, -1, ""},
-	{"ioti", 75, -1, ""},
-	{"uoti", 75, -1, ""},
-	{"iuoti", 77, -1, ""},
-	{"auti", 72, -1, ""},
-	{"iauti", 79, -1, ""},
-	{"yti", 72, -1, ""},
-	{"\u0117ti", 72, -1, ""},
-	{"tel\u0117ti", 82, -1, ""},
-	{"in\u0117ti", 82, -1, ""},
-	{"ter\u0117ti", 82, -1, ""},
-	{"ui", 40, -1, ""},
-	{"iui", 86, -1, ""},
-	{"eniui", 87, -1, ""},
-	{"oj", -1, -1, ""},
-	{"\u0117j", -1, -1, ""},
-	{"k", -1, -1, ""},
-	{"am", -1, -1, ""},
-	{"iam", 92, -1, ""},
-	{"iem", -1, -1, ""},
-	{"im", -1, -1, ""},
-	{"sim", 95, -1, ""},
-	{"om", -1, -1, ""},
-	{"tum", -1, -1, ""},
-	{"\u0117m", -1, -1, ""},
-	{"tum\u0117m", 99, -1, ""},
-	{"an", -1, -1, ""},
-	{"on", -1, -1, ""},
-	{"ion", 102, -1, ""},
-	{"un", -1, -1, ""},
-	{"iun", 104, -1, ""},
-	{"\u0117n", -1, -1, ""},
-	{"o", -1, -1, ""},
-	{"io", 107, -1, ""},
-	{"enio", 108, -1, ""},
-	{"\u0117jo", 107, -1, ""},
-	{"uo", 107, -1, ""},
-	{"s", -1, -1, ""},
-	{"as", 112, -1, ""},
-	{"ias", 113, -1, ""},
-	{"es", 112, -1, ""},
-	{"ies", 115, -1, ""},
-	{"is", 112, -1, ""},
-	{"ais", 117, -1, ""},
-	{"iais", 118, -1, ""},
-	{"tumeis", 117, -1, ""},
-	{"imis", 117, -1, ""},
-	{"enimis", 121, -1, ""},
-	{"omis", 117, -1, ""},
-	{"iomis", 123, -1, ""},
-	{"umis", 117, -1, ""},
-	{"\u0117mis", 117, -1, ""},
-	{"enis", 117, -1, ""},
-	{"asis", 117, -1, ""},
-	{"ysis", 117, -1, ""},
-	{"ams", 112, -1, ""},
-	{"iams", 130, -1, ""},
-	{"iems", 112, -1, ""},
-	{"ims", 112, -1, ""},
-	{"enims", 133, -1, ""},
-	{"oms", 112, -1, ""},
-	{"ioms", 135, -1, ""},
-	{"ums", 112, -1, ""},
-	{"\u0117ms", 112, -1, ""},
-	{"ens", 112, -1, ""},
-	{"os", 112, -1, ""},
-	{"ios", 140, -1, ""},
-	{"uos", 140, -1, ""},
-	{"iuos", 142, -1, ""},
-	{"us", 112, -1, ""},
-	{"aus", 144, -1, ""},
-	{"iaus", 145, -1, ""},
-	{"ius", 144, -1, ""},
-	{"ys", 112, -1, ""},
-	{"enys", 148, -1, ""},
-	{"\u0105s", 112, -1, ""},
-	{"i\u0105s", 150, -1, ""},
-	{"\u0117s", 112, -1, ""},
-	{"am\u0117s", 152, -1, ""},
-	{"iam\u0117s", 153, -1, ""},
-	{"im\u0117s", 152, -1, ""},
-	{"kim\u0117s", 155, -1, ""},
-	{"sim\u0117s", 155, -1, ""},
-	{"om\u0117s", 152, -1, ""},
-	{"\u0117m\u0117s", 152, -1, ""},
-	{"tum\u0117m\u0117s", 159, -1, ""},
-	{"at\u0117s", 152, -1, ""},
-	{"iat\u0117s", 161, -1, ""},
-	{"sit\u0117s", 152, -1, ""},
-	{"ot\u0117s", 152, -1, ""},
-	{"\u0117t\u0117s", 152, -1, ""},
-	{"tum\u0117t\u0117s", 165, -1, ""},
-	{"\u012Fs", 112, -1, ""},
-	{"\u016Bs", 112, -1, ""},
-	{"t\u0173s", 112, -1, ""},
-	{"at", -1, -1, ""},
-	{"iat", 170, -1, ""},
-	{"it", -1, -1, ""},
-	{"sit", 172, -1, ""},
-	{"ot", -1, -1, ""},
-	{"\u0117t", -1, -1, ""},
-	{"tum\u0117t", 175, -1, ""},
-	{"u", -1, -1, ""},
-	{"au", 177, -1, ""},
-	{"iau", 178, -1, ""},
-	{"\u010Diau", 179, -1, ""},
-	{"iu", 177, -1, ""},
-	{"eniu", 181, -1, ""},
-	{"siu", 181, -1, ""},
-	{"y", -1, -1, ""},
-	{"\u0105", -1, -1, ""},
-	{"i\u0105", 185, -1, ""},
-	{"\u0117", -1, -1, ""},
-	{"\u0119", -1, -1, ""},
-	{"\u012F", -1, -1, ""},
-	{"en\u012F", 189, -1, ""},
-	{"\u0173", -1, -1, ""},
-	{"i\u0173", 191, -1, ""},
-}
-var lit_a_1 = []among{
-	{"ing", -1, -1, ""},
-	{"aj", -1, -1, ""},
-	{"iaj", 1, -1, ""},
-	{"iej", -1, -1, ""},
-	{"oj", -1, -1, ""},
-	{"ioj", 4, -1, ""},
-	{"uoj", 4, -1, ""},
-	{"iuoj", 6, -1, ""},
-	{"auj", -1, -1, ""},
-	{"\u0105j", -1, -1, ""},
-	{"i\u0105j", 9, -1, ""},
-	{"\u0117j", -1, -1, ""},
-	{"\u0173j", -1, -1, ""},
-	{"i\u0173j", 12, -1, ""},
-	{"ok", -1, -1, ""},
-	{"iok", 14, -1, ""},
-	{"iuk", -1, -1, ""},
-	{"uliuk", 16, -1, ""},
-	{"u\u010Diuk", 16, -1, ""},
-	{"i\u0161k", -1, -1, ""},
-	{"iul", -1, -1, ""},
-	{"yl", -1, -1, ""},
-	{"\u0117l", -1, -1, ""},
-	{"am", -1, -1, ""},
-	{"dam", 23, -1, ""},
-	{"jam", 23, -1, ""},
-	{"zgan", -1, -1, ""},
-	{"ain", -1, -1, ""},
-	{"esn", -1, -1, ""},
-	{"op", -1, -1, ""},
-	{"iop", 29, -1, ""},
-	{"ias", -1, -1, ""},
-	{"ies", -1, -1, ""},
-	{"ais", -1, -1, ""},
-	{"iais", 33, -1, ""},
-	{"os", -1, -1, ""},
-	{"ios", 35, -1, ""},
-	{"uos", 35, -1, ""},
-	{"iuos", 37, -1, ""},
-	{"aus", -1, -1, ""},
-	{"iaus", 39, -1, ""},
-	{"\u0105s", -1, -1, ""},
-	{"i\u0105s", 41, -1, ""},
-	{"\u0119s", -1, -1, ""},
-	{"ut\u0117ait", -1, -1, ""},
-	{"ant", -1, -1, ""},
-	{"iant", 45, -1, ""},
-	{"siant", 46, -1, ""},
-	{"int", -1, -1, ""},
-	{"ot", -1, -1, ""},
-	{"uot", 49, -1, ""},
-	{"iuot", 50, -1, ""},
-	{"yt", -1, -1, ""},
-	{"\u0117t", -1, -1, ""},
-	{"yk\u0161t", -1, -1, ""},
-	{"iau", -1, -1, ""},
-	{"dav", -1, -1, ""},
-	{"sv", -1, -1, ""},
-	{"\u0161v", -1, -1, ""},
-	{"yk\u0161\u010D", -1, -1, ""},
-	{"\u0119", -1, -1, ""},
-	{"\u0117j\u0119", 60, -1, ""},
-}
-var lit_a_2 = []among{
-	{"ojime", -1, 7, ""},
-	{"\u0117jime", -1, 3, ""},
-	{"avime", -1, 6, ""},
-	{"okate", -1, 8, ""},
-	{"aite", -1, 1, ""},
-	{"uote", -1, 2, ""},
-	{"asius", -1, 5, ""},
-	{"okat\u0117s", -1, 8, ""},
-	{"ait\u0117s", -1, 1, ""},
-	{"uot\u0117s", -1, 2, ""},
-	{"esiu", -1, 4, ""},
-}
-var lit_a_3 = []among{
-	{"\u010D", -1, 1, ""},
-	{"d\u017E", -1, 2, ""},
-}
-var lit_g_v = []byte{17, 65, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 64, 1, 0, 64, 0, 0, 0, 0, 0, 0, 0, 4, 4}
-
-func (z *lithuanianStemmer) r_step1() bool {
-	if z.cursor < z.I_p1 {
-		return false
-	}
-	v_1 := z.limitBackward
-	z.limitBackward = z.I_p1
-	z.ket = z.cursor
-	if z.findAmongB(lit_a_0) == 0 {
-		z.limitBackward = v_1
-		return false
-	}
-	z.bra = z.cursor
-	z.limitBackward = v_1
-	z.sliceDel()
-	return true
-}
-func (z *lithuanianStemmer) r_step2() bool {
-	for {
-		v_1 := z.limit - z.cursor
-		{
-			if z.cursor < z.I_p1 {
-				goto lab0_end
-			}
-			v_2 := z.limitBackward
-			z.limitBackward = z.I_p1
-			z.ket = z.cursor
-			if z.findAmongB(lit_a_1) == 0 {
-				z.limitBackward = v_2
-				goto lab0_end
-			}
-			z.bra = z.cursor
-			z.limitBackward = v_2
-			z.sliceDel()
-			continue
-		}
-	lab0_end:
-		;
-		z.cursor = z.limit - v_1
-		break
-	}
-	return true
-}
-func (z *lithuanianStemmer) r_fix_conflicts() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(lit_a_2)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	switch among_var {
-	case 1:
-		z.sliceFrom("ait\u0117")
-		break
-	case 2:
-		z.sliceFrom("uot\u0117")
-		break
-	case 3:
-		z.sliceFrom("\u0117jimas")
-		break
-	case 4:
-		z.sliceFrom("esys")
-		break
-	case 5:
-		z.sliceFrom("asys")
-		break
-	case 6:
-		z.sliceFrom("avimas")
-		break
-	case 7:
-		z.sliceFrom("ojimas")
-		break
-	case 8:
-		z.sliceFrom("okat\u0117")
-		break
-	}
-	return true
-}
-func (z *lithuanianStemmer) r_fix_chdz() bool {
-	var among_var int
-	z.ket = z.cursor
-	among_var = z.findAmongB(lit_a_3)
-	if among_var == 0 {
-		return false
-	}
-	z.bra = z.cursor
-	switch among_var {
-	case 1:
-		z.sliceFrom("t")
-		break
-	case 2:
-		z.sliceFrom("d")
-		break
-	}
-	return true
-}
-func (z *lithuanianStemmer) r_fix_gd() bool {
-	z.ket = z.cursor
-	if !(z.eqSB("gd")) {
-		return false
-	}
-	z.bra = z.cursor
-	z.sliceFrom("g")
-	return true
-}
-func (z *lithuanianStemmer) stem() {
-	z.I_p1 = z.limit
-	v_1 := z.cursor
-	{
-		v_2 := z.cursor
-		{
-			if !(z.eqS("a")) {
-				z.cursor = v_2
-				goto lab1_end
-			}
-			if z.length <= 6 {
-				z.cursor = v_2
-				goto lab1_end
-			}
-		}
-	lab1_end:
-		;
-		if !z.goOutGrouping(lit_g_v, 97, 371) {
-			goto lab0_end
-		}
-		z.cursor++
-		if !z.goInGrouping(lit_g_v, 97, 371) {
-			goto lab0_end
-		}
-		z.cursor++
-		z.I_p1 = z.cursor
-	}
-lab0_end:
-	;
-	z.cursor = v_1
-	z.limitBackward = z.cursor
-	z.cursor = z.limit
-	v_3 := z.limit - z.cursor
-	z.r_fix_conflicts()
-	z.cursor = z.limit - v_3
-	v_4 := z.limit - z.cursor
-	z.r_step1()
-	z.cursor = z.limit - v_4
-	v_5 := z.limit - z.cursor
-	z.r_fix_chdz()
-	z.cursor = z.limit - v_5
-	v_6 := z.limit - z.cursor
-	z.r_step2()
-	z.cursor = z.limit - v_6
-	v_7 := z.limit - z.cursor
-	z.r_fix_chdz()
-	z.cursor = z.limit - v_7
-	v_8 := z.limit - z.cursor
-	z.r_fix_gd()
-	z.cursor = z.limit - v_8
-	z.cursor = z.limitBackward
-	return
-}
-
-type norwegianStemmer struct {
-	snowball
-	I_p1, I_p2  int
-	S_ch, S_x   []rune
-	LS_ch, LS_x int
-}
-
-func newNorwegian() *norwegianStemmer { return &norwegianStemmer{} }
-
-var nor_a_0 = []among{
-	{"", -1, 1, ""},
-	{"ind", 0, -1, ""},
-	{"kk", 0, -1, ""},
-	{"nk", 0, -1, ""},
-	{"amm", 0, -1, ""},
-	{"omm", 0, -1, ""},
-	{"kap", 0, -1, ""},
-	{"skap", 6, 1, ""},
-	{"pp", 0, -1, ""},
-	{"lt", 0, -1, ""},
-	{"ast", 0, -1, ""},
-	{"\u00F8st", 0, -1, ""},
-	{"v", 0, -1, ""},
-	{"hav", 12, 1, ""},
-	{"giv", 12, 1, ""},
-}
-var nor_a_1 = []among{
-	{"a", -1, 1, ""},
-	{"e", -1, 1, ""},
-	{"ede", 1, 1, ""},
-	{"ande", 1, 1, ""},
-	{"ende", 1, 1, ""},
-	{"ane", 1, 1, ""},
-	{"ene", 1, 1, ""},
-	{"hetene", 6, 1, ""},
-	{"erte", 1, 4, ""},
-	{"en", -1, 1, ""},
-	{"heten", 9, 1, ""},
-	{"ar", -1, 1, ""},
-	{"er", -1, 1, ""},
-	{"heter", 12, 1, ""},
-	{"s", -1, 3, ""},
-	{"as", 14, 1, ""},
-	{"es", 14, 1, ""},
-	{"edes", 16, 1, ""},
-	{"endes", 16, 1, ""},
-	{"enes", 16, 1, ""},
-	{"hetenes", 19, 1, ""},
-	{"ens", 14, 1, ""},
-	{"hetens", 21, 1, ""},
-	{"ers", 14, 2, ""},
-	{"ets", 14, 1, ""},
-	{"et", -1, 1, ""},
-	{"het", 25, 1, ""},
-	{"ert", -1, 4, ""},
-	{"ast", -1, 1, ""},
-}
-var nor_a_2 = []among{
-	{"dt", -1, -1, ""},
-	{"vt", -1, -1, ""},
-}
-var nor_a_3 = []among{
-	{"leg", -1, 1, ""},
-	{"eleg", 0, 1, ""},
-	{"ig", -1, 1, ""},
-	{"eig", 2, 1, ""},
-	{"lig", 2, 1, ""},
-	{"elig", 4, 1, ""},
-	{"els", -1, 1, ""},
-	{"lov", -1, 1, ""},
-	{"elov", 7, 1, ""},
-	{"slov", 7, 1, ""},
-	{"hetslov", 9, 1, ""},
-}
-var nor_g_v = []byte{17, 65, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 48, 2, 142}
-var nor_g_s_ending = []byte{119, 125, 148, 1}
-
-func (z *norwegianStemmer) r_mark_regions() bool {
-	var I_x int
-	z.I_p1 = z.limit
-	v_1 := z.cursor
-	{
-		c := z.cursor + 3
-		if c > z.limit {
-			return false
-		}
-		z.cursor = c
-	}
-	I_x = z.cursor
-	z.cursor = v_1
-	if !z.goOutGrouping(nor_g_v, 97, 248) {
-		return false
-	}
-	z.cursor++
-	if !z.goInGrouping(nor_g_v, 97, 248) {
-		return false
-	}
-	z.cursor++
-	z.I_p1 = z.cursor
-	{
-		if z.I_p1 >= I_x {
-			goto lab0_end
-		}
-		z.I_p1 = I_x
-	}
-lab0_end:
-	;
-	return true
-}
-func (z *norwegianStemmer) r_main_suffix() bool {
-	var among_var int
-	if z.cursor < z.I_p1 {
-		return false
-	}
-	v_1 := z.limitBackward
-	z.limitBackward = z.I_p1
-	z.ket = z.cursor
-	among_var = z.findAmongB(nor_a_1)
-	if among_var == 0 {
-		z.limitBackward = v_1
-		return false
-	}
-	z.bra = z.cursor
-	z.limitBackward = v_1
-	switch among_var {
-	case 1:
-		z.sliceDel()
-		break
-	case 2:
-		among_var = z.findAmongB(nor_a_0)
-		switch among_var {
-		case 1:
-			z.sliceDel()
-			break
-		}
-		break
-	case 3:
-		{
-			v_2 := z.limit - z.cursor
-			{
-				if !(z.inGroupingB(nor_g_s_ending, 98, 122)) {
-					goto lab1_end
-				}
-				goto lab0_end
-			}
-		lab1_end:
-			;
-			z.cursor = z.limit - v_2
-			{
-				if !(z.eqSB("r")) {
-					goto lab2_end
-				}
-				{
-					v_3 := z.limit - z.cursor
-					{
-						if !(z.eqSB("e")) {
-							goto lab3_end
-						}
-						goto lab2_end
-					}
-				lab3_end:
-					;
-					z.cursor = z.limit - v_3
-				}
-				goto lab0_end
-			}
-		lab2_end:
-			;
-			z.cursor = z.limit - v_2
-			if !(z.eqSB("k")) {
-				return false
-			}
-			if !(z.outGroupingB(nor_g_v, 97, 248)) {
-				return false
-			}
-		}
-	lab0_end:
-		;
-		z.sliceDel()
-		break
-	case 4:
-		z.sliceFrom("er")
-		break
-	}
-	return true
-}
-func (z *norwegianStemmer) r_consonant_pair() bool {
-	v_1 := z.limit - z.cursor
-	if z.cursor < z.I_p1 {
-		return false
-	}
-	v_2 := z.limitBackward
-	z.limitBackward = z.I_p1
-	z.ket = z.cursor
-	if z.findAmongB(nor_a_2) == 0 {
-		z.limitBackward = v_2
-		return false
-	}
-	z.bra = z.cursor
-	z.limitBackward = v_2
-	z.cursor = z.limit - v_1
-	if z.cursor <= z.limitBackward {
-		return false
-	}
-	z.cursor--
-	z.bra = z.cursor
-	z.sliceDel()
-	return true
-}
-func (z *norwegianStemmer) r_other_suffix() bool {
-	if z.cursor < z.I_p1 {
-		return false
-	}
-	v_1 := z.limitBackward
-	z.limitBackward = z.I_p1
-	z.ket = z.cursor
-	if z.findAmongB(nor_a_3) == 0 {
-		z.limitBackward = v_1
-		return false
-	}
-	z.bra = z.cursor
-	z.limitBackward = v_1
-	z.sliceDel()
-	return true
-}
-func (z *norwegianStemmer) stem() {
-	v_1 := z.cursor
-	z.r_mark_regions()
-	z.cursor = v_1
-	z.limitBackward = z.cursor
-	z.cursor = z.limit
-	v_2 := z.limit - z.cursor
-	z.r_main_suffix()
-	z.cursor = z.limit - v_2
-	v_3 := z.limit - z.cursor
-	z.r_consonant_pair()
-	z.cursor = z.limit - v_3
-	v_4 := z.limit - z.cursor
-	z.r_other_suffix()
-	z.cursor = z.limit - v_4
-	z.cursor = z.limitBackward
 	return
 }
 
@@ -20297,286 +12647,6 @@ lab0_end:
 	return
 }
 
-type swedishStemmer struct {
-	snowball
-	I_p1, I_p2  int
-	S_ch, S_x   []rune
-	LS_ch, LS_x int
-}
-
-func newSwedish() *swedishStemmer { return &swedishStemmer{} }
-
-var swe_a_0 = []among{
-	{"fab", -1, -1, ""},
-	{"h", -1, -1, ""},
-	{"pak", -1, -1, ""},
-	{"rak", -1, -1, ""},
-	{"stak", -1, -1, ""},
-	{"kom", -1, -1, ""},
-	{"iet", -1, -1, ""},
-	{"cit", -1, -1, ""},
-	{"dit", -1, -1, ""},
-	{"alit", -1, -1, ""},
-	{"ilit", -1, -1, ""},
-	{"mit", -1, -1, ""},
-	{"nit", -1, -1, ""},
-	{"pit", -1, -1, ""},
-	{"rit", -1, -1, ""},
-	{"sit", -1, -1, ""},
-	{"tit", -1, -1, ""},
-	{"uit", -1, -1, ""},
-	{"ivit", -1, -1, ""},
-	{"kvit", -1, -1, ""},
-	{"xit", -1, -1, ""},
-}
-var swe_a_1 = []among{
-	{"a", -1, 1, ""},
-	{"arna", 0, 1, ""},
-	{"erna", 0, 1, ""},
-	{"heterna", 2, 1, ""},
-	{"orna", 0, 1, ""},
-	{"ad", -1, 1, ""},
-	{"e", -1, 1, ""},
-	{"ade", 6, 1, ""},
-	{"ande", 6, 1, ""},
-	{"arne", 6, 1, ""},
-	{"are", 6, 1, ""},
-	{"aste", 6, 1, ""},
-	{"en", -1, 1, ""},
-	{"anden", 12, 1, ""},
-	{"aren", 12, 1, ""},
-	{"heten", 12, 1, ""},
-	{"ern", -1, 1, ""},
-	{"ar", -1, 1, ""},
-	{"er", -1, 1, ""},
-	{"heter", 18, 1, ""},
-	{"or", -1, 1, ""},
-	{"s", -1, 2, ""},
-	{"as", 21, 1, ""},
-	{"arnas", 22, 1, ""},
-	{"ernas", 22, 1, ""},
-	{"ornas", 22, 1, ""},
-	{"es", 21, 1, ""},
-	{"ades", 26, 1, ""},
-	{"andes", 26, 1, ""},
-	{"ens", 21, 1, ""},
-	{"arens", 29, 1, ""},
-	{"hetens", 29, 1, ""},
-	{"erns", 21, 1, ""},
-	{"at", -1, 1, ""},
-	{"et", -1, 3, ""},
-	{"andet", 34, 1, ""},
-	{"het", 34, 1, ""},
-	{"ast", -1, 1, ""},
-}
-var swe_a_2 = []among{
-	{"dd", -1, -1, ""},
-	{"gd", -1, -1, ""},
-	{"nn", -1, -1, ""},
-	{"dt", -1, -1, ""},
-	{"gt", -1, -1, ""},
-	{"kt", -1, -1, ""},
-	{"tt", -1, -1, ""},
-}
-var swe_a_3 = []among{
-	{"ig", -1, 1, ""},
-	{"lig", 0, 1, ""},
-	{"els", -1, 1, ""},
-	{"fullt", -1, 3, ""},
-	{"\u00F6st", -1, 2, ""},
-}
-var swe_g_v = []byte{17, 65, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24, 0, 32}
-var swe_g_s_ending = []byte{119, 127, 149}
-var swe_g_ost_ending = []byte{173, 58}
-
-func (z *swedishStemmer) r_mark_regions() bool {
-	var I_x int
-	z.I_p1 = z.limit
-	v_1 := z.cursor
-	{
-		c := z.cursor + 3
-		if c > z.limit {
-			return false
-		}
-		z.cursor = c
-	}
-	I_x = z.cursor
-	z.cursor = v_1
-	if !z.goOutGrouping(swe_g_v, 97, 246) {
-		return false
-	}
-	z.cursor++
-	if !z.goInGrouping(swe_g_v, 97, 246) {
-		return false
-	}
-	z.cursor++
-	z.I_p1 = z.cursor
-	{
-		if z.I_p1 >= I_x {
-			goto lab0_end
-		}
-		z.I_p1 = I_x
-	}
-lab0_end:
-	;
-	return true
-}
-func (z *swedishStemmer) r_et_condition() bool {
-	v_1 := z.limit - z.cursor
-	if !(z.outGroupingB(swe_g_v, 97, 246)) {
-		return false
-	}
-	if !(z.inGroupingB(swe_g_v, 97, 246)) {
-		return false
-	}
-	{
-		if z.cursor > z.limitBackward {
-			goto lab0_end
-		}
-		return false
-	}
-lab0_end:
-	;
-	z.cursor = z.limit - v_1
-	{
-		v_2 := z.limit - z.cursor
-		{
-			if z.findAmongB(swe_a_0) == 0 {
-				goto lab1_end
-			}
-			return false
-		}
-	lab1_end:
-		;
-		z.cursor = z.limit - v_2
-	}
-	return true
-}
-func (z *swedishStemmer) r_main_suffix() bool {
-	var among_var int
-	if z.cursor < z.I_p1 {
-		return false
-	}
-	v_1 := z.limitBackward
-	z.limitBackward = z.I_p1
-	z.ket = z.cursor
-	among_var = z.findAmongB(swe_a_1)
-	if among_var == 0 {
-		z.limitBackward = v_1
-		return false
-	}
-	z.bra = z.cursor
-	z.limitBackward = v_1
-	switch among_var {
-	case 1:
-		z.sliceDel()
-		break
-	case 2:
-		{
-			v_2 := z.limit - z.cursor
-			{
-				if !(z.eqSB("et")) {
-					goto lab1_end
-				}
-				if !z.r_et_condition() {
-					goto lab1_end
-				}
-				z.bra = z.cursor
-				goto lab0_end
-			}
-		lab1_end:
-			;
-			z.cursor = z.limit - v_2
-			if !(z.inGroupingB(swe_g_s_ending, 98, 121)) {
-				return false
-			}
-		}
-	lab0_end:
-		;
-		z.sliceDel()
-		break
-	case 3:
-		if !z.r_et_condition() {
-			return false
-		}
-		z.sliceDel()
-		break
-	}
-	return true
-}
-func (z *swedishStemmer) r_consonant_pair() bool {
-	if z.cursor < z.I_p1 {
-		return false
-	}
-	v_1 := z.limitBackward
-	z.limitBackward = z.I_p1
-	v_2 := z.limit - z.cursor
-	if z.findAmongB(swe_a_2) == 0 {
-		z.limitBackward = v_1
-		return false
-	}
-	z.cursor = z.limit - v_2
-	z.ket = z.cursor
-	if z.cursor <= z.limitBackward {
-		z.limitBackward = v_1
-		return false
-	}
-	z.cursor--
-	z.bra = z.cursor
-	z.sliceDel()
-	z.limitBackward = v_1
-	return true
-}
-func (z *swedishStemmer) r_other_suffix() bool {
-	var among_var int
-	if z.cursor < z.I_p1 {
-		return false
-	}
-	v_1 := z.limitBackward
-	z.limitBackward = z.I_p1
-	z.ket = z.cursor
-	among_var = z.findAmongB(swe_a_3)
-	if among_var == 0 {
-		z.limitBackward = v_1
-		return false
-	}
-	z.bra = z.cursor
-	z.limitBackward = v_1
-	switch among_var {
-	case 1:
-		z.sliceDel()
-		break
-	case 2:
-		if !(z.inGroupingB(swe_g_ost_ending, 105, 118)) {
-			return false
-		}
-		z.sliceFrom("\u00F6s")
-		break
-	case 3:
-		z.sliceFrom("full")
-		break
-	}
-	return true
-}
-func (z *swedishStemmer) stem() {
-	v_1 := z.cursor
-	z.r_mark_regions()
-	z.cursor = v_1
-	z.limitBackward = z.cursor
-	z.cursor = z.limit
-	v_2 := z.limit - z.cursor
-	z.r_main_suffix()
-	z.cursor = z.limit - v_2
-	v_3 := z.limit - z.cursor
-	z.r_consonant_pair()
-	z.cursor = z.limit - v_3
-	v_4 := z.limit - z.cursor
-	z.r_other_suffix()
-	z.cursor = z.limit - v_4
-	z.cursor = z.limitBackward
-	return
-}
-
 type turkishStemmer struct {
 	snowball
 	I_p1, I_p2                        int
@@ -22566,5 +14636,6867 @@ func (z *turkishStemmer) stem() {
 	z.cursor = z.limit - v_2
 	z.cursor = z.limitBackward
 	z.r_postlude()
+	return
+}
+
+// Snowball 2.2.0 stemmers re-translated from Apache Lucene 10.5.1's
+// org.tartarus.snowball.ext sources (Dutch, English, French, German,
+// Greek, Hungarian, Lithuanian, Norwegian, Swedish), replacing translations
+// of a newer Snowball release that differ from Lucene.
+
+type dutchStemmer struct {
+	snowball
+	I_p2      int
+	I_p1      int
+	B_e_found bool
+}
+
+func newDutch() *dutchStemmer { return &dutchStemmer{} }
+
+var dut_a_0 = []among{
+	{"", -1, 6, ""},
+	{"\u00E1", 0, 1, ""},
+	{"\u00E4", 0, 1, ""},
+	{"\u00E9", 0, 2, ""},
+	{"\u00EB", 0, 2, ""},
+	{"\u00ED", 0, 3, ""},
+	{"\u00EF", 0, 3, ""},
+	{"\u00F3", 0, 4, ""},
+	{"\u00F6", 0, 4, ""},
+	{"\u00FA", 0, 5, ""},
+	{"\u00FC", 0, 5, ""},
+}
+var dut_a_1 = []among{
+	{"", -1, 3, ""},
+	{"I", 0, 2, ""},
+	{"Y", 0, 1, ""},
+}
+var dut_a_2 = []among{
+	{"dd", -1, -1, ""},
+	{"kk", -1, -1, ""},
+	{"tt", -1, -1, ""},
+}
+var dut_a_3 = []among{
+	{"ene", -1, 2, ""},
+	{"se", -1, 3, ""},
+	{"en", -1, 2, ""},
+	{"heden", 2, 1, ""},
+	{"s", -1, 3, ""},
+}
+var dut_a_4 = []among{
+	{"end", -1, 1, ""},
+	{"ig", -1, 2, ""},
+	{"ing", -1, 1, ""},
+	{"lijk", -1, 3, ""},
+	{"baar", -1, 4, ""},
+	{"bar", -1, 5, ""},
+}
+var dut_a_5 = []among{
+	{"aa", -1, -1, ""},
+	{"ee", -1, -1, ""},
+	{"oo", -1, -1, ""},
+	{"uu", -1, -1, ""},
+}
+var dut_g_v = []byte{17, 65, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128}
+var dut_g_v_I = []byte{1, 0, 0, 17, 65, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128}
+var dut_g_v_j = []byte{17, 67, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128}
+
+func (z *dutchStemmer) r_prelude() bool {
+	var among_var int
+	v_1 := z.cursor
+	for {
+		v_2 := z.cursor
+		{
+			z.bra = z.cursor
+			among_var = z.findAmong(dut_a_0)
+			z.ket = z.cursor
+			switch among_var {
+			case 1:
+				z.sliceFrom("a")
+				break
+			case 2:
+				z.sliceFrom("e")
+				break
+			case 3:
+				z.sliceFrom("i")
+				break
+			case 4:
+				z.sliceFrom("o")
+				break
+			case 5:
+				z.sliceFrom("u")
+				break
+			case 6:
+				if z.cursor >= z.limit {
+					goto lab0_end
+				}
+				z.cursor++
+				break
+			}
+			continue
+		}
+	lab0_end:
+		;
+		z.cursor = v_2
+		break
+	}
+	z.cursor = v_1
+	v_3 := z.cursor
+	{
+		z.bra = z.cursor
+		if !(z.eqS("y")) {
+			z.cursor = v_3
+			goto lab1_end
+		}
+		z.ket = z.cursor
+		z.sliceFrom("Y")
+	}
+lab1_end:
+	;
+	for {
+		v_4 := z.cursor
+		{
+		golab3:
+			for {
+				v_5 := z.cursor
+				{
+					if !(z.inGrouping(dut_g_v, 97, 232)) {
+						goto lab4_end
+					}
+					z.bra = z.cursor
+					{
+						v_6 := z.cursor
+						{
+							if !(z.eqS("i")) {
+								goto lab6_end
+							}
+							z.ket = z.cursor
+							if !(z.inGrouping(dut_g_v, 97, 232)) {
+								goto lab6_end
+							}
+							z.sliceFrom("I")
+							goto lab5_end
+						}
+					lab6_end:
+						;
+						z.cursor = v_6
+						if !(z.eqS("y")) {
+							goto lab4_end
+						}
+						z.ket = z.cursor
+						z.sliceFrom("Y")
+					}
+				lab5_end:
+					;
+					z.cursor = v_5
+					break golab3
+				}
+			lab4_end:
+				;
+				z.cursor = v_5
+				if z.cursor >= z.limit {
+					goto lab2_end
+				}
+				z.cursor++
+			}
+			continue
+		}
+	lab2_end:
+		;
+		z.cursor = v_4
+		break
+	}
+	return true
+}
+func (z *dutchStemmer) r_mark_regions() bool {
+	z.I_p1 = z.limit
+	z.I_p2 = z.limit
+golab0:
+	for {
+		{
+			if !(z.inGrouping(dut_g_v, 97, 232)) {
+				goto lab1_end
+			}
+			break golab0
+		}
+	lab1_end:
+		;
+		if z.cursor >= z.limit {
+			return false
+		}
+		z.cursor++
+	}
+golab2:
+	for {
+		{
+			if !(z.outGrouping(dut_g_v, 97, 232)) {
+				goto lab3_end
+			}
+			break golab2
+		}
+	lab3_end:
+		;
+		if z.cursor >= z.limit {
+			return false
+		}
+		z.cursor++
+	}
+	z.I_p1 = z.cursor
+	{
+		if z.I_p1 >= 3 {
+			goto lab4_end
+		}
+		z.I_p1 = 3
+	}
+lab4_end:
+	;
+golab5:
+	for {
+		{
+			if !(z.inGrouping(dut_g_v, 97, 232)) {
+				goto lab6_end
+			}
+			break golab5
+		}
+	lab6_end:
+		;
+		if z.cursor >= z.limit {
+			return false
+		}
+		z.cursor++
+	}
+golab7:
+	for {
+		{
+			if !(z.outGrouping(dut_g_v, 97, 232)) {
+				goto lab8_end
+			}
+			break golab7
+		}
+	lab8_end:
+		;
+		if z.cursor >= z.limit {
+			return false
+		}
+		z.cursor++
+	}
+	z.I_p2 = z.cursor
+	return true
+}
+func (z *dutchStemmer) r_postlude() bool {
+	var among_var int
+	for {
+		v_1 := z.cursor
+		{
+			z.bra = z.cursor
+			among_var = z.findAmong(dut_a_1)
+			z.ket = z.cursor
+			switch among_var {
+			case 1:
+				z.sliceFrom("y")
+				break
+			case 2:
+				z.sliceFrom("i")
+				break
+			case 3:
+				if z.cursor >= z.limit {
+					goto lab0_end
+				}
+				z.cursor++
+				break
+			}
+			continue
+		}
+	lab0_end:
+		;
+		z.cursor = v_1
+		break
+	}
+	return true
+}
+func (z *dutchStemmer) r_R1() bool {
+	return z.I_p1 <= z.cursor
+}
+func (z *dutchStemmer) r_R2() bool {
+	return z.I_p2 <= z.cursor
+}
+func (z *dutchStemmer) r_undouble() bool {
+	v_1 := z.limit - z.cursor
+	if z.findAmongB(dut_a_2) == 0 {
+		return false
+	}
+	z.cursor = z.limit - v_1
+	z.ket = z.cursor
+	if z.cursor <= z.limitBackward {
+		return false
+	}
+	z.cursor--
+	z.bra = z.cursor
+	z.sliceDel()
+	return true
+}
+func (z *dutchStemmer) r_e_ending() bool {
+	z.B_e_found = false
+	z.ket = z.cursor
+	if !(z.eqSB("e")) {
+		return false
+	}
+	z.bra = z.cursor
+	if !z.r_R1() {
+		return false
+	}
+	v_1 := z.limit - z.cursor
+	if !(z.outGroupingB(dut_g_v, 97, 232)) {
+		return false
+	}
+	z.cursor = z.limit - v_1
+	z.sliceDel()
+	z.B_e_found = true
+	if !z.r_undouble() {
+		return false
+	}
+	return true
+}
+func (z *dutchStemmer) r_en_ending() bool {
+	if !z.r_R1() {
+		return false
+	}
+	v_1 := z.limit - z.cursor
+	if !(z.outGroupingB(dut_g_v, 97, 232)) {
+		return false
+	}
+	z.cursor = z.limit - v_1
+	{
+		v_2 := z.limit - z.cursor
+		{
+			if !(z.eqSB("gem")) {
+				goto lab0_end
+			}
+			return false
+		}
+	lab0_end:
+		;
+		z.cursor = z.limit - v_2
+	}
+	z.sliceDel()
+	if !z.r_undouble() {
+		return false
+	}
+	return true
+}
+func (z *dutchStemmer) r_standard_suffix() bool {
+	var among_var int
+	v_1 := z.limit - z.cursor
+	{
+		z.ket = z.cursor
+		among_var = z.findAmongB(dut_a_3)
+		if among_var == 0 {
+			goto lab0_end
+		}
+		z.bra = z.cursor
+		switch among_var {
+		case 1:
+			if !z.r_R1() {
+				goto lab0_end
+			}
+			z.sliceFrom("heid")
+			break
+		case 2:
+			if !z.r_en_ending() {
+				goto lab0_end
+			}
+			break
+		case 3:
+			if !z.r_R1() {
+				goto lab0_end
+			}
+			if !(z.outGroupingB(dut_g_v_j, 97, 232)) {
+				goto lab0_end
+			}
+			z.sliceDel()
+			break
+		}
+	}
+lab0_end:
+	;
+	z.cursor = z.limit - v_1
+	v_2 := z.limit - z.cursor
+	z.r_e_ending()
+	z.cursor = z.limit - v_2
+	v_3 := z.limit - z.cursor
+	{
+		z.ket = z.cursor
+		if !(z.eqSB("heid")) {
+			goto lab1_end
+		}
+		z.bra = z.cursor
+		if !z.r_R2() {
+			goto lab1_end
+		}
+		{
+			v_4 := z.limit - z.cursor
+			{
+				if !(z.eqSB("c")) {
+					goto lab2_end
+				}
+				goto lab1_end
+			}
+		lab2_end:
+			;
+			z.cursor = z.limit - v_4
+		}
+		z.sliceDel()
+		z.ket = z.cursor
+		if !(z.eqSB("en")) {
+			goto lab1_end
+		}
+		z.bra = z.cursor
+		if !z.r_en_ending() {
+			goto lab1_end
+		}
+	}
+lab1_end:
+	;
+	z.cursor = z.limit - v_3
+	v_5 := z.limit - z.cursor
+	{
+		z.ket = z.cursor
+		among_var = z.findAmongB(dut_a_4)
+		if among_var == 0 {
+			goto lab3_end
+		}
+		z.bra = z.cursor
+		switch among_var {
+		case 1:
+			if !z.r_R2() {
+				goto lab3_end
+			}
+			z.sliceDel()
+			{
+				v_6 := z.limit - z.cursor
+				{
+					z.ket = z.cursor
+					if !(z.eqSB("ig")) {
+						goto lab5_end
+					}
+					z.bra = z.cursor
+					if !z.r_R2() {
+						goto lab5_end
+					}
+					{
+						v_7 := z.limit - z.cursor
+						{
+							if !(z.eqSB("e")) {
+								goto lab6_end
+							}
+							goto lab5_end
+						}
+					lab6_end:
+						;
+						z.cursor = z.limit - v_7
+					}
+					z.sliceDel()
+					goto lab4_end
+				}
+			lab5_end:
+				;
+				z.cursor = z.limit - v_6
+				if !z.r_undouble() {
+					goto lab3_end
+				}
+			}
+		lab4_end:
+			;
+			break
+		case 2:
+			if !z.r_R2() {
+				goto lab3_end
+			}
+			{
+				v_8 := z.limit - z.cursor
+				{
+					if !(z.eqSB("e")) {
+						goto lab7_end
+					}
+					goto lab3_end
+				}
+			lab7_end:
+				;
+				z.cursor = z.limit - v_8
+			}
+			z.sliceDel()
+			break
+		case 3:
+			if !z.r_R2() {
+				goto lab3_end
+			}
+			z.sliceDel()
+			if !z.r_e_ending() {
+				goto lab3_end
+			}
+			break
+		case 4:
+			if !z.r_R2() {
+				goto lab3_end
+			}
+			z.sliceDel()
+			break
+		case 5:
+			if !z.r_R2() {
+				goto lab3_end
+			}
+			if !(z.B_e_found) {
+				goto lab3_end
+			}
+			z.sliceDel()
+			break
+		}
+	}
+lab3_end:
+	;
+	z.cursor = z.limit - v_5
+	v_9 := z.limit - z.cursor
+	{
+		if !(z.outGroupingB(dut_g_v_I, 73, 232)) {
+			goto lab8_end
+		}
+		v_10 := z.limit - z.cursor
+		if z.findAmongB(dut_a_5) == 0 {
+			goto lab8_end
+		}
+		if !(z.outGroupingB(dut_g_v, 97, 232)) {
+			goto lab8_end
+		}
+		z.cursor = z.limit - v_10
+		z.ket = z.cursor
+		if z.cursor <= z.limitBackward {
+			goto lab8_end
+		}
+		z.cursor--
+		z.bra = z.cursor
+		z.sliceDel()
+	}
+lab8_end:
+	;
+	z.cursor = z.limit - v_9
+	return true
+}
+func (z *dutchStemmer) stem() {
+	v_1 := z.cursor
+	z.r_prelude()
+	z.cursor = v_1
+	v_2 := z.cursor
+	z.r_mark_regions()
+	z.cursor = v_2
+	z.limitBackward = z.cursor
+	z.cursor = z.limit
+	z.r_standard_suffix()
+	z.cursor = z.limitBackward
+	v_4 := z.cursor
+	z.r_postlude()
+	z.cursor = v_4
+	return
+}
+
+type englishStemmer struct {
+	snowball
+	B_Y_found bool
+	I_p2      int
+	I_p1      int
+}
+
+func newEnglish() *englishStemmer { return &englishStemmer{} }
+
+var eng_a_0 = []among{
+	{"arsen", -1, -1, ""},
+	{"commun", -1, -1, ""},
+	{"gener", -1, -1, ""},
+}
+var eng_a_1 = []among{
+	{"'", -1, 1, ""},
+	{"'s'", 0, 1, ""},
+	{"'s", -1, 1, ""},
+}
+var eng_a_2 = []among{
+	{"ied", -1, 2, ""},
+	{"s", -1, 3, ""},
+	{"ies", 1, 2, ""},
+	{"sses", 1, 1, ""},
+	{"ss", 1, -1, ""},
+	{"us", 1, -1, ""},
+}
+var eng_a_3 = []among{
+	{"", -1, 3, ""},
+	{"bb", 0, 2, ""},
+	{"dd", 0, 2, ""},
+	{"ff", 0, 2, ""},
+	{"gg", 0, 2, ""},
+	{"bl", 0, 1, ""},
+	{"mm", 0, 2, ""},
+	{"nn", 0, 2, ""},
+	{"pp", 0, 2, ""},
+	{"rr", 0, 2, ""},
+	{"at", 0, 1, ""},
+	{"tt", 0, 2, ""},
+	{"iz", 0, 1, ""},
+}
+var eng_a_4 = []among{
+	{"ed", -1, 2, ""},
+	{"eed", 0, 1, ""},
+	{"ing", -1, 2, ""},
+	{"edly", -1, 2, ""},
+	{"eedly", 3, 1, ""},
+	{"ingly", -1, 2, ""},
+}
+var eng_a_5 = []among{
+	{"anci", -1, 3, ""},
+	{"enci", -1, 2, ""},
+	{"ogi", -1, 13, ""},
+	{"li", -1, 15, ""},
+	{"bli", 3, 12, ""},
+	{"abli", 4, 4, ""},
+	{"alli", 3, 8, ""},
+	{"fulli", 3, 9, ""},
+	{"lessli", 3, 14, ""},
+	{"ousli", 3, 10, ""},
+	{"entli", 3, 5, ""},
+	{"aliti", -1, 8, ""},
+	{"biliti", -1, 12, ""},
+	{"iviti", -1, 11, ""},
+	{"tional", -1, 1, ""},
+	{"ational", 14, 7, ""},
+	{"alism", -1, 8, ""},
+	{"ation", -1, 7, ""},
+	{"ization", 17, 6, ""},
+	{"izer", -1, 6, ""},
+	{"ator", -1, 7, ""},
+	{"iveness", -1, 11, ""},
+	{"fulness", -1, 9, ""},
+	{"ousness", -1, 10, ""},
+}
+var eng_a_6 = []among{
+	{"icate", -1, 4, ""},
+	{"ative", -1, 6, ""},
+	{"alize", -1, 3, ""},
+	{"iciti", -1, 4, ""},
+	{"ical", -1, 4, ""},
+	{"tional", -1, 1, ""},
+	{"ational", 5, 2, ""},
+	{"ful", -1, 5, ""},
+	{"ness", -1, 5, ""},
+}
+var eng_a_7 = []among{
+	{"ic", -1, 1, ""},
+	{"ance", -1, 1, ""},
+	{"ence", -1, 1, ""},
+	{"able", -1, 1, ""},
+	{"ible", -1, 1, ""},
+	{"ate", -1, 1, ""},
+	{"ive", -1, 1, ""},
+	{"ize", -1, 1, ""},
+	{"iti", -1, 1, ""},
+	{"al", -1, 1, ""},
+	{"ism", -1, 1, ""},
+	{"ion", -1, 2, ""},
+	{"er", -1, 1, ""},
+	{"ous", -1, 1, ""},
+	{"ant", -1, 1, ""},
+	{"ent", -1, 1, ""},
+	{"ment", 15, 1, ""},
+	{"ement", 16, 1, ""},
+}
+var eng_a_8 = []among{
+	{"e", -1, 1, ""},
+	{"l", -1, 2, ""},
+}
+var eng_a_9 = []among{
+	{"succeed", -1, -1, ""},
+	{"proceed", -1, -1, ""},
+	{"exceed", -1, -1, ""},
+	{"canning", -1, -1, ""},
+	{"inning", -1, -1, ""},
+	{"earring", -1, -1, ""},
+	{"herring", -1, -1, ""},
+	{"outing", -1, -1, ""},
+}
+var eng_a_10 = []among{
+	{"andes", -1, -1, ""},
+	{"atlas", -1, -1, ""},
+	{"bias", -1, -1, ""},
+	{"cosmos", -1, -1, ""},
+	{"dying", -1, 3, ""},
+	{"early", -1, 9, ""},
+	{"gently", -1, 7, ""},
+	{"howe", -1, -1, ""},
+	{"idly", -1, 6, ""},
+	{"lying", -1, 4, ""},
+	{"news", -1, -1, ""},
+	{"only", -1, 10, ""},
+	{"singly", -1, 11, ""},
+	{"skies", -1, 2, ""},
+	{"skis", -1, 1, ""},
+	{"sky", -1, -1, ""},
+	{"tying", -1, 5, ""},
+	{"ugly", -1, 8, ""},
+}
+var eng_g_aeo = []byte{17, 64}
+var eng_g_v = []byte{17, 65, 16, 1}
+var eng_g_v_WXY = []byte{1, 17, 65, 208, 1}
+var eng_g_valid_LI = []byte{55, 141, 2}
+
+func (z *englishStemmer) r_prelude() bool {
+	z.B_Y_found = false
+	v_1 := z.cursor
+	{
+		z.bra = z.cursor
+		if !(z.eqS("'")) {
+			goto lab0_end
+		}
+		z.ket = z.cursor
+		z.sliceDel()
+	}
+lab0_end:
+	;
+	z.cursor = v_1
+	v_2 := z.cursor
+	{
+		z.bra = z.cursor
+		if !(z.eqS("y")) {
+			goto lab1_end
+		}
+		z.ket = z.cursor
+		z.sliceFrom("Y")
+		z.B_Y_found = true
+	}
+lab1_end:
+	;
+	z.cursor = v_2
+	v_3 := z.cursor
+	{
+		for {
+			v_4 := z.cursor
+			{
+			golab4:
+				for {
+					v_5 := z.cursor
+					{
+						if !(z.inGrouping(eng_g_v, 97, 121)) {
+							goto lab5_end
+						}
+						z.bra = z.cursor
+						if !(z.eqS("y")) {
+							goto lab5_end
+						}
+						z.ket = z.cursor
+						z.cursor = v_5
+						break golab4
+					}
+				lab5_end:
+					;
+					z.cursor = v_5
+					if z.cursor >= z.limit {
+						goto lab3_end
+					}
+					z.cursor++
+				}
+				z.sliceFrom("Y")
+				z.B_Y_found = true
+				continue
+			}
+		lab3_end:
+			;
+			z.cursor = v_4
+			break
+		}
+	}
+	z.cursor = v_3
+	return true
+}
+func (z *englishStemmer) r_mark_regions() bool {
+	z.I_p1 = z.limit
+	z.I_p2 = z.limit
+	v_1 := z.cursor
+	{
+		{
+			v_2 := z.cursor
+			{
+				if z.findAmong(eng_a_0) == 0 {
+					goto lab2_end
+				}
+				goto lab1_end
+			}
+		lab2_end:
+			;
+			z.cursor = v_2
+		golab3:
+			for {
+				{
+					if !(z.inGrouping(eng_g_v, 97, 121)) {
+						goto lab4_end
+					}
+					break golab3
+				}
+			lab4_end:
+				;
+				if z.cursor >= z.limit {
+					goto lab0_end
+				}
+				z.cursor++
+			}
+		golab5:
+			for {
+				{
+					if !(z.outGrouping(eng_g_v, 97, 121)) {
+						goto lab6_end
+					}
+					break golab5
+				}
+			lab6_end:
+				;
+				if z.cursor >= z.limit {
+					goto lab0_end
+				}
+				z.cursor++
+			}
+		}
+	lab1_end:
+		;
+		z.I_p1 = z.cursor
+	golab7:
+		for {
+			{
+				if !(z.inGrouping(eng_g_v, 97, 121)) {
+					goto lab8_end
+				}
+				break golab7
+			}
+		lab8_end:
+			;
+			if z.cursor >= z.limit {
+				goto lab0_end
+			}
+			z.cursor++
+		}
+	golab9:
+		for {
+			{
+				if !(z.outGrouping(eng_g_v, 97, 121)) {
+					goto lab10_end
+				}
+				break golab9
+			}
+		lab10_end:
+			;
+			if z.cursor >= z.limit {
+				goto lab0_end
+			}
+			z.cursor++
+		}
+		z.I_p2 = z.cursor
+	}
+lab0_end:
+	;
+	z.cursor = v_1
+	return true
+}
+func (z *englishStemmer) r_shortv() bool {
+	{
+		v_1 := z.limit - z.cursor
+		{
+			if !(z.outGroupingB(eng_g_v_WXY, 89, 121)) {
+				goto lab1_end
+			}
+			if !(z.inGroupingB(eng_g_v, 97, 121)) {
+				goto lab1_end
+			}
+			if !(z.outGroupingB(eng_g_v, 97, 121)) {
+				goto lab1_end
+			}
+			goto lab0_end
+		}
+	lab1_end:
+		;
+		z.cursor = z.limit - v_1
+		if !(z.outGroupingB(eng_g_v, 97, 121)) {
+			return false
+		}
+		if !(z.inGroupingB(eng_g_v, 97, 121)) {
+			return false
+		}
+		if z.cursor > z.limitBackward {
+			return false
+		}
+	}
+lab0_end:
+	;
+	return true
+}
+func (z *englishStemmer) r_R1() bool {
+	return z.I_p1 <= z.cursor
+}
+func (z *englishStemmer) r_R2() bool {
+	return z.I_p2 <= z.cursor
+}
+func (z *englishStemmer) r_Step_1a() bool {
+	var among_var int
+	v_1 := z.limit - z.cursor
+	{
+		z.ket = z.cursor
+		if z.findAmongB(eng_a_1) == 0 {
+			z.cursor = z.limit - v_1
+			goto lab0_end
+		}
+		z.bra = z.cursor
+		z.sliceDel()
+	}
+lab0_end:
+	;
+	z.ket = z.cursor
+	among_var = z.findAmongB(eng_a_2)
+	if among_var == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	switch among_var {
+	case 1:
+		z.sliceFrom("ss")
+		break
+	case 2:
+		{
+			v_2 := z.limit - z.cursor
+			{
+				{
+					c := z.cursor - 2
+					if c < z.limitBackward {
+						goto lab2_end
+					}
+					z.cursor = c
+				}
+				z.sliceFrom("i")
+				goto lab1_end
+			}
+		lab2_end:
+			;
+			z.cursor = z.limit - v_2
+			z.sliceFrom("ie")
+		}
+	lab1_end:
+		;
+		break
+	case 3:
+		if z.cursor <= z.limitBackward {
+			return false
+		}
+		z.cursor--
+	golab3:
+		for {
+			{
+				if !(z.inGroupingB(eng_g_v, 97, 121)) {
+					goto lab4_end
+				}
+				break golab3
+			}
+		lab4_end:
+			;
+			if z.cursor <= z.limitBackward {
+				return false
+			}
+			z.cursor--
+		}
+		z.sliceDel()
+		break
+	}
+	return true
+}
+func (z *englishStemmer) r_Step_1b() bool {
+	var among_var int
+	z.ket = z.cursor
+	among_var = z.findAmongB(eng_a_4)
+	if among_var == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	switch among_var {
+	case 1:
+		if !z.r_R1() {
+			return false
+		}
+		z.sliceFrom("ee")
+		break
+	case 2:
+		v_1 := z.limit - z.cursor
+	golab0:
+		for {
+			{
+				if !(z.inGroupingB(eng_g_v, 97, 121)) {
+					goto lab1_end
+				}
+				break golab0
+			}
+		lab1_end:
+			;
+			if z.cursor <= z.limitBackward {
+				return false
+			}
+			z.cursor--
+		}
+		z.cursor = z.limit - v_1
+		z.sliceDel()
+		z.ket = z.cursor
+		z.bra = z.cursor
+		v_3 := z.limit - z.cursor
+		among_var = z.findAmongB(eng_a_3)
+		switch among_var {
+		case 1:
+			z.sliceFrom("e")
+			return false
+		case 2:
+			{
+				v_4 := z.limit - z.cursor
+				{
+					if !(z.inGroupingB(eng_g_aeo, 97, 111)) {
+						goto lab2_end
+					}
+					if z.cursor > z.limitBackward {
+						goto lab2_end
+					}
+					return false
+				}
+			lab2_end:
+				;
+				z.cursor = z.limit - v_4
+			}
+			break
+		case 3:
+			if z.cursor != z.I_p1 {
+				return false
+			}
+			v_5 := z.limit - z.cursor
+			if !z.r_shortv() {
+				return false
+			}
+			z.cursor = z.limit - v_5
+			z.sliceFrom("e")
+			return false
+		}
+		z.cursor = z.limit - v_3
+		z.ket = z.cursor
+		if z.cursor <= z.limitBackward {
+			return false
+		}
+		z.cursor--
+		z.bra = z.cursor
+		z.sliceDel()
+		break
+	}
+	return true
+}
+func (z *englishStemmer) r_Step_1c() bool {
+	z.ket = z.cursor
+	{
+		v_1 := z.limit - z.cursor
+		{
+			if !(z.eqSB("y")) {
+				goto lab1_end
+			}
+			goto lab0_end
+		}
+	lab1_end:
+		;
+		z.cursor = z.limit - v_1
+		if !(z.eqSB("Y")) {
+			return false
+		}
+	}
+lab0_end:
+	;
+	z.bra = z.cursor
+	if !(z.outGroupingB(eng_g_v, 97, 121)) {
+		return false
+	}
+	{
+		if z.cursor > z.limitBackward {
+			goto lab2_end
+		}
+		return false
+	}
+lab2_end:
+	;
+	z.sliceFrom("i")
+	return true
+}
+func (z *englishStemmer) r_Step_2() bool {
+	var among_var int
+	z.ket = z.cursor
+	among_var = z.findAmongB(eng_a_5)
+	if among_var == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	if !z.r_R1() {
+		return false
+	}
+	switch among_var {
+	case 1:
+		z.sliceFrom("tion")
+		break
+	case 2:
+		z.sliceFrom("ence")
+		break
+	case 3:
+		z.sliceFrom("ance")
+		break
+	case 4:
+		z.sliceFrom("able")
+		break
+	case 5:
+		z.sliceFrom("ent")
+		break
+	case 6:
+		z.sliceFrom("ize")
+		break
+	case 7:
+		z.sliceFrom("ate")
+		break
+	case 8:
+		z.sliceFrom("al")
+		break
+	case 9:
+		z.sliceFrom("ful")
+		break
+	case 10:
+		z.sliceFrom("ous")
+		break
+	case 11:
+		z.sliceFrom("ive")
+		break
+	case 12:
+		z.sliceFrom("ble")
+		break
+	case 13:
+		if !(z.eqSB("l")) {
+			return false
+		}
+		z.sliceFrom("og")
+		break
+	case 14:
+		z.sliceFrom("less")
+		break
+	case 15:
+		if !(z.inGroupingB(eng_g_valid_LI, 99, 116)) {
+			return false
+		}
+		z.sliceDel()
+		break
+	}
+	return true
+}
+func (z *englishStemmer) r_Step_3() bool {
+	var among_var int
+	z.ket = z.cursor
+	among_var = z.findAmongB(eng_a_6)
+	if among_var == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	if !z.r_R1() {
+		return false
+	}
+	switch among_var {
+	case 1:
+		z.sliceFrom("tion")
+		break
+	case 2:
+		z.sliceFrom("ate")
+		break
+	case 3:
+		z.sliceFrom("al")
+		break
+	case 4:
+		z.sliceFrom("ic")
+		break
+	case 5:
+		z.sliceDel()
+		break
+	case 6:
+		if !z.r_R2() {
+			return false
+		}
+		z.sliceDel()
+		break
+	}
+	return true
+}
+func (z *englishStemmer) r_Step_4() bool {
+	var among_var int
+	z.ket = z.cursor
+	among_var = z.findAmongB(eng_a_7)
+	if among_var == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	if !z.r_R2() {
+		return false
+	}
+	switch among_var {
+	case 1:
+		z.sliceDel()
+		break
+	case 2:
+		{
+			v_1 := z.limit - z.cursor
+			{
+				if !(z.eqSB("s")) {
+					goto lab1_end
+				}
+				goto lab0_end
+			}
+		lab1_end:
+			;
+			z.cursor = z.limit - v_1
+			if !(z.eqSB("t")) {
+				return false
+			}
+		}
+	lab0_end:
+		;
+		z.sliceDel()
+		break
+	}
+	return true
+}
+func (z *englishStemmer) r_Step_5() bool {
+	var among_var int
+	z.ket = z.cursor
+	among_var = z.findAmongB(eng_a_8)
+	if among_var == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	switch among_var {
+	case 1:
+		{
+			v_1 := z.limit - z.cursor
+			{
+				if !z.r_R2() {
+					goto lab1_end
+				}
+				goto lab0_end
+			}
+		lab1_end:
+			;
+			z.cursor = z.limit - v_1
+			if !z.r_R1() {
+				return false
+			}
+			{
+				v_2 := z.limit - z.cursor
+				{
+					if !z.r_shortv() {
+						goto lab2_end
+					}
+					return false
+				}
+			lab2_end:
+				;
+				z.cursor = z.limit - v_2
+			}
+		}
+	lab0_end:
+		;
+		z.sliceDel()
+		break
+	case 2:
+		if !z.r_R2() {
+			return false
+		}
+		if !(z.eqSB("l")) {
+			return false
+		}
+		z.sliceDel()
+		break
+	}
+	return true
+}
+func (z *englishStemmer) r_exception2() bool {
+	z.ket = z.cursor
+	if z.findAmongB(eng_a_9) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	if z.cursor > z.limitBackward {
+		return false
+	}
+	return true
+}
+func (z *englishStemmer) r_exception1() bool {
+	var among_var int
+	z.bra = z.cursor
+	among_var = z.findAmong(eng_a_10)
+	if among_var == 0 {
+		return false
+	}
+	z.ket = z.cursor
+	if z.cursor < z.limit {
+		return false
+	}
+	switch among_var {
+	case 1:
+		z.sliceFrom("ski")
+		break
+	case 2:
+		z.sliceFrom("sky")
+		break
+	case 3:
+		z.sliceFrom("die")
+		break
+	case 4:
+		z.sliceFrom("lie")
+		break
+	case 5:
+		z.sliceFrom("tie")
+		break
+	case 6:
+		z.sliceFrom("idl")
+		break
+	case 7:
+		z.sliceFrom("gentl")
+		break
+	case 8:
+		z.sliceFrom("ugli")
+		break
+	case 9:
+		z.sliceFrom("earli")
+		break
+	case 10:
+		z.sliceFrom("onli")
+		break
+	case 11:
+		z.sliceFrom("singl")
+		break
+	}
+	return true
+}
+func (z *englishStemmer) r_postlude() bool {
+	if !(z.B_Y_found) {
+		return false
+	}
+	for {
+		v_1 := z.cursor
+		{
+		golab1:
+			for {
+				v_2 := z.cursor
+				{
+					z.bra = z.cursor
+					if !(z.eqS("Y")) {
+						goto lab2_end
+					}
+					z.ket = z.cursor
+					z.cursor = v_2
+					break golab1
+				}
+			lab2_end:
+				;
+				z.cursor = v_2
+				if z.cursor >= z.limit {
+					goto lab0_end
+				}
+				z.cursor++
+			}
+			z.sliceFrom("y")
+			continue
+		}
+	lab0_end:
+		;
+		z.cursor = v_1
+		break
+	}
+	return true
+}
+func (z *englishStemmer) stem() {
+	{
+		v_1 := z.cursor
+		{
+			if !z.r_exception1() {
+				goto lab1_end
+			}
+			goto lab0_end
+		}
+	lab1_end:
+		;
+		z.cursor = v_1
+		{
+			{
+				v_2 := z.cursor
+				{
+					{
+						c := z.cursor + 3
+						if c > z.limit {
+							goto lab3_end
+						}
+						z.cursor = c
+					}
+					goto lab2_end
+				}
+			lab3_end:
+				;
+				z.cursor = v_2
+			}
+			goto lab0_end
+		}
+	lab2_end:
+		;
+		z.cursor = v_1
+		z.r_prelude()
+		z.r_mark_regions()
+		z.limitBackward = z.cursor
+		z.cursor = z.limit
+		v_5 := z.limit - z.cursor
+		z.r_Step_1a()
+		z.cursor = z.limit - v_5
+		{
+			v_6 := z.limit - z.cursor
+			{
+				if !z.r_exception2() {
+					goto lab5_end
+				}
+				goto lab4_end
+			}
+		lab5_end:
+			;
+			z.cursor = z.limit - v_6
+			v_7 := z.limit - z.cursor
+			z.r_Step_1b()
+			z.cursor = z.limit - v_7
+			v_8 := z.limit - z.cursor
+			z.r_Step_1c()
+			z.cursor = z.limit - v_8
+			v_9 := z.limit - z.cursor
+			z.r_Step_2()
+			z.cursor = z.limit - v_9
+			v_10 := z.limit - z.cursor
+			z.r_Step_3()
+			z.cursor = z.limit - v_10
+			v_11 := z.limit - z.cursor
+			z.r_Step_4()
+			z.cursor = z.limit - v_11
+			v_12 := z.limit - z.cursor
+			z.r_Step_5()
+			z.cursor = z.limit - v_12
+		}
+	lab4_end:
+		;
+		z.cursor = z.limitBackward
+		v_13 := z.cursor
+		z.r_postlude()
+		z.cursor = v_13
+	}
+lab0_end:
+	;
+	return
+}
+
+type frenchStemmer struct {
+	snowball
+	I_p2 int
+	I_p1 int
+	I_pV int
+}
+
+func newFrench() *frenchStemmer { return &frenchStemmer{} }
+
+var fre_a_0 = []among{
+	{"col", -1, -1, ""},
+	{"par", -1, -1, ""},
+	{"tap", -1, -1, ""},
+}
+var fre_a_1 = []among{
+	{"", -1, 7, ""},
+	{"H", 0, 6, ""},
+	{"He", 1, 4, ""},
+	{"Hi", 1, 5, ""},
+	{"I", 0, 1, ""},
+	{"U", 0, 2, ""},
+	{"Y", 0, 3, ""},
+}
+var fre_a_2 = []among{
+	{"iqU", -1, 3, ""},
+	{"abl", -1, 3, ""},
+	{"I\u00E8r", -1, 4, ""},
+	{"i\u00E8r", -1, 4, ""},
+	{"eus", -1, 2, ""},
+	{"iv", -1, 1, ""},
+}
+var fre_a_3 = []among{
+	{"ic", -1, 2, ""},
+	{"abil", -1, 1, ""},
+	{"iv", -1, 3, ""},
+}
+var fre_a_4 = []among{
+	{"iqUe", -1, 1, ""},
+	{"atrice", -1, 2, ""},
+	{"ance", -1, 1, ""},
+	{"ence", -1, 5, ""},
+	{"logie", -1, 3, ""},
+	{"able", -1, 1, ""},
+	{"isme", -1, 1, ""},
+	{"euse", -1, 11, ""},
+	{"iste", -1, 1, ""},
+	{"ive", -1, 8, ""},
+	{"if", -1, 8, ""},
+	{"usion", -1, 4, ""},
+	{"ation", -1, 2, ""},
+	{"ution", -1, 4, ""},
+	{"ateur", -1, 2, ""},
+	{"iqUes", -1, 1, ""},
+	{"atrices", -1, 2, ""},
+	{"ances", -1, 1, ""},
+	{"ences", -1, 5, ""},
+	{"logies", -1, 3, ""},
+	{"ables", -1, 1, ""},
+	{"ismes", -1, 1, ""},
+	{"euses", -1, 11, ""},
+	{"istes", -1, 1, ""},
+	{"ives", -1, 8, ""},
+	{"ifs", -1, 8, ""},
+	{"usions", -1, 4, ""},
+	{"ations", -1, 2, ""},
+	{"utions", -1, 4, ""},
+	{"ateurs", -1, 2, ""},
+	{"ments", -1, 15, ""},
+	{"ements", 30, 6, ""},
+	{"issements", 31, 12, ""},
+	{"it\u00E9s", -1, 7, ""},
+	{"ment", -1, 15, ""},
+	{"ement", 34, 6, ""},
+	{"issement", 35, 12, ""},
+	{"amment", 34, 13, ""},
+	{"emment", 34, 14, ""},
+	{"aux", -1, 10, ""},
+	{"eaux", 39, 9, ""},
+	{"eux", -1, 1, ""},
+	{"it\u00E9", -1, 7, ""},
+}
+var fre_a_5 = []among{
+	{"ira", -1, 1, ""},
+	{"ie", -1, 1, ""},
+	{"isse", -1, 1, ""},
+	{"issante", -1, 1, ""},
+	{"i", -1, 1, ""},
+	{"irai", 4, 1, ""},
+	{"ir", -1, 1, ""},
+	{"iras", -1, 1, ""},
+	{"ies", -1, 1, ""},
+	{"\u00EEmes", -1, 1, ""},
+	{"isses", -1, 1, ""},
+	{"issantes", -1, 1, ""},
+	{"\u00EEtes", -1, 1, ""},
+	{"is", -1, 1, ""},
+	{"irais", 13, 1, ""},
+	{"issais", 13, 1, ""},
+	{"irions", -1, 1, ""},
+	{"issions", -1, 1, ""},
+	{"irons", -1, 1, ""},
+	{"issons", -1, 1, ""},
+	{"issants", -1, 1, ""},
+	{"it", -1, 1, ""},
+	{"irait", 21, 1, ""},
+	{"issait", 21, 1, ""},
+	{"issant", -1, 1, ""},
+	{"iraIent", -1, 1, ""},
+	{"issaIent", -1, 1, ""},
+	{"irent", -1, 1, ""},
+	{"issent", -1, 1, ""},
+	{"iront", -1, 1, ""},
+	{"\u00EEt", -1, 1, ""},
+	{"iriez", -1, 1, ""},
+	{"issiez", -1, 1, ""},
+	{"irez", -1, 1, ""},
+	{"issez", -1, 1, ""},
+}
+var fre_a_6 = []among{
+	{"a", -1, 3, ""},
+	{"era", 0, 2, ""},
+	{"asse", -1, 3, ""},
+	{"ante", -1, 3, ""},
+	{"\u00E9e", -1, 2, ""},
+	{"ai", -1, 3, ""},
+	{"erai", 5, 2, ""},
+	{"er", -1, 2, ""},
+	{"as", -1, 3, ""},
+	{"eras", 8, 2, ""},
+	{"\u00E2mes", -1, 3, ""},
+	{"asses", -1, 3, ""},
+	{"antes", -1, 3, ""},
+	{"\u00E2tes", -1, 3, ""},
+	{"\u00E9es", -1, 2, ""},
+	{"ais", -1, 3, ""},
+	{"erais", 15, 2, ""},
+	{"ions", -1, 1, ""},
+	{"erions", 17, 2, ""},
+	{"assions", 17, 3, ""},
+	{"erons", -1, 2, ""},
+	{"ants", -1, 3, ""},
+	{"\u00E9s", -1, 2, ""},
+	{"ait", -1, 3, ""},
+	{"erait", 23, 2, ""},
+	{"ant", -1, 3, ""},
+	{"aIent", -1, 3, ""},
+	{"eraIent", 26, 2, ""},
+	{"\u00E8rent", -1, 2, ""},
+	{"assent", -1, 3, ""},
+	{"eront", -1, 2, ""},
+	{"\u00E2t", -1, 3, ""},
+	{"ez", -1, 2, ""},
+	{"iez", 32, 2, ""},
+	{"eriez", 33, 2, ""},
+	{"assiez", 33, 3, ""},
+	{"erez", 32, 2, ""},
+	{"\u00E9", -1, 2, ""},
+}
+var fre_a_7 = []among{
+	{"e", -1, 3, ""},
+	{"I\u00E8re", 0, 2, ""},
+	{"i\u00E8re", 0, 2, ""},
+	{"ion", -1, 1, ""},
+	{"Ier", -1, 2, ""},
+	{"ier", -1, 2, ""},
+}
+var fre_a_8 = []among{
+	{"ell", -1, -1, ""},
+	{"eill", -1, -1, ""},
+	{"enn", -1, -1, ""},
+	{"onn", -1, -1, ""},
+	{"ett", -1, -1, ""},
+}
+var fre_g_v = []byte{17, 65, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 130, 103, 8, 5}
+var fre_g_keep_with_s = []byte{1, 65, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128}
+
+func (z *frenchStemmer) r_prelude() bool {
+	for {
+		v_1 := z.cursor
+		{
+		golab1:
+			for {
+				v_2 := z.cursor
+				{
+					{
+						v_3 := z.cursor
+						{
+							if !(z.inGrouping(fre_g_v, 97, 251)) {
+								goto lab4_end
+							}
+							z.bra = z.cursor
+							{
+								v_4 := z.cursor
+								{
+									if !(z.eqS("u")) {
+										goto lab6_end
+									}
+									z.ket = z.cursor
+									if !(z.inGrouping(fre_g_v, 97, 251)) {
+										goto lab6_end
+									}
+									z.sliceFrom("U")
+									goto lab5_end
+								}
+							lab6_end:
+								;
+								z.cursor = v_4
+								{
+									if !(z.eqS("i")) {
+										goto lab7_end
+									}
+									z.ket = z.cursor
+									if !(z.inGrouping(fre_g_v, 97, 251)) {
+										goto lab7_end
+									}
+									z.sliceFrom("I")
+									goto lab5_end
+								}
+							lab7_end:
+								;
+								z.cursor = v_4
+								if !(z.eqS("y")) {
+									goto lab4_end
+								}
+								z.ket = z.cursor
+								z.sliceFrom("Y")
+							}
+						lab5_end:
+							;
+							goto lab3_end
+						}
+					lab4_end:
+						;
+						z.cursor = v_3
+						{
+							z.bra = z.cursor
+							if !(z.eqS("\u00EB")) {
+								goto lab8_end
+							}
+							z.ket = z.cursor
+							z.sliceFrom("He")
+							goto lab3_end
+						}
+					lab8_end:
+						;
+						z.cursor = v_3
+						{
+							z.bra = z.cursor
+							if !(z.eqS("\u00EF")) {
+								goto lab9_end
+							}
+							z.ket = z.cursor
+							z.sliceFrom("Hi")
+							goto lab3_end
+						}
+					lab9_end:
+						;
+						z.cursor = v_3
+						{
+							z.bra = z.cursor
+							if !(z.eqS("y")) {
+								goto lab10_end
+							}
+							z.ket = z.cursor
+							if !(z.inGrouping(fre_g_v, 97, 251)) {
+								goto lab10_end
+							}
+							z.sliceFrom("Y")
+							goto lab3_end
+						}
+					lab10_end:
+						;
+						z.cursor = v_3
+						if !(z.eqS("q")) {
+							goto lab2_end
+						}
+						z.bra = z.cursor
+						if !(z.eqS("u")) {
+							goto lab2_end
+						}
+						z.ket = z.cursor
+						z.sliceFrom("U")
+					}
+				lab3_end:
+					;
+					z.cursor = v_2
+					break golab1
+				}
+			lab2_end:
+				;
+				z.cursor = v_2
+				if z.cursor >= z.limit {
+					goto lab0_end
+				}
+				z.cursor++
+			}
+			continue
+		}
+	lab0_end:
+		;
+		z.cursor = v_1
+		break
+	}
+	return true
+}
+func (z *frenchStemmer) r_mark_regions() bool {
+	z.I_pV = z.limit
+	z.I_p1 = z.limit
+	z.I_p2 = z.limit
+	v_1 := z.cursor
+	{
+		{
+			v_2 := z.cursor
+			{
+				if !(z.inGrouping(fre_g_v, 97, 251)) {
+					goto lab2_end
+				}
+				if !(z.inGrouping(fre_g_v, 97, 251)) {
+					goto lab2_end
+				}
+				if z.cursor >= z.limit {
+					goto lab2_end
+				}
+				z.cursor++
+				goto lab1_end
+			}
+		lab2_end:
+			;
+			z.cursor = v_2
+			{
+				if z.findAmong(fre_a_0) == 0 {
+					goto lab3_end
+				}
+				goto lab1_end
+			}
+		lab3_end:
+			;
+			z.cursor = v_2
+			if z.cursor >= z.limit {
+				goto lab0_end
+			}
+			z.cursor++
+		golab4:
+			for {
+				{
+					if !(z.inGrouping(fre_g_v, 97, 251)) {
+						goto lab5_end
+					}
+					break golab4
+				}
+			lab5_end:
+				;
+				if z.cursor >= z.limit {
+					goto lab0_end
+				}
+				z.cursor++
+			}
+		}
+	lab1_end:
+		;
+		z.I_pV = z.cursor
+	}
+lab0_end:
+	;
+	z.cursor = v_1
+	v_4 := z.cursor
+	{
+	golab7:
+		for {
+			{
+				if !(z.inGrouping(fre_g_v, 97, 251)) {
+					goto lab8_end
+				}
+				break golab7
+			}
+		lab8_end:
+			;
+			if z.cursor >= z.limit {
+				goto lab6_end
+			}
+			z.cursor++
+		}
+	golab9:
+		for {
+			{
+				if !(z.outGrouping(fre_g_v, 97, 251)) {
+					goto lab10_end
+				}
+				break golab9
+			}
+		lab10_end:
+			;
+			if z.cursor >= z.limit {
+				goto lab6_end
+			}
+			z.cursor++
+		}
+		z.I_p1 = z.cursor
+	golab11:
+		for {
+			{
+				if !(z.inGrouping(fre_g_v, 97, 251)) {
+					goto lab12_end
+				}
+				break golab11
+			}
+		lab12_end:
+			;
+			if z.cursor >= z.limit {
+				goto lab6_end
+			}
+			z.cursor++
+		}
+	golab13:
+		for {
+			{
+				if !(z.outGrouping(fre_g_v, 97, 251)) {
+					goto lab14_end
+				}
+				break golab13
+			}
+		lab14_end:
+			;
+			if z.cursor >= z.limit {
+				goto lab6_end
+			}
+			z.cursor++
+		}
+		z.I_p2 = z.cursor
+	}
+lab6_end:
+	;
+	z.cursor = v_4
+	return true
+}
+func (z *frenchStemmer) r_postlude() bool {
+	var among_var int
+	for {
+		v_1 := z.cursor
+		{
+			z.bra = z.cursor
+			among_var = z.findAmong(fre_a_1)
+			z.ket = z.cursor
+			switch among_var {
+			case 1:
+				z.sliceFrom("i")
+				break
+			case 2:
+				z.sliceFrom("u")
+				break
+			case 3:
+				z.sliceFrom("y")
+				break
+			case 4:
+				z.sliceFrom("\u00EB")
+				break
+			case 5:
+				z.sliceFrom("\u00EF")
+				break
+			case 6:
+				z.sliceDel()
+				break
+			case 7:
+				if z.cursor >= z.limit {
+					goto lab0_end
+				}
+				z.cursor++
+				break
+			}
+			continue
+		}
+	lab0_end:
+		;
+		z.cursor = v_1
+		break
+	}
+	return true
+}
+func (z *frenchStemmer) r_RV() bool {
+	return z.I_pV <= z.cursor
+}
+func (z *frenchStemmer) r_R1() bool {
+	return z.I_p1 <= z.cursor
+}
+func (z *frenchStemmer) r_R2() bool {
+	return z.I_p2 <= z.cursor
+}
+func (z *frenchStemmer) r_standard_suffix() bool {
+	var among_var int
+	z.ket = z.cursor
+	among_var = z.findAmongB(fre_a_4)
+	if among_var == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	switch among_var {
+	case 1:
+		if !z.r_R2() {
+			return false
+		}
+		z.sliceDel()
+		break
+	case 2:
+		if !z.r_R2() {
+			return false
+		}
+		z.sliceDel()
+		v_1 := z.limit - z.cursor
+		{
+			z.ket = z.cursor
+			if !(z.eqSB("ic")) {
+				z.cursor = z.limit - v_1
+				goto lab0_end
+			}
+			z.bra = z.cursor
+			{
+				v_2 := z.limit - z.cursor
+				{
+					if !z.r_R2() {
+						goto lab2_end
+					}
+					z.sliceDel()
+					goto lab1_end
+				}
+			lab2_end:
+				;
+				z.cursor = z.limit - v_2
+				z.sliceFrom("iqU")
+			}
+		lab1_end:
+		}
+	lab0_end:
+		;
+		break
+	case 3:
+		if !z.r_R2() {
+			return false
+		}
+		z.sliceFrom("log")
+		break
+	case 4:
+		if !z.r_R2() {
+			return false
+		}
+		z.sliceFrom("u")
+		break
+	case 5:
+		if !z.r_R2() {
+			return false
+		}
+		z.sliceFrom("ent")
+		break
+	case 6:
+		if !z.r_RV() {
+			return false
+		}
+		z.sliceDel()
+		v_3 := z.limit - z.cursor
+		{
+			z.ket = z.cursor
+			among_var = z.findAmongB(fre_a_2)
+			if among_var == 0 {
+				z.cursor = z.limit - v_3
+				goto lab3_end
+			}
+			z.bra = z.cursor
+			switch among_var {
+			case 1:
+				if !z.r_R2() {
+					z.cursor = z.limit - v_3
+					goto lab3_end
+				}
+				z.sliceDel()
+				z.ket = z.cursor
+				if !(z.eqSB("at")) {
+					z.cursor = z.limit - v_3
+					goto lab3_end
+				}
+				z.bra = z.cursor
+				if !z.r_R2() {
+					z.cursor = z.limit - v_3
+					goto lab3_end
+				}
+				z.sliceDel()
+				break
+			case 2:
+				{
+					v_4 := z.limit - z.cursor
+					{
+						if !z.r_R2() {
+							goto lab5_end
+						}
+						z.sliceDel()
+						goto lab4_end
+					}
+				lab5_end:
+					;
+					z.cursor = z.limit - v_4
+					if !z.r_R1() {
+						z.cursor = z.limit - v_3
+						goto lab3_end
+					}
+					z.sliceFrom("eux")
+				}
+			lab4_end:
+				;
+				break
+			case 3:
+				if !z.r_R2() {
+					z.cursor = z.limit - v_3
+					goto lab3_end
+				}
+				z.sliceDel()
+				break
+			case 4:
+				if !z.r_RV() {
+					z.cursor = z.limit - v_3
+					goto lab3_end
+				}
+				z.sliceFrom("i")
+				break
+			}
+		}
+	lab3_end:
+		;
+		break
+	case 7:
+		if !z.r_R2() {
+			return false
+		}
+		z.sliceDel()
+		v_5 := z.limit - z.cursor
+		{
+			z.ket = z.cursor
+			among_var = z.findAmongB(fre_a_3)
+			if among_var == 0 {
+				z.cursor = z.limit - v_5
+				goto lab6_end
+			}
+			z.bra = z.cursor
+			switch among_var {
+			case 1:
+				{
+					v_6 := z.limit - z.cursor
+					{
+						if !z.r_R2() {
+							goto lab8_end
+						}
+						z.sliceDel()
+						goto lab7_end
+					}
+				lab8_end:
+					;
+					z.cursor = z.limit - v_6
+					z.sliceFrom("abl")
+				}
+			lab7_end:
+				;
+				break
+			case 2:
+				{
+					v_7 := z.limit - z.cursor
+					{
+						if !z.r_R2() {
+							goto lab10_end
+						}
+						z.sliceDel()
+						goto lab9_end
+					}
+				lab10_end:
+					;
+					z.cursor = z.limit - v_7
+					z.sliceFrom("iqU")
+				}
+			lab9_end:
+				;
+				break
+			case 3:
+				if !z.r_R2() {
+					z.cursor = z.limit - v_5
+					goto lab6_end
+				}
+				z.sliceDel()
+				break
+			}
+		}
+	lab6_end:
+		;
+		break
+	case 8:
+		if !z.r_R2() {
+			return false
+		}
+		z.sliceDel()
+		v_8 := z.limit - z.cursor
+		{
+			z.ket = z.cursor
+			if !(z.eqSB("at")) {
+				z.cursor = z.limit - v_8
+				goto lab11_end
+			}
+			z.bra = z.cursor
+			if !z.r_R2() {
+				z.cursor = z.limit - v_8
+				goto lab11_end
+			}
+			z.sliceDel()
+			z.ket = z.cursor
+			if !(z.eqSB("ic")) {
+				z.cursor = z.limit - v_8
+				goto lab11_end
+			}
+			z.bra = z.cursor
+			{
+				v_9 := z.limit - z.cursor
+				{
+					if !z.r_R2() {
+						goto lab13_end
+					}
+					z.sliceDel()
+					goto lab12_end
+				}
+			lab13_end:
+				;
+				z.cursor = z.limit - v_9
+				z.sliceFrom("iqU")
+			}
+		lab12_end:
+		}
+	lab11_end:
+		;
+		break
+	case 9:
+		z.sliceFrom("eau")
+		break
+	case 10:
+		if !z.r_R1() {
+			return false
+		}
+		z.sliceFrom("al")
+		break
+	case 11:
+		{
+			v_10 := z.limit - z.cursor
+			{
+				if !z.r_R2() {
+					goto lab15_end
+				}
+				z.sliceDel()
+				goto lab14_end
+			}
+		lab15_end:
+			;
+			z.cursor = z.limit - v_10
+			if !z.r_R1() {
+				return false
+			}
+			z.sliceFrom("eux")
+		}
+	lab14_end:
+		;
+		break
+	case 12:
+		if !z.r_R1() {
+			return false
+		}
+		if !(z.outGroupingB(fre_g_v, 97, 251)) {
+			return false
+		}
+		z.sliceDel()
+		break
+	case 13:
+		if !z.r_RV() {
+			return false
+		}
+		z.sliceFrom("ant")
+		return false
+	case 14:
+		if !z.r_RV() {
+			return false
+		}
+		z.sliceFrom("ent")
+		return false
+	case 15:
+		v_11 := z.limit - z.cursor
+		if !(z.inGroupingB(fre_g_v, 97, 251)) {
+			return false
+		}
+		if !z.r_RV() {
+			return false
+		}
+		z.cursor = z.limit - v_11
+		z.sliceDel()
+		return false
+	}
+	return true
+}
+func (z *frenchStemmer) r_i_verb_suffix() bool {
+	if z.cursor < z.I_pV {
+		return false
+	}
+	v_2 := z.limitBackward
+	z.limitBackward = z.I_pV
+	z.ket = z.cursor
+	if z.findAmongB(fre_a_5) == 0 {
+		z.limitBackward = v_2
+		return false
+	}
+	z.bra = z.cursor
+	{
+		v_3 := z.limit - z.cursor
+		{
+			if !(z.eqSB("H")) {
+				goto lab0_end
+			}
+			z.limitBackward = v_2
+			return false
+		}
+	lab0_end:
+		;
+		z.cursor = z.limit - v_3
+	}
+	if !(z.outGroupingB(fre_g_v, 97, 251)) {
+		z.limitBackward = v_2
+		return false
+	}
+	z.sliceDel()
+	z.limitBackward = v_2
+	return true
+}
+func (z *frenchStemmer) r_verb_suffix() bool {
+	var among_var int
+	if z.cursor < z.I_pV {
+		return false
+	}
+	v_2 := z.limitBackward
+	z.limitBackward = z.I_pV
+	z.ket = z.cursor
+	among_var = z.findAmongB(fre_a_6)
+	if among_var == 0 {
+		z.limitBackward = v_2
+		return false
+	}
+	z.bra = z.cursor
+	switch among_var {
+	case 1:
+		if !z.r_R2() {
+			z.limitBackward = v_2
+			return false
+		}
+		z.sliceDel()
+		break
+	case 2:
+		z.sliceDel()
+		break
+	case 3:
+		z.sliceDel()
+		v_3 := z.limit - z.cursor
+		{
+			z.ket = z.cursor
+			if !(z.eqSB("e")) {
+				z.cursor = z.limit - v_3
+				goto lab0_end
+			}
+			z.bra = z.cursor
+			z.sliceDel()
+		}
+	lab0_end:
+		;
+		break
+	}
+	z.limitBackward = v_2
+	return true
+}
+func (z *frenchStemmer) r_residual_suffix() bool {
+	var among_var int
+	v_1 := z.limit - z.cursor
+	{
+		z.ket = z.cursor
+		if !(z.eqSB("s")) {
+			z.cursor = z.limit - v_1
+			goto lab0_end
+		}
+		z.bra = z.cursor
+		v_2 := z.limit - z.cursor
+		{
+			v_3 := z.limit - z.cursor
+			{
+				if !(z.eqSB("Hi")) {
+					goto lab2_end
+				}
+				goto lab1_end
+			}
+		lab2_end:
+			;
+			z.cursor = z.limit - v_3
+			if !(z.outGroupingB(fre_g_keep_with_s, 97, 232)) {
+				z.cursor = z.limit - v_1
+				goto lab0_end
+			}
+		}
+	lab1_end:
+		;
+		z.cursor = z.limit - v_2
+		z.sliceDel()
+	}
+lab0_end:
+	;
+	if z.cursor < z.I_pV {
+		return false
+	}
+	v_5 := z.limitBackward
+	z.limitBackward = z.I_pV
+	z.ket = z.cursor
+	among_var = z.findAmongB(fre_a_7)
+	if among_var == 0 {
+		z.limitBackward = v_5
+		return false
+	}
+	z.bra = z.cursor
+	switch among_var {
+	case 1:
+		if !z.r_R2() {
+			z.limitBackward = v_5
+			return false
+		}
+		{
+			v_6 := z.limit - z.cursor
+			{
+				if !(z.eqSB("s")) {
+					goto lab4_end
+				}
+				goto lab3_end
+			}
+		lab4_end:
+			;
+			z.cursor = z.limit - v_6
+			if !(z.eqSB("t")) {
+				z.limitBackward = v_5
+				return false
+			}
+		}
+	lab3_end:
+		;
+		z.sliceDel()
+		break
+	case 2:
+		z.sliceFrom("i")
+		break
+	case 3:
+		z.sliceDel()
+		break
+	}
+	z.limitBackward = v_5
+	return true
+}
+func (z *frenchStemmer) r_un_double() bool {
+	v_1 := z.limit - z.cursor
+	if z.findAmongB(fre_a_8) == 0 {
+		return false
+	}
+	z.cursor = z.limit - v_1
+	z.ket = z.cursor
+	if z.cursor <= z.limitBackward {
+		return false
+	}
+	z.cursor--
+	z.bra = z.cursor
+	z.sliceDel()
+	return true
+}
+func (z *frenchStemmer) r_un_accent() bool {
+	{
+		v_1 := 1
+		for {
+			{
+				if !(z.outGroupingB(fre_g_v, 97, 251)) {
+					goto lab0_end
+				}
+				v_1--
+				continue
+			}
+		lab0_end:
+			;
+			break
+		}
+		if v_1 > 0 {
+			return false
+		}
+	}
+	z.ket = z.cursor
+	{
+		v_3 := z.limit - z.cursor
+		{
+			if !(z.eqSB("\u00E9")) {
+				goto lab2_end
+			}
+			goto lab1_end
+		}
+	lab2_end:
+		;
+		z.cursor = z.limit - v_3
+		if !(z.eqSB("\u00E8")) {
+			return false
+		}
+	}
+lab1_end:
+	;
+	z.bra = z.cursor
+	z.sliceFrom("e")
+	return true
+}
+func (z *frenchStemmer) stem() {
+	v_1 := z.cursor
+	z.r_prelude()
+	z.cursor = v_1
+	z.r_mark_regions()
+	z.limitBackward = z.cursor
+	z.cursor = z.limit
+	v_3 := z.limit - z.cursor
+	{
+		{
+			v_4 := z.limit - z.cursor
+			{
+				v_5 := z.limit - z.cursor
+				{
+					v_6 := z.limit - z.cursor
+					{
+						if !z.r_standard_suffix() {
+							goto lab4_end
+						}
+						goto lab3_end
+					}
+				lab4_end:
+					;
+					z.cursor = z.limit - v_6
+					{
+						if !z.r_i_verb_suffix() {
+							goto lab5_end
+						}
+						goto lab3_end
+					}
+				lab5_end:
+					;
+					z.cursor = z.limit - v_6
+					if !z.r_verb_suffix() {
+						goto lab2_end
+					}
+				}
+			lab3_end:
+				;
+				z.cursor = z.limit - v_5
+				v_7 := z.limit - z.cursor
+				{
+					z.ket = z.cursor
+					{
+						v_8 := z.limit - z.cursor
+						{
+							if !(z.eqSB("Y")) {
+								goto lab8_end
+							}
+							z.bra = z.cursor
+							z.sliceFrom("i")
+							goto lab7_end
+						}
+					lab8_end:
+						;
+						z.cursor = z.limit - v_8
+						if !(z.eqSB("\u00E7")) {
+							z.cursor = z.limit - v_7
+							goto lab6_end
+						}
+						z.bra = z.cursor
+						z.sliceFrom("c")
+					}
+				lab7_end:
+				}
+			lab6_end:
+				;
+				goto lab1_end
+			}
+		lab2_end:
+			;
+			z.cursor = z.limit - v_4
+			if !z.r_residual_suffix() {
+				goto lab0_end
+			}
+		}
+	lab1_end:
+	}
+lab0_end:
+	;
+	z.cursor = z.limit - v_3
+	v_9 := z.limit - z.cursor
+	z.r_un_double()
+	z.cursor = z.limit - v_9
+	v_10 := z.limit - z.cursor
+	z.r_un_accent()
+	z.cursor = z.limit - v_10
+	z.cursor = z.limitBackward
+	v_11 := z.cursor
+	z.r_postlude()
+	z.cursor = v_11
+	return
+}
+
+type germanStemmer struct {
+	snowball
+	I_x  int
+	I_p2 int
+	I_p1 int
+}
+
+func newGerman() *germanStemmer { return &germanStemmer{} }
+
+var ger_a_0 = []among{
+	{"", -1, 5, ""},
+	{"ae", 0, 2, ""},
+	{"oe", 0, 3, ""},
+	{"qu", 0, -1, ""},
+	{"ue", 0, 4, ""},
+	{"\u00DF", 0, 1, ""},
+}
+var ger_a_1 = []among{
+	{"", -1, 5, ""},
+	{"U", 0, 2, ""},
+	{"Y", 0, 1, ""},
+	{"\u00E4", 0, 3, ""},
+	{"\u00F6", 0, 4, ""},
+	{"\u00FC", 0, 2, ""},
+}
+var ger_a_2 = []among{
+	{"e", -1, 3, ""},
+	{"em", -1, 1, ""},
+	{"en", -1, 3, ""},
+	{"ern", -1, 2, ""},
+	{"er", -1, 2, ""},
+	{"s", -1, 4, ""},
+	{"es", 5, 3, ""},
+}
+var ger_a_3 = []among{
+	{"en", -1, 1, ""},
+	{"er", -1, 1, ""},
+	{"st", -1, 2, ""},
+	{"est", 2, 1, ""},
+}
+var ger_a_4 = []among{
+	{"ig", -1, 1, ""},
+	{"lich", -1, 1, ""},
+}
+var ger_a_5 = []among{
+	{"end", -1, 1, ""},
+	{"ig", -1, 2, ""},
+	{"ung", -1, 1, ""},
+	{"lich", -1, 3, ""},
+	{"isch", -1, 2, ""},
+	{"ik", -1, 2, ""},
+	{"heit", -1, 3, ""},
+	{"keit", -1, 4, ""},
+}
+var ger_g_v = []byte{17, 65, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 32, 8}
+var ger_g_s_ending = []byte{117, 30, 5}
+var ger_g_st_ending = []byte{117, 30, 4}
+
+func (z *germanStemmer) r_prelude() bool {
+	var among_var int
+	v_1 := z.cursor
+	for {
+		v_2 := z.cursor
+		{
+		golab1:
+			for {
+				v_3 := z.cursor
+				{
+					if !(z.inGrouping(ger_g_v, 97, 252)) {
+						goto lab2_end
+					}
+					z.bra = z.cursor
+					{
+						v_4 := z.cursor
+						{
+							if !(z.eqS("u")) {
+								goto lab4_end
+							}
+							z.ket = z.cursor
+							if !(z.inGrouping(ger_g_v, 97, 252)) {
+								goto lab4_end
+							}
+							z.sliceFrom("U")
+							goto lab3_end
+						}
+					lab4_end:
+						;
+						z.cursor = v_4
+						if !(z.eqS("y")) {
+							goto lab2_end
+						}
+						z.ket = z.cursor
+						if !(z.inGrouping(ger_g_v, 97, 252)) {
+							goto lab2_end
+						}
+						z.sliceFrom("Y")
+					}
+				lab3_end:
+					;
+					z.cursor = v_3
+					break golab1
+				}
+			lab2_end:
+				;
+				z.cursor = v_3
+				if z.cursor >= z.limit {
+					goto lab0_end
+				}
+				z.cursor++
+			}
+			continue
+		}
+	lab0_end:
+		;
+		z.cursor = v_2
+		break
+	}
+	z.cursor = v_1
+	for {
+		v_5 := z.cursor
+		{
+			z.bra = z.cursor
+			among_var = z.findAmong(ger_a_0)
+			z.ket = z.cursor
+			switch among_var {
+			case 1:
+				z.sliceFrom("ss")
+				break
+			case 2:
+				z.sliceFrom("\u00E4")
+				break
+			case 3:
+				z.sliceFrom("\u00F6")
+				break
+			case 4:
+				z.sliceFrom("\u00FC")
+				break
+			case 5:
+				if z.cursor >= z.limit {
+					goto lab5_end
+				}
+				z.cursor++
+				break
+			}
+			continue
+		}
+	lab5_end:
+		;
+		z.cursor = v_5
+		break
+	}
+	return true
+}
+func (z *germanStemmer) r_mark_regions() bool {
+	z.I_p1 = z.limit
+	z.I_p2 = z.limit
+	v_1 := z.cursor
+	{
+		c := z.cursor + 3
+		if c > z.limit {
+			return false
+		}
+		z.cursor = c
+	}
+	z.I_x = z.cursor
+	z.cursor = v_1
+golab0:
+	for {
+		{
+			if !(z.inGrouping(ger_g_v, 97, 252)) {
+				goto lab1_end
+			}
+			break golab0
+		}
+	lab1_end:
+		;
+		if z.cursor >= z.limit {
+			return false
+		}
+		z.cursor++
+	}
+golab2:
+	for {
+		{
+			if !(z.outGrouping(ger_g_v, 97, 252)) {
+				goto lab3_end
+			}
+			break golab2
+		}
+	lab3_end:
+		;
+		if z.cursor >= z.limit {
+			return false
+		}
+		z.cursor++
+	}
+	z.I_p1 = z.cursor
+	{
+		if z.I_p1 >= z.I_x {
+			goto lab4_end
+		}
+		z.I_p1 = z.I_x
+	}
+lab4_end:
+	;
+golab5:
+	for {
+		{
+			if !(z.inGrouping(ger_g_v, 97, 252)) {
+				goto lab6_end
+			}
+			break golab5
+		}
+	lab6_end:
+		;
+		if z.cursor >= z.limit {
+			return false
+		}
+		z.cursor++
+	}
+golab7:
+	for {
+		{
+			if !(z.outGrouping(ger_g_v, 97, 252)) {
+				goto lab8_end
+			}
+			break golab7
+		}
+	lab8_end:
+		;
+		if z.cursor >= z.limit {
+			return false
+		}
+		z.cursor++
+	}
+	z.I_p2 = z.cursor
+	return true
+}
+func (z *germanStemmer) r_postlude() bool {
+	var among_var int
+	for {
+		v_1 := z.cursor
+		{
+			z.bra = z.cursor
+			among_var = z.findAmong(ger_a_1)
+			z.ket = z.cursor
+			switch among_var {
+			case 1:
+				z.sliceFrom("y")
+				break
+			case 2:
+				z.sliceFrom("u")
+				break
+			case 3:
+				z.sliceFrom("a")
+				break
+			case 4:
+				z.sliceFrom("o")
+				break
+			case 5:
+				if z.cursor >= z.limit {
+					goto lab0_end
+				}
+				z.cursor++
+				break
+			}
+			continue
+		}
+	lab0_end:
+		;
+		z.cursor = v_1
+		break
+	}
+	return true
+}
+func (z *germanStemmer) r_R1() bool {
+	return z.I_p1 <= z.cursor
+}
+func (z *germanStemmer) r_R2() bool {
+	return z.I_p2 <= z.cursor
+}
+func (z *germanStemmer) r_standard_suffix() bool {
+	var among_var int
+	v_1 := z.limit - z.cursor
+	{
+		z.ket = z.cursor
+		among_var = z.findAmongB(ger_a_2)
+		if among_var == 0 {
+			goto lab0_end
+		}
+		z.bra = z.cursor
+		if !z.r_R1() {
+			goto lab0_end
+		}
+		switch among_var {
+		case 1:
+			{
+				v_2 := z.limit - z.cursor
+				{
+					if !(z.eqSB("syst")) {
+						goto lab1_end
+					}
+					goto lab0_end
+				}
+			lab1_end:
+				;
+				z.cursor = z.limit - v_2
+			}
+			z.sliceDel()
+			break
+		case 2:
+			z.sliceDel()
+			break
+		case 3:
+			z.sliceDel()
+			v_3 := z.limit - z.cursor
+			{
+				z.ket = z.cursor
+				if !(z.eqSB("s")) {
+					z.cursor = z.limit - v_3
+					goto lab2_end
+				}
+				z.bra = z.cursor
+				if !(z.eqSB("nis")) {
+					z.cursor = z.limit - v_3
+					goto lab2_end
+				}
+				z.sliceDel()
+			}
+		lab2_end:
+			;
+			break
+		case 4:
+			if !(z.inGroupingB(ger_g_s_ending, 98, 116)) {
+				goto lab0_end
+			}
+			z.sliceDel()
+			break
+		}
+	}
+lab0_end:
+	;
+	z.cursor = z.limit - v_1
+	v_4 := z.limit - z.cursor
+	{
+		z.ket = z.cursor
+		among_var = z.findAmongB(ger_a_3)
+		if among_var == 0 {
+			goto lab3_end
+		}
+		z.bra = z.cursor
+		if !z.r_R1() {
+			goto lab3_end
+		}
+		switch among_var {
+		case 1:
+			z.sliceDel()
+			break
+		case 2:
+			if !(z.inGroupingB(ger_g_st_ending, 98, 116)) {
+				goto lab3_end
+			}
+			{
+				c := z.cursor - 3
+				if c < z.limitBackward {
+					goto lab3_end
+				}
+				z.cursor = c
+			}
+			z.sliceDel()
+			break
+		}
+	}
+lab3_end:
+	;
+	z.cursor = z.limit - v_4
+	v_5 := z.limit - z.cursor
+	{
+		z.ket = z.cursor
+		among_var = z.findAmongB(ger_a_5)
+		if among_var == 0 {
+			goto lab4_end
+		}
+		z.bra = z.cursor
+		if !z.r_R2() {
+			goto lab4_end
+		}
+		switch among_var {
+		case 1:
+			z.sliceDel()
+			v_6 := z.limit - z.cursor
+			{
+				z.ket = z.cursor
+				if !(z.eqSB("ig")) {
+					z.cursor = z.limit - v_6
+					goto lab5_end
+				}
+				z.bra = z.cursor
+				{
+					v_7 := z.limit - z.cursor
+					{
+						if !(z.eqSB("e")) {
+							goto lab6_end
+						}
+						z.cursor = z.limit - v_6
+						goto lab5_end
+					}
+				lab6_end:
+					;
+					z.cursor = z.limit - v_7
+				}
+				if !z.r_R2() {
+					z.cursor = z.limit - v_6
+					goto lab5_end
+				}
+				z.sliceDel()
+			}
+		lab5_end:
+			;
+			break
+		case 2:
+			{
+				v_8 := z.limit - z.cursor
+				{
+					if !(z.eqSB("e")) {
+						goto lab7_end
+					}
+					goto lab4_end
+				}
+			lab7_end:
+				;
+				z.cursor = z.limit - v_8
+			}
+			z.sliceDel()
+			break
+		case 3:
+			z.sliceDel()
+			v_9 := z.limit - z.cursor
+			{
+				z.ket = z.cursor
+				{
+					v_10 := z.limit - z.cursor
+					{
+						if !(z.eqSB("er")) {
+							goto lab10_end
+						}
+						goto lab9_end
+					}
+				lab10_end:
+					;
+					z.cursor = z.limit - v_10
+					if !(z.eqSB("en")) {
+						z.cursor = z.limit - v_9
+						goto lab8_end
+					}
+				}
+			lab9_end:
+				;
+				z.bra = z.cursor
+				if !z.r_R1() {
+					z.cursor = z.limit - v_9
+					goto lab8_end
+				}
+				z.sliceDel()
+			}
+		lab8_end:
+			;
+			break
+		case 4:
+			z.sliceDel()
+			v_11 := z.limit - z.cursor
+			{
+				z.ket = z.cursor
+				if z.findAmongB(ger_a_4) == 0 {
+					z.cursor = z.limit - v_11
+					goto lab11_end
+				}
+				z.bra = z.cursor
+				if !z.r_R2() {
+					z.cursor = z.limit - v_11
+					goto lab11_end
+				}
+				z.sliceDel()
+			}
+		lab11_end:
+			;
+			break
+		}
+	}
+lab4_end:
+	;
+	z.cursor = z.limit - v_5
+	return true
+}
+func (z *germanStemmer) stem() {
+	v_1 := z.cursor
+	z.r_prelude()
+	z.cursor = v_1
+	v_2 := z.cursor
+	z.r_mark_regions()
+	z.cursor = v_2
+	z.limitBackward = z.cursor
+	z.cursor = z.limit
+	z.r_standard_suffix()
+	z.cursor = z.limitBackward
+	v_4 := z.cursor
+	z.r_postlude()
+	z.cursor = v_4
+	return
+}
+
+type greekStemmer struct {
+	snowball
+	B_test1 bool
+}
+
+func newGreek() *greekStemmer { return &greekStemmer{} }
+
+var gre_a_0 = []among{
+	{"", -1, 25, ""},
+	{"\u0386", 0, 1, ""},
+	{"\u0388", 0, 5, ""},
+	{"\u0389", 0, 7, ""},
+	{"\u038A", 0, 9, ""},
+	{"\u038C", 0, 15, ""},
+	{"\u038E", 0, 20, ""},
+	{"\u038F", 0, 24, ""},
+	{"\u0390", 0, 7, ""},
+	{"\u0391", 0, 1, ""},
+	{"\u0392", 0, 2, ""},
+	{"\u0393", 0, 3, ""},
+	{"\u0394", 0, 4, ""},
+	{"\u0395", 0, 5, ""},
+	{"\u0396", 0, 6, ""},
+	{"\u0397", 0, 7, ""},
+	{"\u0398", 0, 8, ""},
+	{"\u0399", 0, 9, ""},
+	{"\u039A", 0, 10, ""},
+	{"\u039B", 0, 11, ""},
+	{"\u039C", 0, 12, ""},
+	{"\u039D", 0, 13, ""},
+	{"\u039E", 0, 14, ""},
+	{"\u039F", 0, 15, ""},
+	{"\u03A0", 0, 16, ""},
+	{"\u03A1", 0, 17, ""},
+	{"\u03A3", 0, 18, ""},
+	{"\u03A4", 0, 19, ""},
+	{"\u03A5", 0, 20, ""},
+	{"\u03A6", 0, 21, ""},
+	{"\u03A7", 0, 22, ""},
+	{"\u03A8", 0, 23, ""},
+	{"\u03A9", 0, 24, ""},
+	{"\u03AA", 0, 9, ""},
+	{"\u03AB", 0, 20, ""},
+	{"\u03AC", 0, 1, ""},
+	{"\u03AD", 0, 5, ""},
+	{"\u03AE", 0, 7, ""},
+	{"\u03AF", 0, 9, ""},
+	{"\u03B0", 0, 20, ""},
+	{"\u03C2", 0, 18, ""},
+	{"\u03CA", 0, 7, ""},
+	{"\u03CB", 0, 20, ""},
+	{"\u03CC", 0, 15, ""},
+	{"\u03CD", 0, 20, ""},
+	{"\u03CE", 0, 24, ""},
+}
+var gre_a_1 = []among{
+	{"\u03C3\u03BA\u03B1\u03B3\u03B9\u03B1", -1, 2, ""},
+	{"\u03C6\u03B1\u03B3\u03B9\u03B1", -1, 1, ""},
+	{"\u03BF\u03BB\u03BF\u03B3\u03B9\u03B1", -1, 3, ""},
+	{"\u03C3\u03BF\u03B3\u03B9\u03B1", -1, 4, ""},
+	{"\u03C4\u03B1\u03C4\u03BF\u03B3\u03B9\u03B1", -1, 5, ""},
+	{"\u03BA\u03C1\u03B5\u03B1\u03C4\u03B1", -1, 6, ""},
+	{"\u03C0\u03B5\u03C1\u03B1\u03C4\u03B1", -1, 7, ""},
+	{"\u03C4\u03B5\u03C1\u03B1\u03C4\u03B1", -1, 8, ""},
+	{"\u03B3\u03B5\u03B3\u03BF\u03BD\u03BF\u03C4\u03B1", -1, 11, ""},
+	{"\u03BA\u03B1\u03B8\u03B5\u03C3\u03C4\u03C9\u03C4\u03B1", -1, 10, ""},
+	{"\u03C6\u03C9\u03C4\u03B1", -1, 9, ""},
+	{"\u03C0\u03B5\u03C1\u03B1\u03C4\u03B7", -1, 7, ""},
+	{"\u03C3\u03BA\u03B1\u03B3\u03B9\u03C9\u03BD", -1, 2, ""},
+	{"\u03C6\u03B1\u03B3\u03B9\u03C9\u03BD", -1, 1, ""},
+	{"\u03BF\u03BB\u03BF\u03B3\u03B9\u03C9\u03BD", -1, 3, ""},
+	{"\u03C3\u03BF\u03B3\u03B9\u03C9\u03BD", -1, 4, ""},
+	{"\u03C4\u03B1\u03C4\u03BF\u03B3\u03B9\u03C9\u03BD", -1, 5, ""},
+	{"\u03BA\u03C1\u03B5\u03B1\u03C4\u03C9\u03BD", -1, 6, ""},
+	{"\u03C0\u03B5\u03C1\u03B1\u03C4\u03C9\u03BD", -1, 7, ""},
+	{"\u03C4\u03B5\u03C1\u03B1\u03C4\u03C9\u03BD", -1, 8, ""},
+	{"\u03B3\u03B5\u03B3\u03BF\u03BD\u03BF\u03C4\u03C9\u03BD", -1, 11, ""},
+	{"\u03BA\u03B1\u03B8\u03B5\u03C3\u03C4\u03C9\u03C4\u03C9\u03BD", -1, 10, ""},
+	{"\u03C6\u03C9\u03C4\u03C9\u03BD", -1, 9, ""},
+	{"\u03BA\u03C1\u03B5\u03B1\u03C3", -1, 6, ""},
+	{"\u03C0\u03B5\u03C1\u03B1\u03C3", -1, 7, ""},
+	{"\u03C4\u03B5\u03C1\u03B1\u03C3", -1, 8, ""},
+	{"\u03B3\u03B5\u03B3\u03BF\u03BD\u03BF\u03C3", -1, 11, ""},
+	{"\u03BA\u03C1\u03B5\u03B1\u03C4\u03BF\u03C3", -1, 6, ""},
+	{"\u03C0\u03B5\u03C1\u03B1\u03C4\u03BF\u03C3", -1, 7, ""},
+	{"\u03C4\u03B5\u03C1\u03B1\u03C4\u03BF\u03C3", -1, 8, ""},
+	{"\u03B3\u03B5\u03B3\u03BF\u03BD\u03BF\u03C4\u03BF\u03C3", -1, 11, ""},
+	{"\u03BA\u03B1\u03B8\u03B5\u03C3\u03C4\u03C9\u03C4\u03BF\u03C3", -1, 10, ""},
+	{"\u03C6\u03C9\u03C4\u03BF\u03C3", -1, 9, ""},
+	{"\u03BA\u03B1\u03B8\u03B5\u03C3\u03C4\u03C9\u03C3", -1, 10, ""},
+	{"\u03C6\u03C9\u03C3", -1, 9, ""},
+	{"\u03C3\u03BA\u03B1\u03B3\u03B9\u03BF\u03C5", -1, 2, ""},
+	{"\u03C6\u03B1\u03B3\u03B9\u03BF\u03C5", -1, 1, ""},
+	{"\u03BF\u03BB\u03BF\u03B3\u03B9\u03BF\u03C5", -1, 3, ""},
+	{"\u03C3\u03BF\u03B3\u03B9\u03BF\u03C5", -1, 4, ""},
+	{"\u03C4\u03B1\u03C4\u03BF\u03B3\u03B9\u03BF\u03C5", -1, 5, ""},
+}
+var gre_a_2 = []among{
+	{"\u03C0\u03B1", -1, 1, ""},
+	{"\u03BE\u03B1\u03BD\u03B1\u03C0\u03B1", 0, 1, ""},
+	{"\u03B5\u03C0\u03B1", 0, 1, ""},
+	{"\u03C0\u03B5\u03C1\u03B9\u03C0\u03B1", 0, 1, ""},
+	{"\u03B1\u03BD\u03B1\u03BC\u03C0\u03B1", 0, 1, ""},
+	{"\u03B5\u03BC\u03C0\u03B1", 0, 1, ""},
+	{"\u03B2", -1, 2, ""},
+	{"\u03B4\u03B1\u03BD\u03B5", -1, 1, ""},
+	{"\u03B2\u03B1\u03B8\u03C5\u03C1\u03B9", -1, 2, ""},
+	{"\u03B2\u03B1\u03C1\u03BA", -1, 2, ""},
+	{"\u03BC\u03B1\u03C1\u03BA", -1, 2, ""},
+	{"\u03BB", -1, 2, ""},
+	{"\u03BC", -1, 2, ""},
+	{"\u03BA\u03BF\u03C1\u03BD", -1, 2, ""},
+	{"\u03B1\u03B8\u03C1\u03BF", -1, 1, ""},
+	{"\u03C3\u03C5\u03BD\u03B1\u03B8\u03C1\u03BF", 14, 1, ""},
+	{"\u03C0", -1, 2, ""},
+	{"\u03B9\u03BC\u03C0", 16, 2, ""},
+	{"\u03C1", -1, 2, ""},
+	{"\u03BC\u03B1\u03C1", 18, 2, ""},
+	{"\u03B1\u03BC\u03C0\u03B1\u03C1", 18, 2, ""},
+	{"\u03B3\u03BA\u03C1", 18, 2, ""},
+	{"\u03B2\u03BF\u03BB\u03B2\u03BF\u03C1", 18, 2, ""},
+	{"\u03B3\u03BB\u03C5\u03BA\u03BF\u03C1", 18, 2, ""},
+	{"\u03C0\u03B9\u03C0\u03B5\u03C1\u03BF\u03C1", 18, 2, ""},
+	{"\u03C0\u03C1", 18, 2, ""},
+	{"\u03BC\u03C0\u03C1", 25, 2, ""},
+	{"\u03B1\u03C1\u03C1", 18, 2, ""},
+	{"\u03B3\u03BB\u03C5\u03BA\u03C5\u03C1", 18, 2, ""},
+	{"\u03C0\u03BF\u03BB\u03C5\u03C1", 18, 2, ""},
+	{"\u03BB\u03BF\u03C5", -1, 2, ""},
+}
+var gre_a_3 = []among{
+	{"\u03B9\u03B6\u03B1", -1, 1, ""},
+	{"\u03B9\u03B6\u03B5", -1, 1, ""},
+	{"\u03B9\u03B6\u03B1\u03BC\u03B5", -1, 1, ""},
+	{"\u03B9\u03B6\u03BF\u03C5\u03BC\u03B5", -1, 1, ""},
+	{"\u03B9\u03B6\u03B1\u03BD\u03B5", -1, 1, ""},
+	{"\u03B9\u03B6\u03BF\u03C5\u03BD\u03B5", -1, 1, ""},
+	{"\u03B9\u03B6\u03B1\u03C4\u03B5", -1, 1, ""},
+	{"\u03B9\u03B6\u03B5\u03C4\u03B5", -1, 1, ""},
+	{"\u03B9\u03B6\u03B5\u03B9", -1, 1, ""},
+	{"\u03B9\u03B6\u03B1\u03BD", -1, 1, ""},
+	{"\u03B9\u03B6\u03BF\u03C5\u03BD", -1, 1, ""},
+	{"\u03B9\u03B6\u03B5\u03C3", -1, 1, ""},
+	{"\u03B9\u03B6\u03B5\u03B9\u03C3", -1, 1, ""},
+	{"\u03B9\u03B6\u03C9", -1, 1, ""},
+}
+var gre_a_4 = []among{
+	{"\u03B2\u03B9", -1, 1, ""},
+	{"\u03BB\u03B9", -1, 1, ""},
+	{"\u03B1\u03BB", -1, 1, ""},
+	{"\u03B5\u03BD", -1, 1, ""},
+	{"\u03C3", -1, 1, ""},
+	{"\u03C7", -1, 1, ""},
+	{"\u03C5\u03C8", -1, 1, ""},
+	{"\u03B6\u03C9", -1, 1, ""},
+}
+var gre_a_5 = []among{
+	{"\u03C9\u03B8\u03B7\u03BA\u03B1", -1, 1, ""},
+	{"\u03C9\u03B8\u03B7\u03BA\u03B5", -1, 1, ""},
+	{"\u03C9\u03B8\u03B7\u03BA\u03B1\u03BC\u03B5", -1, 1, ""},
+	{"\u03C9\u03B8\u03B7\u03BA\u03B1\u03BD\u03B5", -1, 1, ""},
+	{"\u03C9\u03B8\u03B7\u03BA\u03B1\u03C4\u03B5", -1, 1, ""},
+	{"\u03C9\u03B8\u03B7\u03BA\u03B1\u03BD", -1, 1, ""},
+	{"\u03C9\u03B8\u03B7\u03BA\u03B5\u03C3", -1, 1, ""},
+}
+var gre_a_6 = []among{
+	{"\u03BE\u03B1\u03BD\u03B1\u03C0\u03B1", -1, 1, ""},
+	{"\u03B5\u03C0\u03B1", -1, 1, ""},
+	{"\u03C0\u03B5\u03C1\u03B9\u03C0\u03B1", -1, 1, ""},
+	{"\u03B1\u03BD\u03B1\u03BC\u03C0\u03B1", -1, 1, ""},
+	{"\u03B5\u03BC\u03C0\u03B1", -1, 1, ""},
+	{"\u03C7\u03B1\u03C1\u03C4\u03BF\u03C0\u03B1", -1, 1, ""},
+	{"\u03B5\u03BE\u03B1\u03C1\u03C7\u03B1", -1, 1, ""},
+	{"\u03B3\u03B5", -1, 2, ""},
+	{"\u03B3\u03BA\u03B5", -1, 2, ""},
+	{"\u03BA\u03BB\u03B5", -1, 1, ""},
+	{"\u03B5\u03BA\u03BB\u03B5", 9, 1, ""},
+	{"\u03B1\u03C0\u03B5\u03BA\u03BB\u03B5", 10, 1, ""},
+	{"\u03B1\u03C0\u03BF\u03BA\u03BB\u03B5", 9, 1, ""},
+	{"\u03B5\u03C3\u03C9\u03BA\u03BB\u03B5", 9, 1, ""},
+	{"\u03B4\u03B1\u03BD\u03B5", -1, 1, ""},
+	{"\u03C0\u03B5", -1, 1, ""},
+	{"\u03B5\u03C0\u03B5", 15, 1, ""},
+	{"\u03BC\u03B5\u03C4\u03B5\u03C0\u03B5", 16, 1, ""},
+	{"\u03B5\u03C3\u03B5", -1, 1, ""},
+	{"\u03B3\u03BA", -1, 2, ""},
+	{"\u03BC", -1, 2, ""},
+	{"\u03C0\u03BF\u03C5\u03BA\u03B1\u03BC", 20, 2, ""},
+	{"\u03BA\u03BF\u03BC", 20, 2, ""},
+	{"\u03B1\u03BD", -1, 2, ""},
+	{"\u03BF\u03BB\u03BF", -1, 2, ""},
+	{"\u03B1\u03B8\u03C1\u03BF", -1, 1, ""},
+	{"\u03C3\u03C5\u03BD\u03B1\u03B8\u03C1\u03BF", 25, 1, ""},
+	{"\u03C0", -1, 2, ""},
+	{"\u03BB\u03B1\u03C1", -1, 2, ""},
+	{"\u03B4\u03B7\u03BC\u03BF\u03BA\u03C1\u03B1\u03C4", -1, 2, ""},
+	{"\u03B1\u03C6", -1, 2, ""},
+	{"\u03B3\u03B9\u03B3\u03B1\u03BD\u03C4\u03BF\u03B1\u03C6", 30, 2, ""},
+}
+var gre_a_7 = []among{
+	{"\u03B9\u03C3\u03B1", -1, 1, ""},
+	{"\u03B9\u03C3\u03B1\u03BC\u03B5", -1, 1, ""},
+	{"\u03B9\u03C3\u03B1\u03BD\u03B5", -1, 1, ""},
+	{"\u03B9\u03C3\u03B5", -1, 1, ""},
+	{"\u03B9\u03C3\u03B1\u03C4\u03B5", -1, 1, ""},
+	{"\u03B9\u03C3\u03B1\u03BD", -1, 1, ""},
+	{"\u03B9\u03C3\u03B5\u03C3", -1, 1, ""},
+}
+var gre_a_8 = []among{
+	{"\u03BE\u03B1\u03BD\u03B1\u03C0\u03B1", -1, 1, ""},
+	{"\u03B5\u03C0\u03B1", -1, 1, ""},
+	{"\u03C0\u03B5\u03C1\u03B9\u03C0\u03B1", -1, 1, ""},
+	{"\u03B1\u03BD\u03B1\u03BC\u03C0\u03B1", -1, 1, ""},
+	{"\u03B5\u03BC\u03C0\u03B1", -1, 1, ""},
+	{"\u03C7\u03B1\u03C1\u03C4\u03BF\u03C0\u03B1", -1, 1, ""},
+	{"\u03B5\u03BE\u03B1\u03C1\u03C7\u03B1", -1, 1, ""},
+	{"\u03BA\u03BB\u03B5", -1, 1, ""},
+	{"\u03B5\u03BA\u03BB\u03B5", 7, 1, ""},
+	{"\u03B1\u03C0\u03B5\u03BA\u03BB\u03B5", 8, 1, ""},
+	{"\u03B1\u03C0\u03BF\u03BA\u03BB\u03B5", 7, 1, ""},
+	{"\u03B5\u03C3\u03C9\u03BA\u03BB\u03B5", 7, 1, ""},
+	{"\u03B4\u03B1\u03BD\u03B5", -1, 1, ""},
+	{"\u03C0\u03B5", -1, 1, ""},
+	{"\u03B5\u03C0\u03B5", 13, 1, ""},
+	{"\u03BC\u03B5\u03C4\u03B5\u03C0\u03B5", 14, 1, ""},
+	{"\u03B5\u03C3\u03B5", -1, 1, ""},
+	{"\u03B1\u03B8\u03C1\u03BF", -1, 1, ""},
+	{"\u03C3\u03C5\u03BD\u03B1\u03B8\u03C1\u03BF", 17, 1, ""},
+}
+var gre_a_9 = []among{
+	{"\u03B9\u03C3\u03BF\u03C5\u03BC\u03B5", -1, 1, ""},
+	{"\u03B9\u03C3\u03BF\u03C5\u03BD\u03B5", -1, 1, ""},
+	{"\u03B9\u03C3\u03B5\u03C4\u03B5", -1, 1, ""},
+	{"\u03B9\u03C3\u03B5\u03B9", -1, 1, ""},
+	{"\u03B9\u03C3\u03BF\u03C5\u03BD", -1, 1, ""},
+	{"\u03B9\u03C3\u03B5\u03B9\u03C3", -1, 1, ""},
+	{"\u03B9\u03C3\u03C9", -1, 1, ""},
+}
+var gre_a_10 = []among{
+	{"\u03B1\u03C4\u03B1", -1, 2, ""},
+	{"\u03C6\u03B1", -1, 2, ""},
+	{"\u03B7\u03C6\u03B1", 1, 2, ""},
+	{"\u03BC\u03B5\u03B3", -1, 2, ""},
+	{"\u03BB\u03C5\u03B3", -1, 2, ""},
+	{"\u03B7\u03B4", -1, 2, ""},
+	{"\u03BA\u03BB\u03B5", -1, 1, ""},
+	{"\u03B5\u03C3\u03C9\u03BA\u03BB\u03B5", 6, 1, ""},
+	{"\u03C0\u03BB\u03B5", -1, 1, ""},
+	{"\u03B4\u03B1\u03BD\u03B5", -1, 1, ""},
+	{"\u03C3\u03B5", -1, 1, ""},
+	{"\u03B1\u03C3\u03B5", 10, 1, ""},
+	{"\u03BA\u03B1\u03B8", -1, 2, ""},
+	{"\u03B5\u03C7\u03B8", -1, 2, ""},
+	{"\u03BA\u03B1\u03BA", -1, 2, ""},
+	{"\u03BC\u03B1\u03BA", -1, 2, ""},
+	{"\u03C3\u03BA", -1, 2, ""},
+	{"\u03C6\u03B9\u03BB", -1, 2, ""},
+	{"\u03BA\u03C5\u03BB", -1, 2, ""},
+	{"\u03BC", -1, 2, ""},
+	{"\u03B3\u03B5\u03BC", 19, 2, ""},
+	{"\u03B1\u03C7\u03BD", -1, 2, ""},
+	{"\u03C3\u03C5\u03BD\u03B1\u03B8\u03C1\u03BF", -1, 1, ""},
+	{"\u03C0", -1, 2, ""},
+	{"\u03B1\u03C0", 23, 2, ""},
+	{"\u03B5\u03BC\u03C0", 23, 2, ""},
+	{"\u03B5\u03C5\u03C0", 23, 2, ""},
+	{"\u03B1\u03C1", -1, 2, ""},
+	{"\u03B1\u03BF\u03C1", -1, 2, ""},
+	{"\u03B3\u03C5\u03C1", -1, 2, ""},
+	{"\u03C7\u03C1", -1, 2, ""},
+	{"\u03C7\u03C9\u03C1", -1, 2, ""},
+	{"\u03BA\u03C4", -1, 2, ""},
+	{"\u03B1\u03BA\u03C4", 32, 2, ""},
+	{"\u03C7\u03C4", -1, 2, ""},
+	{"\u03B1\u03C7\u03C4", 34, 2, ""},
+	{"\u03C4\u03B1\u03C7", -1, 2, ""},
+	{"\u03C3\u03C7", -1, 2, ""},
+	{"\u03B1\u03C3\u03C7", 37, 2, ""},
+	{"\u03C5\u03C8", -1, 2, ""},
+}
+var gre_a_11 = []among{
+	{"\u03B9\u03C3\u03C4\u03B1", -1, 1, ""},
+	{"\u03B9\u03C3\u03C4\u03B5", -1, 1, ""},
+	{"\u03B9\u03C3\u03C4\u03B7", -1, 1, ""},
+	{"\u03B9\u03C3\u03C4\u03BF\u03B9", -1, 1, ""},
+	{"\u03B9\u03C3\u03C4\u03C9\u03BD", -1, 1, ""},
+	{"\u03B9\u03C3\u03C4\u03BF", -1, 1, ""},
+	{"\u03B9\u03C3\u03C4\u03B5\u03C3", -1, 1, ""},
+	{"\u03B9\u03C3\u03C4\u03B7\u03C3", -1, 1, ""},
+	{"\u03B9\u03C3\u03C4\u03BF\u03C3", -1, 1, ""},
+	{"\u03B9\u03C3\u03C4\u03BF\u03C5\u03C3", -1, 1, ""},
+	{"\u03B9\u03C3\u03C4\u03BF\u03C5", -1, 1, ""},
+}
+var gre_a_12 = []among{
+	{"\u03B5\u03B3\u03BA\u03BB\u03B5", -1, 1, ""},
+	{"\u03B1\u03C0\u03BF\u03BA\u03BB\u03B5", -1, 1, ""},
+	{"\u03B4\u03B1\u03BD\u03B5", -1, 2, ""},
+	{"\u03B1\u03BD\u03C4\u03B9\u03B4\u03B1\u03BD\u03B5", 2, 2, ""},
+	{"\u03C3\u03B5", -1, 1, ""},
+	{"\u03BC\u03B5\u03C4\u03B1\u03C3\u03B5", 4, 1, ""},
+	{"\u03BC\u03B9\u03BA\u03C1\u03BF\u03C3\u03B5", 4, 1, ""},
+}
+var gre_a_13 = []among{
+	{"\u03B1\u03C4\u03BF\u03BC\u03B9\u03BA", -1, 2, ""},
+	{"\u03B5\u03B8\u03BD\u03B9\u03BA", -1, 4, ""},
+	{"\u03C4\u03BF\u03C0\u03B9\u03BA", -1, 7, ""},
+	{"\u03B5\u03BA\u03BB\u03B5\u03BA\u03C4\u03B9\u03BA", -1, 5, ""},
+	{"\u03C3\u03BA\u03B5\u03C0\u03C4\u03B9\u03BA", -1, 6, ""},
+	{"\u03B3\u03BD\u03C9\u03C3\u03C4\u03B9\u03BA", -1, 3, ""},
+	{"\u03B1\u03B3\u03BD\u03C9\u03C3\u03C4\u03B9\u03BA", 5, 1, ""},
+	{"\u03B1\u03BB\u03B5\u03BE\u03B1\u03BD\u03B4\u03C1\u03B9\u03BD", -1, 8, ""},
+	{"\u03B8\u03B5\u03B1\u03C4\u03C1\u03B9\u03BD", -1, 10, ""},
+	{"\u03B2\u03C5\u03B6\u03B1\u03BD\u03C4\u03B9\u03BD", -1, 9, ""},
+}
+var gre_a_14 = []among{
+	{"\u03B9\u03C3\u03BC\u03BF\u03B9", -1, 1, ""},
+	{"\u03B9\u03C3\u03BC\u03C9\u03BD", -1, 1, ""},
+	{"\u03B9\u03C3\u03BC\u03BF", -1, 1, ""},
+	{"\u03B9\u03C3\u03BC\u03BF\u03C3", -1, 1, ""},
+	{"\u03B9\u03C3\u03BC\u03BF\u03C5\u03C3", -1, 1, ""},
+	{"\u03B9\u03C3\u03BC\u03BF\u03C5", -1, 1, ""},
+}
+var gre_a_15 = []among{
+	{"\u03C3", -1, 1, ""},
+	{"\u03C7", -1, 1, ""},
+}
+var gre_a_16 = []among{
+	{"\u03BF\u03C5\u03B4\u03B1\u03BA\u03B9\u03B1", -1, 1, ""},
+	{"\u03B1\u03C1\u03B1\u03BA\u03B9\u03B1", -1, 1, ""},
+	{"\u03BF\u03C5\u03B4\u03B1\u03BA\u03B9", -1, 1, ""},
+	{"\u03B1\u03C1\u03B1\u03BA\u03B9", -1, 1, ""},
+}
+var gre_a_17 = []among{
+	{"\u03B2", -1, 2, ""},
+	{"\u03B2\u03B1\u03BC\u03B2", 0, 1, ""},
+	{"\u03C3\u03BB\u03BF\u03B2", 0, 1, ""},
+	{"\u03C4\u03C3\u03B5\u03C7\u03BF\u03C3\u03BB\u03BF\u03B2", 2, 1, ""},
+	{"\u03BA\u03B1\u03C1\u03B4", -1, 2, ""},
+	{"\u03B6", -1, 2, ""},
+	{"\u03C4\u03B6", 5, 1, ""},
+	{"\u03BA", -1, 1, ""},
+	{"\u03BA\u03B1\u03C0\u03B1\u03BA", 7, 1, ""},
+	{"\u03C3\u03BF\u03BA", 7, 1, ""},
+	{"\u03C3\u03BA", 7, 1, ""},
+	{"\u03B2\u03B1\u03BB", -1, 2, ""},
+	{"\u03BC\u03B1\u03BB", -1, 1, ""},
+	{"\u03B3\u03BB", -1, 2, ""},
+	{"\u03C4\u03C1\u03B9\u03C0\u03BF\u03BB", -1, 2, ""},
+	{"\u03C0\u03BB", -1, 1, ""},
+	{"\u03BB\u03BF\u03C5\u03BB", -1, 1, ""},
+	{"\u03C6\u03C5\u03BB", -1, 1, ""},
+	{"\u03BA\u03B1\u03B9\u03BC", -1, 1, ""},
+	{"\u03BA\u03BB\u03B9\u03BC", -1, 1, ""},
+	{"\u03C6\u03B1\u03C1\u03BC", -1, 1, ""},
+	{"\u03B3\u03B9\u03B1\u03BD", -1, 2, ""},
+	{"\u03C3\u03C0\u03B1\u03BD", -1, 1, ""},
+	{"\u03B7\u03B3\u03BF\u03C5\u03BC\u03B5\u03BD", -1, 2, ""},
+	{"\u03BA\u03BF\u03BD", -1, 1, ""},
+	{"\u03BC\u03B1\u03BA\u03C1\u03C5\u03BD", -1, 2, ""},
+	{"\u03C0", -1, 2, ""},
+	{"\u03BA\u03B1\u03C4\u03C1\u03B1\u03C0", 26, 1, ""},
+	{"\u03C1", -1, 1, ""},
+	{"\u03B2\u03C1", 28, 1, ""},
+	{"\u03BB\u03B1\u03B2\u03C1", 29, 1, ""},
+	{"\u03B1\u03BC\u03B2\u03C1", 29, 1, ""},
+	{"\u03BC\u03B5\u03C1", 28, 1, ""},
+	{"\u03C0\u03B1\u03C4\u03B5\u03C1", 28, 2, ""},
+	{"\u03B1\u03BD\u03B8\u03C1", 28, 1, ""},
+	{"\u03BA\u03BF\u03C1", 28, 1, ""},
+	{"\u03C3", -1, 1, ""},
+	{"\u03BD\u03B1\u03B3\u03BA\u03B1\u03C3", 36, 1, ""},
+	{"\u03C4\u03BF\u03C3", 36, 2, ""},
+	{"\u03BC\u03BF\u03C5\u03C3\u03C4", -1, 1, ""},
+	{"\u03C1\u03C5", -1, 1, ""},
+	{"\u03C6", -1, 1, ""},
+	{"\u03C3\u03C6", 41, 1, ""},
+	{"\u03B1\u03BB\u03B9\u03C3\u03C6", 42, 1, ""},
+	{"\u03BD\u03C5\u03C6", 41, 2, ""},
+	{"\u03C7", -1, 1, ""},
+}
+var gre_a_18 = []among{
+	{"\u03B1\u03BA\u03B9\u03B1", -1, 1, ""},
+	{"\u03B1\u03C1\u03B1\u03BA\u03B9\u03B1", 0, 1, ""},
+	{"\u03B9\u03C4\u03C3\u03B1", -1, 1, ""},
+	{"\u03B1\u03BA\u03B9", -1, 1, ""},
+	{"\u03B1\u03C1\u03B1\u03BA\u03B9", 3, 1, ""},
+	{"\u03B9\u03C4\u03C3\u03C9\u03BD", -1, 1, ""},
+	{"\u03B9\u03C4\u03C3\u03B1\u03C3", -1, 1, ""},
+	{"\u03B9\u03C4\u03C3\u03B5\u03C3", -1, 1, ""},
+}
+var gre_a_19 = []among{
+	{"\u03C8\u03B1\u03BB", -1, 1, ""},
+	{"\u03B1\u03B9\u03C6\u03BD", -1, 1, ""},
+	{"\u03BF\u03BB\u03BF", -1, 1, ""},
+	{"\u03B9\u03C1", -1, 1, ""},
+}
+var gre_a_20 = []among{
+	{"\u03B5", -1, 1, ""},
+	{"\u03C0\u03B1\u03B9\u03C7\u03BD", -1, 1, ""},
+}
+var gre_a_21 = []among{
+	{"\u03B9\u03B4\u03B9\u03B1", -1, 1, ""},
+	{"\u03B9\u03B4\u03B9\u03C9\u03BD", -1, 1, ""},
+	{"\u03B9\u03B4\u03B9\u03BF", -1, 1, ""},
+}
+var gre_a_22 = []among{
+	{"\u03B9\u03B2", -1, 1, ""},
+	{"\u03B4", -1, 1, ""},
+	{"\u03C6\u03C1\u03B1\u03B3\u03BA", -1, 1, ""},
+	{"\u03BB\u03C5\u03BA", -1, 1, ""},
+	{"\u03BF\u03B2\u03B5\u03BB", -1, 1, ""},
+	{"\u03BC\u03B7\u03BD", -1, 1, ""},
+	{"\u03C1", -1, 1, ""},
+}
+var gre_a_23 = []among{
+	{"\u03B9\u03C3\u03BA\u03B5", -1, 1, ""},
+	{"\u03B9\u03C3\u03BA\u03BF", -1, 1, ""},
+	{"\u03B9\u03C3\u03BA\u03BF\u03C3", -1, 1, ""},
+	{"\u03B9\u03C3\u03BA\u03BF\u03C5", -1, 1, ""},
+}
+var gre_a_24 = []among{
+	{"\u03B1\u03B4\u03C9\u03BD", -1, 1, ""},
+	{"\u03B1\u03B4\u03B5\u03C3", -1, 1, ""},
+}
+var gre_a_25 = []among{
+	{"\u03B3\u03B9\u03B1\u03B3\u03B9", -1, -1, ""},
+	{"\u03B8\u03B5\u03B9", -1, -1, ""},
+	{"\u03BF\u03BA", -1, -1, ""},
+	{"\u03BC\u03B1\u03BC", -1, -1, ""},
+	{"\u03BC\u03B1\u03BD", -1, -1, ""},
+	{"\u03BC\u03C0\u03B1\u03BC\u03C0", -1, -1, ""},
+	{"\u03C0\u03B5\u03B8\u03B5\u03C1", -1, -1, ""},
+	{"\u03C0\u03B1\u03C4\u03B5\u03C1", -1, -1, ""},
+	{"\u03BA\u03C5\u03C1", -1, -1, ""},
+	{"\u03BD\u03C4\u03B1\u03BD\u03C4", -1, -1, ""},
+}
+var gre_a_26 = []among{
+	{"\u03B5\u03B4\u03C9\u03BD", -1, 1, ""},
+	{"\u03B5\u03B4\u03B5\u03C3", -1, 1, ""},
+}
+var gre_a_27 = []among{
+	{"\u03BC\u03B9\u03BB", -1, 1, ""},
+	{"\u03B4\u03B1\u03C0", -1, 1, ""},
+	{"\u03B3\u03B7\u03C0", -1, 1, ""},
+	{"\u03B9\u03C0", -1, 1, ""},
+	{"\u03B5\u03BC\u03C0", -1, 1, ""},
+	{"\u03BF\u03C0", -1, 1, ""},
+	{"\u03BA\u03C1\u03B1\u03C3\u03C0", -1, 1, ""},
+	{"\u03C5\u03C0", -1, 1, ""},
+}
+var gre_a_28 = []among{
+	{"\u03BF\u03C5\u03B4\u03C9\u03BD", -1, 1, ""},
+	{"\u03BF\u03C5\u03B4\u03B5\u03C3", -1, 1, ""},
+}
+var gre_a_29 = []among{
+	{"\u03C4\u03C1\u03B1\u03B3", -1, 1, ""},
+	{"\u03C6\u03B5", -1, 1, ""},
+	{"\u03BA\u03B1\u03BB\u03B9\u03B1\u03BA", -1, 1, ""},
+	{"\u03B1\u03C1\u03BA", -1, 1, ""},
+	{"\u03C3\u03BA", -1, 1, ""},
+	{"\u03C0\u03B5\u03C4\u03B1\u03BB", -1, 1, ""},
+	{"\u03B2\u03B5\u03BB", -1, 1, ""},
+	{"\u03BB\u03BF\u03C5\u03BB", -1, 1, ""},
+	{"\u03C6\u03BB", -1, 1, ""},
+	{"\u03C7\u03BD", -1, 1, ""},
+	{"\u03C0\u03BB\u03B5\u03BE", -1, 1, ""},
+	{"\u03C3\u03C0", -1, 1, ""},
+	{"\u03C6\u03C1", -1, 1, ""},
+	{"\u03C3", -1, 1, ""},
+	{"\u03BB\u03B9\u03C7", -1, 1, ""},
+}
+var gre_a_30 = []among{
+	{"\u03B5\u03C9\u03BD", -1, 1, ""},
+	{"\u03B5\u03C9\u03C3", -1, 1, ""},
+}
+var gre_a_31 = []among{
+	{"\u03B4", -1, 1, ""},
+	{"\u03B9\u03B4", 0, 1, ""},
+	{"\u03B8", -1, 1, ""},
+	{"\u03B3\u03B1\u03BB", -1, 1, ""},
+	{"\u03B5\u03BB", -1, 1, ""},
+	{"\u03BD", -1, 1, ""},
+	{"\u03C0", -1, 1, ""},
+	{"\u03C0\u03B1\u03C1", -1, 1, ""},
+}
+var gre_a_32 = []among{
+	{"\u03B9\u03B1", -1, 1, ""},
+	{"\u03B9\u03C9\u03BD", -1, 1, ""},
+	{"\u03B9\u03BF\u03C5", -1, 1, ""},
+}
+var gre_a_33 = []among{
+	{"\u03B9\u03BA\u03B1", -1, 1, ""},
+	{"\u03B9\u03BA\u03C9\u03BD", -1, 1, ""},
+	{"\u03B9\u03BA\u03BF", -1, 1, ""},
+	{"\u03B9\u03BA\u03BF\u03C5", -1, 1, ""},
+}
+var gre_a_34 = []among{
+	{"\u03B1\u03B4", -1, 1, ""},
+	{"\u03C3\u03C5\u03BD\u03B1\u03B4", 0, 1, ""},
+	{"\u03BA\u03B1\u03C4\u03B1\u03B4", 0, 1, ""},
+	{"\u03B1\u03BD\u03C4\u03B9\u03B4", -1, 1, ""},
+	{"\u03B5\u03BD\u03B4", -1, 1, ""},
+	{"\u03C6\u03C5\u03BB\u03BF\u03B4", -1, 1, ""},
+	{"\u03C5\u03C0\u03BF\u03B4", -1, 1, ""},
+	{"\u03C0\u03C1\u03C9\u03C4\u03BF\u03B4", -1, 1, ""},
+	{"\u03B5\u03BE\u03C9\u03B4", -1, 1, ""},
+	{"\u03B7\u03B8", -1, 1, ""},
+	{"\u03B1\u03BD\u03B7\u03B8", 9, 1, ""},
+	{"\u03BE\u03B9\u03BA", -1, 1, ""},
+	{"\u03B1\u03BB", -1, 1, ""},
+	{"\u03B1\u03BC\u03BC\u03BF\u03C7\u03B1\u03BB", 12, 1, ""},
+	{"\u03C3\u03C5\u03BD\u03BF\u03BC\u03B7\u03BB", -1, 1, ""},
+	{"\u03BC\u03C0\u03BF\u03BB", -1, 1, ""},
+	{"\u03BC\u03BF\u03C5\u03BB", -1, 1, ""},
+	{"\u03C4\u03C3\u03B1\u03BC", -1, 1, ""},
+	{"\u03B2\u03C1\u03C9\u03BC", -1, 1, ""},
+	{"\u03B1\u03BC\u03B1\u03BD", -1, 1, ""},
+	{"\u03BC\u03C0\u03B1\u03BD", -1, 1, ""},
+	{"\u03BA\u03B1\u03BB\u03BB\u03B9\u03BD", -1, 1, ""},
+	{"\u03C0\u03BF\u03C3\u03C4\u03B5\u03BB\u03BD", -1, 1, ""},
+	{"\u03C6\u03B9\u03BB\u03BF\u03BD", -1, 1, ""},
+	{"\u03BA\u03B1\u03BB\u03C0", -1, 1, ""},
+	{"\u03B3\u03B5\u03C1", -1, 1, ""},
+	{"\u03C7\u03B1\u03C3", -1, 1, ""},
+	{"\u03BC\u03C0\u03BF\u03C3", -1, 1, ""},
+	{"\u03C0\u03BB\u03B9\u03B1\u03C4\u03C3", -1, 1, ""},
+	{"\u03C0\u03B5\u03C4\u03C3", -1, 1, ""},
+	{"\u03C0\u03B9\u03C4\u03C3", -1, 1, ""},
+	{"\u03C6\u03C5\u03C3", -1, 1, ""},
+	{"\u03BC\u03C0\u03B1\u03B3\u03B9\u03B1\u03C4", -1, 1, ""},
+	{"\u03BD\u03B9\u03C4", -1, 1, ""},
+	{"\u03C0\u03B9\u03BA\u03B1\u03BD\u03C4", -1, 1, ""},
+	{"\u03C3\u03B5\u03C1\u03C4", -1, 1, ""},
+}
+var gre_a_35 = []among{
+	{"\u03B1\u03B3\u03B1\u03BC\u03B5", -1, 1, ""},
+	{"\u03B7\u03BA\u03B1\u03BC\u03B5", -1, 1, ""},
+	{"\u03B7\u03B8\u03B7\u03BA\u03B1\u03BC\u03B5", 1, 1, ""},
+	{"\u03B7\u03C3\u03B1\u03BC\u03B5", -1, 1, ""},
+	{"\u03BF\u03C5\u03C3\u03B1\u03BC\u03B5", -1, 1, ""},
+}
+var gre_a_36 = []among{
+	{"\u03B2\u03BF\u03C5\u03B2", -1, 1, ""},
+	{"\u03BE\u03B5\u03B8", -1, 1, ""},
+	{"\u03C0\u03B5\u03B8", -1, 1, ""},
+	{"\u03B1\u03C0\u03BF\u03B8", -1, 1, ""},
+	{"\u03B1\u03C0\u03BF\u03BA", -1, 1, ""},
+	{"\u03BF\u03C5\u03BB", -1, 1, ""},
+	{"\u03B1\u03BD\u03B1\u03C0", -1, 1, ""},
+	{"\u03C0\u03B9\u03BA\u03C1", -1, 1, ""},
+	{"\u03C0\u03BF\u03C4", -1, 1, ""},
+	{"\u03B1\u03C0\u03BF\u03C3\u03C4", -1, 1, ""},
+	{"\u03C7", -1, 1, ""},
+	{"\u03C3\u03B9\u03C7", 10, 1, ""},
+}
+var gre_a_37 = []among{
+	{"\u03C4\u03C1", -1, 1, ""},
+	{"\u03C4\u03C3", -1, 1, ""},
+}
+var gre_a_38 = []among{
+	{"\u03B1\u03B3\u03B1\u03BD\u03B5", -1, 1, ""},
+	{"\u03B7\u03BA\u03B1\u03BD\u03B5", -1, 1, ""},
+	{"\u03B7\u03B8\u03B7\u03BA\u03B1\u03BD\u03B5", 1, 1, ""},
+	{"\u03B7\u03C3\u03B1\u03BD\u03B5", -1, 1, ""},
+	{"\u03BF\u03C5\u03C3\u03B1\u03BD\u03B5", -1, 1, ""},
+	{"\u03BF\u03BD\u03C4\u03B1\u03BD\u03B5", -1, 1, ""},
+	{"\u03B9\u03BF\u03BD\u03C4\u03B1\u03BD\u03B5", 5, 1, ""},
+	{"\u03BF\u03C5\u03BD\u03C4\u03B1\u03BD\u03B5", -1, 1, ""},
+	{"\u03B9\u03BF\u03C5\u03BD\u03C4\u03B1\u03BD\u03B5", 7, 1, ""},
+	{"\u03BF\u03C4\u03B1\u03BD\u03B5", -1, 1, ""},
+	{"\u03B9\u03BF\u03C4\u03B1\u03BD\u03B5", 9, 1, ""},
+}
+var gre_a_39 = []among{
+	{"\u03C4\u03B1\u03B2", -1, 1, ""},
+	{"\u03BD\u03C4\u03B1\u03B2", 0, 1, ""},
+	{"\u03C8\u03B7\u03BB\u03BF\u03C4\u03B1\u03B2", 0, 1, ""},
+	{"\u03BB\u03B9\u03B2", -1, 1, ""},
+	{"\u03BA\u03BB\u03B9\u03B2", 3, 1, ""},
+	{"\u03BE\u03B7\u03C1\u03BF\u03BA\u03BB\u03B9\u03B2", 4, 1, ""},
+	{"\u03B3", -1, 1, ""},
+	{"\u03B1\u03B3", 6, 1, ""},
+	{"\u03C4\u03C1\u03B1\u03B3", 7, 1, ""},
+	{"\u03C4\u03C3\u03B1\u03B3", 7, 1, ""},
+	{"\u03B1\u03B8\u03B9\u03B3\u03B3", 6, 1, ""},
+	{"\u03C4\u03C3\u03B9\u03B3\u03B3", 6, 1, ""},
+	{"\u03B1\u03C4\u03C3\u03B9\u03B3\u03B3", 11, 1, ""},
+	{"\u03C3\u03C4\u03B5\u03B3", 6, 1, ""},
+	{"\u03B1\u03C0\u03B7\u03B3", 6, 1, ""},
+	{"\u03C3\u03B9\u03B3", 6, 1, ""},
+	{"\u03B1\u03BD\u03BF\u03C1\u03B3", 6, 1, ""},
+	{"\u03B5\u03BD\u03BF\u03C1\u03B3", 6, 1, ""},
+	{"\u03BA\u03B1\u03BB\u03C0\u03BF\u03C5\u03B6", -1, 1, ""},
+	{"\u03B8", -1, 1, ""},
+	{"\u03BC\u03C9\u03B1\u03BC\u03B5\u03B8", 19, 1, ""},
+	{"\u03C0\u03B9\u03B8", 19, 1, ""},
+	{"\u03B1\u03C0\u03B9\u03B8", 21, 1, ""},
+	{"\u03B4\u03B5\u03BA", -1, 1, ""},
+	{"\u03C0\u03B5\u03BB\u03B5\u03BA", -1, 1, ""},
+	{"\u03B9\u03BA", -1, 1, ""},
+	{"\u03B1\u03BD\u03B9\u03BA", 25, 1, ""},
+	{"\u03B2\u03BF\u03C5\u03BB\u03BA", -1, 1, ""},
+	{"\u03B2\u03B1\u03C3\u03BA", -1, 1, ""},
+	{"\u03B2\u03C1\u03B1\u03C7\u03C5\u03BA", -1, 1, ""},
+	{"\u03B3\u03B1\u03BB", -1, 1, ""},
+	{"\u03BA\u03B1\u03C4\u03B1\u03B3\u03B1\u03BB", 30, 1, ""},
+	{"\u03BF\u03BB\u03BF\u03B3\u03B1\u03BB", 30, 1, ""},
+	{"\u03B2\u03B1\u03B8\u03C5\u03B3\u03B1\u03BB", 30, 1, ""},
+	{"\u03BC\u03B5\u03BB", -1, 1, ""},
+	{"\u03BA\u03B1\u03C3\u03C4\u03B5\u03BB", -1, 1, ""},
+	{"\u03C0\u03BF\u03C1\u03C4\u03BF\u03BB", -1, 1, ""},
+	{"\u03C0\u03BB", -1, 1, ""},
+	{"\u03B4\u03B9\u03C0\u03BB", 37, 1, ""},
+	{"\u03BB\u03B1\u03BF\u03C0\u03BB", 37, 1, ""},
+	{"\u03C8\u03C5\u03C7\u03BF\u03C0\u03BB", 37, 1, ""},
+	{"\u03BF\u03C5\u03BB", -1, 1, ""},
+	{"\u03BC", -1, 1, ""},
+	{"\u03BF\u03BB\u03B9\u03B3\u03BF\u03B4\u03B1\u03BC", 42, 1, ""},
+	{"\u03BC\u03BF\u03C5\u03C3\u03BF\u03C5\u03BB\u03BC", 42, 1, ""},
+	{"\u03B4\u03C1\u03B1\u03B4\u03BF\u03C5\u03BC", 42, 1, ""},
+	{"\u03B2\u03C1\u03B1\u03C7\u03BC", 42, 1, ""},
+	{"\u03BD", -1, 1, ""},
+	{"\u03B1\u03BC\u03B5\u03C1\u03B9\u03BA\u03B1\u03BD", 47, 1, ""},
+	{"\u03C0", -1, 1, ""},
+	{"\u03B1\u03B4\u03B1\u03C0", 49, 1, ""},
+	{"\u03C7\u03B1\u03BC\u03B7\u03BB\u03BF\u03B4\u03B1\u03C0", 49, 1, ""},
+	{"\u03C0\u03BF\u03BB\u03C5\u03B4\u03B1\u03C0", 49, 1, ""},
+	{"\u03BA\u03BF\u03C0", 49, 1, ""},
+	{"\u03C5\u03C0\u03BF\u03BA\u03BF\u03C0", 53, 1, ""},
+	{"\u03C4\u03C3\u03BF\u03C0", 49, 1, ""},
+	{"\u03C3\u03C0", 49, 1, ""},
+	{"\u03B5\u03C1", -1, 1, ""},
+	{"\u03B3\u03B5\u03C1", 57, 1, ""},
+	{"\u03B2\u03B5\u03C4\u03B5\u03C1", 57, 1, ""},
+	{"\u03BB\u03BF\u03C5\u03B8\u03B7\u03C1", -1, 1, ""},
+	{"\u03BA\u03BF\u03C1\u03BC\u03BF\u03C1", -1, 1, ""},
+	{"\u03C0\u03B5\u03C1\u03B9\u03C4\u03C1", -1, 1, ""},
+	{"\u03BF\u03C5\u03C1", -1, 1, ""},
+	{"\u03C3", -1, 1, ""},
+	{"\u03B2\u03B1\u03C3", 64, 1, ""},
+	{"\u03C0\u03BF\u03BB\u03B9\u03C3", 64, 1, ""},
+	{"\u03C3\u03B1\u03C1\u03B1\u03BA\u03B1\u03C4\u03C3", 64, 1, ""},
+	{"\u03B8\u03C5\u03C3", 64, 1, ""},
+	{"\u03B4\u03B9\u03B1\u03C4", -1, 1, ""},
+	{"\u03C0\u03BB\u03B1\u03C4", -1, 1, ""},
+	{"\u03C4\u03C3\u03B1\u03C1\u03BB\u03B1\u03C4", -1, 1, ""},
+	{"\u03C4\u03B5\u03C4", -1, 1, ""},
+	{"\u03C0\u03BF\u03C5\u03C1\u03B9\u03C4", -1, 1, ""},
+	{"\u03C3\u03BF\u03C5\u03BB\u03C4", -1, 1, ""},
+	{"\u03BC\u03B1\u03B9\u03BD\u03C4", -1, 1, ""},
+	{"\u03B6\u03C9\u03BD\u03C4", -1, 1, ""},
+	{"\u03BA\u03B1\u03C3\u03C4", -1, 1, ""},
+	{"\u03C6", -1, 1, ""},
+	{"\u03B4\u03B9\u03B1\u03C6", 78, 1, ""},
+	{"\u03C3\u03C4\u03B5\u03C6", 78, 1, ""},
+	{"\u03C6\u03C9\u03C4\u03BF\u03C3\u03C4\u03B5\u03C6", 80, 1, ""},
+	{"\u03C0\u03B5\u03C1\u03B7\u03C6", 78, 1, ""},
+	{"\u03C5\u03C0\u03B5\u03C1\u03B7\u03C6", 82, 1, ""},
+	{"\u03BA\u03BF\u03B9\u03BB\u03B1\u03C1\u03C6", 78, 1, ""},
+	{"\u03C0\u03B5\u03BD\u03C4\u03B1\u03C1\u03C6", 78, 1, ""},
+	{"\u03BF\u03C1\u03C6", 78, 1, ""},
+	{"\u03C7", -1, 1, ""},
+	{"\u03B1\u03BC\u03B7\u03C7", 87, 1, ""},
+	{"\u03B2\u03B9\u03BF\u03BC\u03B7\u03C7", 87, 1, ""},
+	{"\u03BC\u03B5\u03B3\u03BB\u03BF\u03B2\u03B9\u03BF\u03BC\u03B7\u03C7", 89, 1, ""},
+	{"\u03BA\u03B1\u03C0\u03BD\u03BF\u03B2\u03B9\u03BF\u03BC\u03B7\u03C7", 89, 1, ""},
+	{"\u03BC\u03B9\u03BA\u03C1\u03BF\u03B2\u03B9\u03BF\u03BC\u03B7\u03C7", 89, 1, ""},
+	{"\u03C0\u03BF\u03BB\u03C5\u03BC\u03B7\u03C7", 87, 1, ""},
+	{"\u03BB\u03B9\u03C7", 87, 1, ""},
+}
+var gre_a_40 = []among{
+	{"\u03B7\u03C3\u03B5\u03C4\u03B5", -1, 1, ""},
+}
+var gre_a_41 = []among{
+	{"\u03B5\u03BD\u03B4", -1, 1, ""},
+	{"\u03C3\u03C5\u03BD\u03B4", -1, 1, ""},
+	{"\u03BF\u03B4", -1, 1, ""},
+	{"\u03B4\u03B9\u03B1\u03B8", -1, 1, ""},
+	{"\u03BA\u03B1\u03B8", -1, 1, ""},
+	{"\u03C1\u03B1\u03B8", -1, 1, ""},
+	{"\u03C4\u03B1\u03B8", -1, 1, ""},
+	{"\u03C4\u03B9\u03B8", -1, 1, ""},
+	{"\u03B5\u03BA\u03B8", -1, 1, ""},
+	{"\u03B5\u03BD\u03B8", -1, 1, ""},
+	{"\u03C3\u03C5\u03BD\u03B8", -1, 1, ""},
+	{"\u03C1\u03BF\u03B8", -1, 1, ""},
+	{"\u03C5\u03C0\u03B5\u03C1\u03B8", -1, 1, ""},
+	{"\u03C3\u03B8", -1, 1, ""},
+	{"\u03B5\u03C5\u03B8", -1, 1, ""},
+	{"\u03B1\u03C1\u03BA", -1, 1, ""},
+	{"\u03C9\u03C6\u03B5\u03BB", -1, 1, ""},
+	{"\u03B2\u03BF\u03BB", -1, 1, ""},
+	{"\u03B1\u03B9\u03BD", -1, 1, ""},
+	{"\u03C0\u03BF\u03BD", -1, 1, ""},
+	{"\u03C1\u03BF\u03BD", -1, 1, ""},
+	{"\u03C3\u03C5\u03BD", -1, 1, ""},
+	{"\u03B2\u03B1\u03C1", -1, 1, ""},
+	{"\u03B2\u03C1", -1, 1, ""},
+	{"\u03B1\u03B9\u03C1", -1, 1, ""},
+	{"\u03C6\u03BF\u03C1", -1, 1, ""},
+	{"\u03B5\u03C5\u03C1", -1, 1, ""},
+	{"\u03C0\u03C5\u03C1", -1, 1, ""},
+	{"\u03C7\u03C9\u03C1", -1, 1, ""},
+	{"\u03BD\u03B5\u03C4", -1, 1, ""},
+	{"\u03C3\u03C7", -1, 1, ""},
+}
+var gre_a_42 = []among{
+	{"\u03C0\u03B1\u03B3", -1, 1, ""},
+	{"\u03B4", -1, 1, ""},
+	{"\u03B1\u03B4", 1, 1, ""},
+	{"\u03B8", -1, 1, ""},
+	{"\u03B1\u03B8", 3, 1, ""},
+	{"\u03C4\u03BF\u03BA", -1, 1, ""},
+	{"\u03C3\u03BA", -1, 1, ""},
+	{"\u03C0\u03B1\u03C1\u03B1\u03BA\u03B1\u03BB", -1, 1, ""},
+	{"\u03C3\u03BA\u03B5\u03BB", -1, 1, ""},
+	{"\u03B1\u03C0\u03BB", -1, 1, ""},
+	{"\u03B5\u03BC", -1, 1, ""},
+	{"\u03B1\u03BD", -1, 1, ""},
+	{"\u03B2\u03B5\u03BD", -1, 1, ""},
+	{"\u03B2\u03B1\u03C1\u03BF\u03BD", -1, 1, ""},
+	{"\u03BA\u03BF\u03C0", -1, 1, ""},
+	{"\u03C3\u03B5\u03C1\u03C0", -1, 1, ""},
+	{"\u03B1\u03B2\u03B1\u03C1", -1, 1, ""},
+	{"\u03B5\u03BD\u03B1\u03C1", -1, 1, ""},
+	{"\u03B1\u03B2\u03C1", -1, 1, ""},
+	{"\u03BC\u03C0\u03BF\u03C1", -1, 1, ""},
+	{"\u03B8\u03B1\u03C1\u03C1", -1, 1, ""},
+	{"\u03BD\u03C4\u03C1", -1, 1, ""},
+	{"\u03C5", -1, 1, ""},
+	{"\u03BD\u03B9\u03C6", -1, 1, ""},
+	{"\u03C3\u03C5\u03C1\u03C6", -1, 1, ""},
+}
+var gre_a_43 = []among{
+	{"\u03BF\u03BD\u03C4\u03B1\u03C3", -1, 1, ""},
+	{"\u03C9\u03BD\u03C4\u03B1\u03C3", -1, 1, ""},
+}
+var gre_a_44 = []among{
+	{"\u03BF\u03BC\u03B1\u03C3\u03C4\u03B5", -1, 1, ""},
+	{"\u03B9\u03BF\u03BC\u03B1\u03C3\u03C4\u03B5", 0, 1, ""},
+}
+var gre_a_45 = []among{
+	{"\u03C0", -1, 1, ""},
+	{"\u03B1\u03C0", 0, 1, ""},
+	{"\u03B1\u03BA\u03B1\u03C4\u03B1\u03C0", 1, 1, ""},
+	{"\u03C3\u03C5\u03BC\u03C0", 0, 1, ""},
+	{"\u03B1\u03C3\u03C5\u03BC\u03C0", 3, 1, ""},
+	{"\u03B1\u03BC\u03B5\u03C4\u03B1\u03BC\u03C6", -1, 1, ""},
+}
+var gre_a_46 = []among{
+	{"\u03B6", -1, 1, ""},
+	{"\u03B1\u03BB", -1, 1, ""},
+	{"\u03C0\u03B1\u03C1\u03B1\u03BA\u03B1\u03BB", 1, 1, ""},
+	{"\u03B5\u03BA\u03C4\u03B5\u03BB", -1, 1, ""},
+	{"\u03BC", -1, 1, ""},
+	{"\u03BE", -1, 1, ""},
+	{"\u03C0\u03C1\u03BF", -1, 1, ""},
+	{"\u03B1\u03C1", -1, 1, ""},
+	{"\u03BD\u03B9\u03C3", -1, 1, ""},
+}
+var gre_a_47 = []among{
+	{"\u03B7\u03B8\u03B7\u03BA\u03B1", -1, 1, ""},
+	{"\u03B7\u03B8\u03B7\u03BA\u03B5", -1, 1, ""},
+	{"\u03B7\u03B8\u03B7\u03BA\u03B5\u03C3", -1, 1, ""},
+}
+var gre_a_48 = []among{
+	{"\u03C0\u03B9\u03B8", -1, 1, ""},
+	{"\u03BF\u03B8", -1, 1, ""},
+	{"\u03BD\u03B1\u03C1\u03B8", -1, 1, ""},
+	{"\u03C3\u03BA\u03BF\u03C5\u03BB", -1, 1, ""},
+	{"\u03C3\u03BA\u03C9\u03BB", -1, 1, ""},
+	{"\u03C3\u03C6", -1, 1, ""},
+}
+var gre_a_49 = []among{
+	{"\u03B8", -1, 1, ""},
+	{"\u03B4\u03B9\u03B1\u03B8", 0, 1, ""},
+	{"\u03C0\u03B1\u03C1\u03B1\u03BA\u03B1\u03C4\u03B1\u03B8", 0, 1, ""},
+	{"\u03C3\u03C5\u03BD\u03B8", 0, 1, ""},
+	{"\u03C0\u03C1\u03BF\u03C3\u03B8", 0, 1, ""},
+}
+var gre_a_50 = []among{
+	{"\u03B7\u03BA\u03B1", -1, 1, ""},
+	{"\u03B7\u03BA\u03B5", -1, 1, ""},
+	{"\u03B7\u03BA\u03B5\u03C3", -1, 1, ""},
+}
+var gre_a_51 = []among{
+	{"\u03C6\u03B1\u03B3", -1, 1, ""},
+	{"\u03BB\u03B7\u03B3", -1, 1, ""},
+	{"\u03C6\u03C1\u03C5\u03B4", -1, 1, ""},
+	{"\u03BC\u03B1\u03BD\u03C4\u03B9\u03BB", -1, 1, ""},
+	{"\u03BC\u03B1\u03BB\u03BB", -1, 1, ""},
+	{"\u03BF\u03BC", -1, 1, ""},
+	{"\u03B2\u03BB\u03B5\u03C0", -1, 1, ""},
+	{"\u03C0\u03BF\u03B4\u03B1\u03C1", -1, 1, ""},
+	{"\u03BA\u03C5\u03BC\u03B1\u03C4", -1, 1, ""},
+	{"\u03C0\u03C1\u03C9\u03C4", -1, 1, ""},
+	{"\u03BB\u03B1\u03C7", -1, 1, ""},
+	{"\u03C0\u03B1\u03BD\u03C4\u03B1\u03C7", -1, 1, ""},
+}
+var gre_a_52 = []among{
+	{"\u03C4\u03C3\u03B1", -1, 1, ""},
+	{"\u03C7\u03B1\u03B4", -1, 1, ""},
+	{"\u03BC\u03B5\u03B4", -1, 1, ""},
+	{"\u03BB\u03B1\u03BC\u03C0\u03B9\u03B4", -1, 1, ""},
+	{"\u03B4\u03B5", -1, 1, ""},
+	{"\u03C0\u03BB\u03B5", -1, 1, ""},
+	{"\u03BC\u03B5\u03C3\u03B1\u03B6", -1, 1, ""},
+	{"\u03B4\u03B5\u03C3\u03C0\u03BF\u03B6", -1, 1, ""},
+	{"\u03B1\u03B9\u03B8", -1, 1, ""},
+	{"\u03C6\u03B1\u03C1\u03BC\u03B1\u03BA", -1, 1, ""},
+	{"\u03B1\u03B3\u03BA", -1, 1, ""},
+	{"\u03B1\u03BD\u03B7\u03BA", -1, 1, ""},
+	{"\u03BB", -1, 1, ""},
+	{"\u03BC", -1, 1, ""},
+	{"\u03B1\u03BC", 13, 1, ""},
+	{"\u03B2\u03C1\u03BF\u03BC", 13, 1, ""},
+	{"\u03C5\u03C0\u03BF\u03C4\u03B5\u03B9\u03BD", -1, 1, ""},
+	{"\u03B5\u03BA\u03BB\u03B9\u03C0", -1, 1, ""},
+	{"\u03C1", -1, 1, ""},
+	{"\u03B5\u03BD\u03B4\u03B9\u03B1\u03C6\u03B5\u03C1", 18, 1, ""},
+	{"\u03B1\u03BD\u03B1\u03C1\u03C1", 18, 1, ""},
+	{"\u03C0\u03B1\u03C4", -1, 1, ""},
+	{"\u03BA\u03B1\u03B8\u03B1\u03C1\u03B5\u03C5", -1, 1, ""},
+	{"\u03B4\u03B5\u03C5\u03C4\u03B5\u03C1\u03B5\u03C5", -1, 1, ""},
+	{"\u03BB\u03B5\u03C7", -1, 1, ""},
+}
+var gre_a_53 = []among{
+	{"\u03BF\u03C5\u03C3\u03B1", -1, 1, ""},
+	{"\u03BF\u03C5\u03C3\u03B5", -1, 1, ""},
+	{"\u03BF\u03C5\u03C3\u03B5\u03C3", -1, 1, ""},
+}
+var gre_a_54 = []among{
+	{"\u03C0\u03B5\u03BB", -1, 1, ""},
+	{"\u03BB\u03BB", -1, 1, ""},
+	{"\u03C3\u03BC\u03B7\u03BD", -1, 1, ""},
+	{"\u03C1\u03C0", -1, 1, ""},
+	{"\u03C0\u03C1", -1, 1, ""},
+	{"\u03C6\u03C1", -1, 1, ""},
+	{"\u03C7\u03BF\u03C1\u03C4", -1, 1, ""},
+	{"\u03BF\u03C6", -1, 1, ""},
+	{"\u03C8\u03BF\u03C6", 7, -1, ""},
+	{"\u03C3\u03C6", -1, 1, ""},
+	{"\u03BB\u03BF\u03C7", -1, 1, ""},
+	{"\u03BD\u03B1\u03C5\u03BB\u03BF\u03C7", 10, -1, ""},
+}
+var gre_a_55 = []among{
+	{"\u03B1\u03BC\u03B1\u03BB\u03BB\u03B9", -1, 1, ""},
+	{"\u03BB", -1, 1, ""},
+	{"\u03B1\u03BC\u03B1\u03BB", 1, 1, ""},
+	{"\u03BC", -1, 1, ""},
+	{"\u03BF\u03C5\u03BB\u03B1\u03BC", 3, 1, ""},
+	{"\u03B5\u03BD", -1, 1, ""},
+	{"\u03B4\u03B5\u03C1\u03B2\u03B5\u03BD", 5, 1, ""},
+	{"\u03C0", -1, 1, ""},
+	{"\u03B1\u03B5\u03B9\u03C0", 7, 1, ""},
+	{"\u03B1\u03C1\u03C4\u03B9\u03C0", 7, 1, ""},
+	{"\u03C3\u03C5\u03BC\u03C0", 7, 1, ""},
+	{"\u03BD\u03B5\u03BF\u03C0", 7, 1, ""},
+	{"\u03BA\u03C1\u03BF\u03BA\u03B1\u03BB\u03BF\u03C0", 7, 1, ""},
+	{"\u03BF\u03BB\u03BF\u03C0", 7, 1, ""},
+	{"\u03C0\u03C1\u03BF\u03C3\u03C9\u03C0\u03BF\u03C0", 7, 1, ""},
+	{"\u03C3\u03B9\u03B4\u03B7\u03C1\u03BF\u03C0", 7, 1, ""},
+	{"\u03B4\u03C1\u03BF\u03C3\u03BF\u03C0", 7, 1, ""},
+	{"\u03B1\u03C3\u03C0", 7, 1, ""},
+	{"\u03B1\u03BD\u03C5\u03C0", 7, 1, ""},
+	{"\u03C1", -1, 1, ""},
+	{"\u03B1\u03C3\u03C0\u03B1\u03C1", 19, 1, ""},
+	{"\u03C7\u03B1\u03C1", 19, 1, ""},
+	{"\u03B1\u03C7\u03B1\u03C1", 21, 1, ""},
+	{"\u03B1\u03C0\u03B5\u03C1", 19, 1, ""},
+	{"\u03C4\u03C1", 19, 1, ""},
+	{"\u03BF\u03C5\u03C1", 19, 1, ""},
+	{"\u03C4", -1, 1, ""},
+	{"\u03B4\u03B9\u03B1\u03C4", 26, 1, ""},
+	{"\u03B5\u03C0\u03B9\u03C4", 26, 1, ""},
+	{"\u03C3\u03C5\u03BD\u03C4", 26, 1, ""},
+	{"\u03BF\u03BC\u03BF\u03C4", 26, 1, ""},
+	{"\u03BD\u03BF\u03BC\u03BF\u03C4", 30, 1, ""},
+	{"\u03B1\u03C0\u03BF\u03C4", 26, 1, ""},
+	{"\u03C5\u03C0\u03BF\u03C4", 26, 1, ""},
+	{"\u03B1\u03B2\u03B1\u03C3\u03C4", 26, 1, ""},
+	{"\u03B1\u03B9\u03BC\u03BF\u03C3\u03C4", 26, 1, ""},
+	{"\u03C0\u03C1\u03BF\u03C3\u03C4", 26, 1, ""},
+	{"\u03B1\u03BD\u03C5\u03C3\u03C4", 26, 1, ""},
+	{"\u03BD\u03B1\u03C5", -1, 1, ""},
+	{"\u03B1\u03C6", -1, 1, ""},
+	{"\u03BE\u03B5\u03C6", -1, 1, ""},
+	{"\u03B1\u03B4\u03B7\u03C6", -1, 1, ""},
+	{"\u03C0\u03B1\u03BC\u03C6", -1, 1, ""},
+	{"\u03C0\u03BF\u03BB\u03C5\u03C6", -1, 1, ""},
+}
+var gre_a_56 = []among{
+	{"\u03B1\u03B3\u03B1", -1, 1, ""},
+	{"\u03B1\u03B3\u03B5", -1, 1, ""},
+	{"\u03B1\u03B3\u03B5\u03C3", -1, 1, ""},
+}
+var gre_a_57 = []among{
+	{"\u03B7\u03C3\u03B1", -1, 1, ""},
+	{"\u03B7\u03C3\u03B5", -1, 1, ""},
+	{"\u03B7\u03C3\u03BF\u03C5", -1, 1, ""},
+}
+var gre_a_58 = []among{
+	{"\u03BD", -1, 1, ""},
+	{"\u03B4\u03C9\u03B4\u03B5\u03BA\u03B1\u03BD", 0, 1, ""},
+	{"\u03B5\u03C0\u03C4\u03B1\u03BD", 0, 1, ""},
+	{"\u03BC\u03B5\u03B3\u03B1\u03BB\u03BF\u03BD", 0, 1, ""},
+	{"\u03B5\u03C1\u03B7\u03BC\u03BF\u03BD", 0, 1, ""},
+	{"\u03C7\u03B5\u03C1\u03C3\u03BF\u03BD", 0, 1, ""},
+}
+var gre_a_59 = []among{
+	{"\u03B7\u03C3\u03C4\u03B5", -1, 1, ""},
+}
+var gre_a_60 = []among{
+	{"\u03C3\u03B2", -1, 1, ""},
+	{"\u03B1\u03C3\u03B2", 0, 1, ""},
+	{"\u03B1\u03C0\u03BB", -1, 1, ""},
+	{"\u03B1\u03B5\u03B9\u03BC\u03BD", -1, 1, ""},
+	{"\u03C7\u03C1", -1, 1, ""},
+	{"\u03B1\u03C7\u03C1", 4, 1, ""},
+	{"\u03BA\u03BF\u03B9\u03BD\u03BF\u03C7\u03C1", 4, 1, ""},
+	{"\u03B4\u03C5\u03C3\u03C7\u03C1", 4, 1, ""},
+	{"\u03B5\u03C5\u03C7\u03C1", 4, 1, ""},
+	{"\u03C0\u03B1\u03BB\u03B9\u03BC\u03C8", -1, 1, ""},
+}
+var gre_a_61 = []among{
+	{"\u03BF\u03C5\u03BD\u03B5", -1, 1, ""},
+	{"\u03B7\u03B8\u03BF\u03C5\u03BD\u03B5", 0, 1, ""},
+	{"\u03B7\u03C3\u03BF\u03C5\u03BD\u03B5", 0, 1, ""},
+}
+var gre_a_62 = []among{
+	{"\u03C3\u03C0\u03B9", -1, 1, ""},
+	{"\u03BD", -1, 1, ""},
+	{"\u03B5\u03BE\u03C9\u03BD", 1, 1, ""},
+	{"\u03C1", -1, 1, ""},
+	{"\u03C3\u03C4\u03C1\u03B1\u03B2\u03BF\u03BC\u03BF\u03C5\u03C4\u03C3", -1, 1, ""},
+	{"\u03BA\u03B1\u03BA\u03BF\u03BC\u03BF\u03C5\u03C4\u03C3", -1, 1, ""},
+}
+var gre_a_63 = []among{
+	{"\u03BF\u03C5\u03BC\u03B5", -1, 1, ""},
+	{"\u03B7\u03B8\u03BF\u03C5\u03BC\u03B5", 0, 1, ""},
+	{"\u03B7\u03C3\u03BF\u03C5\u03BC\u03B5", 0, 1, ""},
+}
+var gre_a_64 = []among{
+	{"\u03B1\u03B6", -1, 1, ""},
+	{"\u03C9\u03C1\u03B9\u03BF\u03C0\u03BB", -1, 1, ""},
+	{"\u03B1\u03C3\u03BF\u03C5\u03C3", -1, 1, ""},
+	{"\u03C0\u03B1\u03C1\u03B1\u03C3\u03BF\u03C5\u03C3", 2, 1, ""},
+	{"\u03B1\u03BB\u03BB\u03BF\u03C3\u03BF\u03C5\u03C3", -1, 1, ""},
+	{"\u03C6", -1, 1, ""},
+	{"\u03C7", -1, 1, ""},
+}
+var gre_a_65 = []among{
+	{"\u03BC\u03B1\u03C4\u03B1", -1, 1, ""},
+	{"\u03BC\u03B1\u03C4\u03C9\u03BD", -1, 1, ""},
+	{"\u03BC\u03B1\u03C4\u03BF\u03C3", -1, 1, ""},
+}
+var gre_a_66 = []among{
+	{"\u03B1", -1, 1, ""},
+	{"\u03B9\u03BF\u03C5\u03BC\u03B1", 0, 1, ""},
+	{"\u03BF\u03BC\u03BF\u03C5\u03BD\u03B1", 0, 1, ""},
+	{"\u03B9\u03BF\u03BC\u03BF\u03C5\u03BD\u03B1", 2, 1, ""},
+	{"\u03BF\u03C3\u03BF\u03C5\u03BD\u03B1", 0, 1, ""},
+	{"\u03B9\u03BF\u03C3\u03BF\u03C5\u03BD\u03B1", 4, 1, ""},
+	{"\u03B5", -1, 1, ""},
+	{"\u03B1\u03B3\u03B1\u03C4\u03B5", 6, 1, ""},
+	{"\u03B7\u03BA\u03B1\u03C4\u03B5", 6, 1, ""},
+	{"\u03B7\u03B8\u03B7\u03BA\u03B1\u03C4\u03B5", 8, 1, ""},
+	{"\u03B7\u03C3\u03B1\u03C4\u03B5", 6, 1, ""},
+	{"\u03BF\u03C5\u03C3\u03B1\u03C4\u03B5", 6, 1, ""},
+	{"\u03B5\u03B9\u03C4\u03B5", 6, 1, ""},
+	{"\u03B7\u03B8\u03B5\u03B9\u03C4\u03B5", 12, 1, ""},
+	{"\u03B9\u03B5\u03BC\u03B1\u03C3\u03C4\u03B5", 6, 1, ""},
+	{"\u03BF\u03C5\u03BC\u03B1\u03C3\u03C4\u03B5", 6, 1, ""},
+	{"\u03B9\u03BF\u03C5\u03BC\u03B1\u03C3\u03C4\u03B5", 15, 1, ""},
+	{"\u03B9\u03B5\u03C3\u03B1\u03C3\u03C4\u03B5", 6, 1, ""},
+	{"\u03BF\u03C3\u03B1\u03C3\u03C4\u03B5", 6, 1, ""},
+	{"\u03B9\u03BF\u03C3\u03B1\u03C3\u03C4\u03B5", 18, 1, ""},
+	{"\u03B7", -1, 1, ""},
+	{"\u03B9", -1, 1, ""},
+	{"\u03B1\u03BC\u03B1\u03B9", 21, 1, ""},
+	{"\u03B9\u03B5\u03BC\u03B1\u03B9", 21, 1, ""},
+	{"\u03BF\u03BC\u03B1\u03B9", 21, 1, ""},
+	{"\u03BF\u03C5\u03BC\u03B1\u03B9", 21, 1, ""},
+	{"\u03B1\u03C3\u03B1\u03B9", 21, 1, ""},
+	{"\u03B5\u03C3\u03B1\u03B9", 21, 1, ""},
+	{"\u03B9\u03B5\u03C3\u03B1\u03B9", 27, 1, ""},
+	{"\u03B1\u03C4\u03B1\u03B9", 21, 1, ""},
+	{"\u03B5\u03C4\u03B1\u03B9", 21, 1, ""},
+	{"\u03B9\u03B5\u03C4\u03B1\u03B9", 30, 1, ""},
+	{"\u03BF\u03BD\u03C4\u03B1\u03B9", 21, 1, ""},
+	{"\u03BF\u03C5\u03BD\u03C4\u03B1\u03B9", 21, 1, ""},
+	{"\u03B9\u03BF\u03C5\u03BD\u03C4\u03B1\u03B9", 33, 1, ""},
+	{"\u03B5\u03B9", 21, 1, ""},
+	{"\u03B1\u03B5\u03B9", 35, 1, ""},
+	{"\u03B7\u03B8\u03B5\u03B9", 35, 1, ""},
+	{"\u03B7\u03C3\u03B5\u03B9", 35, 1, ""},
+	{"\u03BF\u03B9", 21, 1, ""},
+	{"\u03B1\u03BD", -1, 1, ""},
+	{"\u03B1\u03B3\u03B1\u03BD", 40, 1, ""},
+	{"\u03B7\u03BA\u03B1\u03BD", 40, 1, ""},
+	{"\u03B7\u03B8\u03B7\u03BA\u03B1\u03BD", 42, 1, ""},
+	{"\u03B7\u03C3\u03B1\u03BD", 40, 1, ""},
+	{"\u03BF\u03C5\u03C3\u03B1\u03BD", 40, 1, ""},
+	{"\u03BF\u03BD\u03C4\u03BF\u03C5\u03C3\u03B1\u03BD", 45, 1, ""},
+	{"\u03B9\u03BF\u03BD\u03C4\u03BF\u03C5\u03C3\u03B1\u03BD", 46, 1, ""},
+	{"\u03BF\u03BD\u03C4\u03B1\u03BD", 40, 1, ""},
+	{"\u03B9\u03BF\u03BD\u03C4\u03B1\u03BD", 48, 1, ""},
+	{"\u03BF\u03C5\u03BD\u03C4\u03B1\u03BD", 40, 1, ""},
+	{"\u03B9\u03BF\u03C5\u03BD\u03C4\u03B1\u03BD", 50, 1, ""},
+	{"\u03BF\u03C4\u03B1\u03BD", 40, 1, ""},
+	{"\u03B9\u03BF\u03C4\u03B1\u03BD", 52, 1, ""},
+	{"\u03BF\u03BC\u03B1\u03C3\u03C4\u03B1\u03BD", 40, 1, ""},
+	{"\u03B9\u03BF\u03BC\u03B1\u03C3\u03C4\u03B1\u03BD", 54, 1, ""},
+	{"\u03BF\u03C3\u03B1\u03C3\u03C4\u03B1\u03BD", 40, 1, ""},
+	{"\u03B9\u03BF\u03C3\u03B1\u03C3\u03C4\u03B1\u03BD", 56, 1, ""},
+	{"\u03BF\u03C5\u03BD", -1, 1, ""},
+	{"\u03B7\u03B8\u03BF\u03C5\u03BD", 58, 1, ""},
+	{"\u03BF\u03BC\u03BF\u03C5\u03BD", 58, 1, ""},
+	{"\u03B9\u03BF\u03BC\u03BF\u03C5\u03BD", 60, 1, ""},
+	{"\u03B7\u03C3\u03BF\u03C5\u03BD", 58, 1, ""},
+	{"\u03BF\u03C3\u03BF\u03C5\u03BD", 58, 1, ""},
+	{"\u03B9\u03BF\u03C3\u03BF\u03C5\u03BD", 63, 1, ""},
+	{"\u03C9\u03BD", -1, 1, ""},
+	{"\u03B7\u03B4\u03C9\u03BD", 65, 1, ""},
+	{"\u03BF", -1, 1, ""},
+	{"\u03B1\u03C3", -1, 1, ""},
+	{"\u03B5\u03C3", -1, 1, ""},
+	{"\u03B7\u03B4\u03B5\u03C3", 69, 1, ""},
+	{"\u03B7\u03C3\u03B5\u03C3", 69, 1, ""},
+	{"\u03B7\u03C3", -1, 1, ""},
+	{"\u03B5\u03B9\u03C3", -1, 1, ""},
+	{"\u03B7\u03B8\u03B5\u03B9\u03C3", 73, 1, ""},
+	{"\u03BF\u03C3", -1, 1, ""},
+	{"\u03C5\u03C3", -1, 1, ""},
+	{"\u03BF\u03C5\u03C3", 76, 1, ""},
+	{"\u03C5", -1, 1, ""},
+	{"\u03BF\u03C5", 78, 1, ""},
+	{"\u03C9", -1, 1, ""},
+	{"\u03B1\u03C9", 80, 1, ""},
+	{"\u03B7\u03B8\u03C9", 80, 1, ""},
+	{"\u03B7\u03C3\u03C9", 80, 1, ""},
+}
+var gre_a_67 = []among{
+	{"\u03BF\u03C4\u03B5\u03C1", -1, 1, ""},
+	{"\u03B5\u03C3\u03C4\u03B5\u03C1", -1, 1, ""},
+	{"\u03C5\u03C4\u03B5\u03C1", -1, 1, ""},
+	{"\u03C9\u03C4\u03B5\u03C1", -1, 1, ""},
+	{"\u03BF\u03C4\u03B1\u03C4", -1, 1, ""},
+	{"\u03B5\u03C3\u03C4\u03B1\u03C4", -1, 1, ""},
+	{"\u03C5\u03C4\u03B1\u03C4", -1, 1, ""},
+	{"\u03C9\u03C4\u03B1\u03C4", -1, 1, ""},
+}
+var gre_g_v = []byte{81, 65, 16, 1}
+var gre_g_v2 = []byte{81, 65, 0, 1}
+
+func (z *greekStemmer) r_has_min_length() bool {
+	return z.length >= 3
+}
+func (z *greekStemmer) r_tolower() bool {
+	var among_var int
+	for {
+		v_1 := z.limit - z.cursor
+		{
+			z.ket = z.cursor
+			among_var = z.findAmongB(gre_a_0)
+			z.bra = z.cursor
+			switch among_var {
+			case 1:
+				z.sliceFrom("\u03B1")
+				break
+			case 2:
+				z.sliceFrom("\u03B2")
+				break
+			case 3:
+				z.sliceFrom("\u03B3")
+				break
+			case 4:
+				z.sliceFrom("\u03B4")
+				break
+			case 5:
+				z.sliceFrom("\u03B5")
+				break
+			case 6:
+				z.sliceFrom("\u03B6")
+				break
+			case 7:
+				z.sliceFrom("\u03B7")
+				break
+			case 8:
+				z.sliceFrom("\u03B8")
+				break
+			case 9:
+				z.sliceFrom("\u03B9")
+				break
+			case 10:
+				z.sliceFrom("\u03BA")
+				break
+			case 11:
+				z.sliceFrom("\u03BB")
+				break
+			case 12:
+				z.sliceFrom("\u03BC")
+				break
+			case 13:
+				z.sliceFrom("\u03BD")
+				break
+			case 14:
+				z.sliceFrom("\u03BE")
+				break
+			case 15:
+				z.sliceFrom("\u03BF")
+				break
+			case 16:
+				z.sliceFrom("\u03C0")
+				break
+			case 17:
+				z.sliceFrom("\u03C1")
+				break
+			case 18:
+				z.sliceFrom("\u03C3")
+				break
+			case 19:
+				z.sliceFrom("\u03C4")
+				break
+			case 20:
+				z.sliceFrom("\u03C5")
+				break
+			case 21:
+				z.sliceFrom("\u03C6")
+				break
+			case 22:
+				z.sliceFrom("\u03C7")
+				break
+			case 23:
+				z.sliceFrom("\u03C8")
+				break
+			case 24:
+				z.sliceFrom("\u03C9")
+				break
+			case 25:
+				if z.cursor <= z.limitBackward {
+					goto lab0_end
+				}
+				z.cursor--
+				break
+			}
+			continue
+		}
+	lab0_end:
+		;
+		z.cursor = z.limit - v_1
+		break
+	}
+	return true
+}
+func (z *greekStemmer) r_step1() bool {
+	var among_var int
+	z.ket = z.cursor
+	among_var = z.findAmongB(gre_a_1)
+	if among_var == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	switch among_var {
+	case 1:
+		z.sliceFrom("\u03C6\u03B1")
+		break
+	case 2:
+		z.sliceFrom("\u03C3\u03BA\u03B1")
+		break
+	case 3:
+		z.sliceFrom("\u03BF\u03BB\u03BF")
+		break
+	case 4:
+		z.sliceFrom("\u03C3\u03BF")
+		break
+	case 5:
+		z.sliceFrom("\u03C4\u03B1\u03C4\u03BF")
+		break
+	case 6:
+		z.sliceFrom("\u03BA\u03C1\u03B5")
+		break
+	case 7:
+		z.sliceFrom("\u03C0\u03B5\u03C1")
+		break
+	case 8:
+		z.sliceFrom("\u03C4\u03B5\u03C1")
+		break
+	case 9:
+		z.sliceFrom("\u03C6\u03C9")
+		break
+	case 10:
+		z.sliceFrom("\u03BA\u03B1\u03B8\u03B5\u03C3\u03C4")
+		break
+	case 11:
+		z.sliceFrom("\u03B3\u03B5\u03B3\u03BF\u03BD")
+		break
+	}
+	z.B_test1 = false
+	return true
+}
+func (z *greekStemmer) r_steps1() bool {
+	var among_var int
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_3) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	z.ket = z.cursor
+	z.bra = z.cursor
+	among_var = z.findAmongB(gre_a_2)
+	if among_var == 0 {
+		return false
+	}
+	if z.cursor > z.limitBackward {
+		return false
+	}
+	switch among_var {
+	case 1:
+		z.sliceFrom("\u03B9")
+		break
+	case 2:
+		z.sliceFrom("\u03B9\u03B6")
+		break
+	}
+	return true
+}
+func (z *greekStemmer) r_steps2() bool {
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_5) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	z.ket = z.cursor
+	z.bra = z.cursor
+	if z.findAmongB(gre_a_4) == 0 {
+		return false
+	}
+	if z.cursor > z.limitBackward {
+		return false
+	}
+	z.sliceFrom("\u03C9\u03BD")
+	return true
+}
+func (z *greekStemmer) r_steps3() bool {
+	var among_var int
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_7) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	{
+		v_1 := z.limit - z.cursor
+		{
+			if !(z.eqSB("\u03B9\u03C3\u03B1")) {
+				goto lab1_end
+			}
+			if z.cursor > z.limitBackward {
+				goto lab1_end
+			}
+			z.sliceFrom("\u03B9\u03C3")
+			goto lab0_end
+		}
+	lab1_end:
+		;
+		z.cursor = z.limit - v_1
+		z.ket = z.cursor
+		z.bra = z.cursor
+		among_var = z.findAmongB(gre_a_6)
+		if among_var == 0 {
+			return false
+		}
+		if z.cursor > z.limitBackward {
+			return false
+		}
+		switch among_var {
+		case 1:
+			z.sliceFrom("\u03B9")
+			break
+		case 2:
+			z.sliceFrom("\u03B9\u03C3")
+			break
+		}
+	}
+lab0_end:
+	;
+	return true
+}
+func (z *greekStemmer) r_steps4() bool {
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_9) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	z.ket = z.cursor
+	z.bra = z.cursor
+	if z.findAmongB(gre_a_8) == 0 {
+		return false
+	}
+	if z.cursor > z.limitBackward {
+		return false
+	}
+	z.sliceFrom("\u03B9")
+	return true
+}
+func (z *greekStemmer) r_steps5() bool {
+	var among_var int
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_11) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	z.ket = z.cursor
+	z.bra = z.cursor
+	among_var = z.findAmongB(gre_a_10)
+	if among_var == 0 {
+		return false
+	}
+	if z.cursor > z.limitBackward {
+		return false
+	}
+	switch among_var {
+	case 1:
+		z.sliceFrom("\u03B9")
+		break
+	case 2:
+		z.sliceFrom("\u03B9\u03C3\u03C4")
+		break
+	}
+	return true
+}
+func (z *greekStemmer) r_steps6() bool {
+	var among_var int
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_14) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	{
+		v_1 := z.limit - z.cursor
+		{
+			z.ket = z.cursor
+			z.bra = z.cursor
+			among_var = z.findAmongB(gre_a_12)
+			if among_var == 0 {
+				goto lab1_end
+			}
+			if z.cursor > z.limitBackward {
+				goto lab1_end
+			}
+			switch among_var {
+			case 1:
+				z.sliceFrom("\u03B9\u03C3\u03BC")
+				break
+			case 2:
+				z.sliceFrom("\u03B9")
+				break
+			}
+			goto lab0_end
+		}
+	lab1_end:
+		;
+		z.cursor = z.limit - v_1
+		z.ket = z.cursor
+		among_var = z.findAmongB(gre_a_13)
+		if among_var == 0 {
+			return false
+		}
+		z.bra = z.cursor
+		switch among_var {
+		case 1:
+			z.sliceFrom("\u03B1\u03B3\u03BD\u03C9\u03C3\u03C4")
+			break
+		case 2:
+			z.sliceFrom("\u03B1\u03C4\u03BF\u03BC")
+			break
+		case 3:
+			z.sliceFrom("\u03B3\u03BD\u03C9\u03C3\u03C4")
+			break
+		case 4:
+			z.sliceFrom("\u03B5\u03B8\u03BD")
+			break
+		case 5:
+			z.sliceFrom("\u03B5\u03BA\u03BB\u03B5\u03BA\u03C4")
+			break
+		case 6:
+			z.sliceFrom("\u03C3\u03BA\u03B5\u03C0\u03C4")
+			break
+		case 7:
+			z.sliceFrom("\u03C4\u03BF\u03C0")
+			break
+		case 8:
+			z.sliceFrom("\u03B1\u03BB\u03B5\u03BE\u03B1\u03BD\u03B4\u03C1")
+			break
+		case 9:
+			z.sliceFrom("\u03B2\u03C5\u03B6\u03B1\u03BD\u03C4")
+			break
+		case 10:
+			z.sliceFrom("\u03B8\u03B5\u03B1\u03C4\u03C1")
+			break
+		}
+	}
+lab0_end:
+	;
+	return true
+}
+func (z *greekStemmer) r_steps7() bool {
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_16) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	z.ket = z.cursor
+	z.bra = z.cursor
+	if z.findAmongB(gre_a_15) == 0 {
+		return false
+	}
+	if z.cursor > z.limitBackward {
+		return false
+	}
+	z.sliceFrom("\u03B1\u03C1\u03B1\u03BA")
+	return true
+}
+func (z *greekStemmer) r_steps8() bool {
+	var among_var int
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_18) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	{
+		v_1 := z.limit - z.cursor
+		{
+			z.ket = z.cursor
+			z.bra = z.cursor
+			among_var = z.findAmongB(gre_a_17)
+			if among_var == 0 {
+				goto lab1_end
+			}
+			if z.cursor > z.limitBackward {
+				goto lab1_end
+			}
+			switch among_var {
+			case 1:
+				z.sliceFrom("\u03B1\u03BA")
+				break
+			case 2:
+				z.sliceFrom("\u03B9\u03C4\u03C3")
+				break
+			}
+			goto lab0_end
+		}
+	lab1_end:
+		;
+		z.cursor = z.limit - v_1
+		z.ket = z.cursor
+		z.bra = z.cursor
+		if !(z.eqSB("\u03BA\u03BF\u03C1")) {
+			return false
+		}
+		z.sliceFrom("\u03B9\u03C4\u03C3")
+	}
+lab0_end:
+	;
+	return true
+}
+func (z *greekStemmer) r_steps9() bool {
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_21) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	{
+		v_1 := z.limit - z.cursor
+		{
+			z.ket = z.cursor
+			z.bra = z.cursor
+			if z.findAmongB(gre_a_19) == 0 {
+				goto lab1_end
+			}
+			if z.cursor > z.limitBackward {
+				goto lab1_end
+			}
+			z.sliceFrom("\u03B9\u03B4")
+			goto lab0_end
+		}
+	lab1_end:
+		;
+		z.cursor = z.limit - v_1
+		z.ket = z.cursor
+		z.bra = z.cursor
+		if z.findAmongB(gre_a_20) == 0 {
+			return false
+		}
+		z.sliceFrom("\u03B9\u03B4")
+	}
+lab0_end:
+	;
+	return true
+}
+func (z *greekStemmer) r_steps10() bool {
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_23) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	z.ket = z.cursor
+	z.bra = z.cursor
+	if z.findAmongB(gre_a_22) == 0 {
+		return false
+	}
+	if z.cursor > z.limitBackward {
+		return false
+	}
+	z.sliceFrom("\u03B9\u03C3\u03BA")
+	return true
+}
+func (z *greekStemmer) r_step2a() bool {
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_24) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	{
+		v_1 := z.limit - z.cursor
+		{
+			if z.findAmongB(gre_a_25) == 0 {
+				goto lab0_end
+			}
+			return false
+		}
+	lab0_end:
+		;
+		z.cursor = z.limit - v_1
+	}
+	{
+		c := z.cursor
+		z.insert(z.cursor, z.cursor, "\u03B1\u03B4")
+		z.cursor = c
+	}
+	return true
+}
+func (z *greekStemmer) r_step2b() bool {
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_26) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.ket = z.cursor
+	z.bra = z.cursor
+	if z.findAmongB(gre_a_27) == 0 {
+		return false
+	}
+	z.sliceFrom("\u03B5\u03B4")
+	return true
+}
+func (z *greekStemmer) r_step2c() bool {
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_28) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.ket = z.cursor
+	z.bra = z.cursor
+	if z.findAmongB(gre_a_29) == 0 {
+		return false
+	}
+	z.sliceFrom("\u03BF\u03C5\u03B4")
+	return true
+}
+func (z *greekStemmer) r_step2d() bool {
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_30) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	z.ket = z.cursor
+	z.bra = z.cursor
+	if z.findAmongB(gre_a_31) == 0 {
+		return false
+	}
+	if z.cursor > z.limitBackward {
+		return false
+	}
+	z.sliceFrom("\u03B5")
+	return true
+}
+func (z *greekStemmer) r_step3() bool {
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_32) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	z.ket = z.cursor
+	z.bra = z.cursor
+	if !(z.inGroupingB(gre_g_v, 945, 969)) {
+		return false
+	}
+	z.sliceFrom("\u03B9")
+	return true
+}
+func (z *greekStemmer) r_step4() bool {
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_33) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	{
+		v_1 := z.limit - z.cursor
+		{
+			z.ket = z.cursor
+			z.bra = z.cursor
+			if !(z.inGroupingB(gre_g_v, 945, 969)) {
+				goto lab1_end
+			}
+			z.sliceFrom("\u03B9\u03BA")
+			goto lab0_end
+		}
+	lab1_end:
+		;
+		z.cursor = z.limit - v_1
+		z.ket = z.cursor
+	}
+lab0_end:
+	;
+	z.bra = z.cursor
+	if z.findAmongB(gre_a_34) == 0 {
+		return false
+	}
+	if z.cursor > z.limitBackward {
+		return false
+	}
+	z.sliceFrom("\u03B9\u03BA")
+	return true
+}
+func (z *greekStemmer) r_step5a() bool {
+	v_1 := z.limit - z.cursor
+	{
+		if !(z.eqSB("\u03B1\u03B3\u03B1\u03BC\u03B5")) {
+			goto lab0_end
+		}
+		if z.cursor > z.limitBackward {
+			goto lab0_end
+		}
+		z.sliceFrom("\u03B1\u03B3\u03B1\u03BC")
+	}
+lab0_end:
+	;
+	z.cursor = z.limit - v_1
+	v_2 := z.limit - z.cursor
+	{
+		z.ket = z.cursor
+		if z.findAmongB(gre_a_35) == 0 {
+			goto lab1_end
+		}
+		z.bra = z.cursor
+		z.sliceDel()
+		z.B_test1 = false
+	}
+lab1_end:
+	;
+	z.cursor = z.limit - v_2
+	z.ket = z.cursor
+	if !(z.eqSB("\u03B1\u03BC\u03B5")) {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	z.ket = z.cursor
+	z.bra = z.cursor
+	if z.findAmongB(gre_a_36) == 0 {
+		return false
+	}
+	if z.cursor > z.limitBackward {
+		return false
+	}
+	z.sliceFrom("\u03B1\u03BC")
+	return true
+}
+func (z *greekStemmer) r_step5b() bool {
+	v_1 := z.limit - z.cursor
+	{
+		z.ket = z.cursor
+		if z.findAmongB(gre_a_38) == 0 {
+			goto lab0_end
+		}
+		z.bra = z.cursor
+		z.sliceDel()
+		z.B_test1 = false
+		z.ket = z.cursor
+		z.bra = z.cursor
+		if z.findAmongB(gre_a_37) == 0 {
+			goto lab0_end
+		}
+		if z.cursor > z.limitBackward {
+			goto lab0_end
+		}
+		z.sliceFrom("\u03B1\u03B3\u03B1\u03BD")
+	}
+lab0_end:
+	;
+	z.cursor = z.limit - v_1
+	z.ket = z.cursor
+	if !(z.eqSB("\u03B1\u03BD\u03B5")) {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	{
+		v_2 := z.limit - z.cursor
+		{
+			z.ket = z.cursor
+			z.bra = z.cursor
+			if !(z.inGroupingB(gre_g_v2, 945, 969)) {
+				goto lab2_end
+			}
+			z.sliceFrom("\u03B1\u03BD")
+			goto lab1_end
+		}
+	lab2_end:
+		;
+		z.cursor = z.limit - v_2
+		z.ket = z.cursor
+	}
+lab1_end:
+	;
+	z.bra = z.cursor
+	if z.findAmongB(gre_a_39) == 0 {
+		return false
+	}
+	if z.cursor > z.limitBackward {
+		return false
+	}
+	z.sliceFrom("\u03B1\u03BD")
+	return true
+}
+func (z *greekStemmer) r_step5c() bool {
+	v_1 := z.limit - z.cursor
+	{
+		z.ket = z.cursor
+		if z.findAmongB(gre_a_40) == 0 {
+			goto lab0_end
+		}
+		z.bra = z.cursor
+		z.sliceDel()
+		z.B_test1 = false
+	}
+lab0_end:
+	;
+	z.cursor = z.limit - v_1
+	z.ket = z.cursor
+	if !(z.eqSB("\u03B5\u03C4\u03B5")) {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	{
+		v_2 := z.limit - z.cursor
+		{
+			z.ket = z.cursor
+			z.bra = z.cursor
+			if !(z.inGroupingB(gre_g_v2, 945, 969)) {
+				goto lab2_end
+			}
+			z.sliceFrom("\u03B5\u03C4")
+			goto lab1_end
+		}
+	lab2_end:
+		;
+		z.cursor = z.limit - v_2
+		{
+			z.ket = z.cursor
+			z.bra = z.cursor
+			if z.findAmongB(gre_a_41) == 0 {
+				goto lab3_end
+			}
+			z.sliceFrom("\u03B5\u03C4")
+			goto lab1_end
+		}
+	lab3_end:
+		;
+		z.cursor = z.limit - v_2
+		z.ket = z.cursor
+	}
+lab1_end:
+	;
+	z.bra = z.cursor
+	if z.findAmongB(gre_a_42) == 0 {
+		return false
+	}
+	if z.cursor > z.limitBackward {
+		return false
+	}
+	z.sliceFrom("\u03B5\u03C4")
+	return true
+}
+func (z *greekStemmer) r_step5d() bool {
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_43) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	{
+		v_1 := z.limit - z.cursor
+		{
+			z.ket = z.cursor
+			z.bra = z.cursor
+			if !(z.eqSB("\u03B1\u03C1\u03C7")) {
+				goto lab1_end
+			}
+			if z.cursor > z.limitBackward {
+				goto lab1_end
+			}
+			z.sliceFrom("\u03BF\u03BD\u03C4")
+			goto lab0_end
+		}
+	lab1_end:
+		;
+		z.cursor = z.limit - v_1
+		z.ket = z.cursor
+		z.bra = z.cursor
+		if !(z.eqSB("\u03BA\u03C1\u03B5")) {
+			return false
+		}
+		z.sliceFrom("\u03C9\u03BD\u03C4")
+	}
+lab0_end:
+	;
+	return true
+}
+func (z *greekStemmer) r_step5e() bool {
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_44) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	z.ket = z.cursor
+	z.bra = z.cursor
+	if !(z.eqSB("\u03BF\u03BD")) {
+		return false
+	}
+	if z.cursor > z.limitBackward {
+		return false
+	}
+	z.sliceFrom("\u03BF\u03BC\u03B1\u03C3\u03C4")
+	return true
+}
+func (z *greekStemmer) r_step5f() bool {
+	v_1 := z.limit - z.cursor
+	{
+		z.ket = z.cursor
+		if !(z.eqSB("\u03B9\u03B5\u03C3\u03C4\u03B5")) {
+			goto lab0_end
+		}
+		z.bra = z.cursor
+		z.sliceDel()
+		z.B_test1 = false
+		z.ket = z.cursor
+		z.bra = z.cursor
+		if z.findAmongB(gre_a_45) == 0 {
+			goto lab0_end
+		}
+		if z.cursor > z.limitBackward {
+			goto lab0_end
+		}
+		z.sliceFrom("\u03B9\u03B5\u03C3\u03C4")
+	}
+lab0_end:
+	;
+	z.cursor = z.limit - v_1
+	z.ket = z.cursor
+	if !(z.eqSB("\u03B5\u03C3\u03C4\u03B5")) {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	z.ket = z.cursor
+	z.bra = z.cursor
+	if z.findAmongB(gre_a_46) == 0 {
+		return false
+	}
+	if z.cursor > z.limitBackward {
+		return false
+	}
+	z.sliceFrom("\u03B9\u03B5\u03C3\u03C4")
+	return true
+}
+func (z *greekStemmer) r_step5g() bool {
+	v_1 := z.limit - z.cursor
+	{
+		z.ket = z.cursor
+		if z.findAmongB(gre_a_47) == 0 {
+			goto lab0_end
+		}
+		z.bra = z.cursor
+		z.sliceDel()
+		z.B_test1 = false
+	}
+lab0_end:
+	;
+	z.cursor = z.limit - v_1
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_50) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	{
+		v_2 := z.limit - z.cursor
+		{
+			z.ket = z.cursor
+			z.bra = z.cursor
+			if z.findAmongB(gre_a_48) == 0 {
+				goto lab2_end
+			}
+			z.sliceFrom("\u03B7\u03BA")
+			goto lab1_end
+		}
+	lab2_end:
+		;
+		z.cursor = z.limit - v_2
+		z.ket = z.cursor
+		z.bra = z.cursor
+		if z.findAmongB(gre_a_49) == 0 {
+			return false
+		}
+		if z.cursor > z.limitBackward {
+			return false
+		}
+		z.sliceFrom("\u03B7\u03BA")
+	}
+lab1_end:
+	;
+	return true
+}
+func (z *greekStemmer) r_step5h() bool {
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_53) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	{
+		v_1 := z.limit - z.cursor
+		{
+			z.ket = z.cursor
+			z.bra = z.cursor
+			if z.findAmongB(gre_a_51) == 0 {
+				goto lab1_end
+			}
+			z.sliceFrom("\u03BF\u03C5\u03C3")
+			goto lab0_end
+		}
+	lab1_end:
+		;
+		z.cursor = z.limit - v_1
+		z.ket = z.cursor
+		z.bra = z.cursor
+		if z.findAmongB(gre_a_52) == 0 {
+			return false
+		}
+		if z.cursor > z.limitBackward {
+			return false
+		}
+		z.sliceFrom("\u03BF\u03C5\u03C3")
+	}
+lab0_end:
+	;
+	return true
+}
+func (z *greekStemmer) r_step5i() bool {
+	var among_var int
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_56) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	{
+		v_1 := z.limit - z.cursor
+		{
+			z.ket = z.cursor
+			z.bra = z.cursor
+			if !(z.eqSB("\u03BA\u03BF\u03BB\u03BB")) {
+				goto lab1_end
+			}
+			z.sliceFrom("\u03B1\u03B3")
+			goto lab0_end
+		}
+	lab1_end:
+		;
+		z.cursor = z.limit - v_1
+		{
+			v_2 := z.limit - z.cursor
+			{
+				z.ket = z.cursor
+				z.bra = z.cursor
+				among_var = z.findAmongB(gre_a_54)
+				if among_var == 0 {
+					goto lab3_end
+				}
+				switch among_var {
+				case 1:
+					z.sliceFrom("\u03B1\u03B3")
+					break
+				}
+				goto lab2_end
+			}
+		lab3_end:
+			;
+			z.cursor = z.limit - v_2
+			z.ket = z.cursor
+			z.bra = z.cursor
+			if z.findAmongB(gre_a_55) == 0 {
+				return false
+			}
+			if z.cursor > z.limitBackward {
+				return false
+			}
+			z.sliceFrom("\u03B1\u03B3")
+		}
+	lab2_end:
+	}
+lab0_end:
+	;
+	return true
+}
+func (z *greekStemmer) r_step5j() bool {
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_57) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	z.ket = z.cursor
+	z.bra = z.cursor
+	if z.findAmongB(gre_a_58) == 0 {
+		return false
+	}
+	if z.cursor > z.limitBackward {
+		return false
+	}
+	z.sliceFrom("\u03B7\u03C3")
+	return true
+}
+func (z *greekStemmer) r_step5k() bool {
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_59) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	z.ket = z.cursor
+	z.bra = z.cursor
+	if z.findAmongB(gre_a_60) == 0 {
+		return false
+	}
+	if z.cursor > z.limitBackward {
+		return false
+	}
+	z.sliceFrom("\u03B7\u03C3\u03C4")
+	return true
+}
+func (z *greekStemmer) r_step5l() bool {
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_61) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	z.ket = z.cursor
+	z.bra = z.cursor
+	if z.findAmongB(gre_a_62) == 0 {
+		return false
+	}
+	if z.cursor > z.limitBackward {
+		return false
+	}
+	z.sliceFrom("\u03BF\u03C5\u03BD")
+	return true
+}
+func (z *greekStemmer) r_step5m() bool {
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_63) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	z.B_test1 = false
+	z.ket = z.cursor
+	z.bra = z.cursor
+	if z.findAmongB(gre_a_64) == 0 {
+		return false
+	}
+	if z.cursor > z.limitBackward {
+		return false
+	}
+	z.sliceFrom("\u03BF\u03C5\u03BC")
+	return true
+}
+func (z *greekStemmer) r_step6() bool {
+	v_1 := z.limit - z.cursor
+	{
+		z.ket = z.cursor
+		if z.findAmongB(gre_a_65) == 0 {
+			goto lab0_end
+		}
+		z.bra = z.cursor
+		z.sliceFrom("\u03BC\u03B1")
+	}
+lab0_end:
+	;
+	z.cursor = z.limit - v_1
+	if !(z.B_test1) {
+		return false
+	}
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_66) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	return true
+}
+func (z *greekStemmer) r_step7() bool {
+	z.ket = z.cursor
+	if z.findAmongB(gre_a_67) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	return true
+}
+func (z *greekStemmer) stem() {
+	z.limitBackward = z.cursor
+	z.cursor = z.limit
+	v_1 := z.limit - z.cursor
+	z.r_tolower()
+	z.cursor = z.limit - v_1
+	if !z.r_has_min_length() {
+		return
+	}
+	z.B_test1 = true
+	v_2 := z.limit - z.cursor
+	z.r_step1()
+	z.cursor = z.limit - v_2
+	v_3 := z.limit - z.cursor
+	z.r_steps1()
+	z.cursor = z.limit - v_3
+	v_4 := z.limit - z.cursor
+	z.r_steps2()
+	z.cursor = z.limit - v_4
+	v_5 := z.limit - z.cursor
+	z.r_steps3()
+	z.cursor = z.limit - v_5
+	v_6 := z.limit - z.cursor
+	z.r_steps4()
+	z.cursor = z.limit - v_6
+	v_7 := z.limit - z.cursor
+	z.r_steps5()
+	z.cursor = z.limit - v_7
+	v_8 := z.limit - z.cursor
+	z.r_steps6()
+	z.cursor = z.limit - v_8
+	v_9 := z.limit - z.cursor
+	z.r_steps7()
+	z.cursor = z.limit - v_9
+	v_10 := z.limit - z.cursor
+	z.r_steps8()
+	z.cursor = z.limit - v_10
+	v_11 := z.limit - z.cursor
+	z.r_steps9()
+	z.cursor = z.limit - v_11
+	v_12 := z.limit - z.cursor
+	z.r_steps10()
+	z.cursor = z.limit - v_12
+	v_13 := z.limit - z.cursor
+	z.r_step2a()
+	z.cursor = z.limit - v_13
+	v_14 := z.limit - z.cursor
+	z.r_step2b()
+	z.cursor = z.limit - v_14
+	v_15 := z.limit - z.cursor
+	z.r_step2c()
+	z.cursor = z.limit - v_15
+	v_16 := z.limit - z.cursor
+	z.r_step2d()
+	z.cursor = z.limit - v_16
+	v_17 := z.limit - z.cursor
+	z.r_step3()
+	z.cursor = z.limit - v_17
+	v_18 := z.limit - z.cursor
+	z.r_step4()
+	z.cursor = z.limit - v_18
+	v_19 := z.limit - z.cursor
+	z.r_step5a()
+	z.cursor = z.limit - v_19
+	v_20 := z.limit - z.cursor
+	z.r_step5b()
+	z.cursor = z.limit - v_20
+	v_21 := z.limit - z.cursor
+	z.r_step5c()
+	z.cursor = z.limit - v_21
+	v_22 := z.limit - z.cursor
+	z.r_step5d()
+	z.cursor = z.limit - v_22
+	v_23 := z.limit - z.cursor
+	z.r_step5e()
+	z.cursor = z.limit - v_23
+	v_24 := z.limit - z.cursor
+	z.r_step5f()
+	z.cursor = z.limit - v_24
+	v_25 := z.limit - z.cursor
+	z.r_step5g()
+	z.cursor = z.limit - v_25
+	v_26 := z.limit - z.cursor
+	z.r_step5h()
+	z.cursor = z.limit - v_26
+	v_27 := z.limit - z.cursor
+	z.r_step5j()
+	z.cursor = z.limit - v_27
+	v_28 := z.limit - z.cursor
+	z.r_step5i()
+	z.cursor = z.limit - v_28
+	v_29 := z.limit - z.cursor
+	z.r_step5k()
+	z.cursor = z.limit - v_29
+	v_30 := z.limit - z.cursor
+	z.r_step5l()
+	z.cursor = z.limit - v_30
+	v_31 := z.limit - z.cursor
+	z.r_step5m()
+	z.cursor = z.limit - v_31
+	v_32 := z.limit - z.cursor
+	z.r_step6()
+	z.cursor = z.limit - v_32
+	v_33 := z.limit - z.cursor
+	z.r_step7()
+	z.cursor = z.limit - v_33
+	z.cursor = z.limitBackward
+	return
+}
+
+type hungarianStemmer struct {
+	snowball
+	I_p1 int
+}
+
+func newHungarian() *hungarianStemmer { return &hungarianStemmer{} }
+
+var hun_a_0 = []among{
+	{"cs", -1, -1, ""},
+	{"dzs", -1, -1, ""},
+	{"gy", -1, -1, ""},
+	{"ly", -1, -1, ""},
+	{"ny", -1, -1, ""},
+	{"sz", -1, -1, ""},
+	{"ty", -1, -1, ""},
+	{"zs", -1, -1, ""},
+}
+var hun_a_1 = []among{
+	{"\u00E1", -1, 1, ""},
+	{"\u00E9", -1, 2, ""},
+}
+var hun_a_2 = []among{
+	{"bb", -1, -1, ""},
+	{"cc", -1, -1, ""},
+	{"dd", -1, -1, ""},
+	{"ff", -1, -1, ""},
+	{"gg", -1, -1, ""},
+	{"jj", -1, -1, ""},
+	{"kk", -1, -1, ""},
+	{"ll", -1, -1, ""},
+	{"mm", -1, -1, ""},
+	{"nn", -1, -1, ""},
+	{"pp", -1, -1, ""},
+	{"rr", -1, -1, ""},
+	{"ccs", -1, -1, ""},
+	{"ss", -1, -1, ""},
+	{"zzs", -1, -1, ""},
+	{"tt", -1, -1, ""},
+	{"vv", -1, -1, ""},
+	{"ggy", -1, -1, ""},
+	{"lly", -1, -1, ""},
+	{"nny", -1, -1, ""},
+	{"tty", -1, -1, ""},
+	{"ssz", -1, -1, ""},
+	{"zz", -1, -1, ""},
+}
+var hun_a_3 = []among{
+	{"al", -1, 1, ""},
+	{"el", -1, 1, ""},
+}
+var hun_a_4 = []among{
+	{"ba", -1, -1, ""},
+	{"ra", -1, -1, ""},
+	{"be", -1, -1, ""},
+	{"re", -1, -1, ""},
+	{"ig", -1, -1, ""},
+	{"nak", -1, -1, ""},
+	{"nek", -1, -1, ""},
+	{"val", -1, -1, ""},
+	{"vel", -1, -1, ""},
+	{"ul", -1, -1, ""},
+	{"n\u00E1l", -1, -1, ""},
+	{"n\u00E9l", -1, -1, ""},
+	{"b\u00F3l", -1, -1, ""},
+	{"r\u00F3l", -1, -1, ""},
+	{"t\u00F3l", -1, -1, ""},
+	{"\u00FCl", -1, -1, ""},
+	{"b\u0151l", -1, -1, ""},
+	{"r\u0151l", -1, -1, ""},
+	{"t\u0151l", -1, -1, ""},
+	{"n", -1, -1, ""},
+	{"an", 19, -1, ""},
+	{"ban", 20, -1, ""},
+	{"en", 19, -1, ""},
+	{"ben", 22, -1, ""},
+	{"k\u00E9ppen", 22, -1, ""},
+	{"on", 19, -1, ""},
+	{"\u00F6n", 19, -1, ""},
+	{"k\u00E9pp", -1, -1, ""},
+	{"kor", -1, -1, ""},
+	{"t", -1, -1, ""},
+	{"at", 29, -1, ""},
+	{"et", 29, -1, ""},
+	{"k\u00E9nt", 29, -1, ""},
+	{"ank\u00E9nt", 32, -1, ""},
+	{"enk\u00E9nt", 32, -1, ""},
+	{"onk\u00E9nt", 32, -1, ""},
+	{"ot", 29, -1, ""},
+	{"\u00E9rt", 29, -1, ""},
+	{"\u00F6t", 29, -1, ""},
+	{"hez", -1, -1, ""},
+	{"hoz", -1, -1, ""},
+	{"h\u00F6z", -1, -1, ""},
+	{"v\u00E1", -1, -1, ""},
+	{"v\u00E9", -1, -1, ""},
+}
+var hun_a_5 = []among{
+	{"\u00E1n", -1, 2, ""},
+	{"\u00E9n", -1, 1, ""},
+	{"\u00E1nk\u00E9nt", -1, 2, ""},
+}
+var hun_a_6 = []among{
+	{"stul", -1, 1, ""},
+	{"astul", 0, 1, ""},
+	{"\u00E1stul", 0, 2, ""},
+	{"st\u00FCl", -1, 1, ""},
+	{"est\u00FCl", 3, 1, ""},
+	{"\u00E9st\u00FCl", 3, 3, ""},
+}
+var hun_a_7 = []among{
+	{"\u00E1", -1, 1, ""},
+	{"\u00E9", -1, 1, ""},
+}
+var hun_a_8 = []among{
+	{"k", -1, 3, ""},
+	{"ak", 0, 3, ""},
+	{"ek", 0, 3, ""},
+	{"ok", 0, 3, ""},
+	{"\u00E1k", 0, 1, ""},
+	{"\u00E9k", 0, 2, ""},
+	{"\u00F6k", 0, 3, ""},
+}
+var hun_a_9 = []among{
+	{"\u00E9i", -1, 1, ""},
+	{"\u00E1\u00E9i", 0, 3, ""},
+	{"\u00E9\u00E9i", 0, 2, ""},
+	{"\u00E9", -1, 1, ""},
+	{"k\u00E9", 3, 1, ""},
+	{"ak\u00E9", 4, 1, ""},
+	{"ek\u00E9", 4, 1, ""},
+	{"ok\u00E9", 4, 1, ""},
+	{"\u00E1k\u00E9", 4, 3, ""},
+	{"\u00E9k\u00E9", 4, 2, ""},
+	{"\u00F6k\u00E9", 4, 1, ""},
+	{"\u00E9\u00E9", 3, 2, ""},
+}
+var hun_a_10 = []among{
+	{"a", -1, 1, ""},
+	{"ja", 0, 1, ""},
+	{"d", -1, 1, ""},
+	{"ad", 2, 1, ""},
+	{"ed", 2, 1, ""},
+	{"od", 2, 1, ""},
+	{"\u00E1d", 2, 2, ""},
+	{"\u00E9d", 2, 3, ""},
+	{"\u00F6d", 2, 1, ""},
+	{"e", -1, 1, ""},
+	{"je", 9, 1, ""},
+	{"nk", -1, 1, ""},
+	{"unk", 11, 1, ""},
+	{"\u00E1nk", 11, 2, ""},
+	{"\u00E9nk", 11, 3, ""},
+	{"\u00FCnk", 11, 1, ""},
+	{"uk", -1, 1, ""},
+	{"juk", 16, 1, ""},
+	{"\u00E1juk", 17, 2, ""},
+	{"\u00FCk", -1, 1, ""},
+	{"j\u00FCk", 19, 1, ""},
+	{"\u00E9j\u00FCk", 20, 3, ""},
+	{"m", -1, 1, ""},
+	{"am", 22, 1, ""},
+	{"em", 22, 1, ""},
+	{"om", 22, 1, ""},
+	{"\u00E1m", 22, 2, ""},
+	{"\u00E9m", 22, 3, ""},
+	{"o", -1, 1, ""},
+	{"\u00E1", -1, 2, ""},
+	{"\u00E9", -1, 3, ""},
+}
+var hun_a_11 = []among{
+	{"id", -1, 1, ""},
+	{"aid", 0, 1, ""},
+	{"jaid", 1, 1, ""},
+	{"eid", 0, 1, ""},
+	{"jeid", 3, 1, ""},
+	{"\u00E1id", 0, 2, ""},
+	{"\u00E9id", 0, 3, ""},
+	{"i", -1, 1, ""},
+	{"ai", 7, 1, ""},
+	{"jai", 8, 1, ""},
+	{"ei", 7, 1, ""},
+	{"jei", 10, 1, ""},
+	{"\u00E1i", 7, 2, ""},
+	{"\u00E9i", 7, 3, ""},
+	{"itek", -1, 1, ""},
+	{"eitek", 14, 1, ""},
+	{"jeitek", 15, 1, ""},
+	{"\u00E9itek", 14, 3, ""},
+	{"ik", -1, 1, ""},
+	{"aik", 18, 1, ""},
+	{"jaik", 19, 1, ""},
+	{"eik", 18, 1, ""},
+	{"jeik", 21, 1, ""},
+	{"\u00E1ik", 18, 2, ""},
+	{"\u00E9ik", 18, 3, ""},
+	{"ink", -1, 1, ""},
+	{"aink", 25, 1, ""},
+	{"jaink", 26, 1, ""},
+	{"eink", 25, 1, ""},
+	{"jeink", 28, 1, ""},
+	{"\u00E1ink", 25, 2, ""},
+	{"\u00E9ink", 25, 3, ""},
+	{"aitok", -1, 1, ""},
+	{"jaitok", 32, 1, ""},
+	{"\u00E1itok", -1, 2, ""},
+	{"im", -1, 1, ""},
+	{"aim", 35, 1, ""},
+	{"jaim", 36, 1, ""},
+	{"eim", 35, 1, ""},
+	{"jeim", 38, 1, ""},
+	{"\u00E1im", 35, 2, ""},
+	{"\u00E9im", 35, 3, ""},
+}
+var hun_g_v = []byte{17, 65, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 17, 36, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1}
+
+func (z *hungarianStemmer) r_mark_regions() bool {
+	z.I_p1 = z.limit
+	{
+		v_1 := z.cursor
+		{
+			if !(z.inGrouping(hun_g_v, 97, 369)) {
+				goto lab1_end
+			}
+		golab2:
+			for {
+				v_2 := z.cursor
+				{
+					if !(z.outGrouping(hun_g_v, 97, 369)) {
+						goto lab3_end
+					}
+					z.cursor = v_2
+					break golab2
+				}
+			lab3_end:
+				;
+				z.cursor = v_2
+				if z.cursor >= z.limit {
+					goto lab1_end
+				}
+				z.cursor++
+			}
+			{
+				v_3 := z.cursor
+				{
+					if z.findAmong(hun_a_0) == 0 {
+						goto lab5_end
+					}
+					goto lab4_end
+				}
+			lab5_end:
+				;
+				z.cursor = v_3
+				if z.cursor >= z.limit {
+					goto lab1_end
+				}
+				z.cursor++
+			}
+		lab4_end:
+			;
+			z.I_p1 = z.cursor
+			goto lab0_end
+		}
+	lab1_end:
+		;
+		z.cursor = v_1
+		if !(z.outGrouping(hun_g_v, 97, 369)) {
+			return false
+		}
+	golab6:
+		for {
+			{
+				if !(z.inGrouping(hun_g_v, 97, 369)) {
+					goto lab7_end
+				}
+				break golab6
+			}
+		lab7_end:
+			;
+			if z.cursor >= z.limit {
+				return false
+			}
+			z.cursor++
+		}
+		z.I_p1 = z.cursor
+	}
+lab0_end:
+	;
+	return true
+}
+func (z *hungarianStemmer) r_R1() bool {
+	return z.I_p1 <= z.cursor
+}
+func (z *hungarianStemmer) r_v_ending() bool {
+	var among_var int
+	z.ket = z.cursor
+	among_var = z.findAmongB(hun_a_1)
+	if among_var == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	if !z.r_R1() {
+		return false
+	}
+	switch among_var {
+	case 1:
+		z.sliceFrom("a")
+		break
+	case 2:
+		z.sliceFrom("e")
+		break
+	}
+	return true
+}
+func (z *hungarianStemmer) r_double() bool {
+	v_1 := z.limit - z.cursor
+	if z.findAmongB(hun_a_2) == 0 {
+		return false
+	}
+	z.cursor = z.limit - v_1
+	return true
+}
+func (z *hungarianStemmer) r_undouble() bool {
+	if z.cursor <= z.limitBackward {
+		return false
+	}
+	z.cursor--
+	z.ket = z.cursor
+	{
+		c := z.cursor - 1
+		if c < z.limitBackward {
+			return false
+		}
+		z.cursor = c
+	}
+	z.bra = z.cursor
+	z.sliceDel()
+	return true
+}
+func (z *hungarianStemmer) r_instrum() bool {
+	z.ket = z.cursor
+	if z.findAmongB(hun_a_3) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	if !z.r_R1() {
+		return false
+	}
+	if !z.r_double() {
+		return false
+	}
+	z.sliceDel()
+	if !z.r_undouble() {
+		return false
+	}
+	return true
+}
+func (z *hungarianStemmer) r_case() bool {
+	z.ket = z.cursor
+	if z.findAmongB(hun_a_4) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	if !z.r_R1() {
+		return false
+	}
+	z.sliceDel()
+	if !z.r_v_ending() {
+		return false
+	}
+	return true
+}
+func (z *hungarianStemmer) r_case_special() bool {
+	var among_var int
+	z.ket = z.cursor
+	among_var = z.findAmongB(hun_a_5)
+	if among_var == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	if !z.r_R1() {
+		return false
+	}
+	switch among_var {
+	case 1:
+		z.sliceFrom("e")
+		break
+	case 2:
+		z.sliceFrom("a")
+		break
+	}
+	return true
+}
+func (z *hungarianStemmer) r_case_other() bool {
+	var among_var int
+	z.ket = z.cursor
+	among_var = z.findAmongB(hun_a_6)
+	if among_var == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	if !z.r_R1() {
+		return false
+	}
+	switch among_var {
+	case 1:
+		z.sliceDel()
+		break
+	case 2:
+		z.sliceFrom("a")
+		break
+	case 3:
+		z.sliceFrom("e")
+		break
+	}
+	return true
+}
+func (z *hungarianStemmer) r_factive() bool {
+	z.ket = z.cursor
+	if z.findAmongB(hun_a_7) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	if !z.r_R1() {
+		return false
+	}
+	if !z.r_double() {
+		return false
+	}
+	z.sliceDel()
+	if !z.r_undouble() {
+		return false
+	}
+	return true
+}
+func (z *hungarianStemmer) r_plural() bool {
+	var among_var int
+	z.ket = z.cursor
+	among_var = z.findAmongB(hun_a_8)
+	if among_var == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	if !z.r_R1() {
+		return false
+	}
+	switch among_var {
+	case 1:
+		z.sliceFrom("a")
+		break
+	case 2:
+		z.sliceFrom("e")
+		break
+	case 3:
+		z.sliceDel()
+		break
+	}
+	return true
+}
+func (z *hungarianStemmer) r_owned() bool {
+	var among_var int
+	z.ket = z.cursor
+	among_var = z.findAmongB(hun_a_9)
+	if among_var == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	if !z.r_R1() {
+		return false
+	}
+	switch among_var {
+	case 1:
+		z.sliceDel()
+		break
+	case 2:
+		z.sliceFrom("e")
+		break
+	case 3:
+		z.sliceFrom("a")
+		break
+	}
+	return true
+}
+func (z *hungarianStemmer) r_sing_owner() bool {
+	var among_var int
+	z.ket = z.cursor
+	among_var = z.findAmongB(hun_a_10)
+	if among_var == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	if !z.r_R1() {
+		return false
+	}
+	switch among_var {
+	case 1:
+		z.sliceDel()
+		break
+	case 2:
+		z.sliceFrom("a")
+		break
+	case 3:
+		z.sliceFrom("e")
+		break
+	}
+	return true
+}
+func (z *hungarianStemmer) r_plur_owner() bool {
+	var among_var int
+	z.ket = z.cursor
+	among_var = z.findAmongB(hun_a_11)
+	if among_var == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	if !z.r_R1() {
+		return false
+	}
+	switch among_var {
+	case 1:
+		z.sliceDel()
+		break
+	case 2:
+		z.sliceFrom("a")
+		break
+	case 3:
+		z.sliceFrom("e")
+		break
+	}
+	return true
+}
+func (z *hungarianStemmer) stem() {
+	v_1 := z.cursor
+	z.r_mark_regions()
+	z.cursor = v_1
+	z.limitBackward = z.cursor
+	z.cursor = z.limit
+	v_2 := z.limit - z.cursor
+	z.r_instrum()
+	z.cursor = z.limit - v_2
+	v_3 := z.limit - z.cursor
+	z.r_case()
+	z.cursor = z.limit - v_3
+	v_4 := z.limit - z.cursor
+	z.r_case_special()
+	z.cursor = z.limit - v_4
+	v_5 := z.limit - z.cursor
+	z.r_case_other()
+	z.cursor = z.limit - v_5
+	v_6 := z.limit - z.cursor
+	z.r_factive()
+	z.cursor = z.limit - v_6
+	v_7 := z.limit - z.cursor
+	z.r_owned()
+	z.cursor = z.limit - v_7
+	v_8 := z.limit - z.cursor
+	z.r_sing_owner()
+	z.cursor = z.limit - v_8
+	v_9 := z.limit - z.cursor
+	z.r_plur_owner()
+	z.cursor = z.limit - v_9
+	v_10 := z.limit - z.cursor
+	z.r_plural()
+	z.cursor = z.limit - v_10
+	z.cursor = z.limitBackward
+	return
+}
+
+type lithuanianStemmer struct {
+	snowball
+	I_p1 int
+}
+
+func newLithuanian() *lithuanianStemmer { return &lithuanianStemmer{} }
+
+var lit_a_0 = []among{
+	{"a", -1, -1, ""},
+	{"ia", 0, -1, ""},
+	{"eria", 1, -1, ""},
+	{"osna", 0, -1, ""},
+	{"iosna", 3, -1, ""},
+	{"uosna", 3, -1, ""},
+	{"iuosna", 5, -1, ""},
+	{"ysna", 0, -1, ""},
+	{"\u0117sna", 0, -1, ""},
+	{"e", -1, -1, ""},
+	{"ie", 9, -1, ""},
+	{"enie", 10, -1, ""},
+	{"erie", 10, -1, ""},
+	{"oje", 9, -1, ""},
+	{"ioje", 13, -1, ""},
+	{"uje", 9, -1, ""},
+	{"iuje", 15, -1, ""},
+	{"yje", 9, -1, ""},
+	{"enyje", 17, -1, ""},
+	{"eryje", 17, -1, ""},
+	{"\u0117je", 9, -1, ""},
+	{"ame", 9, -1, ""},
+	{"iame", 21, -1, ""},
+	{"sime", 9, -1, ""},
+	{"ome", 9, -1, ""},
+	{"\u0117me", 9, -1, ""},
+	{"tum\u0117me", 25, -1, ""},
+	{"ose", 9, -1, ""},
+	{"iose", 27, -1, ""},
+	{"uose", 27, -1, ""},
+	{"iuose", 29, -1, ""},
+	{"yse", 9, -1, ""},
+	{"enyse", 31, -1, ""},
+	{"eryse", 31, -1, ""},
+	{"\u0117se", 9, -1, ""},
+	{"ate", 9, -1, ""},
+	{"iate", 35, -1, ""},
+	{"ite", 9, -1, ""},
+	{"kite", 37, -1, ""},
+	{"site", 37, -1, ""},
+	{"ote", 9, -1, ""},
+	{"tute", 9, -1, ""},
+	{"\u0117te", 9, -1, ""},
+	{"tum\u0117te", 42, -1, ""},
+	{"i", -1, -1, ""},
+	{"ai", 44, -1, ""},
+	{"iai", 45, -1, ""},
+	{"eriai", 46, -1, ""},
+	{"ei", 44, -1, ""},
+	{"tumei", 48, -1, ""},
+	{"ki", 44, -1, ""},
+	{"imi", 44, -1, ""},
+	{"erimi", 51, -1, ""},
+	{"umi", 44, -1, ""},
+	{"iumi", 53, -1, ""},
+	{"si", 44, -1, ""},
+	{"asi", 55, -1, ""},
+	{"iasi", 56, -1, ""},
+	{"esi", 55, -1, ""},
+	{"iesi", 58, -1, ""},
+	{"siesi", 59, -1, ""},
+	{"isi", 55, -1, ""},
+	{"aisi", 61, -1, ""},
+	{"eisi", 61, -1, ""},
+	{"tumeisi", 63, -1, ""},
+	{"uisi", 61, -1, ""},
+	{"osi", 55, -1, ""},
+	{"\u0117josi", 66, -1, ""},
+	{"uosi", 66, -1, ""},
+	{"iuosi", 68, -1, ""},
+	{"siuosi", 69, -1, ""},
+	{"usi", 55, -1, ""},
+	{"ausi", 71, -1, ""},
+	{"\u010Diausi", 72, -1, ""},
+	{"\u0105si", 55, -1, ""},
+	{"\u0117si", 55, -1, ""},
+	{"\u0173si", 55, -1, ""},
+	{"t\u0173si", 76, -1, ""},
+	{"ti", 44, -1, ""},
+	{"enti", 78, -1, ""},
+	{"inti", 78, -1, ""},
+	{"oti", 78, -1, ""},
+	{"ioti", 81, -1, ""},
+	{"uoti", 81, -1, ""},
+	{"iuoti", 83, -1, ""},
+	{"auti", 78, -1, ""},
+	{"iauti", 85, -1, ""},
+	{"yti", 78, -1, ""},
+	{"\u0117ti", 78, -1, ""},
+	{"tel\u0117ti", 88, -1, ""},
+	{"in\u0117ti", 88, -1, ""},
+	{"ter\u0117ti", 88, -1, ""},
+	{"ui", 44, -1, ""},
+	{"iui", 92, -1, ""},
+	{"eniui", 93, -1, ""},
+	{"oj", -1, -1, ""},
+	{"\u0117j", -1, -1, ""},
+	{"k", -1, -1, ""},
+	{"am", -1, -1, ""},
+	{"iam", 98, -1, ""},
+	{"iem", -1, -1, ""},
+	{"im", -1, -1, ""},
+	{"sim", 101, -1, ""},
+	{"om", -1, -1, ""},
+	{"tum", -1, -1, ""},
+	{"\u0117m", -1, -1, ""},
+	{"tum\u0117m", 105, -1, ""},
+	{"an", -1, -1, ""},
+	{"on", -1, -1, ""},
+	{"ion", 108, -1, ""},
+	{"un", -1, -1, ""},
+	{"iun", 110, -1, ""},
+	{"\u0117n", -1, -1, ""},
+	{"o", -1, -1, ""},
+	{"io", 113, -1, ""},
+	{"enio", 114, -1, ""},
+	{"\u0117jo", 113, -1, ""},
+	{"uo", 113, -1, ""},
+	{"s", -1, -1, ""},
+	{"as", 118, -1, ""},
+	{"ias", 119, -1, ""},
+	{"es", 118, -1, ""},
+	{"ies", 121, -1, ""},
+	{"is", 118, -1, ""},
+	{"ais", 123, -1, ""},
+	{"iais", 124, -1, ""},
+	{"tumeis", 123, -1, ""},
+	{"imis", 123, -1, ""},
+	{"enimis", 127, -1, ""},
+	{"omis", 123, -1, ""},
+	{"iomis", 129, -1, ""},
+	{"umis", 123, -1, ""},
+	{"\u0117mis", 123, -1, ""},
+	{"enis", 123, -1, ""},
+	{"asis", 123, -1, ""},
+	{"ysis", 123, -1, ""},
+	{"ams", 118, -1, ""},
+	{"iams", 136, -1, ""},
+	{"iems", 118, -1, ""},
+	{"ims", 118, -1, ""},
+	{"enims", 139, -1, ""},
+	{"erims", 139, -1, ""},
+	{"oms", 118, -1, ""},
+	{"ioms", 142, -1, ""},
+	{"ums", 118, -1, ""},
+	{"\u0117ms", 118, -1, ""},
+	{"ens", 118, -1, ""},
+	{"os", 118, -1, ""},
+	{"ios", 147, -1, ""},
+	{"uos", 147, -1, ""},
+	{"iuos", 149, -1, ""},
+	{"ers", 118, -1, ""},
+	{"us", 118, -1, ""},
+	{"aus", 152, -1, ""},
+	{"iaus", 153, -1, ""},
+	{"ius", 152, -1, ""},
+	{"ys", 118, -1, ""},
+	{"enys", 156, -1, ""},
+	{"erys", 156, -1, ""},
+	{"\u0105s", 118, -1, ""},
+	{"i\u0105s", 159, -1, ""},
+	{"\u0117s", 118, -1, ""},
+	{"am\u0117s", 161, -1, ""},
+	{"iam\u0117s", 162, -1, ""},
+	{"im\u0117s", 161, -1, ""},
+	{"kim\u0117s", 164, -1, ""},
+	{"sim\u0117s", 164, -1, ""},
+	{"om\u0117s", 161, -1, ""},
+	{"\u0117m\u0117s", 161, -1, ""},
+	{"tum\u0117m\u0117s", 168, -1, ""},
+	{"at\u0117s", 161, -1, ""},
+	{"iat\u0117s", 170, -1, ""},
+	{"sit\u0117s", 161, -1, ""},
+	{"ot\u0117s", 161, -1, ""},
+	{"\u0117t\u0117s", 161, -1, ""},
+	{"tum\u0117t\u0117s", 174, -1, ""},
+	{"\u012Fs", 118, -1, ""},
+	{"\u016Bs", 118, -1, ""},
+	{"t\u0173s", 118, -1, ""},
+	{"at", -1, -1, ""},
+	{"iat", 179, -1, ""},
+	{"it", -1, -1, ""},
+	{"sit", 181, -1, ""},
+	{"ot", -1, -1, ""},
+	{"\u0117t", -1, -1, ""},
+	{"tum\u0117t", 184, -1, ""},
+	{"u", -1, -1, ""},
+	{"au", 186, -1, ""},
+	{"iau", 187, -1, ""},
+	{"\u010Diau", 188, -1, ""},
+	{"iu", 186, -1, ""},
+	{"eniu", 190, -1, ""},
+	{"siu", 190, -1, ""},
+	{"y", -1, -1, ""},
+	{"\u0105", -1, -1, ""},
+	{"i\u0105", 194, -1, ""},
+	{"\u0117", -1, -1, ""},
+	{"\u0119", -1, -1, ""},
+	{"\u012F", -1, -1, ""},
+	{"en\u012F", 198, -1, ""},
+	{"er\u012F", 198, -1, ""},
+	{"\u0173", -1, -1, ""},
+	{"i\u0173", 201, -1, ""},
+	{"er\u0173", 201, -1, ""},
+}
+var lit_a_1 = []among{
+	{"ing", -1, -1, ""},
+	{"aj", -1, -1, ""},
+	{"iaj", 1, -1, ""},
+	{"iej", -1, -1, ""},
+	{"oj", -1, -1, ""},
+	{"ioj", 4, -1, ""},
+	{"uoj", 4, -1, ""},
+	{"iuoj", 6, -1, ""},
+	{"auj", -1, -1, ""},
+	{"\u0105j", -1, -1, ""},
+	{"i\u0105j", 9, -1, ""},
+	{"\u0117j", -1, -1, ""},
+	{"\u0173j", -1, -1, ""},
+	{"i\u0173j", 12, -1, ""},
+	{"ok", -1, -1, ""},
+	{"iok", 14, -1, ""},
+	{"iuk", -1, -1, ""},
+	{"uliuk", 16, -1, ""},
+	{"u\u010Diuk", 16, -1, ""},
+	{"i\u0161k", -1, -1, ""},
+	{"iul", -1, -1, ""},
+	{"yl", -1, -1, ""},
+	{"\u0117l", -1, -1, ""},
+	{"am", -1, -1, ""},
+	{"dam", 23, -1, ""},
+	{"jam", 23, -1, ""},
+	{"zgan", -1, -1, ""},
+	{"ain", -1, -1, ""},
+	{"esn", -1, -1, ""},
+	{"op", -1, -1, ""},
+	{"iop", 29, -1, ""},
+	{"ias", -1, -1, ""},
+	{"ies", -1, -1, ""},
+	{"ais", -1, -1, ""},
+	{"iais", 33, -1, ""},
+	{"os", -1, -1, ""},
+	{"ios", 35, -1, ""},
+	{"uos", 35, -1, ""},
+	{"iuos", 37, -1, ""},
+	{"aus", -1, -1, ""},
+	{"iaus", 39, -1, ""},
+	{"\u0105s", -1, -1, ""},
+	{"i\u0105s", 41, -1, ""},
+	{"\u0119s", -1, -1, ""},
+	{"ut\u0117ait", -1, -1, ""},
+	{"ant", -1, -1, ""},
+	{"iant", 45, -1, ""},
+	{"siant", 46, -1, ""},
+	{"int", -1, -1, ""},
+	{"ot", -1, -1, ""},
+	{"uot", 49, -1, ""},
+	{"iuot", 50, -1, ""},
+	{"yt", -1, -1, ""},
+	{"\u0117t", -1, -1, ""},
+	{"yk\u0161t", -1, -1, ""},
+	{"iau", -1, -1, ""},
+	{"dav", -1, -1, ""},
+	{"sv", -1, -1, ""},
+	{"\u0161v", -1, -1, ""},
+	{"yk\u0161\u010D", -1, -1, ""},
+	{"\u0119", -1, -1, ""},
+	{"\u0117j\u0119", 60, -1, ""},
+}
+var lit_a_2 = []among{
+	{"ojime", -1, 7, ""},
+	{"\u0117jime", -1, 3, ""},
+	{"avime", -1, 6, ""},
+	{"okate", -1, 8, ""},
+	{"aite", -1, 1, ""},
+	{"uote", -1, 2, ""},
+	{"asius", -1, 5, ""},
+	{"okat\u0117s", -1, 8, ""},
+	{"ait\u0117s", -1, 1, ""},
+	{"uot\u0117s", -1, 2, ""},
+	{"esiu", -1, 4, ""},
+}
+var lit_a_3 = []among{
+	{"\u010D", -1, 1, ""},
+	{"d\u017E", -1, 2, ""},
+}
+var lit_a_4 = []among{
+	{"gd", -1, 1, ""},
+}
+var lit_g_v = []byte{17, 65, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 64, 1, 0, 64, 0, 0, 0, 0, 0, 0, 0, 4, 4}
+
+func (z *lithuanianStemmer) r_step1() bool {
+	if z.cursor < z.I_p1 {
+		return false
+	}
+	v_2 := z.limitBackward
+	z.limitBackward = z.I_p1
+	z.ket = z.cursor
+	if z.findAmongB(lit_a_0) == 0 {
+		z.limitBackward = v_2
+		return false
+	}
+	z.bra = z.cursor
+	z.limitBackward = v_2
+	z.sliceDel()
+	return true
+}
+func (z *lithuanianStemmer) r_step2() bool {
+	for {
+		v_1 := z.limit - z.cursor
+		{
+			if z.cursor < z.I_p1 {
+				goto lab0_end
+			}
+			v_3 := z.limitBackward
+			z.limitBackward = z.I_p1
+			z.ket = z.cursor
+			if z.findAmongB(lit_a_1) == 0 {
+				z.limitBackward = v_3
+				goto lab0_end
+			}
+			z.bra = z.cursor
+			z.limitBackward = v_3
+			z.sliceDel()
+			continue
+		}
+	lab0_end:
+		;
+		z.cursor = z.limit - v_1
+		break
+	}
+	return true
+}
+func (z *lithuanianStemmer) r_fix_conflicts() bool {
+	var among_var int
+	z.ket = z.cursor
+	among_var = z.findAmongB(lit_a_2)
+	if among_var == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	switch among_var {
+	case 1:
+		z.sliceFrom("ait\u0117")
+		break
+	case 2:
+		z.sliceFrom("uot\u0117")
+		break
+	case 3:
+		z.sliceFrom("\u0117jimas")
+		break
+	case 4:
+		z.sliceFrom("esys")
+		break
+	case 5:
+		z.sliceFrom("asys")
+		break
+	case 6:
+		z.sliceFrom("avimas")
+		break
+	case 7:
+		z.sliceFrom("ojimas")
+		break
+	case 8:
+		z.sliceFrom("okat\u0117")
+		break
+	}
+	return true
+}
+func (z *lithuanianStemmer) r_fix_chdz() bool {
+	var among_var int
+	z.ket = z.cursor
+	among_var = z.findAmongB(lit_a_3)
+	if among_var == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	switch among_var {
+	case 1:
+		z.sliceFrom("t")
+		break
+	case 2:
+		z.sliceFrom("d")
+		break
+	}
+	return true
+}
+func (z *lithuanianStemmer) r_fix_gd() bool {
+	z.ket = z.cursor
+	if z.findAmongB(lit_a_4) == 0 {
+		return false
+	}
+	z.bra = z.cursor
+	z.sliceFrom("g")
+	return true
+}
+func (z *lithuanianStemmer) stem() {
+	z.I_p1 = z.limit
+	v_1 := z.cursor
+	{
+		v_2 := z.cursor
+		{
+			v_3 := z.cursor
+			if !(z.eqS("a")) {
+				z.cursor = v_2
+				goto lab1_end
+			}
+			z.cursor = v_3
+			if z.length <= 6 {
+				z.cursor = v_2
+				goto lab1_end
+			}
+			{
+				c := z.cursor + 1
+				if c > z.limit {
+					z.cursor = v_2
+					goto lab1_end
+				}
+				z.cursor = c
+			}
+		}
+	lab1_end:
+		;
+	golab2:
+		for {
+			{
+				if !(z.inGrouping(lit_g_v, 97, 371)) {
+					goto lab3_end
+				}
+				break golab2
+			}
+		lab3_end:
+			;
+			if z.cursor >= z.limit {
+				goto lab0_end
+			}
+			z.cursor++
+		}
+	golab4:
+		for {
+			{
+				if !(z.outGrouping(lit_g_v, 97, 371)) {
+					goto lab5_end
+				}
+				break golab4
+			}
+		lab5_end:
+			;
+			if z.cursor >= z.limit {
+				goto lab0_end
+			}
+			z.cursor++
+		}
+		z.I_p1 = z.cursor
+	}
+lab0_end:
+	;
+	z.cursor = v_1
+	z.limitBackward = z.cursor
+	z.cursor = z.limit
+	v_6 := z.limit - z.cursor
+	z.r_fix_conflicts()
+	z.cursor = z.limit - v_6
+	v_7 := z.limit - z.cursor
+	z.r_step1()
+	z.cursor = z.limit - v_7
+	v_8 := z.limit - z.cursor
+	z.r_fix_chdz()
+	z.cursor = z.limit - v_8
+	v_9 := z.limit - z.cursor
+	z.r_step2()
+	z.cursor = z.limit - v_9
+	v_10 := z.limit - z.cursor
+	z.r_fix_chdz()
+	z.cursor = z.limit - v_10
+	v_11 := z.limit - z.cursor
+	z.r_fix_gd()
+	z.cursor = z.limit - v_11
+	z.cursor = z.limitBackward
+	return
+}
+
+type norwegianStemmer struct {
+	snowball
+	I_x  int
+	I_p1 int
+}
+
+func newNorwegian() *norwegianStemmer { return &norwegianStemmer{} }
+
+var nor_a_0 = []among{
+	{"a", -1, 1, ""},
+	{"e", -1, 1, ""},
+	{"ede", 1, 1, ""},
+	{"ande", 1, 1, ""},
+	{"ende", 1, 1, ""},
+	{"ane", 1, 1, ""},
+	{"ene", 1, 1, ""},
+	{"hetene", 6, 1, ""},
+	{"erte", 1, 3, ""},
+	{"en", -1, 1, ""},
+	{"heten", 9, 1, ""},
+	{"ar", -1, 1, ""},
+	{"er", -1, 1, ""},
+	{"heter", 12, 1, ""},
+	{"s", -1, 2, ""},
+	{"as", 14, 1, ""},
+	{"es", 14, 1, ""},
+	{"edes", 16, 1, ""},
+	{"endes", 16, 1, ""},
+	{"enes", 16, 1, ""},
+	{"hetenes", 19, 1, ""},
+	{"ens", 14, 1, ""},
+	{"hetens", 21, 1, ""},
+	{"ers", 14, 1, ""},
+	{"ets", 14, 1, ""},
+	{"et", -1, 1, ""},
+	{"het", 25, 1, ""},
+	{"ert", -1, 3, ""},
+	{"ast", -1, 1, ""},
+}
+var nor_a_1 = []among{
+	{"dt", -1, -1, ""},
+	{"vt", -1, -1, ""},
+}
+var nor_a_2 = []among{
+	{"leg", -1, 1, ""},
+	{"eleg", 0, 1, ""},
+	{"ig", -1, 1, ""},
+	{"eig", 2, 1, ""},
+	{"lig", 2, 1, ""},
+	{"elig", 4, 1, ""},
+	{"els", -1, 1, ""},
+	{"lov", -1, 1, ""},
+	{"elov", 7, 1, ""},
+	{"slov", 7, 1, ""},
+	{"hetslov", 9, 1, ""},
+}
+var nor_g_v = []byte{17, 65, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 48, 0, 128}
+var nor_g_s_ending = []byte{119, 125, 149, 1}
+
+func (z *norwegianStemmer) r_mark_regions() bool {
+	z.I_p1 = z.limit
+	v_1 := z.cursor
+	{
+		c := z.cursor + 3
+		if c > z.limit {
+			return false
+		}
+		z.cursor = c
+	}
+	z.I_x = z.cursor
+	z.cursor = v_1
+golab0:
+	for {
+		v_2 := z.cursor
+		{
+			if !(z.inGrouping(nor_g_v, 97, 248)) {
+				goto lab1_end
+			}
+			z.cursor = v_2
+			break golab0
+		}
+	lab1_end:
+		;
+		z.cursor = v_2
+		if z.cursor >= z.limit {
+			return false
+		}
+		z.cursor++
+	}
+golab2:
+	for {
+		{
+			if !(z.outGrouping(nor_g_v, 97, 248)) {
+				goto lab3_end
+			}
+			break golab2
+		}
+	lab3_end:
+		;
+		if z.cursor >= z.limit {
+			return false
+		}
+		z.cursor++
+	}
+	z.I_p1 = z.cursor
+	{
+		if z.I_p1 >= z.I_x {
+			goto lab4_end
+		}
+		z.I_p1 = z.I_x
+	}
+lab4_end:
+	;
+	return true
+}
+func (z *norwegianStemmer) r_main_suffix() bool {
+	var among_var int
+	if z.cursor < z.I_p1 {
+		return false
+	}
+	v_2 := z.limitBackward
+	z.limitBackward = z.I_p1
+	z.ket = z.cursor
+	among_var = z.findAmongB(nor_a_0)
+	if among_var == 0 {
+		z.limitBackward = v_2
+		return false
+	}
+	z.bra = z.cursor
+	z.limitBackward = v_2
+	switch among_var {
+	case 1:
+		z.sliceDel()
+		break
+	case 2:
+		{
+			v_3 := z.limit - z.cursor
+			{
+				if !(z.inGroupingB(nor_g_s_ending, 98, 122)) {
+					goto lab1_end
+				}
+				goto lab0_end
+			}
+		lab1_end:
+			;
+			z.cursor = z.limit - v_3
+			if !(z.eqSB("k")) {
+				return false
+			}
+			if !(z.outGroupingB(nor_g_v, 97, 248)) {
+				return false
+			}
+		}
+	lab0_end:
+		;
+		z.sliceDel()
+		break
+	case 3:
+		z.sliceFrom("er")
+		break
+	}
+	return true
+}
+func (z *norwegianStemmer) r_consonant_pair() bool {
+	v_1 := z.limit - z.cursor
+	if z.cursor < z.I_p1 {
+		return false
+	}
+	v_3 := z.limitBackward
+	z.limitBackward = z.I_p1
+	z.ket = z.cursor
+	if z.findAmongB(nor_a_1) == 0 {
+		z.limitBackward = v_3
+		return false
+	}
+	z.bra = z.cursor
+	z.limitBackward = v_3
+	z.cursor = z.limit - v_1
+	if z.cursor <= z.limitBackward {
+		return false
+	}
+	z.cursor--
+	z.bra = z.cursor
+	z.sliceDel()
+	return true
+}
+func (z *norwegianStemmer) r_other_suffix() bool {
+	if z.cursor < z.I_p1 {
+		return false
+	}
+	v_2 := z.limitBackward
+	z.limitBackward = z.I_p1
+	z.ket = z.cursor
+	if z.findAmongB(nor_a_2) == 0 {
+		z.limitBackward = v_2
+		return false
+	}
+	z.bra = z.cursor
+	z.limitBackward = v_2
+	z.sliceDel()
+	return true
+}
+func (z *norwegianStemmer) stem() {
+	v_1 := z.cursor
+	z.r_mark_regions()
+	z.cursor = v_1
+	z.limitBackward = z.cursor
+	z.cursor = z.limit
+	v_2 := z.limit - z.cursor
+	z.r_main_suffix()
+	z.cursor = z.limit - v_2
+	v_3 := z.limit - z.cursor
+	z.r_consonant_pair()
+	z.cursor = z.limit - v_3
+	v_4 := z.limit - z.cursor
+	z.r_other_suffix()
+	z.cursor = z.limit - v_4
+	z.cursor = z.limitBackward
+	return
+}
+
+type swedishStemmer struct {
+	snowball
+	I_x  int
+	I_p1 int
+}
+
+func newSwedish() *swedishStemmer { return &swedishStemmer{} }
+
+var swe_a_0 = []among{
+	{"a", -1, 1, ""},
+	{"arna", 0, 1, ""},
+	{"erna", 0, 1, ""},
+	{"heterna", 2, 1, ""},
+	{"orna", 0, 1, ""},
+	{"ad", -1, 1, ""},
+	{"e", -1, 1, ""},
+	{"ade", 6, 1, ""},
+	{"ande", 6, 1, ""},
+	{"arne", 6, 1, ""},
+	{"are", 6, 1, ""},
+	{"aste", 6, 1, ""},
+	{"en", -1, 1, ""},
+	{"anden", 12, 1, ""},
+	{"aren", 12, 1, ""},
+	{"heten", 12, 1, ""},
+	{"ern", -1, 1, ""},
+	{"ar", -1, 1, ""},
+	{"er", -1, 1, ""},
+	{"heter", 18, 1, ""},
+	{"or", -1, 1, ""},
+	{"s", -1, 2, ""},
+	{"as", 21, 1, ""},
+	{"arnas", 22, 1, ""},
+	{"ernas", 22, 1, ""},
+	{"ornas", 22, 1, ""},
+	{"es", 21, 1, ""},
+	{"ades", 26, 1, ""},
+	{"andes", 26, 1, ""},
+	{"ens", 21, 1, ""},
+	{"arens", 29, 1, ""},
+	{"hetens", 29, 1, ""},
+	{"erns", 21, 1, ""},
+	{"at", -1, 1, ""},
+	{"andet", -1, 1, ""},
+	{"het", -1, 1, ""},
+	{"ast", -1, 1, ""},
+}
+var swe_a_1 = []among{
+	{"dd", -1, -1, ""},
+	{"gd", -1, -1, ""},
+	{"nn", -1, -1, ""},
+	{"dt", -1, -1, ""},
+	{"gt", -1, -1, ""},
+	{"kt", -1, -1, ""},
+	{"tt", -1, -1, ""},
+}
+var swe_a_2 = []among{
+	{"ig", -1, 1, ""},
+	{"lig", 0, 1, ""},
+	{"els", -1, 1, ""},
+	{"fullt", -1, 3, ""},
+	{"\u00F6st", -1, 2, ""},
+}
+var swe_g_v = []byte{17, 65, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24, 0, 32}
+var swe_g_s_ending = []byte{119, 127, 149}
+var swe_g_ost_ending = []byte{173, 58}
+
+func (z *swedishStemmer) r_mark_regions() bool {
+	z.I_p1 = z.limit
+	v_1 := z.cursor
+	{
+		c := z.cursor + 3
+		if c > z.limit {
+			return false
+		}
+		z.cursor = c
+	}
+	z.I_x = z.cursor
+	z.cursor = v_1
+golab0:
+	for {
+		v_2 := z.cursor
+		{
+			if !(z.inGrouping(swe_g_v, 97, 246)) {
+				goto lab1_end
+			}
+			z.cursor = v_2
+			break golab0
+		}
+	lab1_end:
+		;
+		z.cursor = v_2
+		if z.cursor >= z.limit {
+			return false
+		}
+		z.cursor++
+	}
+golab2:
+	for {
+		{
+			if !(z.outGrouping(swe_g_v, 97, 246)) {
+				goto lab3_end
+			}
+			break golab2
+		}
+	lab3_end:
+		;
+		if z.cursor >= z.limit {
+			return false
+		}
+		z.cursor++
+	}
+	z.I_p1 = z.cursor
+	{
+		if z.I_p1 >= z.I_x {
+			goto lab4_end
+		}
+		z.I_p1 = z.I_x
+	}
+lab4_end:
+	;
+	return true
+}
+func (z *swedishStemmer) r_main_suffix() bool {
+	var among_var int
+	if z.cursor < z.I_p1 {
+		return false
+	}
+	v_2 := z.limitBackward
+	z.limitBackward = z.I_p1
+	z.ket = z.cursor
+	among_var = z.findAmongB(swe_a_0)
+	if among_var == 0 {
+		z.limitBackward = v_2
+		return false
+	}
+	z.bra = z.cursor
+	z.limitBackward = v_2
+	switch among_var {
+	case 1:
+		z.sliceDel()
+		break
+	case 2:
+		if !(z.inGroupingB(swe_g_s_ending, 98, 121)) {
+			return false
+		}
+		z.sliceDel()
+		break
+	}
+	return true
+}
+func (z *swedishStemmer) r_consonant_pair() bool {
+	if z.cursor < z.I_p1 {
+		return false
+	}
+	v_2 := z.limitBackward
+	z.limitBackward = z.I_p1
+	v_3 := z.limit - z.cursor
+	if z.findAmongB(swe_a_1) == 0 {
+		z.limitBackward = v_2
+		return false
+	}
+	z.cursor = z.limit - v_3
+	z.ket = z.cursor
+	if z.cursor <= z.limitBackward {
+		z.limitBackward = v_2
+		return false
+	}
+	z.cursor--
+	z.bra = z.cursor
+	z.sliceDel()
+	z.limitBackward = v_2
+	return true
+}
+func (z *swedishStemmer) r_other_suffix() bool {
+	var among_var int
+	if z.cursor < z.I_p1 {
+		return false
+	}
+	v_2 := z.limitBackward
+	z.limitBackward = z.I_p1
+	z.ket = z.cursor
+	among_var = z.findAmongB(swe_a_2)
+	if among_var == 0 {
+		z.limitBackward = v_2
+		return false
+	}
+	z.bra = z.cursor
+	z.limitBackward = v_2
+	switch among_var {
+	case 1:
+		z.sliceDel()
+		break
+	case 2:
+		if !(z.inGroupingB(swe_g_ost_ending, 105, 118)) {
+			return false
+		}
+		z.sliceFrom("\u00F6s")
+		break
+	case 3:
+		z.sliceFrom("full")
+		break
+	}
+	return true
+}
+func (z *swedishStemmer) stem() {
+	v_1 := z.cursor
+	z.r_mark_regions()
+	z.cursor = v_1
+	z.limitBackward = z.cursor
+	z.cursor = z.limit
+	v_2 := z.limit - z.cursor
+	z.r_main_suffix()
+	z.cursor = z.limit - v_2
+	v_3 := z.limit - z.cursor
+	z.r_consonant_pair()
+	z.cursor = z.limit - v_3
+	v_4 := z.limit - z.cursor
+	z.r_other_suffix()
+	z.cursor = z.limit - v_4
+	z.cursor = z.limitBackward
 	return
 }

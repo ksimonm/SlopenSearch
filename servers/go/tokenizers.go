@@ -566,9 +566,7 @@ func reversePathTokens(text string, delim, repl rune, skip int) []analyzedToken 
 // thaiTokens approximates Lucene's ThaiTokenizer (dictionary based word
 // breaking is not available): runs of letters and digits become words.
 func thaiTokens(text string) []analyzedToken {
-	return charTokenize(text, func(r rune) bool {
-		return unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Mc, r)
-	}, nil, 1<<20)
+	return thaiAnalyzedTokens(text)
 }
 
 // ---------------------------------------------------------------- classic
