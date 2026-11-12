@@ -263,6 +263,9 @@ func validateProps(props map[string]any) *mappingValidationError {
 			}
 		}
 		for _, k := range sortedAnyKeys(def) {
+			if t == "knn_vector" && knnFieldParams[k] {
+				continue
+			}
 			if !allowedMappingParams[k] {
 				return mve(fmt.Sprintf("unknown parameter [%s] on mapper [%s] of type [%s]", k, name, t), "")
 			}
