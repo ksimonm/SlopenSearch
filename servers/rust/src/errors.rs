@@ -15,6 +15,8 @@ pub struct ApiError {
     pub top_type: Option<String>,
     pub top_reason: Option<String>,
     pub root_cause: Option<Box<ApiError>>,
+    /// A complete pre-rendered response body (e.g. shard failure envelopes).
+    pub raw: Option<Box<Value>>,
 }
 
 impl ApiError {
@@ -29,6 +31,7 @@ impl ApiError {
             top_type: None,
             top_reason: None,
             root_cause: None,
+            raw: None,
         }
     }
 
@@ -68,6 +71,9 @@ impl ApiError {
     }
 
     pub fn to_value(&self) -> Value {
+        if let Some(raw) = &self.raw {
+            return (**raw).clone();
+        }
         let (rc_type, rc_reason) = match &self.root_cause {
             Some(rc) => (rc.typ.clone(), rc.reason.clone()),
             None => (self.typ.clone(), self.reason.clone()),

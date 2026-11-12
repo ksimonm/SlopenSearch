@@ -610,8 +610,7 @@ struct SortSpec {
     nested_filter: Option<Value>,
     unmapped_type: Option<String>,
     numeric_type: Option<String>,
-    script_src: Option<String>,
-    script_params: Value,
+    script_raw: Value,
     script_type: String,
     geo: Value,
     geo_unit: String,
@@ -695,19 +694,17 @@ fn parse_sort_specs(raw: Option<&Value>) -> Result<Vec<SortSpec>, ApiError> {
                             .get("order")
                             .map(|v| value_to_string(v).unwrap_or_default() == "desc")
                             .unwrap_or(false);
-                        sp.script_type = so
-                            .get("type")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("number")
-                            .to_string();
-                        if let Some(script) = so.get("script") {
-                            if let Some(src) = script.get("source").and_then(|v| v.as_str()) {
-                                sp.script_src = Some(src.to_string());
-                            }
-                            if let Some(params) = script.get("params") {
-                                sp.script_params = params.clone();
-                            }
+                        let st = match so.get("type").and_then(|v| v.as_str()) {
+                            Some(t) => t.to_string(),
+                            None => return Err(ApiError::bad("Required [type]")),
+                        };
+                        if !matches!(st.as_str(), "number" | "string" | "version") {
+                            return Err(sort_parse_error("[_script] failed to parse field [type]").caused_by(
+                                ApiError::bad(&format!("Unknown ScriptSortType [{}]", st)),
+                            ));
                         }
+                        sp.script_type = st;
+                        sp.script_raw = so.get("script").cloned().unwrap_or(Value::Null);
                     }
                     out.push(sp);
                     continue;
@@ -1021,31 +1018,38 @@ fn nested_sort_values(idx: &Index, id: &str, sp: &SortSpec, path: &str) -> Vec<V
     out
 }
 
-fn eval_sort_script(sp: &SortSpec, h: &MultiHit) -> Value {
-    let src = sp.script_src.clone().unwrap_or_default();
-    let params = sp.script_params.as_object().cloned().unwrap_or_default();
-    let field_of = |s: &str| -> Option<String> {
-        let a = s.find("doc['")?;
-        let rest = &s[a + 5..];
-        let b = rest.find("']")?;
-        Some(rest[..b].to_string())
+fn eval_sort_script(store: &Store, sp: &SortSpec, h: &MultiHit) -> Result<Value, ApiError> {
+    use crate::script_ctx as sc;
+    let idx = match store.indices.get(&h.idx_name) {
+        Some(i) => i,
+        None => return Ok(Value::Null),
     };
-    if let Some(f) = field_of(&src) {
-        if let Some(v) = field_value(&h.doc, &f) {
-            let raw = flatten_any(v).first().cloned().unwrap_or(Value::Null);
-            if src.contains("Math.abs") {
-                let p = params.get("p").and_then(to_f64).unwrap_or(0.0);
-                let n = to_f64(&raw).unwrap_or(0.0);
-                return json!((n - p).abs());
+    let ctx_name = if sp.script_type == "string" { "string_sort" } else { "number_sort" };
+    let cs = sc::prepare(&sp.script_raw, ctx_name).map_err(|e| sc::err_for_shard(idx, e, false))?;
+    let qc = QueryCtx::new(idx, &h.id, &h.doc);
+    let mut opts = sc::RunOpts { score: h.score, ..Default::default() };
+    let v = cs.run(Some(&qc), &mut opts).map_err(|se| sc::script_shard_error(idx, &se))?;
+    if ctx_name == "string_sort" {
+        return match v {
+            Value::String(_) | Value::Null => Ok(v),
+            other => {
+                let mut se = sc::ScriptErr::new(
+                    false,
+                    "class_cast_exception",
+                    &format!("cannot implicitly cast def [{}] to java.lang.String", sc::def_type_name(&other)),
+                );
+                se.script = cs.spec.err_name();
+                se.stack = vec![cs.spec.src.clone()];
+                Err(sc::script_shard_error(idx, &se))
             }
-            if src.contains("* -1") {
-                let n = to_f64(&raw).unwrap_or(0.0);
-                return json!(-n);
-            }
-            return raw;
-        }
+        };
     }
-    Value::Null
+    Ok(match &v {
+        Value::Number(n) => sc::f64_value(n.as_f64().unwrap_or(0.0)),
+        Value::Bool(b) => sc::f64_value(if *b { 1.0 } else { 0.0 }),
+        Value::String(s) if matches!(s.as_str(), "NaN" | "Infinity" | "-Infinity") => v.clone(),
+        _ => sc::f64_value(0.0),
+    })
 }
 
 fn geo_point(v: &Value) -> Option<(f64, f64)> {
@@ -1148,7 +1152,7 @@ fn compute_sort_cell(store: &Store, h: &MultiHit, sp: &SortSpec) -> Result<(bool
         return Ok((false, json!(h.pos)));
     }
     if sp.kind == 5 {
-        return Ok((false, eval_sort_script(sp, h)));
+        return Ok((false, eval_sort_script(store, sp, h)?));
     }
     let idx = &store.indices[&h.idx_name];
     if sp.kind == 6 {
@@ -1796,121 +1800,32 @@ fn collect_tokens(query: &Map<String, Value>, out: &mut HashSet<String>) {
     }
 }
 
-fn script_field_error(reason: &str) -> ApiError {
-    let mut e = ApiError::new(
-        "search_phase_execution_exception",
-        "all shards failed",
-        400,
-    );
-    let cause = ApiError::new("script_exception", reason, 400)
-        .field("lang", json!("painless"));
-    e.root_cause = Some(Box::new(cause.clone()));
-    e.caused_by = Some(Box::new(cause));
-    e.field("lang", json!("painless"))
-}
-
-fn eval_script_field(doc: &Value, idx: &Index, sf: &Value) -> Result<Vec<Value>, ApiError> {
-    let (src, params) = match sf {
-        Value::String(s) => (s.clone(), json!({})),
-        Value::Object(m) => {
-            let script = m.get("script").cloned().unwrap_or(Value::Null);
-            match script {
-                Value::String(s) => (s, json!({})),
-                Value::Object(so) => (
-                    so.get("source")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    so.get("params").cloned().unwrap_or(json!({})),
-                ),
-                _ => (String::new(), json!({})),
-            }
-        }
-        _ => (String::new(), json!({})),
+/// Evaluates one script field for a hit; None omits the field.
+fn eval_script_field(
+    idx: &Index,
+    id: &str,
+    doc: &Value,
+    sf: &Value,
+    source: &mut Option<Value>,
+) -> Result<Option<Vec<Value>>, ApiError> {
+    use crate::script_ctx as sc;
+    let (raw, ignore_failure) = match sf {
+        Value::Object(m) if m.contains_key("script") => (
+            m.get("script").cloned().unwrap_or(Value::Null),
+            m.get("ignore_failure").and_then(|v| v.as_bool()).unwrap_or(false),
+        ),
+        other => (other.clone(), false),
     };
-    let src = src.trim().to_string();
-    let missing = || script_field_error("runtime error");
-    let field_name = |s: &str| -> Option<String> {
-        let a = s.find("doc['")?;
-        let rest = &s[a + 5..];
-        let b = rest.find("']")?;
-        Some(rest[..b].to_string())
-    };
-    if src == "null" {
-        return Ok(vec![Value::Null]);
+    let cs = sc::prepare(&raw, "field").map_err(|e| sc::err_for_shard(idx, e, false))?;
+    let qc = QueryCtx::new(idx, id, doc);
+    let mut opts = sc::RunOpts { source: source.take(), ..Default::default() };
+    let res = cs.run(Some(&qc), &mut opts);
+    *source = opts.source.take();
+    match res {
+        Ok(v) => Ok(sc::field_script_values(v)),
+        Err(_) if ignore_failure => Ok(None),
+        Err(se) => Err(sc::script_shard_error(idx, &se)),
     }
-    if src.starts_with('[') && src.ends_with(']') {
-        let inner = &src[1..src.len() - 1];
-        if let Some((k, v)) = inner.split_once(':') {
-            let key = k.trim().trim_matches(|c| c == '\'' || c == '"');
-            let val: Value = if let Ok(n) = v.trim().parse::<f64>() {
-                json!(n)
-            } else {
-                json!(v.trim().trim_matches(|c| c == '\'' || c == '"'))
-            };
-            let mut m = Map::new();
-            m.insert(key.to_string(), val);
-            return Ok(vec![Value::Object(m)]);
-        }
-        let vals: Vec<Value> = inner
-            .split(',')
-            .filter_map(|x| x.trim().parse::<f64>().ok().map(|n| json!(n)))
-            .collect();
-        return Ok(vals);
-    }
-    if let Some(rest) = src.strip_prefix("params['_source']") {
-        let mut cur = doc;
-        let mut tail = rest;
-        while let Some(a) = tail.find("['") {
-            let r = &tail[a + 2..];
-            let Some(b) = r.find("']") else { break };
-            let key = &r[..b];
-            cur = cur.get(key).unwrap_or(&Value::Null);
-            tail = &r[b + 2..];
-        }
-        return Ok(vec![cur.clone()]);
-    }
-    if src.starts_with("params.x") {
-        let p = params.get("x").cloned().unwrap_or(Value::Null);
-        if let Some(f) = field_name(&src) {
-            let v = field_value(doc, &f)
-                .and_then(|x| flatten_any(x).into_iter().next())
-                .unwrap_or(Value::Null);
-            let s = format!(
-                "{}{}",
-                value_to_string(&p).unwrap_or_default(),
-                value_to_string(&v).unwrap_or_default()
-            );
-            return Ok(vec![json!(s)]);
-        }
-        return Ok(vec![p]);
-    }
-    if let Some(f) = field_name(&src) {
-        if src.contains(".size()") {
-            let n = field_value(doc, &f)
-                .map(|raw| flatten_any(raw).len() as i64)
-                .unwrap_or(0);
-            return Ok(vec![json!(n)]);
-        }
-        let Some(raw) = field_value(doc, &f) else {
-            return Err(missing());
-        };
-        let list = flatten_any(raw);
-        if src.contains("* 2") {
-            let n = list.first().and_then(to_f64).unwrap_or(0.0);
-            return Ok(vec![json!(n * 2.0)]);
-        }
-        if !src.contains(".value") {
-            return Ok(list);
-        }
-        let first = list.first().cloned().unwrap_or(Value::Null);
-        return Ok(vec![first]);
-    }
-    // Bare literals
-    if let Ok(n) = src.parse::<f64>() {
-        return Ok(vec![json!(n)]);
-    }
-    Ok(vec![json!(src)])
 }
 
 fn strip_query_names(v: &Value) -> Value {
@@ -3763,14 +3678,15 @@ pub fn run_search(
                     Some(Value::Object(m)) => m,
                     _ => Map::new(),
                 };
+                let mut source = Some(h.doc.clone());
                 for (name, spec) in sf {
-                    let vals = match eval_script_field(&h.doc, idx, spec) {
-                        Ok(v) => v,
-                        Err(e) => return Err(e),
-                    };
-                    out.insert(name.clone(), Value::Array(vals));
+                    if let Some(vals) = eval_script_field(idx, &h.id, &h.doc, spec, &mut source)? {
+                        out.insert(name.clone(), Value::Array(vals));
+                    }
                 }
-                entry.insert("fields".to_string(), Value::Object(out));
+                if !out.is_empty() {
+                    entry.insert("fields".to_string(), Value::Object(out));
+                }
             }
         }
         {
@@ -4231,7 +4147,8 @@ fn apply_search_extras(
                         .unwrap_or("")
                         .to_string();
                     let expl = match store.indices.get(&idx_name) {
-                        Some(idx) => bm25_explanation(idx, &id, &q, score, &idx_name),
+                        Some(idx) => crate::script_ctx::script_score_explanation(&q, score)
+                            .unwrap_or_else(|| bm25_explanation(idx, &id, &q, score, &idx_name)),
                         None => json!({"value": score, "description": "match", "details": []}),
                     };
                     o.insert("_explanation".to_string(), expl);

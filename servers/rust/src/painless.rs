@@ -12,13 +12,29 @@ pub struct ScriptEnv<'a, 'b> {
 
 impl<'a, 'b> ScriptEnv<'a, 'b> {
     pub fn resolve_path(&self, path: &str) -> Value {
+        if path.starts_with("params[") {
+            let mut norm = String::from("params");
+            for seg in path["params".len()..].split(']') {
+                let seg = seg.trim_start_matches('.').trim_start_matches('[');
+                let seg = seg.trim_matches(|c| c == '\'' || c == '"');
+                if !seg.is_empty() {
+                    norm.push('.');
+                    norm.push_str(seg);
+                }
+            }
+            return self.resolve_path(&norm);
+        }
         if path.starts_with("doc[") {
             let i = match path.find(']') {
                 Some(i) => i,
                 None => return Value::Null,
             };
             let field = path[4..i].trim_matches(|c| c == '\'' || c == '"');
-            let (vals, _) = self.c.values(field);
+            let (mut vals, _) = self.c.values(field);
+            if i + 1 == path.len() {
+                vals.sort_by(|a, b| compare_any(a, b).cmp(&0));
+                return Value::Array(vals);
+            }
             if vals.is_empty() {
                 return Value::Null;
             }
@@ -56,6 +72,20 @@ impl<'a, 'b> ScriptEnv<'a, 'b> {
                 None => return Value::Null,
             };
             for seg in rest.split('.') {
+                match cur.get(seg) {
+                    Some(v) => cur = v,
+                    None => return Value::Null,
+                }
+            }
+            return cur.clone();
+        }
+        if let Some(key) = path.strip_prefix("params.") {
+            let mut segs = key.split('.');
+            let mut cur = match self.params.get(segs.next().unwrap_or("")) {
+                Some(v) => v,
+                None => return Value::Null,
+            };
+            for seg in segs {
                 match cur.get(seg) {
                     Some(v) => cur = v,
                     None => return Value::Null,
@@ -118,6 +148,10 @@ impl<'a, 'b> ScriptEnv<'a, 'b> {
         Ok(v)
     }
 }
+
+/// Message of the illegal_state_exception raised by doc[...].value on a
+/// document without a value.
+pub const MISSING_DOC_VALUE: &str = "A document doesn't have a value for a field! Use doc[<field>].size()==0 to check if a document is missing a field!";
 
 pub fn script_float(v: &Value) -> f64 {
     if let Some(n) = integer_of(v) {
@@ -380,6 +414,41 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
             return Ok(v);
         }
         let c = self.src[self.pos];
+        if c == b'[' {
+            // list literal [a, b] or map literal [k: v, ...] / [:]
+            self.pos += 1;
+            if self.eat(":") {
+                if !self.eat("]") {
+                    return Err("expected ']'".to_string());
+                }
+                return Ok(Value::Object(Map::new()));
+            }
+            let mut list = Vec::new();
+            let mut map = Map::new();
+            if self.eat("]") {
+                return Ok(Value::Array(list));
+            }
+            loop {
+                let v = self.parse_ternary()?;
+                if self.eat(":") {
+                    let val = self.parse_ternary()?;
+                    map.insert(value_to_script_string(&v).unwrap_or_default(), val);
+                } else {
+                    list.push(v);
+                }
+                if self.eat(",") {
+                    continue;
+                }
+                if !self.eat("]") {
+                    return Err("expected ']'".to_string());
+                }
+                break;
+            }
+            if !map.is_empty() {
+                return Ok(Value::Object(map));
+            }
+            return Ok(Value::Array(list));
+        }
         if c == b'\'' || c == b'"' {
             self.pos += 1;
             let start = self.pos;
@@ -408,6 +477,11 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
                 return Ok(Value::Number(Number::from(n)));
             }
             let text = String::from_utf8_lossy(&self.src[start..self.pos]).to_string();
+            if !text.contains('.') {
+                if let Ok(n) = text.parse::<i64>() {
+                    return Ok(Value::Number(Number::from(n)));
+                }
+            }
             let f: f64 = text.parse().unwrap_or(0.0);
             return Ok(num_f64(f));
         }
@@ -456,6 +530,12 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
                 }
                 let member = String::from_utf8_lossy(&self.src[fstart..self.pos]).to_string();
                 token = format!("{}.{}", token, member);
+                if token.starts_with("Math.")
+                    && self.src[self.pos..].starts_with(b"(")
+                    && !self.src[self.pos..].starts_with(b"()")
+                {
+                    break;
+                }
                 if self.pos < self.src.len() && self.src[self.pos] == b'(' {
                     self.pos += 1;
                     if !self.eat(")") {
@@ -479,6 +559,12 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
         }
         if self.pos < self.src.len() && self.src[self.pos] == b'(' {
             return self.eval_call(&token);
+        }
+        if token.starts_with("doc[") && token.ends_with("].value") {
+            let field = Self::doc_field_of(&token);
+            if self.env.c.values(&field).0.is_empty() {
+                return Err(MISSING_DOC_VALUE.to_string());
+            }
         }
         let v = self.env.resolve_path(&token);
         if let Some(base) = token.strip_suffix(".size()") {
@@ -604,159 +690,6 @@ pub fn script_params_of(bm: &serde_json::Map<String, Value>) -> serde_json::Map<
         .and_then(|p| p.as_object())
         .cloned()
         .unwrap_or_default()
-}
-
-fn script_doc_guard(src: &str, c: &QueryCtx) -> Result<(), String> {
-    let bytes = src.as_bytes();
-    let mut i = 0usize;
-    while let Some(pos) = src[i..].find("doc[") {
-        let start = i + pos + 4;
-        let mut j = start;
-        while j < bytes.len() && bytes[j] == b' ' {
-            j += 1;
-        }
-        if j < bytes.len() && (bytes[j] == b'\'' || bytes[j] == b'"') {
-            let q = bytes[j];
-            j += 1;
-            let fstart = j;
-            while j < bytes.len() && bytes[j] != q {
-                j += 1;
-            }
-            let field = &src[fstart..j];
-            let mut k = j + 1;
-            if k < bytes.len() && bytes[k] == b']' {
-                k += 1;
-            }
-            if src[k..].starts_with(".value") && !c.has_field(field) {
-                return Err(format!("No field found for [{}] in mapping", field));
-            }
-        }
-        i = start;
-    }
-    Ok(())
-}
-
-impl<'a> QueryCtx<'a> {
-    pub fn eval_script_query(&self, body: &Value) -> Result<(bool, f64), crate::errors::ApiError> {
-        let bm = match body.as_object() {
-            Some(m) => m,
-            None => return Err(crate::errors::ApiError::parsing("[script] query malformed")),
-        };
-        let mut src = bm
-            .get("script")
-            .and_then(|s| s.as_str())
-            .unwrap_or("")
-            .to_string();
-        if src.is_empty() {
-            if let Some(sm) = bm.get("script").and_then(|s| s.as_object()) {
-                src = sm
-                    .get("source")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if src.is_empty() {
-                    src = sm
-                        .get("script")
-                        .and_then(|s| s.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                }
-            }
-        }
-        if src.is_empty() {
-            if let Some(sm) = bm.get("script").and_then(|s| s.as_object()) {
-                src = sm
-                    .get("source")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("")
-                    .to_string();
-            }
-        }
-        let mut params = script_params_of(bm);
-        if let Some(sm) = bm.get("script").and_then(|s| s.as_object()) {
-            params = script_params_of(sm);
-        }
-        let env = ScriptEnv { c: self, params };
-        if let Err(e) = script_doc_guard(&src, self) {
-            return Err(crate::eval_extra::shard_error(
-                400,
-                "script_exception",
-                &format!("failed to create query: {}", e),
-            ));
-        }
-        match env.eval_script_expression(&src) {
-            Ok(v) => {
-                if truthy(&v) {
-                    let boost = bm.get("boost").and_then(to_f64).unwrap_or(1.0);
-                    Ok((true, boost))
-                } else {
-                    Ok((false, 0.0))
-                }
-            }
-            Err(e) => Err(crate::eval_extra::shard_error(
-                400,
-                "script_exception",
-                &format!("failed to create query: {}", e),
-            )),
-        }
-    }
-
-    pub fn eval_script_score(&self, body: &Value) -> Result<(bool, f64), crate::errors::ApiError> {
-        let bm = match body.as_object() {
-            Some(m) => m,
-            None => return Err(crate::errors::ApiError::parsing("[script_score] query malformed")),
-        };
-        let inner = match bm.get("query").and_then(|q| q.as_object()) {
-            Some(q) => q,
-            None => {
-                return Err(crate::errors::ApiError::parsing(
-                    "[script_score] requires 'query'",
-                ))
-            }
-        };
-        let (matched, base_score) = self.eval(inner)?;
-        if !matched {
-            return Ok((false, 0.0));
-        }
-        let sm = match bm.get("script").and_then(|s| s.as_object()) {
-            Some(s) => s,
-            None => return Ok((true, 1.0)),
-        };
-        let src = sm.get("source").and_then(|s| s.as_str()).unwrap_or("");
-        let mut params = script_params_of(sm);
-        params.insert("__score".to_string(), serde_json::json!(base_score));
-        let env = ScriptEnv { c: self, params };
-        if let Err(e) = script_doc_guard(src, self) {
-            return Err(crate::eval_extra::shard_error(
-                400,
-                "script_exception",
-                &format!("failed to create query: {}", e),
-            ));
-        }
-        let score = match env.eval_script_expression(src) {
-            Ok(v) => script_float(&v),
-            Err(e) => {
-                return Err(crate::eval_extra::shard_error(
-                    400,
-                    "script_exception",
-                    &format!("failed to create query: {}", e),
-                ))
-            }
-        };
-        if !score.is_finite() || score < 0.0 {
-            return Err(crate::eval_extra::shard_error(
-                400,
-                "illegal_argument_exception",
-                &format!("script_score script returned an invalid score [{:?}]", score),
-            ));
-        }
-        if let Some(min) = bm.get("min_score").and_then(to_f64) {
-            if score < min {
-                return Ok((false, 0.0));
-            }
-        }
-        Ok((true, score))
-    }
 }
 
 pub fn _value_to_script_string_public(v: &Value) -> Option<String> {
