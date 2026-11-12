@@ -272,16 +272,26 @@ fn bad_param(req: &Req) -> Option<Response> {
         "requests_per_second", "retry_on_conflict", "analyze_wildcard", "default_operator", "df", "lenient",
         "allow_partial_search_results", "expand_wildcards", "ignore_unavailable", "allow_no_indices",
     ];
+    // the parameters a GET of one document consumes (did-you-mean candidates)
+    const GET_CONSUMED: &[&str] = &[
+        "index", "id", "routing", "preference", "realtime", "refresh", "stored_fields",
+        "version", "version_type", "_source", "_source_includes", "_source_excludes",
+    ];
+    let mut invalid: Vec<&str> = Vec::new();
     for (k, _) in &req.query {
-        if !ALLOWED.contains(&k.as_str()) {
-            return Some(err_response(ApiError::new(
-                "illegal_argument_exception",
-                &format!("request [{}] contains unrecognized parameter: [{}]", req.path, k),
-                400,
-            )));
+        if !ALLOWED.contains(&k.as_str()) && !invalid.contains(&k.as_str()) {
+            invalid.push(k.as_str());
         }
     }
-    None
+    if invalid.is_empty() {
+        return None;
+    }
+    let candidates: &[&str] = if req.method == "GET" || req.method == "HEAD" { GET_CONSUMED } else { ALLOWED };
+    Some(err_response(ApiError::new(
+        "illegal_argument_exception",
+        &crate::errors::unrecognized_message(&req.path, &invalid, candidates, "parameter"),
+        400,
+    )))
 }
 
 fn check_refresh(req: &Req) -> Option<Response> {

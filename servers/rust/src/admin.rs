@@ -339,17 +339,15 @@ pub fn get_index_meta(store: &mut Store, req: &Req, spec: &str) -> Response {
     };
     if req.method == "HEAD" {
         let has_wildcard = spec.contains('*') || spec.contains('?') || spec == "_all";
-        let status = if !names.is_empty() || has_wildcard {
-            200
-        } else {
-            404
-        };
-        return (
-            StatusCode::from_u16(status).unwrap(),
-            [(axum::http::header::CONTENT_TYPE, "application/json; charset=UTF-8")],
-            "",
-        )
-            .into_response();
+        if names.is_empty() && !has_wildcard {
+            return (
+                StatusCode::NOT_FOUND,
+                [(axum::http::header::CONTENT_TYPE, "application/json; charset=UTF-8")],
+                "",
+            )
+                .into_response();
+        }
+        // 200: build the GET body so the HEAD answer carries its content-length
     }
     let flat = req.bool_param("flat_settings");
     let mut out = Map::new();

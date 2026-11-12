@@ -72,8 +72,10 @@ pub struct Req {
 
 impl Req {
     pub fn param(&self, k: &str) -> Option<&str> {
+        // a repeated parameter: the last value wins
         self.query
             .iter()
+            .rev()
             .find(|(qk, _)| qk == k)
             .map(|(_, v)| v.as_str())
     }
@@ -321,6 +323,8 @@ fn parse_query(uri: &Uri) -> Vec<(String, String)> {
                 Some((k, v)) => (k, v),
                 None => (pair, ""),
             };
+            // `?=x` names the parameter after its value
+            let k = if k.is_empty() { v } else { k };
             out.push((pct_decode(k), pct_decode(v)));
         }
     }
