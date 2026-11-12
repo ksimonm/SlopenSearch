@@ -629,6 +629,49 @@ pub fn script_score_query(qc: &QueryCtx, body: &Value) -> Result<(bool, f64), Ap
     Ok((true, s * boost))
 }
 
+/// The functions the score context binds (ScoreScriptUtils): saturation,
+/// sigmoid, the numeric decay functions and randomScore. None when `name`
+/// is not one of them or the arity does not match.
+pub fn score_function(name: &str, args: &[Value], qc: &QueryCtx) -> Option<f64> {
+    let f = |i: usize| score_value(&args[i]);
+    let dist = || ((f(4) - f(0)).abs() - f(2)).max(0.0);
+    Some(match (name, args.len()) {
+        ("saturation", 2) => f(0) / (f(1) + f(0)),
+        ("sigmoid", 3) => {
+            let (v, k, e) = (f(0), f(1), f(2));
+            v.powf(e) / (k.powf(e) + v.powf(e))
+        }
+        ("decayNumericLinear", 5) => {
+            let scaling = f(1) / (1.0 - f(3));
+            ((scaling - dist()) / scaling).max(0.0)
+        }
+        ("decayNumericExp", 5) => {
+            let scaling = f(3).ln() / f(1);
+            (scaling * dist()).exp()
+        }
+        ("decayNumericGauss", 5) => {
+            let scaling = 0.5 * f(1).powi(2) / f(3).ln();
+            (0.5 * dist().powi(2) / scaling).exp()
+        }
+        ("randomScore", 1) | ("randomScore", 2) => {
+            let mut key = qc.id.clone();
+            if let Some(Value::String(field)) = args.get(1) {
+                if let Some(v) = qc.values(field).0.first() {
+                    key = value_text(v);
+                }
+            }
+            let seed = f(0) as i64;
+            let mut h: u32 = 0x811c9dc5;
+            for b in format!("{}\u{0}{}", seed, key).bytes() {
+                h ^= b as u32;
+                h = h.wrapping_mul(0x01000193);
+            }
+            (h & 0x00FF_FFFF) as f64 / (1u32 << 24) as f64
+        }
+        _ => return None,
+    })
+}
+
 /// The explanation of a top-level script_score query, if `q` is one.
 pub fn script_score_explanation(q: &Value, score: f64) -> Option<Value> {
     let raw = q.get("script_score")?.get("script")?;
@@ -875,7 +918,22 @@ fn now_millis() -> i64 {
 // current engine is the expression subset in painless.rs; errors that it
 // cannot describe are reported as generic runtime errors.
 
-fn painless_compile(_spec: &ScriptSpec, _ctx_name: &str) -> Result<(), ScriptErr> {
+fn painless_compile(spec: &ScriptSpec, ctx_name: &str) -> Result<(), ScriptErr> {
+    // The one static type check the expression subset can make: a string
+    // literal returned where the context expects a double.
+    let body = spec.src.trim().trim_end_matches(';').trim();
+    let body = body.strip_prefix("return ").unwrap_or(body).trim();
+    let is_str_literal = body.len() >= 2
+        && ((body.starts_with('\'') && body.ends_with('\'') && !body[1..body.len() - 1].contains('\''))
+            || (body.starts_with('"') && body.ends_with('"') && !body[1..body.len() - 1].contains('"')));
+    if is_str_literal && matches!(ctx_name, "score" | "number_sort") {
+        let mut se = ScriptErr::new(true, "class_cast_exception", "Cannot cast from [java.lang.String] to [double].");
+        se.script = spec.err_name();
+        let off = spec.src.find(body).unwrap_or(0);
+        se.stack = vec![snippet(&spec.src, off), caret_line(off)];
+        se.pos = Some((off as i64, 0, spec.src.len() as i64));
+        return Err(se);
+    }
     Ok(())
 }
 

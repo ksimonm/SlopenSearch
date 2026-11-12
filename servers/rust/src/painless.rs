@@ -681,7 +681,10 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
             "Math.pow" if args.len() == 2 => Ok(num_f64(
                 script_float(&args[0]).powf(script_float(&args[1])),
             )),
-            _ => Err(format!("unknown function [{}]", fn_name)),
+            _ => match crate::script_ctx::score_function(fn_name, &args, self.env.c) {
+                Some(f) => Ok(num_f64(f)),
+                None => Err(format!("unknown function [{}]", fn_name)),
+            },
         }
     }
 }
