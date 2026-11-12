@@ -2437,6 +2437,9 @@ pub fn apply_normalizer_idx(idx: &Index, name: &str, s: &str) -> String {
     if name == "lowercase" {
         return simple_lower(s);
     }
+    if let Some(n) = crate::analysis::normalize_keyword(idx, name, s) {
+        return n;
+    }
     let key = format!("index.analysis.normalizer.{}.filter", name);
     let v = match find_setting(&idx.settings, &key) {
         Some(v) => v,
