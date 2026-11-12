@@ -57,6 +57,8 @@ type Index struct {
 	SeqNos         map[string]int64
 	PrimaryTerms   map[string]int64
 	NextSeq        int64
+
+	dvGen uint64 // bumped whenever DocValues changes; validates derived caches
 }
 
 const versionCreated = "137307827"
