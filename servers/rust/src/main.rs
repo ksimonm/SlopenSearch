@@ -17,6 +17,7 @@ mod hdr;
 mod highlight;
 mod ingest;
 mod ingest_script;
+mod lang;
 mod maintenance;
 mod meta;
 mod nodes;

@@ -12,6 +12,8 @@ pub enum Stemmer {
     PossessiveEnglish,
     /// A known language whose algorithm is not implemented yet.
     Unimplemented,
+    /// A Lucene language stemmer from `crate::lang`.
+    Lang(crate::lang::chains::TermStem),
 }
 
 impl Stemmer {
@@ -22,6 +24,7 @@ impl Stemmer {
             Stemmer::MinimalEnglish => minimal_english(term),
             Stemmer::PossessiveEnglish => possessive_english(term),
             Stemmer::Unimplemented => term.to_string(),
+            Stemmer::Lang(t) => t.stem(term),
         }
     }
 }
@@ -51,6 +54,9 @@ fn invalid_class(lang: &str) -> ApiError {
 /// The stemmer for a `stemmer` filter `language` (OpenSearch's
 /// StemmerTokenFilterFactory names).
 pub fn stemmer_for(language: &str) -> Result<Stemmer, ApiError> {
+    if let Some(t) = crate::lang::chains::term_stemmer(language) {
+        return Ok(Stemmer::Lang(t));
+    }
     let l = language.to_lowercase();
     Ok(match l.as_str() {
         "english" | "porter" => Stemmer::Porter,
@@ -60,7 +66,7 @@ pub fn stemmer_for(language: &str) -> Result<Stemmer, ApiError> {
         "porter2" => Stemmer::Porter2,
         "light_english" | "kstem" => Stemmer::Unimplemented,
         "arabic" | "armenian" | "basque" | "bengali" | "brazilian" | "bulgarian" | "catalan" | "czech"
-        | "danish" | "dutch" | "dutch_kp" | "estonian" | "finnish" | "light_finnish" | "french"
+        | "danish" | "dutch" | "estonian" | "finnish" | "light_finnish" | "french"
         | "light_french" | "minimal_french" | "galician" | "minimal_galician" | "german" | "german2"
         | "light_german" | "minimal_german" | "greek" | "hindi" | "hungarian" | "light_hungarian"
         | "indonesian" | "irish" | "italian" | "light_italian" | "sorani" | "latvian" | "lithuanian"
@@ -83,7 +89,7 @@ pub fn stemmer_for(language: &str) -> Result<Stemmer, ApiError> {
                 if cls == "Porter" {
                     return Ok(Stemmer::Porter);
                 }
-                return Ok(Stemmer::Unimplemented);
+                return Ok(lang_snowball(&cls));
             }
             return Err(invalid_class(language));
         }
@@ -104,8 +110,17 @@ pub fn snowball_for(language: &str) -> Result<Stemmer, ApiError> {
     Ok(match cls.as_str() {
         "English" => Stemmer::Porter2,
         "Porter" => Stemmer::Porter,
-        _ => Stemmer::Unimplemented,
+        other => lang_snowball(other),
     })
+}
+
+fn lang_snowball(cls: &str) -> Stemmer {
+    // Snowball folded "German2" into "German".
+    let cls = if cls == "German2" { "German" } else { cls };
+    match crate::lang::chains::snowball_class(cls) {
+        Some(c) => Stemmer::Lang(crate::lang::chains::TermStem::S(c)),
+        None => Stemmer::Unimplemented,
+    }
 }
 
 // ------------------------------------------- Snowball English (Porter2)

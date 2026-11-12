@@ -56,6 +56,8 @@ pub enum Tokenizer {
     SimplePatternSplit { re: JRegex },
     CharGroup { split: Vec<CharClass>, chars: HashSet<char>, max_len: usize },
     Thai,
+    /// A complete language analyzer of `crate::lang` (see builtin_analyzer).
+    Language { name: String, params: Map<String, Value> },
 }
 
 pub fn compile_regex(pattern: &str, flags: u32) -> AResult<JRegex> {
@@ -275,11 +277,30 @@ impl Tokenizer {
             Tokenizer::Pattern { re, group } => pattern(&t, re, *group),
             Tokenizer::SimplePattern { re } => simple_pattern(&t, re, false),
             Tokenizer::SimplePatternSplit { re } => simple_pattern(&t, re, true),
-            Tokenizer::Thai => thai(&t),
+            Tokenizer::Thai => thai(text),
+            Tokenizer::Language { name, params } => language_analyzer(name, params, text),
         };
         s.fix_end();
         s
     }
+}
+
+/// A whole Lucene language analyzer chain from `crate::lang` (it runs as
+/// the tokenizer of a filter-less chain).
+fn language_analyzer(name: &str, params: &Map<String, Value>, text: &str) -> Stream {
+    let toks = crate::lang::chains::language_analyzer(name, params, text).unwrap_or_default();
+    let mut pos: isize = -1;
+    let mut end_pos = 0usize;
+    let mut out = Vec::with_capacity(toks.len());
+    for t in toks {
+        pos += t.pos_inc as isize;
+        let p = pos.max(0) as usize;
+        let mut tok = Token::new(t.term, t.start, t.end, &t.typ, p);
+        tok.pos_len = t.pos_len;
+        end_pos = end_pos.max(p + t.pos_len);
+        out.push(tok);
+    }
+    Stream { tokens: out, end_pos }
 }
 
 // ------------------------------------------------------------ char tokenizers
@@ -1058,13 +1079,10 @@ fn simple_pattern(t: &Text, re: &JRegex, split: bool) -> Stream {
 
 /// Thai needs a dictionary-based word break; without one, runs of Thai
 /// letters and other words are emitted whole.
-fn thai(t: &Text) -> Stream {
-    let mut s = standard(t, 255, false);
-    // The word break iterator skips symbols such as emoji.
-    s.tokens.retain(|tok| tok.typ != "<EMOJI>");
-    for (i, tok) in s.tokens.iter_mut().enumerate() {
-        tok.pos = i;
-        tok.typ = "word".to_string();
-    }
-    s
+/// Lucene ThaiTokenizer (JDK dictionary-based word breaks), from `crate::lang`.
+fn thai(text: &str) -> Stream {
+    let toks = crate::lang::chains::thai_tokens(text);
+    let n = toks.len();
+    let tokens = toks.into_iter().enumerate().map(|(i, (term, s, e))| Token::new(term, s, e, "word", i)).collect();
+    Stream { tokens, end_pos: n }
 }
