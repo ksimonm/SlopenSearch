@@ -2678,6 +2678,45 @@ fn lookup_path_values(v: &Value, parts: &[&str], out: &mut Vec<Value>) {
     }
 }
 
+/// Replaces `{"script": {"id": ...}}` references to stored scripts by the stored
+/// source, so every scripted part of a search reads the script as it is right now.
+fn inline_stored_scripts(store: &Store, v: &mut Value) {
+    match v {
+        Value::Object(m) => {
+            for (k, val) in m.iter_mut() {
+                if k == "script" {
+                    if let Some(sm) = val.as_object_mut() {
+                        if !sm.contains_key("source") {
+                            let stored = sm
+                                .get("id")
+                                .and_then(|i| i.as_str())
+                                .and_then(|i| store.scripts.get(i))
+                                .and_then(|st| st.get("script"))
+                                .and_then(|st| st.as_object());
+                            if let Some(st) = stored {
+                                sm.remove("id");
+                                for (sk, sv) in st {
+                                    if sk == "source" || sk == "lang" {
+                                        sm.insert(sk.clone(), sv.clone());
+                                    }
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                }
+                inline_stored_scripts(store, val);
+            }
+        }
+        Value::Array(a) => {
+            for x in a {
+                inline_stored_scripts(store, x);
+            }
+        }
+        _ => {}
+    }
+}
+
 pub fn run_search(
     store: &Store,
     url_name: &str,
@@ -2686,6 +2725,11 @@ pub fn run_search(
     req: &Req,
 ) -> Result<Value, ApiError> {
     let mut bodym = body.as_object().cloned().unwrap_or_default();
+    if !store.scripts.is_empty() {
+        for v in bodym.values_mut() {
+            inline_stored_scripts(store, v);
+        }
+    }
     if let Some(usort) = req.param("sort") {
         let mut parsed = Vec::new();
         let mut valid = true;
@@ -4569,6 +4613,9 @@ pub struct ScrollState {
     pub pos: usize,
     pub page: usize,
     pub slice: Option<(usize, usize)>,
+    /// The searched indices as they were when the scroll started: later pages
+    /// read this point-in-time view, not the live indices.
+    pub snapshot: HashMap<String, Index>,
 }
 
 fn scroll_keepalive_ms(v: &str) -> Option<u64> {
@@ -4780,7 +4827,7 @@ pub fn handle_scroll(store: &mut Store, req: &Req, rest: &[String]) -> Response 
             400,
         ));
     }
-    let Some(mut state) = store.scrolls.get(&id).cloned() else {
+    let Some(mut state) = store.scrolls.remove(&id) else {
         return err_response(scroll_not_found(&id));
     };
     let mut body = state.body.clone();
@@ -4789,7 +4836,17 @@ pub fn handle_scroll(store: &mut Store, req: &Req, rest: &[String]) -> Response 
         o.insert("size".to_string(), json!(state.page));
     }
     let names = state.names.clone();
+    for (n, snap) in state.snapshot.iter_mut() {
+        if let Some(live) = store.indices.get_mut(n) {
+            std::mem::swap(live, snap);
+        }
+    }
     let result = run_search(store, &state.url_name, &names, &body, req);
+    for (n, snap) in state.snapshot.iter_mut() {
+        if let Some(live) = store.indices.get_mut(n) {
+            std::mem::swap(live, snap);
+        }
+    }
     match result {
         Ok(mut v) => {
             let mut raw_len = 0usize;
@@ -4827,7 +4884,10 @@ pub fn handle_scroll(store: &mut Store, req: &Req, rest: &[String]) -> Response 
             }
             json_response(200, Value::Object(out))
         }
-        Err(e) => err_response(e),
+        Err(e) => {
+            store.scrolls.insert(id, state);
+            err_response(e)
+        }
     }
 }
 
@@ -5279,6 +5339,10 @@ pub fn handle_search(store: &mut Store, req: &Req, name: &str) -> Response {
                         pos: raw_len,
                         page,
                         slice,
+                        snapshot: names
+                            .iter()
+                            .filter_map(|n| store.indices.get(n).map(|i| (n.clone(), i.clone())))
+                            .collect(),
                     },
                 );
                 let mut out = Map::new();

@@ -1969,8 +1969,8 @@ impl IndexCtx {
         match v {
             Value::Bool(_) => Some(json!({"type": "boolean"})),
             Value::Number(n) => {
-                let f = n.as_f64()?;
-                if f.fract() == 0.0 {
+                n.as_f64()?;
+                if !n.is_f64() {
                     Some(json!({"type": "long"}))
                 } else {
                     Some(json!({"type": "float"}))
