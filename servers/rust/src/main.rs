@@ -378,7 +378,15 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
 
     let mut resp = {
         let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
-        dispatch(&mut guard, &req)
+        // Requests that may compile or run scripts get a large stack: the
+        // Painless parser, checker and interpreter recurse.
+        let scripted = req.body.windows(6).any(|w| w == b"script") || !guard.pipelines.is_empty();
+        if scripted {
+            let store: &mut Store = &mut guard;
+            crate::pl_api::run_with_stack(|| dispatch(store, &req))
+        } else {
+            dispatch(&mut guard, &req)
+        }
     };
 
     // Post-processing (mirrors Go ServeHTTP)

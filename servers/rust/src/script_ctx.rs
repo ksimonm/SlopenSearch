@@ -11,7 +11,11 @@ use crate::eval::QueryCtx;
 use crate::expressions;
 use crate::store::{Index, NODE_ID};
 use serde_json::{json, Map, Value};
+use crate::pl_api;
+use crate::pl_value::{from_json, to_json, MapKind, PV};
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::{OnceLock, RwLock};
 
 // ---- stored scripts ------------------------------------------------------
@@ -365,14 +369,14 @@ impl From<ApiError> for PrepErr {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 enum Engine {
-    Painless,
+    Painless(Rc<pl_api::Script>),
     Expr(expressions::Expr),
 }
 
 /// A script prepared for one context, in either language.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Compiled {
     pub spec: ScriptSpec,
     pub ctx: String,
@@ -406,20 +410,16 @@ pub fn prepare_spec(spec: ScriptSpec, ctx_name: &str) -> Result<Compiled, PrepEr
         return Ok(Compiled { spec, ctx: ctx_name.to_string(), engine: Engine::Expr(ex) });
     }
     check_lang(&spec, ctx_name)?;
-    painless_compile(&spec, ctx_name).map_err(PrepErr::Script)?;
-    Ok(Compiled { spec, ctx: ctx_name.to_string(), engine: Engine::Painless })
+    let script = painless_compile(&spec, ctx_name).map_err(PrepErr::Script)?;
+    Ok(Compiled { spec, ctx: ctx_name.to_string(), engine: Engine::Painless(script) })
 }
 
 impl Compiled {
-    pub fn is_expression(&self) -> bool {
-        matches!(self.engine, Engine::Expr(_))
-    }
-
     /// Links an expression against an index (no-op for painless).
     pub fn link(&self, idx: Option<&Index>, extra: &Map<String, Value>) -> Result<Option<expressions::Linked>, ScriptErr> {
         let ex = match &self.engine {
             Engine::Expr(ex) => ex,
-            Engine::Painless => return Ok(None),
+            Engine::Painless(_) => return Ok(None),
         };
         let mut params = self.spec.params.clone();
         for (k, v) in extra {
@@ -442,7 +442,10 @@ impl Compiled {
             }
             return Ok(f64_value(v));
         }
-        painless_backend(self, qc, o)
+        match &self.engine {
+            Engine::Painless(script) => painless_backend(self, script, qc, o),
+            Engine::Expr(_) => unreachable!(),
+        }
     }
 }
 
@@ -914,178 +917,118 @@ fn now_millis() -> i64 {
 
 // ---- painless backend ----------------------------------------------------
 //
-// The only two functions that talk to the Painless implementation. The
-// current engine is the expression subset in painless.rs; errors that it
-// cannot describe are reported as generic runtime errors.
+// The functions below are the only ones that talk to the Painless engine
+// (pl_api): compiling, binding the context variables and converting values
+// between JSON and the engine.
 
-fn painless_compile(spec: &ScriptSpec, ctx_name: &str) -> Result<(), ScriptErr> {
-    // The one static type check the expression subset can make: a string
-    // literal returned where the context expects a double.
-    let body = spec.src.trim().trim_end_matches(';').trim();
-    let body = body.strip_prefix("return ").unwrap_or(body).trim();
-    let is_str_literal = body.len() >= 2
-        && ((body.starts_with('\'') && body.ends_with('\'') && !body[1..body.len() - 1].contains('\''))
-            || (body.starts_with('"') && body.ends_with('"') && !body[1..body.len() - 1].contains('"')));
-    if is_str_literal && matches!(ctx_name, "score" | "number_sort") {
-        let mut se = ScriptErr::new(true, "class_cast_exception", "Cannot cast from [java.lang.String] to [double].");
-        se.script = spec.err_name();
-        let off = spec.src.find(body).unwrap_or(0);
-        se.stack = vec![snippet(&spec.src, off), caret_line(off)];
-        se.pos = Some((off as i64, 0, spec.src.len() as i64));
-        return Err(se);
-    }
-    Ok(())
+thread_local! {
+    static COMPILED: RefCell<HashMap<(String, String), Rc<pl_api::Script>>> = RefCell::new(HashMap::new());
+    static SKELETONS: RefCell<HashMap<String, Rc<Index>>> = RefCell::new(HashMap::new());
 }
 
-fn doc_field_refs(src: &str) -> Vec<(String, usize)> {
-    let mut out = Vec::new();
-    let mut from = 0;
-    while let Some(p) = src[from..].find("doc[") {
-        let start = from + p + 4;
-        let rest = &src[start..];
-        let q = rest.chars().next().unwrap_or(' ');
-        if q == '\'' || q == '"' {
-            if let Some(end) = rest[1..].find(q) {
-                out.push((rest[1..1 + end].to_string(), from + p));
-            }
-        }
-        from = start;
+fn from_pl_err(e: pl_api::ScriptErr) -> ScriptErr {
+    ScriptErr {
+        compile: e.compile,
+        link: e.link_err,
+        lang: e.lang,
+        script: e.script,
+        stack: e.stack,
+        pos: e.pos.map(|(a, b, c)| (a as i64, b as i64, c as i64)),
+        cause_type: e.cause_type,
+        reason: e.reason,
+        inner: e.inner.map(|c| (c.typ, c.reason)),
+        extra: e.extra,
     }
-    out
 }
 
-fn painless_backend(cs: &Compiled, qc: Option<&QueryCtx>, o: &mut RunOpts) -> Result<Value, ScriptErr> {
-    let src = cs.spec.src.as_str();
-    let name = cs.spec.err_name();
-    let mk_err = |cause_type: &str, reason: &str| {
-        let mut se = ScriptErr::new(false, cause_type, reason);
-        se.script = name.clone();
-        se.stack = vec![src.to_string()];
-        se
-    };
-    if let Some(q) = qc {
-        for (field, at) in doc_field_refs(src) {
-            if crate::eval::mapping_field_def(q.idx, &field).is_none() && field != "_id" && field != "_index" {
-                let mut se = mk_err("illegal_argument_exception", &format!("No field found for [{}] in mapping", field));
-                se.stack = vec![
-                    "org.opensearch.search.lookup.LeafDocLookup.get(LeafDocLookup.java:89)".into(),
-                    "org.opensearch.search.lookup.LeafDocLookup.get(LeafDocLookup.java:55)".into(),
-                    snippet(src, at + 4),
-                    caret_line(at + 4),
-                ];
-                se.pos = Some(((at + 4) as i64, 0, src.len() as i64));
-                return Err(se);
-            }
-        }
+fn painless_compile(spec: &ScriptSpec, ctx_name: &str) -> Result<Rc<pl_api::Script>, ScriptErr> {
+    let key = (ctx_name.to_string(), spec.src.clone());
+    if let Some(s) = COMPILED.with(|c| c.borrow().get(&key).cloned()) {
+        return Ok(s);
     }
+    let script = Rc::new(pl_api::compile_script(&spec.src, ctx_name, &spec.err_name()).map_err(from_pl_err)?);
+    COMPILED.with(|c| c.borrow_mut().insert(key, script.clone()));
+    Ok(script)
+}
+
+/// The mapping-only copy of an index that the engine's doc lookup needs.
+fn skeleton(idx: &Index) -> Rc<Index> {
+    let key = format!("{}\u{0}{}\u{0}{}", idx.name, idx.uuid, idx.mapping_version);
+    if let Some(s) = SKELETONS.with(|c| c.borrow().get(&key).cloned()) {
+        return s;
+    }
+    let mut tmp = Index::skeleton(&idx.name);
+    tmp.uuid = idx.uuid.clone();
+    tmp.settings = idx.settings.clone();
+    tmp.mappings = idx.mappings.clone();
+    tmp.field_types = idx.field_types.clone();
+    let rc = Rc::new(tmp);
+    SKELETONS.with(|c| c.borrow_mut().insert(key, rc.clone()));
+    rc
+}
+
+fn map_get(m: &PV, key: &str) -> Option<PV> {
+    match m {
+        PV::Map(m) => m.borrow().get(&PV::str(key)),
+        _ => None,
+    }
+}
+
+fn painless_backend(
+    cs: &Compiled,
+    script: &pl_api::Script,
+    qc: Option<&QueryCtx>,
+    o: &mut RunOpts,
+) -> Result<Value, ScriptErr> {
     let mut params = cs.spec.params.clone();
     for (k, v) in &o.params {
         params.insert(k.clone(), v.clone());
     }
-    if let Some(s) = &o.source {
-        params.insert("_source".into(), s.clone());
+    let params = from_json(&Value::Object(params), MapKind::Hash);
+    if let (Some(src), PV::Map(m)) = (&o.source, &params) {
+        m.borrow_mut().put(PV::str("_source"), from_json(src, MapKind::Linked));
     }
-    params.insert("__score".into(), f64_value(o.score));
-    if let Some(Value::Object(ctx)) = o.vars.get("ctx") {
-        for (k, key) in [("_index", "__ctx_index"), ("_id", "__ctx_id"), ("_version", "__ctx_version"), ("_source", "__ctx_source")] {
-            if let Some(v) = ctx.get(k) {
-                params.insert(key.into(), v.clone());
-            }
-        }
-    }
+    let mut b = pl_api::Bindings::default();
+    b.vars.insert("params".into(), params.clone());
+    b.vars.insert("_score".into(), PV::Double(o.score));
     if let Some(v) = &o.value {
-        params.insert("_value".into(), v.clone());
+        b.vars.insert("_value".into(), from_json(v, MapKind::Hash));
     }
-    let skeleton;
-    let empty = Value::Null;
-    let q = match qc {
-        Some(q) => q,
-        None => {
-            skeleton = Index::skeleton("");
-            return run_toy(&QueryCtx::new(&skeleton, "", &empty), params, src, &mk_err, &mut o.vars);
+    let mut var_pvs = Vec::new();
+    for (k, v) in &o.vars {
+        let pv = from_json(v, if k == "ctx" { MapKind::Linked } else { MapKind::Hash });
+        b.vars.insert(k.clone(), pv.clone());
+        var_pvs.push((k.clone(), pv));
+    }
+    if let Some(q) = qc {
+        let values = q.values_map().cloned();
+        b.vars.insert("doc".into(), pl_api::doc_lookup(skeleton(q.idx), &q.id, values));
+        if cs.ctx == "score" {
+            b.funcs = pl_api::score_bindings(q.id.clone());
         }
-    };
-    run_toy(q, params, src, &mk_err, &mut o.vars)
+    }
+    let r = script.exec(&b, &cs.spec.err_name()).map_err(from_pl_err)?;
+    for (k, pv) in var_pvs {
+        o.vars.insert(k, to_json(&pv));
+    }
+    if o.source.is_some() {
+        if let Some(src) = map_get(&params, "_source") {
+            o.source = Some(to_json(&src));
+        }
+    }
+    Ok(to_json(&r))
 }
 
 /// Runs a script that works on a `ctx` map (update context).
 fn painless_ctx_backend(cs: &Compiled, ctx: &mut Map<String, Value>) -> Result<(), ScriptErr> {
-    let index = ctx.get("_index").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let id = ctx.get("_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let version = ctx.get("_version").and_then(|v| v.as_i64()).unwrap_or(0);
-    let mut source = match ctx.get("_source") {
-        Some(Value::Object(m)) => m.clone(),
-        _ => Map::new(),
+    let mut o = RunOpts::default();
+    o.vars.insert("ctx".into(), Value::Object(std::mem::take(ctx)));
+    let r = match &cs.engine {
+        Engine::Painless(script) => painless_backend(cs, script, None, &mut o).map(|_| ()),
+        Engine::Expr(_) => Ok(()),
     };
-    let mut op = String::new();
-    let mut meta = Map::new();
-    let idx = Index::skeleton(&index);
-    crate::docs::run_ctx_script(&cs.spec.src, &idx, &mut source, &cs.spec.params, &id, version, &mut op, &mut meta)
-        .map_err(|(runtime, msg)| {
-            let mut se = ScriptErr::new(!runtime, "illegal_argument_exception", &msg);
-            se.script = cs.spec.err_name();
-            se.stack = vec![cs.spec.src.clone()];
-            se
-        })?;
-    ctx.insert("_source".into(), Value::Object(source));
-    if !op.is_empty() {
-        ctx.insert("op".into(), json!(op));
+    if let Some(Value::Object(m)) = o.vars.remove("ctx") {
+        *ctx = m;
     }
-    for (k, v) in meta {
-        ctx.insert(k, v);
-    }
-    Ok(())
-}
-
-fn run_toy(
-    q: &QueryCtx,
-    params: Map<String, Value>,
-    src: &str,
-    mk_err: &dyn Fn(&str, &str) -> ScriptErr,
-    vars: &mut Map<String, Value>,
-) -> Result<Value, ScriptErr> {
-    let env = crate::painless::ScriptEnv { c: q, params };
-    if vars.contains_key("state") || vars.contains_key("states") {
-        // scripted_metric scripts: statements over shared state
-        let mut locals = vars.clone();
-        let r = crate::painless::exec_statements(src, &mut locals, &env)
-            .map_err(|m| mk_err("illegal_argument_exception", &m))?;
-        for k in ["state", "states"] {
-            if let Some(v) = locals.remove(k) {
-                vars.insert(k.to_string(), v);
-            }
-        }
-        return Ok(r);
-    }
-    env.eval_script_expression(src).map_err(|m| {
-        if m == crate::painless::MISSING_DOC_VALUE {
-            let mut se = mk_err("illegal_state_exception", &m);
-            se.stack.insert(0, "org.opensearch.index.fielddata.ScriptDocValues$Longs.get(ScriptDocValues.java:145)".into());
-            return se;
-        }
-        mk_err("illegal_argument_exception", &m)
-    })
-}
-
-fn snippet_start(off: usize) -> usize {
-    off.saturating_sub(25)
-}
-
-fn caret_line(off: usize) -> String {
-    let start = snippet_start(off);
-    let pad = off - start + if start > 0 { 4 } else { 0 };
-    format!("{}^---- HERE", " ".repeat(pad))
-}
-
-fn snippet(src: &str, off: usize) -> String {
-    let start = snippet_start(off);
-    let end = (off + 25).min(src.len());
-    let mut s = src.get(start..end).unwrap_or(src).to_string();
-    if start > 0 {
-        s = format!("... {}", s);
-    }
-    if end < src.len() {
-        s.push_str(" ...");
-    }
-    s
+    r
 }
