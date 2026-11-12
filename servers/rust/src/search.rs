@@ -3817,7 +3817,8 @@ pub fn run_search(
             }
         }
         if let Some(suggest) = bodym.get("suggest").and_then(|s| s.as_object()) {
-            let plain = eval_suggest(suggest, idx);
+            let all: Vec<&Index> = names.iter().filter_map(|n| store.indices.get(n)).collect();
+            let plain = eval_suggest(suggest, &all)?;
             let typed = req
                 .param("typed_keys")
                 .map(|v| v != "false")
