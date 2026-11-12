@@ -268,6 +268,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.route(cw, r)
+	if r.Method == http.MethodHead && cw.buf.Len() == 0 && cw.status < 300 {
+		// HEAD answers carry the Content-Length of the matching GET body
+		g := r.Clone(r.Context())
+		g.Method = http.MethodGet
+		gw := &captureWriter{h: http.Header{}}
+		s.route(gw, g)
+		if gw.status == cw.status || (gw.status == 0 && cw.status == 0) {
+			cw.buf = gw.buf
+			cw.ordered = gw.ordered
+		}
+	}
 	status := cw.status
 	if status == 0 {
 		status = 200
