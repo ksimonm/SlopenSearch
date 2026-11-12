@@ -40,7 +40,8 @@ reference with `make ref-up` and `curl localhost:9290/...`.
 | `search.rs`, `eval.rs`, `eval_extra.rs`, `highlight.rs`, `suggest.rs` | search API, query evaluation, highlighting, suggesters |
 | `aggs.rs`, `hdr.rs` | aggregations; HDR histogram for percentiles |
 | `ingest.rs`, `ingest_script.rs`, `hashes.rs` | ingest pipelines and processors, their script subset, fingerprint hashes |
-| `painless.rs`, `painless_exec.rs`, `scripts.rs`, `render.rs` | Painless subset, `_scripts/painless/_execute`, stored scripts, Mustache templates |
+| `pl_*.rs` | Painless engine (port of the Go server's): lexer, parser, static checks with Painless-exact compile errors, interpreter, Java value semantics, class library, java.time, regex with the limit-factor circuit breaker; `pl_api.rs` holds contexts, error rendering, the `doc` lookup and `_scripts/painless/_execute` |
+| `painless.rs`, `painless_exec.rs`, `scripts.rs`, `render.rs` | older Painless subset used by search/update/aggs, `_execute` entry point, stored scripts, Mustache templates |
 
 ## Status
 
