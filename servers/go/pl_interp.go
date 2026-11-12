@@ -78,6 +78,19 @@ type plInterp struct {
 	loops      int
 	funcs      map[string]func(args []any, off int) (any, *plRtErr)
 	regexLimit int
+	depth      int
+}
+
+// plMaxDepth bounds nested user-function and lambda calls. The JVM would
+// throw StackOverflowError; Go would crash the whole process instead.
+const plMaxDepth = 2000
+
+func (in *plInterp) enter(off int) *plRtErr {
+	in.depth++
+	if in.depth > plMaxDepth {
+		return &plRtErr{typ: "stack_overflow_error", nilReason: true, isError: true, offset: off}
+	}
+	return nil
 }
 
 func (in *plInterp) loopTick(off int) *plRtErr {
@@ -655,6 +668,10 @@ func (in *plInterp) evalCall(n *plECall, env *plEnv) (any, *plRtErr) {
 }
 
 func (in *plInterp) callUserFunc(f *plFunc, args []any, off int) (any, *plRtErr) {
+	if err := in.enter(off); err != nil {
+		return nil, err
+	}
+	defer func() { in.depth-- }()
 	env := &plEnv{vars: map[string]*plVar{}}
 	for i, name := range f.pnames {
 		v, err := in.store(args[i], f.ptypes[i], off)
@@ -672,6 +689,10 @@ func (in *plInterp) callUserFunc(f *plFunc, args []any, off int) (any, *plRtErr)
 
 // callFn invokes a lambda, function reference or native function.
 func (in *plInterp) callFn(fnv any, args []any, off int) (any, *plRtErr) {
+	if err := in.enter(off); err != nil {
+		return nil, err
+	}
+	defer func() { in.depth-- }()
 	fn, ok := fnv.(*plFn)
 	if !ok {
 		if fnv == nil {
