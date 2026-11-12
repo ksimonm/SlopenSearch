@@ -3750,6 +3750,9 @@ func scoreJSON(v float64) any {
 	if v == math.Trunc(v) {
 		return json.Number(strconv.FormatFloat(v, 'f', 1, 64))
 	}
+	if f32 := float32(v); float64(f32) == v && !math.IsInf(float64(f32), 0) {
+		return json.Number(strconv.FormatFloat(v, 'g', -1, 32))
+	}
 	return v
 }
 

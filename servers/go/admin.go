@@ -742,6 +742,14 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 	if err := validateMappingFull(mergedMappings); err != nil {
 		return nil, err
 	}
+	if v, _ := canonical["index.knn"].(string); v == "true" {
+		if props, ok := mergedMappings["properties"].(map[string]any); ok {
+			if err := knnIndexMappings(props); err != nil {
+				return nil, err
+			}
+		}
+		canonical["index.knn.derived_source.enabled"] = "true"
+	}
 	if props, ok := mergedMappings["properties"].(map[string]any); ok {
 		if err := validateMappingAnalyzers(props, canonical); err != nil {
 			return nil, err
