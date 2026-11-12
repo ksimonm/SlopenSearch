@@ -11,6 +11,11 @@ servers/rust/target/
 servers/rust/target-*/
 servers/go/slopensearch
 servers/go/slopsearch
+*.pprof
+*.prof
+
+# Git worktrees of coding agents (Claude Code)
+.claude/worktrees/
 
 
 # Compatibility score reports (scripts/score.py)
