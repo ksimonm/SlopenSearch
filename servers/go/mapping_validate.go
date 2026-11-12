@@ -43,7 +43,7 @@ var allowedMappingParams = map[string]bool{
 	"distance_error_pct": true, "fielddata_frequency_filter": true,
 	"loading": true, "chunk_size": true, "positive_score_impact": true,
 	"enable_position_increments": true, "include_in_parent": true,
-	"include_in_root": true, "preserve_separators": true,
+	"include_in_root": true, "preserve_separators": true, "preserve_position_increments": true, "contexts": true,
 	"quote_analyzer": true, "dimension": true, "method": true, "model_id": true,
 	"space_type": true, "ef_construction": true, "m": true, "encoder": true,
 }

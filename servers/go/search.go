@@ -1668,7 +1668,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		}
 		if suggest, ok := body["suggest"].(map[string]any); ok {
 			typed := r.URL.Query().Get("typed_keys") != "" && r.URL.Query().Get("typed_keys") != "false"
-			resp["suggest"] = evalSuggest(suggest, aggIdx, typed)
+			sres, serr := evalSuggest(suggest, indices, typed)
+			if serr != nil {
+				writeError(w, serr)
+				return
+			}
+			resp["suggest"] = sres
 		}
 	}
 
