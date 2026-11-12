@@ -779,7 +779,30 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
     if !routing.is_empty() {
         resp.insert("_routing".to_string(), json!(routing));
     }
-    json_response(status, Value::Object(resp))
+    let mut out = json_response(status, Value::Object(resp));
+    if status == 201 {
+        let mut loc = format!("/{}/_doc/{}", java_url_encode(&idx.name), java_url_encode(&doc_id));
+        if !routing.is_empty() {
+            loc.push_str(&format!("?routing={}", java_url_encode(&routing)));
+        }
+        if let Ok(v) = loc.parse() {
+            out.headers_mut().insert("location", v);
+        }
+    }
+    out
+}
+
+/// java.net.URLEncoder.encode with UTF-8: unreserved `a-zA-Z0-9.-*_`, space as '+'.
+fn java_url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'-' | b'*' | b'_' => out.push(b as char),
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
 }
 
 fn source_enabled(idx: &Index) -> bool {
