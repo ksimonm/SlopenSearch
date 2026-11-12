@@ -8,6 +8,14 @@ use regex::Regex;
 use serde_json::{Map, Number, Value};
 use std::collections::BTreeMap;
 
+thread_local! {
+    /// Match-query corpus statistics (docs with the field, total tokens, document
+    /// frequency per query token), keyed by index identity and state, field,
+    /// analyzer and query tokens.
+    static MATCH_STATS: std::cell::RefCell<std::collections::HashMap<String, (usize, usize, Vec<usize>)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
 pub struct QueryCtx<'a> {
     pub idx: &'a Index,
     pub id: String,
@@ -2786,30 +2794,67 @@ impl<'a> QueryCtx<'a> {
             cur_tokens.extend(doc_tokens(&s));
         }
         let dl = cur_tokens.len() as f64;
-        let mut total_docs = 0usize;
-        let mut total_len = 0usize;
-        let mut dfs = vec![0usize; qtokens.len()];
-        for id in &self.idx.order {
-            let mut toks: Vec<String> = Vec::new();
-            if let Some(dv) = self.idx.doc_values.get(id) {
-                if let Some(raw) = dv.get(&resolve_alias_field(self.idx, field)) {
-                    for v in array_values(raw) {
-                        let s = value_scalar_string(&v).unwrap_or_default();
-                        toks.extend(doc_tokens(&s));
+        // Corpus statistics are the same for every document of one search, so they
+        // are computed once per index state instead of once per scored document.
+        let stats_key = if self.idx.uuid.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
+                self.idx.uuid,
+                self.idx.index_total,
+                self.idx.delete_total,
+                self.idx.mapping_version,
+                self.idx.docs.len(),
+                serde_json::to_string(&self.idx.settings).unwrap_or_default(),
+                field,
+                dan,
+                qtokens.join("\u{2}")
+            ))
+        };
+        let cached = stats_key
+            .as_ref()
+            .and_then(|k| MATCH_STATS.with(|c| c.borrow().get(k).cloned()));
+        let (total_docs, total_len, dfs) = match cached {
+            Some(st) => st,
+            None => {
+                let mut total_docs = 0usize;
+                let mut total_len = 0usize;
+                let mut dfs = vec![0usize; qtokens.len()];
+                let rfield = resolve_alias_field(self.idx, field);
+                for id in &self.idx.order {
+                    let mut toks: Vec<String> = Vec::new();
+                    if let Some(dv) = self.idx.doc_values.get(id) {
+                        if let Some(raw) = dv.get(&rfield) {
+                            for v in array_values(raw) {
+                                let s = value_scalar_string(&v).unwrap_or_default();
+                                toks.extend(doc_tokens(&s));
+                            }
+                        }
+                    }
+                    if toks.is_empty() {
+                        continue;
+                    }
+                    total_docs += 1;
+                    total_len += toks.len();
+                    for (qi, qt) in qtokens.iter().enumerate() {
+                        if toks.iter().any(|t| t == qt) {
+                            dfs[qi] += 1;
+                        }
                     }
                 }
-            }
-            if toks.is_empty() {
-                continue;
-            }
-            total_docs += 1;
-            total_len += toks.len();
-            for (qi, qt) in qtokens.iter().enumerate() {
-                if toks.iter().any(|t| t == qt) {
-                    dfs[qi] += 1;
+                if let Some(k) = stats_key {
+                    MATCH_STATS.with(|c| {
+                        let mut c = c.borrow_mut();
+                        if c.len() > 256 {
+                            c.clear();
+                        }
+                        c.insert(k, (total_docs, total_len, dfs.clone()));
+                    });
                 }
+                (total_docs, total_len, dfs)
             }
-        }
+        };
         let avgdl = if total_docs > 0 {
             total_len as f64 / total_docs as f64
         } else {
