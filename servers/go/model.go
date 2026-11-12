@@ -186,6 +186,7 @@ type apiError struct {
 	ClauseEnd     bool
 	NoCausedBy    bool
 	SearchFailure string
+	Suppressed    []*apiError
 }
 
 func (e *apiError) Error() string { return e.Type + ": " + e.Reason }

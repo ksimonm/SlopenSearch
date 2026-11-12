@@ -25,7 +25,7 @@ func (c *queryCtx) bm25Explain(field, term string, score float64) map[string]any
 	if ftype != "" && ftype != "text" && ftype != "match_only_text" && ftype != "search_as_you_type" {
 		return generic
 	}
-	analyzer := c.analyzerName(field, nil)
+	analyzer := c.indexAnalyzerName(field)
 	docTerms := func(vals []any) []string {
 		out := []string{}
 		for _, v := range vals {

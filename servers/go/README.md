@@ -43,7 +43,9 @@ reference with `make ref-up` and `curl localhost:9290/...`.
 | `ingest.go`, `pipeline.go`, `ingest_processors.go`, `ingest_extra.go` | ingest pipelines and processors |
 | `cat.go`, `nodes.go`, `resp.go` | `_cat`, `_nodes`/`_cluster`, response formats (`filter_path`, YAML, ...) |
 | `painless.go`, `script_eval.go`, `scripts.go` | Painless/expression subset, stored scripts, `script_fields` |
-| `analysis.go` | `_analyze` and analyzers (mostly open work) |
+| `analysis.go`, `analysis_chain.go`, `analyze_api.go` | analyzers, analysis chains (index/global/inline components, settings validation), the `_analyze` API with `explain` |
+| `tokenizers.go`, `filters.go`, `filters_pattern.go`, `synonyms.go`, `charfilter.go`, `asciifold_table.go` | tokenizers, token filters, synonym filters, char filters with Lucene offset correction |
+| `jregex.go` | backtracking `java.util.regex` subset (lookaround, possessive, `\p{..}`) for pattern components |
 
 ## Rules
 

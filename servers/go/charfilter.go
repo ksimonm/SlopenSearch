@@ -1,53 +1,17 @@
 package main
 
 import (
-	"regexp"
+	"strconv"
 	"strings"
-	"unicode"
 )
 
 // Character filter execution with Lucene-style offset correction. Tokens are
 // produced over the filtered text, then their UTF-16 offsets are mapped back to
 // the original input using boundary information recorded per output rune.
 
-type charFilterSpec struct {
-	typ    string
-	params map[string]any
-}
-
 type cfRune struct {
 	r          rune
 	start, end int // source UTF-16 offsets
-}
-
-func globalCharSpecs(comps []analyzeComponent) []charFilterSpec {
-	out := make([]charFilterSpec, 0, len(comps))
-	for _, c := range comps {
-		typ := c.name
-		if c.inline != nil {
-			if t, ok := c.inline["type"].(string); ok && t != "" {
-				typ = t
-			}
-		}
-		out = append(out, charFilterSpec{typ: typ, params: c.inline})
-	}
-	return out
-}
-
-func indexCharSpecs(idx *Index, names []string) []charFilterSpec {
-	out := make([]charFilterSpec, 0, len(names))
-	for _, name := range names {
-		typ := name
-		var params map[string]any
-		if idx != nil {
-			if raw, ok := findSetting(idx.Settings, "analysis.char_filter."+name+".type"); ok {
-				typ, _ = raw.(string)
-				params = subSettings(idx.Settings, "analysis.char_filter."+name)
-			}
-		}
-		out = append(out, charFilterSpec{typ: typ, params: params})
-	}
-	return out
 }
 
 func runesToCF(text string) []cfRune {
@@ -208,11 +172,12 @@ func htmlStrip(rs []cfRune, escaped map[string]bool) []cfRune {
 		}
 		inner := strings.TrimSpace(cfToString(rs[i+1 : j]))
 		lower := strings.ToLower(inner)
-		name := lower
+		closing := strings.HasPrefix(lower, "/")
+		name := strings.TrimSpace(strings.TrimPrefix(lower, "/"))
 		if at := strings.IndexAny(name, " \t\r\n/"); at >= 0 {
 			name = name[:at]
 		}
-		if escaped[name] || escaped[lower] {
+		if escaped[name] {
 			out = append(out, rs[i:j+1]...)
 			i = j + 1
 			continue
@@ -242,61 +207,15 @@ func htmlStrip(rs []cfRune, escaped map[string]bool) []cfRune {
 			i = k
 			continue
 		}
+		if closing {
+			name = "/" + name
+		}
 		if htmlBlockTags[name] {
 			out = append(out, cfRune{r: '\n', start: rs[i].start, end: rs[i].end})
 		}
 		i = j + 1
 	}
 	return out
-}
-
-func mappingEscape(s string) string {
-	s = strings.ReplaceAll(s, `\t`, "\t")
-	s = strings.ReplaceAll(s, `\n`, "\n")
-	s = strings.ReplaceAll(s, `\r`, "\r")
-	s = strings.ReplaceAll(s, `\u0020`, " ")
-	return s
-}
-
-func mappingApply(rs []cfRune, mappings []string) []cfRune {
-	for _, m := range mappings {
-		parts := strings.SplitN(m, "=>", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		from := mappingEscape(strings.TrimSpace(parts[0]))
-		to := mappingEscape(strings.TrimSpace(parts[1]))
-		if from == "" {
-			continue
-		}
-		fr := []rune(from)
-		tr := []rune(to)
-		out := []cfRune{}
-		for i := 0; i < len(rs); {
-			if i+len(fr) <= len(rs) {
-				match := true
-				for k, r := range fr {
-					if rs[i+k].r != r {
-						match = false
-						break
-					}
-				}
-				if match {
-					s0 := rs[i].start
-					e0 := rs[i+len(fr)-1].end
-					for _, r := range tr {
-						out = append(out, cfRune{r: r, start: s0, end: e0})
-					}
-					i += len(fr)
-					continue
-				}
-			}
-			out = append(out, rs[i])
-			i++
-		}
-		rs = out
-	}
-	return rs
 }
 
 func runeBoundary(rs []cfRune, text string, originalLen int) []int {
@@ -312,213 +231,6 @@ func runeBoundary(rs []cfRune, text string, originalLen int) []int {
 	}
 	boundary[total] = originalLen
 	return boundary
-}
-
-func runCharFilterSpecs(specs []charFilterSpec, text string) (string, []int, []int, bool) {
-	if len(specs) == 0 {
-		return text, nil, nil, true
-	}
-	originalLen := utf16Offset(text)
-	rs := runesToCF(text)
-	var insertions []int
-	for _, spec := range specs {
-		switch spec.typ {
-		case "html_strip":
-			escaped := map[string]bool{}
-			for _, e := range fsStrings(spec.params, "escaped_tags") {
-				escaped[strings.ToLower(e)] = true
-			}
-			rs = htmlStrip(rs, escaped)
-		case "mapping":
-			rs = mappingApply(rs, fsStrings(spec.params, "mappings"))
-		case "pattern_replace":
-			pat := fsString(spec.params, "pattern", "")
-			repl := fsString(spec.params, "replacement", "")
-			newRS, ins := patternReplaceChar(rs, pat, repl)
-			rs = newRS
-			insertions = append(insertions, ins...)
-		}
-	}
-	filtered := cfToString(rs)
-	if len(insertions) > 0 {
-		// Zero-width insertions use Lucene's boundary correction where an
-		// insertion at filtered offset p shifts offsets >= p.
-		return filtered, nil, insertions, true
-	}
-	return filtered, runeBoundary(rs, filtered, originalLen), nil, true
-}
-
-func remapFilteredTokens(toks []analyzedToken, boundary, insertions []int, originalLen int) {
-	if len(insertions) > 0 {
-		for i := range toks {
-			toks[i].start = correctInsertionOffset(toks[i].start, insertions)
-			toks[i].end = correctInsertionOffset(toks[i].end, insertions)
-		}
-		return
-	}
-	if len(boundary) == 0 {
-		return
-	}
-	for i := range toks {
-		s := toks[i].start
-		e := toks[i].end
-		if s < len(boundary) {
-			toks[i].start = boundary[s]
-		}
-		if e < len(boundary) {
-			toks[i].end = boundary[e]
-		} else {
-			toks[i].end = originalLen
-		}
-	}
-}
-
-func correctInsertionOffset(o int, insertions []int) int {
-	n := 0
-	for _, p := range insertions {
-		if p <= o {
-			n++
-		}
-	}
-	return o - n
-}
-
-func patternReplaceChar(rs []cfRune, pattern, repl string) ([]cfRune, []int) {
-	if pattern == "" {
-		return rs, nil
-	}
-	// Zero-width lookaround insertion: (?<=A)(?=B).
-	if strings.Contains(pattern, "(?<=") && strings.Contains(pattern, "(?=") && !strings.Contains(pattern, "(?:") {
-		start := strings.Index(pattern, "(?<=")
-		end := strings.Index(pattern, "(?=")
-		if end > start {
-			behind := pattern[start+4 : strings.Index(pattern[start:], ")")+start]
-			lookStart := end + 4
-			lookEnd := strings.Index(pattern[lookStart:], ")") + lookStart
-			ahead := pattern[lookStart:lookEnd]
-			bre, err1 := regexp.Compile(behind)
-			are, err2 := regexp.Compile(ahead)
-			if err1 == nil && err2 == nil {
-				out := []cfRune{}
-				insertions := []int{}
-				for i := 0; i < len(rs); i++ {
-					out = append(out, rs[i])
-					if i+1 >= len(rs) {
-						continue
-					}
-					before := cfToString(rs[:i+1])
-					after := cfToString(rs[i+1:])
-					if bre.MatchString(before) && are.MatchString(after) {
-						// Only if the match is anchored at the boundary.
-						loc := bre.FindStringIndex(before)
-						aloc := are.FindStringIndex(after)
-						if loc != nil && loc[1] == len(before) && aloc != nil && aloc[0] == 0 {
-							prevEnd := rs[i].end
-							for _, r := range repl {
-								out = append(out, cfRune{r: r, start: prevEnd, end: prevEnd})
-							}
-							insertions = append(insertions, rs[i].end)
-						}
-					}
-				}
-				return out, insertions
-			}
-		}
-	}
-	// One-sided lookahead: base(?=look)
-	if at := strings.Index(pattern, "(?="); at >= 0 && !strings.Contains(pattern, "(?<=") {
-		base := pattern[:at]
-		lookStart := at + 4
-		lookEnd := strings.Index(pattern[lookStart:], ")") + lookStart
-		look := pattern[lookStart:lookEnd]
-		bre, err1 := regexp.Compile(base)
-		lre, err2 := regexp.Compile(look)
-		if err1 == nil && err2 == nil {
-			return replaceWithLookahead(rs, bre, lre, repl), nil
-		}
-	}
-	re, err := regexp.Compile(normalizeRegexpPattern(pattern))
-	if err != nil {
-		return rs, nil
-	}
-	return replaceAllWithRunes(rs, re, repl), nil
-}
-
-func normalizeRegexpPattern(p string) string {
-	// Go's regexp does not understand \p{Lower}; translate to Unicode classes.
-	p = strings.ReplaceAll(p, `\p{Lower}`, `\p{Ll}`)
-	p = strings.ReplaceAll(p, `\p{Upper}`, `\p{Lu}`)
-	return p
-}
-
-func replaceAllWithRunes(rs []cfRune, re *regexp.Regexp, repl string) []cfRune {
-	text := cfToString(rs)
-	// Map byte offsets to rune offsets.
-	byteToRune := make([]int, len(text)+1)
-	{
-		ri := 0
-		for bi := range text {
-			byteToRune[bi] = ri
-			_, w := decodeRuneAt(text, bi)
-			if w > 0 {
-				ri++
-			}
-		}
-		byteToRune[len(text)] = ri
-	}
-	matches := re.FindAllStringSubmatchIndex(text, -1)
-	out := []cfRune{}
-	last := 0
-	for _, m := range matches {
-		start := byteToRune[m[0]]
-		end := byteToRune[m[1]]
-		out = append(out, rs[last:start]...)
-		replText := re.ExpandString(nil, repl, text, m)
-		s0 := rs[start].start
-		e0 := rs[end-1].end
-		if end == start {
-			s0, e0 = rs[start].start, rs[start].start
-		}
-		for _, r := range string(replText) {
-			out = append(out, cfRune{r: r, start: s0, end: e0})
-		}
-		last = end
-	}
-	out = append(out, rs[last:]...)
-	return out
-}
-
-func replaceWithLookahead(rs []cfRune, base, look *regexp.Regexp, repl string) []cfRune {
-	text := cfToString(rs)
-	out := []cfRune{}
-	pos := 0
-	for pos < len(text) {
-		locs := base.FindStringSubmatchIndex(text[pos:])
-		if locs == nil {
-			break
-		}
-		m := locs
-		absStart := pos + m[0]
-		absEnd := pos + m[1]
-		if !look.MatchString(text[absEnd:]) {
-			// Copy one byte to avoid an infinite loop.
-			out = append(out, rs[pos:pos+1]...)
-			pos++
-			continue
-		}
-		startRune := byteToRuneIndex(text, absStart)
-		endRune := byteToRuneIndex(text, absEnd)
-		out = append(out, rs[posRuneIndex(text, pos):startRune]...)
-		replText := base.ExpandString(nil, repl, text, m)
-		s0 := rs[startRune].start
-		e0 := rs[endRune-1].end
-		for _, r := range string(replText) {
-			out = append(out, cfRune{r: r, start: s0, end: e0})
-		}
-		pos = absEnd
-	}
-	out = append(out, rs[posRuneIndex(text, pos):]...)
-	return out
 }
 
 func decodeRuneAt(s string, i int) (rune, int) {
@@ -543,4 +255,225 @@ func posRuneIndex(s string, byteOff int) int {
 	return byteToRuneIndex(s, byteOff)
 }
 
-var _ = unicode.IsLetter
+// mappingUnescape decodes the escapes MappingCharFilterFactory accepts.
+func mappingUnescape(s string) string {
+	rs := []rune(s)
+	var out []rune
+	for i := 0; i < len(rs); i++ {
+		c := rs[i]
+		if c == '\\' && i+1 < len(rs) {
+			i++
+			switch rs[i] {
+			case 'n':
+				c = '\n'
+			case 't':
+				c = '\t'
+			case 'r':
+				c = '\r'
+			case 'b':
+				c = '\b'
+			case 'f':
+				c = '\f'
+			case 'u':
+				if i+4 < len(rs) {
+					if v, err := strconv.ParseUint(string(rs[i+1:i+5]), 16, 32); err == nil {
+						c = rune(v)
+						i += 4
+						break
+					}
+				}
+				c = 'u'
+			default:
+				c = rs[i]
+			}
+		}
+		out = append(out, c)
+	}
+	return string(out)
+}
+
+type mappingRule struct {
+	from, to []rune
+}
+
+func parseMappingRules(lines []string) ([]mappingRule, *apiError) {
+	var rules []mappingRule
+	for _, line := range lines {
+		at := strings.LastIndex(line, "=>")
+		if at < 0 {
+			return nil, filterError("Invalid Mapping Rule : [" + line + "]")
+		}
+		from := mappingUnescape(strings.TrimSpace(line[:at]))
+		to := mappingUnescape(strings.TrimSpace(line[at+2:]))
+		if from == "" {
+			return nil, filterError("Invalid Mapping Rule : [" + line + "], LHS or RHS is empty")
+		}
+		rules = append(rules, mappingRule{from: []rune(from), to: []rune(to)})
+	}
+	return rules, nil
+}
+
+// mappingApply replaces, at each position, the longest matching key; the
+// replacement is not scanned again (Lucene's MappingCharFilter).
+func mappingApply(rs []cfRune, rules []mappingRule) []cfRune {
+	out := []cfRune{}
+	for i := 0; i < len(rs); {
+		best := -1
+		for ri, rule := range rules {
+			if i+len(rule.from) > len(rs) || (best >= 0 && len(rule.from) <= len(rules[best].from)) {
+				continue
+			}
+			match := true
+			for k, r := range rule.from {
+				if rs[i+k].r != r {
+					match = false
+					break
+				}
+			}
+			if match {
+				best = ri
+			}
+		}
+		if best < 0 {
+			out = append(out, rs[i])
+			i++
+			continue
+		}
+		rule := rules[best]
+		s0 := rs[i].start
+		e0 := rs[i+len(rule.from)-1].end
+		for _, r := range rule.to {
+			out = append(out, cfRune{r: r, start: s0, end: e0})
+		}
+		i += len(rule.from)
+	}
+	return out
+}
+
+// boundaryCorrection maps filtered offsets back through a rune level filter.
+func boundaryCorrection(rs []cfRune, filtered string, inputLen int) func(int) int {
+	boundary := runeBoundary(rs, filtered, inputLen)
+	return func(o int) int {
+		if o >= 0 && o < len(boundary) {
+			return boundary[o]
+		}
+		return inputLen
+	}
+}
+
+// luceneCorrection implements BaseCharFilter offset correction from
+// (offset, cumulative diff) pairs.
+type luceneCorrection struct {
+	offsets, diffs []int
+}
+
+func (c *luceneCorrection) add(off, diff int) {
+	if n := len(c.offsets); n > 0 && c.offsets[n-1] == off {
+		c.diffs[n-1] = diff
+		return
+	}
+	c.offsets = append(c.offsets, off)
+	c.diffs = append(c.diffs, diff)
+}
+
+func (c *luceneCorrection) correct(off int) int {
+	k := -1
+	for i, o := range c.offsets {
+		if o <= off {
+			k = i
+		} else {
+			break
+		}
+	}
+	if k < 0 {
+		return off
+	}
+	return off + c.diffs[k]
+}
+
+func utf16Len(rs []rune) int {
+	n := 0
+	for _, r := range rs {
+		n += runeWidth(r)
+	}
+	return n
+}
+
+// patternReplaceChars ports Lucene's PatternReplaceCharFilter.
+func patternReplaceChars(re *jRegex, repl, text string) (string, func(int) int, *apiError) {
+	in := []rune(text)
+	var out []rune
+	corr := &luceneCorrection{}
+	cumulative := 0
+	last := 0
+	for _, m := range re.findAll(in) {
+		out = append(out, in[last:m[0]]...)
+		before := utf16Len(out)
+		r, err := re.expandReplacement(in, m, repl)
+		if err != nil {
+			return "", nil, err
+		}
+		out = append(out, r...)
+		groupSize := utf16Len(in[m[0]:m[1]])
+		replSize := utf16Len(r)
+		if groupSize != replSize {
+			if replSize < groupSize {
+				cumulative += groupSize - replSize
+				corr.add(before+replSize, cumulative)
+			} else {
+				for i := groupSize; i < replSize; i++ {
+					cumulative--
+					corr.add(before+i, cumulative)
+				}
+			}
+		}
+		last = m[1]
+	}
+	out = append(out, in[last:]...)
+	return string(out), corr.correct, nil
+}
+
+// applyCharFilter runs one char filter, returning the filtered text and the
+// function mapping its offsets back to the input.
+func applyCharFilter(cf chainCharFilter, text string) (string, func(int) int, *apiError) {
+	identity := func(o int) int { return o }
+	switch cf.typ {
+	case "html_strip":
+		escaped := map[string]bool{}
+		for _, e := range fsStrings(cf.params, "escaped_tags") {
+			escaped[strings.ToLower(e)] = true
+		}
+		rs := htmlStrip(runesToCF(text), escaped)
+		out := cfToString(rs)
+		return out, boundaryCorrection(rs, out, utf16Offset(text)), nil
+	case "mapping":
+		if fsString(cf.params, "mappings_path", "") != "" {
+			return "", nil, filterError("IOException while reading mappings_path: file not readable")
+		}
+		if _, ok := cf.params["mappings"]; !ok {
+			return "", nil, filterError("mapping requires either `mappings` or `mappings_path` to be configured")
+		}
+		rules, err := parseMappingRules(fsStrings(cf.params, "mappings"))
+		if err != nil {
+			return "", nil, err
+		}
+		rs := mappingApply(runesToCF(text), rules)
+		out := cfToString(rs)
+		return out, boundaryCorrection(rs, out, utf16Offset(text)), nil
+	case "pattern_replace":
+		pat := fsString(cf.params, "pattern", "")
+		if pat == "" {
+			return "", nil, filterError("pattern is missing for [" + cf.name + "] char filter of type 'pattern_replace'")
+		}
+		flags, ferr := javaRegexFlags(fsString(cf.params, "flags", ""))
+		if ferr != nil {
+			return "", nil, ferr
+		}
+		re, err := compileJavaRegexAPI(pat, flags)
+		if err != nil {
+			return "", nil, err
+		}
+		return patternReplaceChars(re, fsString(cf.params, "replacement", ""), text)
+	}
+	return text, identity, nil
+}
