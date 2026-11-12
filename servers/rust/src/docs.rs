@@ -3726,6 +3726,44 @@ fn normalize_filtered_numbers(v: &mut Value) {
 
 // ----------------------------------------------------------------- analyze
 
+/// Tokens of a `custom` analyzer defined in the index settings, for the token
+/// filters this server knows; `None` when `analyzer` is not such an analyzer.
+fn custom_analyzer_tokens(idx: &Index, analyzer: &str, text: &str) -> Option<Vec<String>> {
+    let base = format!("analysis.analyzer.{}", analyzer);
+    let get = |k: &str| crate::store::find_setting(&idx.settings, &format!("{}.{}", base, k));
+    let tokenizer = get("tokenizer").and_then(|v| v.as_str())?.to_string();
+    if let Some(t) = get("type").and_then(|v| v.as_str()) {
+        if t != "custom" {
+            return None;
+        }
+    }
+    let filters: Vec<String> = match get("filter") {
+        Some(Value::Array(a)) => a.iter().filter_map(|f| f.as_str().map(|s| s.to_string())).collect(),
+        // list settings are kept as their JSON text
+        Some(Value::String(s)) => match serde_json::from_str::<Vec<String>>(s) {
+            Ok(list) => list,
+            Err(_) => s.split(',').map(|x| x.trim().to_string()).collect(),
+        },
+        _ => Vec::new(),
+    };
+    let mut toks = match tokenizer.as_str() {
+        "keyword" => vec![text.to_string()],
+        "whitespace" => text.split_whitespace().map(|s| s.to_string()).collect(),
+        _ => return None,
+    };
+    for f in &filters {
+        toks = match f.as_str() {
+            "lowercase" => toks.iter().map(|t| t.to_lowercase()).collect(),
+            "uppercase" => toks.iter().map(|t| t.to_uppercase()).collect(),
+            "reverse" => toks.iter().map(|t| t.chars().rev().collect()).collect(),
+            "asciifolding" => toks.iter().map(|t| crate::store::asciifold(t)).collect(),
+            "trim" => toks.iter().map(|t| t.trim().to_string()).collect(),
+            _ => return None,
+        };
+    }
+    Some(toks)
+}
+
 pub fn handle_analyze(store: &mut Store, req: &Req, name: &str) -> Response {
     if req.method != "POST" && req.method != "GET" {
         return crate::errors::method_not_allowed(req, &["POST", "GET"]);
@@ -3748,7 +3786,15 @@ pub fn handle_analyze(store: &mut Store, req: &Req, name: &str) -> Response {
         .or_else(|| body.get("tokenizer").and_then(|t| t.as_str()))
         .unwrap_or("")
         .to_string();
-    let tokens = analyze_with(&analyzer, &text);
+    let custom = if name.is_empty() {
+        None
+    } else {
+        store
+            .indices
+            .get(name)
+            .and_then(|idx| custom_analyzer_tokens(idx, &analyzer, &text))
+    };
+    let tokens = custom.unwrap_or_else(|| analyze_with(&analyzer, &text));
     let out: Vec<Value> = tokens
         .iter()
         .enumerate()

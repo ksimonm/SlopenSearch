@@ -697,9 +697,10 @@ pub fn parse_date(v: &Value) -> Option<f64> {
 pub fn infer_type(v: &Value) -> Option<Value> {
     match v {
         Value::Bool(_) => Some(json!({"type": "boolean"})),
-        Value::Number(_) => {
-            let f = v.as_f64()?;
-            if f.fract() == 0.0 {
+        Value::Number(n) => {
+            // the JSON token decides: `3.0` maps as float, `3` as long
+            n.as_f64()?;
+            if !n.is_f64() {
                 Some(json!({"type": "long"}))
             } else {
                 Some(json!({"type": "float"}))

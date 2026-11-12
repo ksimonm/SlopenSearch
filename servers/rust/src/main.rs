@@ -416,17 +416,28 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
         }
     }
 
-    let mut resp = {
-        let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
-        // Requests that may compile or run scripts get a large stack: the
-        // Painless parser, checker and interpreter recurse.
-        let scripted = req.body.windows(6).any(|w| w == b"script") || !guard.pipelines.is_empty();
-        if scripted {
-            let store: &mut Store = &mut guard;
-            crate::pl_api::run_with_stack(|| dispatch(store, &req))
-        } else {
-            dispatch(&mut guard, &req)
-        }
+    // The handlers are synchronous and can be CPU-heavy (searches over many docs) and
+    // wait on the store lock: run them on the blocking pool so the async runtime keeps
+    // accepting and answering connections.
+    let (mut resp, req) = match tokio::task::spawn_blocking(move || {
+        let resp = {
+            let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
+            // Requests that may compile or run scripts get a large stack: the
+            // Painless parser, checker and interpreter recurse.
+            let scripted = req.body.windows(6).any(|w| w == b"script") || !guard.pipelines.is_empty();
+            if scripted {
+                let store: &mut Store = &mut guard;
+                crate::pl_api::run_with_stack(|| dispatch(store, &req))
+            } else {
+                dispatch(&mut guard, &req)
+            }
+        };
+        (resp, req)
+    })
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
     // Post-processing (mirrors Go ServeHTTP)
