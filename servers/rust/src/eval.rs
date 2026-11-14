@@ -1328,7 +1328,7 @@ impl<'a> QueryCtx<'a> {
                     None => return Err(ApiError::parsing("failed to parse term value")),
                 };
                 let want = if case_insensitive {
-                    term.to_lowercase()
+                    term.to_ascii_lowercase()
                 } else {
                     term.clone()
                 };
@@ -1348,14 +1348,14 @@ impl<'a> QueryCtx<'a> {
                     None => return Ok((false, 0.0)),
                 };
                 let want = if case_insensitive {
-                    term.to_lowercase()
+                    term.to_ascii_lowercase()
                 } else {
                     term.clone()
                 };
                 for v in &vals {
                     if let Some(s) = value_scalar_string(v) {
                         let have = if case_insensitive {
-                            s.to_lowercase()
+                            s.to_ascii_lowercase()
                         } else {
                             s
                         };
@@ -2028,7 +2028,7 @@ impl<'a> QueryCtx<'a> {
         let prefix = match value_scalar_string(&nval) {
             Some(p) => {
                 if case_insensitive {
-                    p.to_lowercase()
+                    p.to_ascii_lowercase()
                 } else {
                     p
                 }
@@ -2061,7 +2061,7 @@ impl<'a> QueryCtx<'a> {
             if ftype == "text" || ftype == "match_only_text" || ftype == "search_as_you_type" {
                 for tok in analyze(&s) {
                     let have = if case_insensitive {
-                        tok.to_lowercase()
+                        tok.to_ascii_lowercase()
                     } else {
                         tok
                     };
@@ -2071,7 +2071,7 @@ impl<'a> QueryCtx<'a> {
                 }
             } else {
                 let have = if case_insensitive {
-                    s.to_lowercase()
+                    s.to_ascii_lowercase()
                 } else {
                     s
                 };
@@ -2107,7 +2107,7 @@ impl<'a> QueryCtx<'a> {
         let pattern = match value_scalar_string(&nval) {
             Some(p) => {
                 if case_insensitive {
-                    p.to_lowercase()
+                    p.to_ascii_lowercase()
                 } else {
                     p
                 }
@@ -2146,7 +2146,7 @@ impl<'a> QueryCtx<'a> {
                 };
             for cand in candidates {
                 let have = if case_insensitive {
-                    cand.to_lowercase()
+                    cand.to_ascii_lowercase()
                 } else {
                     cand
                 };
@@ -2197,7 +2197,7 @@ impl<'a> QueryCtx<'a> {
             None => return Ok((false, 0.0)),
         };
         if case_insensitive {
-            pattern = pattern.to_lowercase();
+            pattern = pattern.to_ascii_lowercase();
         }
         let complement = flags.contains("COMPLEMENT")
             && pattern.starts_with("~(")
@@ -2265,7 +2265,7 @@ impl<'a> QueryCtx<'a> {
             };
             for cand in candidates {
                 let have = if case_insensitive {
-                    cand.to_lowercase()
+                    cand.to_ascii_lowercase()
                 } else {
                     cand
                 };
