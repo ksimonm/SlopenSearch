@@ -199,11 +199,12 @@ func inferDynamicValue(idx *model.Index, v any) map[string]any {
 	case bool:
 		return map[string]any{"type": "boolean"}
 	case json.Number:
-		if f, err := t.Float64(); err == nil {
-			if f == math.Trunc(f) {
-				return map[string]any{"type": "long"}
-			}
+		// Like Jackson: the token kind decides, so 3.0 and 1e2 are floats.
+		if strings.ContainsAny(string(t), ".eE") {
 			return map[string]any{"type": "float"}
+		}
+		if _, err := t.Float64(); err == nil {
+			return map[string]any{"type": "long"}
 		}
 	case float64:
 		if t == math.Trunc(t) {
