@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"reflect"
@@ -171,6 +172,9 @@ func knnValidateField(name string, def map[string]any) *apiError {
 	for _, k := range sortedAnyKeys(params) {
 		switch k {
 		case "m", "ef_construction", "ef_search":
+			if n, isNum := params[k].(json.Number); isNum && !strings.ContainsAny(n.String(), ".eE") {
+				continue
+			}
 			if _, ok := params[k].(float64); !ok {
 				if _, ok := params[k].(int64); !ok {
 					return knnValidation(fmt.Sprintf("value is not an instance of Integer for Integer parameter [%s].", k))
@@ -403,6 +407,9 @@ func (c *queryCtx) evalKnnField(field string, p map[string]any) (bool, float64, 
 		if k <= 0 || k > 10000 {
 			return false, 0, errBad("[knn] requires k to be in the range (0, 10000]")
 		}
+		if c.nestedRoot != nil {
+			return c.knnNestedTopK(p, k, filter, score, boost)
+		}
 		scores, err := c.knnTopK(p, field, k, filter, score)
 		if err != nil {
 			return false, 0, err
@@ -431,6 +438,10 @@ func (c *queryCtx) evalKnnField(field string, p map[string]any) (bool, float64, 
 		return s >= ms, s * boost, nil
 	}
 	md, _ := toFloat(p["max_distance"])
+	if filter == nil && fi.engine == "faiss" {
+		// faiss range search excludes the boundary; exact (filtered) search keeps it
+		return d < md, s * boost, nil
+	}
 	return d <= md, s * boost, nil
 }
 

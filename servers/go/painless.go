@@ -78,6 +78,13 @@ func (c *queryCtx) evalScriptScore(body any) (bool, float64, *apiError) {
 	if bm["script"] == nil {
 		return true, base, nil
 	}
+	if sm, ok := bm["script"].(map[string]any); ok && sm["lang"] == "knn" {
+		score, kerr := c.knnScriptScore(sm)
+		if kerr != nil {
+			return false, 0, kerr
+		}
+		return knnScriptScoreFinish(bm, score)
+	}
 	cs, se, ae := prepareScript(bm["script"], "score")
 	if se != nil || ae != nil {
 		return false, 0, scriptErrForShard(c.idx, se, ae, true)

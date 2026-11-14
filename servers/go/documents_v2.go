@@ -1113,6 +1113,9 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 		idx.Order = append(idx.Order, id)
 	}
 	idx.Docs[id] = body
+	if knnDeriveSource(idx, body) {
+		rawBody = nil
+	}
 	idx.RawDocs[id] = append([]byte(nil), rawBody...)
 	idx.Versions[id] = ver
 	seq := nextSeq(idx)

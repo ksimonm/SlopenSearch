@@ -864,6 +864,9 @@ func (c *indexCtx) indexRawField(path string, def map[string]any, raw any) *apiE
 	if typ == "object" || typ == "nested" {
 		return c.indexObject(path, def, raw)
 	}
+	if typ == "knn_vector" {
+		return c.indexKnnVector(path, def, raw)
+	}
 	if typ == "alias" {
 		if raw == nil {
 			return nil
@@ -1715,6 +1718,7 @@ func (idx *Index) computeDocValues(id string, doc map[string]any) *apiError {
 		return err
 	}
 	addDerivedValues(idx, c)
+	knnDeriveSource(idx, doc)
 	if idx.DocValues == nil {
 		idx.DocValues = map[string]map[string][]any{}
 	}

@@ -104,6 +104,9 @@ func docValuesOutput(idx *Index, id, field string, spec fieldSpec, fallbackSourc
 	if !hasDef {
 		return nil, false, nil
 	}
+	if t, _ := def["type"].(string); t == "knn_vector" {
+		return knnFieldOutput(idx, id, field, def, fallbackSource)
+	}
 	ftype := ""
 	hasDV := true
 	if hasDef {
@@ -644,6 +647,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				ensureFieldTypes(vidx)
 			}()
 		}
+		if kerr := knnParseCheck(bodyRaw); kerr != nil {
+			writeError(w, kerr)
+			return
+		}
 		if verr := validateQuery(vidx, query); verr != nil {
 			if verr.Clause != "" {
 				annotateQueryClause(verr, bodyRaw)
@@ -954,6 +961,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			}
 			anyMapped := false
 			for _, idx := range indices {
+				if kerr := knnUnsupportedSort(idx, sp.field); kerr != nil {
+					writeError(w, kerr)
+					return
+				}
 				if sortFieldMapped(idx, sp.field) {
 					anyMapped = true
 					break
@@ -1450,6 +1461,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				entry["_explanation"] = map[string]any{"value": scoreJSON(h.score),
 					"description": "script score function, computed with script:\"" + scriptToString(ss["script"]) + "\"",
 					"details":     []any{}}
+			} else if kexp := knnExplain(h.idx, query, h.id, h.score); kexp != nil {
+				entry["_explanation"] = kexp
 			} else {
 				field, term := explainLabel(query)
 				qc := newQueryCtxForDoc(h.idx, h.id, h.doc)
@@ -1472,7 +1485,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			delete(entry, "_id")
 		}
 		hitCtx := newQueryCtxForDoc(h.idx, h.id, h.doc)
-		if hlCfg != nil && !hitOmit {
+		if hlCfg != nil && mappingSourceEnabled(h.idx) {
 			if hlErr := hlCfg.validate(h.idx); hlErr != nil {
 				writeError(w, hlErr)
 				return
@@ -1537,7 +1550,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 						if !found {
 							continue
 						}
-						if existing, done := out[name]; done {
+						if existing, done := out[name]; done && !knnIsVectorField(h.idx, name) {
 							if list, ok := existing.([]any); ok {
 								out[name] = append(list, vals...)
 								continue
@@ -2398,7 +2411,14 @@ func validateQuery(idx *Index, query map[string]any) *apiError {
 		}
 		switch clause {
 		case "term":
+			if err := knnTermCheck(idx, raw); err != nil {
+				return err
+			}
 			if err := validateTermQuery(idx, raw); err != nil {
+				return err
+			}
+		case "knn":
+			if err := validateKnnQuery(idx, raw); err != nil {
 				return err
 			}
 		case "terms":

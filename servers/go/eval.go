@@ -3251,7 +3251,8 @@ func (c *queryCtx) evalBool(raw map[string]any, boost float64) (bool, float64, *
 		}
 		return true, boost * 1.0, nil
 	}
-	return true, boost * score, nil
+	// Lucene sums clause scores as doubles and returns them as a float
+	return true, boost * float64(float32(score)), nil
 }
 
 func (c *queryCtx) evalConstantScore(raw map[string]any, boost float64) (bool, float64, *apiError) {
