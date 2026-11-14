@@ -131,6 +131,9 @@ def _worker(args):
         ops = spec["ops"]
         if spec.get("once"):
             for i in range(w, len(ops), nw):
+                if deadline and time.time() > deadline:
+                    extra["truncated"] = True
+                    break
                 tag, method, path, body = ops[i]
                 lat, status, data = timed(tag, method, path, body)
                 st.add(tag, lat, status, data, ok=_ok(tag, status, data))

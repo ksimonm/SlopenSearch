@@ -111,12 +111,36 @@ class Run:
         spec = dict(spec, timeout=self.a.request_timeout)
         return loadgen.run(self.t.port, spec, clients, duration, deadline)
 
+    def guarded(self, path, body):
+        """One sequential search with a short timeout (3 x --slow-limit). After a timeout the
+        server is still busy with the abandoned query (the SlopenSearch servers do not cancel
+        it), so wait until it answers again before going on. Returns (ms, status, response)."""
+        c = loadgen.Conn(self.t.port, timeout=min(self.a.request_timeout, 3 * self.a.slow_limit))
+        s = time.perf_counter()
+        st, data = c.req("POST", path, json.dumps(body).encode())
+        ms = round((time.perf_counter() - s) * 1000, 1)
+        if st == -1:
+            self.drain()
+            return ms, st, None
+        try:
+            return ms, st, json.loads(data)
+        except ValueError:
+            return ms, st, data.decode(errors="replace")
+
+    def drain(self):
+        t0 = time.time()
+        while time.time() - t0 < self.a.request_timeout:
+            c = loadgen.Conn(self.t.port, timeout=5)
+            s = time.time()
+            st, _ = c.req("GET", "/_cluster/health")
+            if st == 200 and time.time() - s < 1:
+                break
+        print(f"    (waited {time.time() - t0:.0f}s for the server to finish an abandoned query)", flush=True)
+
     def probe(self, path, body):
         """One sequential request (also a warm-up); returns (ms, status)."""
-        c = loadgen.Conn(self.t.port, timeout=self.a.request_timeout)
-        s = time.perf_counter()
-        st, _ = c.req("POST", path, json.dumps(body).encode())
-        return round((time.perf_counter() - s) * 1000, 1), st
+        ms, st, _ = self.guarded(path, body)
+        return ms, st
 
     def timed_or_skip(self, name, path, body, run):
         """Run the timed workload unless a single probe request is slower than --slow-limit."""
@@ -187,29 +211,29 @@ class Run:
         """Sequential pass over the first queries of every set with exact totals."""
         v = {}
         sets = dict(W.text_queries(self.queries, n=10))
-        sets["search_after"] = []
+        if self.a.queries:
+            sets = {k: v for k, v in sets.items() if k in self.a.queries.split(",")}
         for name, bodies in sets.items():
             v[name] = []
             for b in bodies:
-                s = time.time()
-                st, r = self.call("POST", f"/{W.TEXT}/_search", dict(b, track_total_hits=True),
-                                  timeout=self.a.request_timeout)
+                ms, st, r = self.guarded(f"/{W.TEXT}/_search", dict(b, track_total_hits=True))
                 v[name].append(W.digest(r) if st == 200 else {"status": st, "error": str(r)[:300]})
-                if time.time() - s > self.a.slow_limit:
+                if ms > self.a.slow_limit * 1000:
                     break   # too slow to verify all of them
         # search_after: ids of the first 3 pages of the first query
         q0 = W.search_after_queries(self.queries)[0]
         after, ids = None, []
-        for _ in range(3):
+        for _ in range(3 if not self.a.queries or "search_after" in self.a.queries else 0):
             body = dict(q0, size=100, sort=[{"seq": "asc"}])
             if after:
                 body["search_after"] = after
-            st, r = self.call("POST", f"/{W.TEXT}/_search", body, timeout=self.a.request_timeout)
+            _, st, r = self.guarded(f"/{W.TEXT}/_search", body)
             if st != 200 or not r["hits"]["hits"]:
                 break
             ids += [h["_id"] for h in r["hits"]["hits"]]
             after = r["hits"]["hits"][-1]["sort"]
-        v["search_after"] = [{"ids": ids}]
+        if ids:
+            v["search_after"] = [{"ids": ids}]
         if "knn" in self.wl:
             _, _, qv, truth = datagen.load_vectors(self.data)
             kq = W.knn_queries(qv, truth)
@@ -219,7 +243,7 @@ class Run:
                 for i, b in enumerate(kq[name][:100]):
                     if time.time() > t_end:
                         break
-                    st, r = self.call("POST", f"/{W.VEC}/_search", b, timeout=self.a.request_timeout)
+                    _, st, r = self.guarded(f"/{W.VEC}/_search", b)
                     if st != 200:
                         res.append({"status": st, "error": str(r)[:300]})
                         continue
@@ -273,16 +297,20 @@ class Run:
         # ids are spread over the corpus; updates in the first quarter, deletes in the last
         upd = [("update", "POST", f"/{W.TEXT}/_update/{(i * 7919) % (n // 2)}",
                 json.dumps({"doc": {"quantity": i % 1000, "rating": 4.5}}).encode()) for i in range(m)]
-        self.measure("update_single", lambda: self.load({"type": "list", "ops": upd, "once": True}, self.a.clients))
+        cap = self.a.update_timeout
+        self.measure("update_single", lambda: self.load({"type": "list", "ops": upd, "once": True}, self.a.clients,
+                                                        deadline=time.time() + cap))
         dels = [("delete", "DELETE", f"/{W.TEXT}/_doc/{n - 1 - i}", None) for i in range(m)]
-        self.measure("delete_single", lambda: self.load({"type": "list", "ops": dels, "once": True}, self.a.clients))
+        self.measure("delete_single", lambda: self.load({"type": "list", "ops": dels, "once": True}, self.a.clients,
+                                                        deadline=time.time() + cap))
         bspec = {"type": "bulk", "file": str(self.data / "docs.ndjson"), "index": W.TEXT,
                  "batch": self.a.batch, "max_docs": min(n // 2, 100_000), "action": "update"}
-        self.measure("bulk_update", lambda: self.load(bspec, self.a.clients, deadline=time.time() + self.a.index_timeout))
+        self.measure("bulk_update", lambda: self.load(bspec, self.a.clients, deadline=time.time() + cap))
         users = self.queries["users"][:5]
         dbq = [("delete_by_query", "POST", f"/{W.TEXT}/_delete_by_query?refresh=true",
                 json.dumps({"query": {"term": {"user_id": u}}}).encode()) for u in users]
-        self.measure("delete_by_query", lambda: self.load({"type": "list", "ops": dbq, "once": True}, 1))
+        self.measure("delete_by_query", lambda: self.load({"type": "list", "ops": dbq, "once": True}, 1,
+                                                          deadline=time.time() + cap))
         self.must("POST", f"/{W.TEXT}/_refresh")
         self.res["counts"]["text_after_updates"] = self.must("GET", f"/{W.TEXT}/_count")["count"]
         st, r = self.call("POST", f"/{W.TEXT}/_count", {"query": {"term": {"rating": 4.5}}})
@@ -395,6 +423,8 @@ def main():
     ap.add_argument("--request-timeout", type=float, default=120, help="client timeout per request (s)")
     ap.add_argument("--slow-limit", type=float, default=10,
                     help="skip a timed search workload when one probe request takes longer (s)")
+    ap.add_argument("--update-timeout", type=float, default=300,
+                    help="stop each update/delete workload after this many seconds")
     ap.add_argument("--index-timeout", type=float, default=1800, help="give up indexing after this many seconds")
     ap.add_argument("--data-dir", type=Path, default=None, help="generated data (default /tmp/agent-bench/data)")
     ap.add_argument("--out", type=Path, default=None, help="results directory (default bench/results/<timestamp>)")
