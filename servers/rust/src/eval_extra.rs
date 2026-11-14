@@ -2425,7 +2425,7 @@ impl<'a> QueryCtx<'a> {
         if !bm.contains_key("field") && bm.len() == 1 {
             let (fname, spec) = bm.iter().next().unwrap();
             if let Some(spec) = spec.as_object() {
-                return self.eval_knn_field(fname, spec);
+                return self.eval_knn_query(fname, spec);
             }
         }
         let field = bm

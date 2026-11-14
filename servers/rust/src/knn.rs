@@ -296,24 +296,26 @@ pub fn vec_field(def: &Value) -> Option<VecField> {
 
 /// Raw distance/similarity between two vectors for a space.
 pub fn raw(space: &str, a: &[f64], b: &[f64]) -> f64 {
-    match space {
-        "l2" => a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum(),
-        "l1" => a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum(),
-        "linf" => a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max),
-        "innerproduct" => a.iter().zip(b).map(|(x, y)| x * y).sum(),
+    // float arithmetic, like Lucene's VectorUtil
+    let pairs = || a.iter().zip(b).map(|(x, y)| (*x as f32, *y as f32));
+    (match space {
+        "l2" => pairs().map(|(x, y)| (x - y) * (x - y)).sum::<f32>(),
+        "l1" => pairs().map(|(x, y)| (x - y).abs()).sum::<f32>(),
+        "linf" => pairs().map(|(x, y)| (x - y).abs()).fold(0.0, f32::max),
+        "innerproduct" => pairs().map(|(x, y)| x * y).sum::<f32>(),
         "cosinesimil" => {
-            let dot: f64 = a.iter().zip(b).map(|(x, y)| x * y).sum();
-            let na: f64 = a.iter().map(|x| x * x).sum::<f64>().sqrt();
-            let nb: f64 = b.iter().map(|x| x * x).sum::<f64>().sqrt();
-            dot / (na * nb)
+            let dot: f32 = pairs().map(|(x, y)| x * y).sum();
+            let na: f32 = pairs().map(|(x, _)| x * x).sum();
+            let nb: f32 = pairs().map(|(_, y)| y * y).sum();
+            dot / ((na as f64) * (nb as f64)).sqrt() as f32
         }
         "hamming" => a
             .iter()
             .zip(b)
-            .map(|(x, y)| (((*x as i64) ^ (*y as i64)) as u8).count_ones() as f64)
+            .map(|(x, y)| (((*x as i64) ^ (*y as i64)) as u8).count_ones() as f32)
             .sum(),
         _ => 0.0,
-    }
+    }) as f64
 }
 
 /// OpenSearch score for a raw value of a space.

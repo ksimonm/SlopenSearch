@@ -752,7 +752,7 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
     idx.versions.insert(doc_id.clone(), planned_version);
     idx.seq_nos.insert(doc_id.clone(), seq);
     idx.docs.insert(doc_id.clone(), Value::Object(body.clone()));
-    let raw_store = if !pipeline_applied && !req.body.is_empty() {
+    let raw_store = if !pipeline_applied && !req.body.is_empty() && !crate::knn_index::index_knn(idx) {
         req.body.clone()
     } else {
         serde_json::to_vec(&Value::Object(body.clone())).unwrap_or_default()

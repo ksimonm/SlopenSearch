@@ -622,7 +622,11 @@ pub fn script_score_query(qc: &QueryCtx, body: &Value) -> Result<(bool, f64), Ap
         Some(r) => r.clone(),
         None => return Ok((true, 1.0)),
     };
-    let s = run_score_script(qc, &raw, base, false)?;
+    let s = if raw.get("lang").and_then(|l| l.as_str()) == Some("knn") {
+        crate::knn_query::knn_score_script(qc, &raw)?
+    } else {
+        run_score_script(qc, &raw, base, false)?
+    };
     if let Some(min) = bm.get("min_score").and_then(|v| v.as_f64()) {
         if s < min {
             return Ok((false, 0.0));

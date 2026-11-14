@@ -781,18 +781,33 @@ pub fn canonical_body_settings(body: &Map<String, Value>) -> Map<String, Value> 
     out
 }
 
-fn settings_set_nested(root: &mut Map<String, Value>, path: &[&str], v: Value) {
-    if path.len() == 1 {
-        root.insert(path[0].to_string(), v);
-        return;
+fn settings_set_nested(root: &mut Map<String, Value>, prefix: &str, setting: &str, v: Value) {
+    // Settings.getAsStructuredMap: a key that is both a value and a prefix
+    // keeps the deeper keys dotted next to it.
+    match setting.find('.') {
+        None => {
+            let full = format!("{}{}", prefix, setting);
+            if let Some(Value::Object(inner)) = root.get(&full).cloned() {
+                for (k, iv) in inner {
+                    root.insert(format!("{}.{}", full, k), iv);
+                }
+            }
+            root.insert(full, v);
+        }
+        Some(i) => {
+            let key = format!("{}{}", prefix, &setting[..i]);
+            let rest = &setting[i + 1..];
+            match root.get_mut(&key) {
+                None => {
+                    let mut m = Map::new();
+                    settings_set_nested(&mut m, "", rest, v);
+                    root.insert(key, Value::Object(m));
+                }
+                Some(Value::Object(m)) => settings_set_nested(m, "", rest, v),
+                Some(_) => settings_set_nested(root, &format!("{}.", key), rest, v),
+            }
+        }
     }
-    let entry = root
-        .entry(path[0].to_string())
-        .or_insert_with(|| Value::Object(Map::new()));
-    if !entry.is_object() {
-        *entry = Value::Object(Map::new());
-    }
-    settings_set_nested(entry.as_object_mut().unwrap(), &path[1..], v);
 }
 
 pub fn settings_to_nested(flat: &Map<String, Value>) -> Value {
@@ -800,8 +815,7 @@ pub fn settings_to_nested(flat: &Map<String, Value>) -> Value {
     let mut keys: Vec<&String> = flat.keys().collect();
     keys.sort();
     for k in keys {
-        let parts: Vec<&str> = k.split('.').collect();
-        settings_set_nested(&mut root, &parts, flat[k].clone());
+        settings_set_nested(&mut root, "", k, flat[k].clone());
     }
     Value::Object(root)
 }
@@ -822,6 +836,11 @@ pub fn materialized_flat(idx: &Index) -> Map<String, Value> {
             "index.number_of_replicas".to_string(),
             Value::String(idx.num_replicas().to_string()),
         );
+    }
+    if out.get("index.knn").and_then(|v| v.as_str()) == Some("true")
+        && !out.contains_key("index.knn.derived_source.enabled")
+    {
+        out.insert("index.knn.derived_source.enabled".to_string(), Value::String("true".into()));
     }
     out.insert("index.uuid".to_string(), Value::String(idx.uuid.clone()));
     out.insert(

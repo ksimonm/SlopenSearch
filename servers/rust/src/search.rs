@@ -2753,6 +2753,7 @@ pub fn run_search(
         }
         None => Map::new(),
     };
+    crate::knn_query::validate_tree(&Value::Object(query.clone()), &req.body)?;
     for n in names {
         if let Some(idx) = store.indices.get(n) {
             crate::eval::validate_query(idx, &query)?;

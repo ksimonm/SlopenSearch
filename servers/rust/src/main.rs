@@ -5,6 +5,7 @@ mod alias;
 mod cat;
 mod knn;
 mod knn_index;
+mod knn_query;
 mod cluster;
 mod datastreams;
 mod docs;
