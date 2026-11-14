@@ -1,4 +1,8 @@
-package main
+// Package mustache renders Mustache templates with the semantics of
+// OpenSearch's mustache.java integration: JSON escaping for {{x}}, raw
+// {{{x}}}, lists exposed as maps by index, and the toJson / join / url
+// functions.
+package mustache
 
 import (
 	"bytes"
@@ -11,40 +15,39 @@ import (
 	"slopensearch/internal/painless"
 )
 
-// Mustache templates with the semantics of OpenSearch's mustache.java
-// integration: JSON escaping for {{x}}, raw {{{x}}}, lists exposed as maps
-// by index, and the toJson / join / url functions.
+// Error is a template error (a mustache_exception in OpenSearch).
+type Error struct{ Reason string }
 
-type mustacheErr struct{ reason string }
+func (e *Error) Error() string { return e.Reason }
 
-type mNode struct {
+type node struct {
 	kind     byte // 't' text, 'v' escaped var, 'u' raw var, '#' section, '^' inverted
 	text     string
-	children []*mNode
+	children []*node
 	fn       string // toJson, join, url
 	delim    string // join delimiter
 	inner    string // raw text of the section body (for functions)
 }
 
-func mustacheParse(tpl string) ([]*mNode, *mustacheErr) {
+func parse(tpl string) ([]*node, *Error) {
 	open, close := "{{", "}}"
 	type frame struct {
-		node  *mNode
+		node  *node
 		start int
 	}
-	root := &mNode{}
+	root := &node{}
 	stack := []frame{{node: root}}
 	i := 0
 	for i < len(tpl) {
 		j := strings.Index(tpl[i:], open)
 		if j < 0 {
 			top := stack[len(stack)-1].node
-			top.children = append(top.children, &mNode{kind: 't', text: tpl[i:]})
+			top.children = append(top.children, &node{kind: 't', text: tpl[i:]})
 			break
 		}
 		top := stack[len(stack)-1].node
 		if j > 0 {
-			top.children = append(top.children, &mNode{kind: 't', text: tpl[i : i+j]})
+			top.children = append(top.children, &node{kind: 't', text: tpl[i : i+j]})
 		}
 		tagStart := i + j
 		i = tagStart + len(open)
@@ -55,7 +58,7 @@ func mustacheParse(tpl string) ([]*mNode, *mustacheErr) {
 		}
 		end := strings.Index(tpl[i:], close)
 		if end < 0 {
-			return nil, &mustacheErr{reason: "Improperly closed variable in query-template:1"}
+			return nil, &Error{Reason: "Improperly closed variable in query-template:1"}
 		}
 		tag := tpl[i : i+end]
 		i += end + len(close)
@@ -63,7 +66,7 @@ func mustacheParse(tpl string) ([]*mNode, *mustacheErr) {
 			if strings.HasPrefix(tpl[i:], "}") {
 				i++
 			}
-			top.children = append(top.children, &mNode{kind: 'u', text: strings.TrimSpace(tag)})
+			top.children = append(top.children, &node{kind: 'u', text: strings.TrimSpace(tag)})
 			continue
 		}
 		if tag == "" {
@@ -80,10 +83,10 @@ func mustacheParse(tpl string) ([]*mNode, *mustacheErr) {
 			}
 			continue
 		case '&':
-			top.children = append(top.children, &mNode{kind: 'u', text: strings.TrimSpace(tag[1:])})
+			top.children = append(top.children, &node{kind: 'u', text: strings.TrimSpace(tag[1:])})
 		case '#', '^':
 			name := strings.TrimSpace(tag[1:])
-			n := &mNode{kind: tag[0], text: name}
+			n := &node{kind: tag[0], text: name}
 			fields := strings.Fields(name)
 			if len(fields) > 0 {
 				switch fields[0] {
@@ -108,7 +111,7 @@ func mustacheParse(tpl string) ([]*mNode, *mustacheErr) {
 		case '/':
 			name := strings.TrimSpace(tag[1:])
 			if len(stack) == 1 || stack[len(stack)-1].node.text != name {
-				return nil, &mustacheErr{reason: "Mismatched start/end tags: " + name + " in query-template:1"}
+				return nil, &Error{Reason: "Mismatched start/end tags: " + name + " in query-template:1"}
 			}
 			f := stack[len(stack)-1]
 			f.node.inner = tpl[f.start:tagStart]
@@ -116,7 +119,7 @@ func mustacheParse(tpl string) ([]*mNode, *mustacheErr) {
 		case '>':
 			continue
 		default:
-			top.children = append(top.children, &mNode{kind: 'v', text: strings.TrimSpace(tag)})
+			top.children = append(top.children, &node{kind: 'v', text: strings.TrimSpace(tag)})
 		}
 	}
 	if len(stack) > 1 {
@@ -124,34 +127,34 @@ func mustacheParse(tpl string) ([]*mNode, *mustacheErr) {
 		if f := strings.Fields(name); len(f) > 0 {
 			name = f[0]
 		}
-		return nil, &mustacheErr{reason: "Failed to close '" + name + "' tag @[query-template:1]"}
+		return nil, &Error{Reason: "Failed to close '" + name + "' tag @[query-template:1]"}
 	}
 	return root.children, nil
 }
 
-// mustacheRender renders a template against params.
-func mustacheRender(tpl string, params map[string]any) (string, *mustacheErr) {
-	nodes, err := mustacheParse(tpl)
+// Render renders a template against params.
+func Render(tpl string, params map[string]any) (string, *Error) {
+	nodes, err := parse(tpl)
 	if err != nil {
 		return "", err
 	}
 	var sb strings.Builder
-	mustacheRenderNodes(&sb, nodes, []any{params})
+	renderNodes(&sb, nodes, []any{params})
 	return sb.String(), nil
 }
 
-func mustacheLookup(stack []any, name string) (any, bool) {
+func lookup(stack []any, name string) (any, bool) {
 	if name == "." {
 		return stack[len(stack)-1], true
 	}
 	parts := strings.Split(name, ".")
 	for i := len(stack) - 1; i >= 0; i-- {
-		v, ok := mustacheGet(stack[i], parts[0])
+		v, ok := get(stack[i], parts[0])
 		if !ok {
 			continue
 		}
 		for _, p := range parts[1:] {
-			v, ok = mustacheGet(v, p)
+			v, ok = get(v, p)
 			if !ok {
 				return nil, false
 			}
@@ -161,7 +164,7 @@ func mustacheLookup(stack []any, name string) (any, bool) {
 	return nil, false
 }
 
-func mustacheGet(v any, key string) (any, bool) {
+func get(v any, key string) (any, bool) {
 	switch t := v.(type) {
 	case map[string]any:
 		x, ok := t[key]
@@ -176,7 +179,7 @@ func mustacheGet(v any, key string) (any, bool) {
 	return nil, false
 }
 
-func mustacheTruthy(v any) bool {
+func truthy(v any) bool {
 	switch t := v.(type) {
 	case nil:
 		return false
@@ -190,9 +193,9 @@ func mustacheTruthy(v any) bool {
 	return true
 }
 
-// mustacheString renders a value like Object.toString(); lists are exposed
+// toString renders a value like Object.toString(); lists are exposed
 // to templates as maps keyed by index.
-func mustacheString(v any) string {
+func toString(v any) string {
 	switch t := v.(type) {
 	case nil:
 		return ""
@@ -203,14 +206,14 @@ func mustacheString(v any) string {
 	case []any:
 		m := painless.NewMap(painless.Linked)
 		for i, e := range t {
-			m.Put(itoa(i), painless.FromJSON(e, painless.Linked))
+			m.Put(strconv.Itoa(i), painless.FromJSON(e, painless.Linked))
 		}
 		return painless.ToString(m)
 	}
 	return painless.ToString(painless.FromJSON(v, painless.Hash))
 }
 
-func mustacheJSONEscape(s string) string {
+func jsonEscape(s string) string {
 	var sb strings.Builder
 	for _, r := range s {
 		switch r {
@@ -241,8 +244,8 @@ func mustacheJSONEscape(s string) string {
 	return sb.String()
 }
 
-// mustacheToJSON serializes a value compactly (Jackson style).
-func mustacheToJSON(v any) string {
+// toJSON serializes a value compactly (Jackson style).
+func toJSON(v any) string {
 	var buf bytes.Buffer
 	var write func(v any)
 	write = func(v any) {
@@ -289,85 +292,73 @@ func mustacheToJSON(v any) string {
 	return buf.String()
 }
 
-func mustacheRenderNodes(sb *strings.Builder, nodes []*mNode, stack []any) {
+func renderNodes(sb *strings.Builder, nodes []*node, stack []any) {
 	for _, n := range nodes {
 		switch n.kind {
 		case 't':
 			sb.WriteString(n.text)
 		case 'v':
-			if v, ok := mustacheLookup(stack, n.text); ok {
-				sb.WriteString(mustacheJSONEscape(mustacheString(v)))
+			if v, ok := lookup(stack, n.text); ok {
+				sb.WriteString(jsonEscape(toString(v)))
 			}
 		case 'u':
-			if v, ok := mustacheLookup(stack, n.text); ok {
-				sb.WriteString(mustacheString(v))
+			if v, ok := lookup(stack, n.text); ok {
+				sb.WriteString(toString(v))
 			}
 		case '#':
 			switch n.fn {
 			case "toJson":
-				if v, ok := mustacheLookup(stack, strings.TrimSpace(n.inner)); ok {
-					sb.WriteString(mustacheToJSON(v))
+				if v, ok := lookup(stack, strings.TrimSpace(n.inner)); ok {
+					sb.WriteString(toJSON(v))
 				}
 				continue
 			case "join":
-				if v, ok := mustacheLookup(stack, strings.TrimSpace(n.inner)); ok {
+				if v, ok := lookup(stack, strings.TrimSpace(n.inner)); ok {
 					if list, ok := v.([]any); ok {
 						parts := make([]string, len(list))
 						for i, e := range list {
-							parts[i] = mustacheString(e)
+							parts[i] = toString(e)
 						}
 						sb.WriteString(strings.Join(parts, n.delim))
 					} else {
-						sb.WriteString(mustacheString(v))
+						sb.WriteString(toString(v))
 					}
 				}
 				continue
 			case "url":
 				var inner strings.Builder
-				mustacheRenderNodes(&inner, n.children, stack)
+				renderNodes(&inner, n.children, stack)
 				sb.WriteString(url.QueryEscape(inner.String()))
 				continue
 			}
-			v, _ := mustacheLookup(stack, n.text)
-			if !mustacheTruthy(v) {
+			v, _ := lookup(stack, n.text)
+			if !truthy(v) {
 				continue
 			}
 			if list, ok := v.([]any); ok {
 				for _, e := range list {
-					mustacheRenderNodes(sb, n.children, append(stack, e))
+					renderNodes(sb, n.children, append(stack, e))
 				}
 				continue
 			}
-			mustacheRenderNodes(sb, n.children, append(stack, v))
+			renderNodes(sb, n.children, append(stack, v))
 		case '^':
-			v, _ := mustacheLookup(stack, n.text)
-			if !mustacheTruthy(v) {
-				mustacheRenderNodes(sb, n.children, stack)
+			v, _ := lookup(stack, n.text)
+			if !truthy(v) {
+				renderNodes(sb, n.children, stack)
 			}
 		}
 	}
 }
 
-// mustacheTemplateText returns the template text of a source: strings are
+// TemplateText returns the template text of a source: strings are
 // used as is, objects are serialized to JSON first.
-func mustacheTemplateText(source any) (string, bool) {
+func TemplateText(source any) (string, bool) {
 	switch t := source.(type) {
 	case string:
 		return t, true
 	case map[string]any, []any:
-		return mustacheToJSON(t), true
+		return toJSON(t), true
 	}
 	return "", false
-}
-
-// mustacheScriptError is the script_exception of a failed template.
-func mustacheScriptError(src string, e *mustacheErr) *apiError {
-	body := orderedJSON{{"error", orderedJSON{
-		{"root_cause", []any{orderedJSON{{"type", "script_exception"}, {"reason", e.reason}, {"script_stack", []any{}}, {"script", src}, {"lang", "mustache"}}}},
-		{"type", "script_exception"}, {"reason", e.reason}, {"script_stack", []any{}}, {"script", src}, {"lang", "mustache"},
-		{"caused_by", orderedJSON{{"type", "mustache_exception"}, {"reason", e.reason}}},
-	}}, {"status", 400}}
-	return &apiError{Type: "script_exception", Status: 400, Reason: e.reason, Fields: map[string]any{"lang": "mustache"},
-		CausedBy: &apiError{Type: "mustache_exception", Reason: e.reason},
-		Shard:    &shardFailure{raw: body, status: 400}}
 }

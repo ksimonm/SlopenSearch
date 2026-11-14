@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"slopensearch/internal/mustache"
 	"slopensearch/internal/painless"
 )
 
@@ -20,7 +21,7 @@ func (s *Server) resolveTemplate(body map[string]any) (text string, rendered boo
 		source, hasSource = body["inline"]
 	}
 	if hasSource {
-		text, ok := mustacheTemplateText(source)
+		text, ok := mustache.TemplateText(source)
 		if !ok {
 			return "", false, errParsing("template source must be a string or object")
 		}
@@ -69,7 +70,7 @@ func (s *Server) renderTemplateText(body map[string]any) (string, *apiError) {
 	if err != nil || rendered {
 		return text, err
 	}
-	out, merr := mustacheRender(text, templateParams(body))
+	out, merr := mustache.Render(text, templateParams(body))
 	if merr != nil {
 		return "", mustacheScriptError(text, merr)
 	}

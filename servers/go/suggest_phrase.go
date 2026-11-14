@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"slopensearch/internal/mustache"
 	"slopensearch/internal/painless"
 )
 
@@ -1512,7 +1513,7 @@ func phraseSuggestIndex(req *phraseRequest, idx *Index, text string) (*phEntry, 
 // phCollateMatches renders the collate template for a suggestion and reports
 // whether its query matches any document of the index.
 func phCollateMatches(idx *Index, req *phraseRequest, suggestion string) (bool, *apiError) {
-	tpl, ok := mustacheTemplateText(req.collateSource)
+	tpl, ok := mustache.TemplateText(req.collateSource)
 	if !ok {
 		return false, nil
 	}
@@ -1521,7 +1522,7 @@ func phCollateMatches(idx *Index, req *phraseRequest, suggestion string) (bool, 
 		vars[k] = v
 	}
 	vars["suggestion"] = suggestion
-	src, merr := mustacheRender(tpl, vars)
+	src, merr := mustache.Render(tpl, vars)
 	if merr != nil {
 		return false, mustacheScriptError(tpl, merr)
 	}
