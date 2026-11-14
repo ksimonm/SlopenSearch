@@ -13,7 +13,7 @@ import (
 	"slopensearch/internal/model"
 )
 
-func KnnFieldDef(idx *model.Index, path string) (map[string]any, bool) {
+func knnFieldDef(idx *model.Index, path string) (map[string]any, bool) {
 	props, _ := idx.Mappings["properties"].(map[string]any)
 	parts := strings.Split(path, ".")
 	nested := false
@@ -33,8 +33,8 @@ func KnnFieldDef(idx *model.Index, path string) (map[string]any, bool) {
 	return nil, false
 }
 
-// KnnDistanceScore returns the raw distance-like value and the OpenSearch score.
-func KnnDistanceScore(space string, q, d []float64) (float64, float64) {
+// knnDistanceScore returns the raw distance-like value and the OpenSearch score.
+func knnDistanceScore(space string, q, d []float64) (float64, float64) {
 	switch space {
 	case "cosinesimil":
 		dot, na, nb := 0.0, 0.0, 0.0
@@ -100,7 +100,7 @@ var (
 	knnCacheN  int
 )
 
-func FloatList(v any) ([]float64, bool) {
+func floatList(v any) ([]float64, bool) {
 	arr, ok := v.([]any)
 	if !ok {
 		return nil, false
@@ -116,13 +116,13 @@ func FloatList(v any) ([]float64, bool) {
 	return out, true
 }
 
-func (c *QueryCtx) DocVector(field string) ([]float64, bool) {
+func (c *QueryCtx) docVector(field string) ([]float64, bool) {
 	vals, present := c.Values(field)
 	if !present || len(vals) == 0 {
 		return nil, false
 	}
 	if len(vals) == 1 {
-		if arr, ok := FloatList(vals[0]); ok {
+		if arr, ok := floatList(vals[0]); ok {
 			return arr, true
 		}
 	}
@@ -142,7 +142,7 @@ func knnParseErr(reason string) *apierr.Error {
 }
 
 func (c *QueryCtx) evalKnnField(field string, p map[string]any) (bool, float64, *apierr.Error) {
-	vec, ok := FloatList(p["vector"])
+	vec, ok := floatList(p["vector"])
 	if !ok {
 		return false, 0, knnParseErr("[knn] failed to parse field [vector]")
 	}
@@ -162,14 +162,14 @@ func (c *QueryCtx) evalKnnField(field string, p map[string]any) (bool, float64, 
 	if b, ok := jsonv.ToFloat(p["boost"]); ok {
 		boost = b
 	}
-	def, _ := KnnFieldDef(c.Idx, field)
+	def, _ := knnFieldDef(c.Idx, field)
 	fi := mapping.KnnInfo(def)
 	score := func(qc *QueryCtx) (bool, float64, float64) {
-		dv, ok := qc.DocVector(field)
+		dv, ok := qc.docVector(field)
 		if !ok || len(dv) != len(vec) {
 			return false, 0, 0
 		}
-		d, s := KnnDistanceScore(fi.Space, vec, dv)
+		d, s := knnDistanceScore(fi.Space, vec, dv)
 		return true, d, s
 	}
 	filter, _ := p["filter"].(map[string]any)

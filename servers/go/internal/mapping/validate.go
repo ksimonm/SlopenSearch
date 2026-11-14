@@ -11,21 +11,21 @@ import (
 	"slopensearch/internal/jsonv"
 )
 
-// ValidationError carries the OpenSearch mapper validation message and
+// validationError carries the OpenSearch mapper validation message and
 // the type of the caused_by error used when the error is wrapped in an index
 // creation response.
-type ValidationError struct {
+type validationError struct {
 	Reason string
 	Cause  string
 }
 
-func (e *ValidationError) Error() string { return e.Reason }
+func (e *validationError) Error() string { return e.Reason }
 
-func mve(reason, cause string) *ValidationError {
+func mve(reason, cause string) *validationError {
 	if cause == "" {
 		cause = "mapper_parsing_exception"
 	}
-	return &ValidationError{Reason: reason, Cause: cause}
+	return &validationError{Reason: reason, Cause: cause}
 }
 
 var allowedMappingParams = map[string]bool{
@@ -120,7 +120,7 @@ var knownDateFormatParts = map[string]bool{
 	"date": true, "basic_date": true,
 }
 
-func validateDateFormat(name, fmtStr string) *ValidationError {
+func validateDateFormat(name, fmtStr string) *validationError {
 	if fmtStr == "" {
 		return nil
 	}
@@ -140,7 +140,7 @@ func validateDateFormat(name, fmtStr string) *ValidationError {
 	return nil
 }
 
-func ValidateProps(props map[string]any) *ValidationError {
+func ValidateProps(props map[string]any) *validationError {
 	for _, name := range SortedAnyKeys(props) {
 		raw := props[name]
 		def, ok := raw.(map[string]any)
@@ -271,7 +271,7 @@ func ValidateProps(props map[string]any) *ValidationError {
 			}
 		}
 		for _, k := range SortedAnyKeys(def) {
-			if t == "knn_vector" && KnnFieldParams[k] {
+			if t == "knn_vector" && knnFieldParams[k] {
 				continue
 			}
 			if !allowedMappingParams[k] {
@@ -326,12 +326,12 @@ func ValidatePropsMeta(props map[string]any) *apierr.Error {
 		for _, name := range SortedAnyKeys(props) {
 			if name == "" || strings.Contains(name, "..") {
 				reason := "name cannot be empty string"
-				return WrappedError(reason, "illegal_argument_exception")
+				return wrappedError(reason, "illegal_argument_exception")
 			}
 			switch name {
 			case "_id", "_source", "_index", "_ignored":
 				reason := fmt.Sprintf("Field [%s] is defined more than once", name)
-				return WrappedError(reason, "mapper_parsing_exception")
+				return wrappedError(reason, "mapper_parsing_exception")
 			}
 			def, ok := props[name].(map[string]any)
 			if !ok {
@@ -340,7 +340,7 @@ func ValidatePropsMeta(props map[string]any) *apierr.Error {
 			t, _ := def["type"].(string)
 			if _, has := def["enabled"]; has && t != "" && t != "object" && t != "nested" {
 				reason := fmt.Sprintf("unknown parameter [enabled] on mapper [%s] of type [%s]", name, t)
-				return WrappedError(reason, "mapper_parsing_exception")
+				return wrappedError(reason, "mapper_parsing_exception")
 			}
 			if ia, has := def["ignore_above"]; has {
 				if _, ok := jsonv.ToFloat(ia); !ok {
@@ -362,12 +362,12 @@ func ValidatePropsMeta(props map[string]any) *apierr.Error {
 		return err
 	}
 	if countMappingType(props, "join") > 1 {
-		return WrappedError("Field [_parent_join] is defined more than once", "illegal_argument_exception")
+		return wrappedError("Field [_parent_join] is defined more than once", "illegal_argument_exception")
 	}
 	return nil
 }
 
-func WrappedError(reason, cause string) *apierr.Error {
+func wrappedError(reason, cause string) *apierr.Error {
 	return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 		Reason:   "Failed to parse mapping [_doc]: " + reason,
 		CausedBy: &apierr.Error{Type: cause, Reason: reason}}
@@ -408,7 +408,7 @@ func ValidateAliasMappings(props map[string]any) *apierr.Error {
 		}
 		path, _ := def["path"].(string)
 		if path == "" {
-			return WrappedError(fmt.Sprintf("The [path] property must be specified for field [%s].", name), "mapper_parsing_exception")
+			return wrappedError(fmt.Sprintf("The [path] property must be specified for field [%s].", name), "mapper_parsing_exception")
 		}
 		var unsupported []string
 		for _, k := range SortedAnyKeys(def) {
@@ -419,7 +419,7 @@ func ValidateAliasMappings(props map[string]any) *apierr.Error {
 		}
 		if len(unsupported) > 0 {
 			reason := fmt.Sprintf("Mapping definition for [%s] has unsupported parameters:  [%s]", name, strings.Join(unsupported, ", "))
-			return WrappedError(reason, "mapper_parsing_exception")
+			return wrappedError(reason, "mapper_parsing_exception")
 		}
 		target := aliasTarget(props, path)
 		if target == nil {
@@ -494,7 +494,7 @@ func ValidateJoinPlacement(props map[string]any, prefix string) *apierr.Error {
 		}
 		if t, _ := def["type"].(string); t == "join" && prefix != "" {
 			reason := fmt.Sprintf("join field [%s] cannot be added inside an object or in a multi-field", path)
-			return WrappedError(reason, "mapper_parsing_exception")
+			return wrappedError(reason, "mapper_parsing_exception")
 		}
 		if sub, ok := def["properties"].(map[string]any); ok {
 			if err := ValidateJoinPlacement(sub, path); err != nil {
@@ -506,7 +506,7 @@ func ValidateJoinPlacement(props map[string]any, prefix string) *apierr.Error {
 				if fdef, ok := fields[fname].(map[string]any); ok {
 					if ft, _ := fdef["type"].(string); ft == "join" {
 						reason := fmt.Sprintf("join field [%s.%s] cannot be added inside an object or in a multi-field", path, fname)
-						return WrappedError(reason, "mapper_parsing_exception")
+						return wrappedError(reason, "mapper_parsing_exception")
 					}
 				}
 			}
@@ -522,13 +522,13 @@ func ValidateSource(mappings map[string]any) *apierr.Error {
 			case "enabled", "includes", "excludes", "include", "exclude":
 			default:
 				reason := fmt.Sprintf("unknown parameter [%s] on mapper [_source] of type [null]", k)
-				return WrappedError(reason, "illegal_argument_exception")
+				return wrappedError(reason, "illegal_argument_exception")
 			}
 		}
 	}
 	if rt, ok := mappings["runtime"]; ok {
 		reason := fmt.Sprintf("Root mapping definition has unsupported parameters:  [runtime : %s]", javaMapDebug(rt))
-		return WrappedError(reason, "illegal_argument_exception")
+		return wrappedError(reason, "illegal_argument_exception")
 	}
 	return nil
 }

@@ -9,7 +9,7 @@ import (
 	"slopensearch/internal/painless"
 )
 
-func (c *QueryCtx) EvalScriptQuery(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalScriptQuery(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, apierr.Parsing("[script] query malformed")

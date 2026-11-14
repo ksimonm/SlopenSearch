@@ -59,7 +59,7 @@ func Process(h http.Header, ordered bool, r *http.Request, status int, body []by
 		return toYAMLOrdered(tree)
 	}
 	if pretty {
-		return Pretty(tree)
+		return prettyJSON(tree)
 	}
 	var buf bytes.Buffer
 	writeCompactOrdered(&buf, tree)

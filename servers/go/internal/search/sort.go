@@ -72,7 +72,7 @@ func searchSortSpecValueRaw(h MultiHit, sp SortSpec) (any, bool, bool) {
 		}
 		return int64(pos), true, false
 	}
-	if FieldUnderNested(h.Idx, sp.Field) && sp.NestedPath == "" {
+	if fieldUnderNested(h.Idx, sp.Field) && sp.NestedPath == "" {
 		return nil, false, true
 	}
 	if sp.NestedPath != "" {
@@ -83,7 +83,7 @@ func searchSortSpecValueRaw(h MultiHit, sp SortSpec) (any, bool, bool) {
 		if len(vals) == 1 {
 			return vals[0], true, false
 		}
-		return ReduceSortValues(vals, sp.Desc, sp.Mode), true, false
+		return reduceSortValues(vals, sp.Desc, sp.Mode), true, false
 	}
 	if sp.Unmapped != "" {
 		if !SortFieldMapped(h.Idx, sp.Field) {
@@ -97,7 +97,7 @@ func searchSortSpecValueRaw(h MultiHit, sp SortSpec) (any, bool, bool) {
 			}
 		}
 	}
-	v, ok := h.SortValue(sp.Field, sp.Desc, sp.Mode)
+	v, ok := h.sortValue(sp.Field, sp.Desc, sp.Mode)
 	if ok {
 		return v, true, false
 	}
@@ -159,13 +159,13 @@ func CompareSortSpec(a, b MultiHit, sp SortSpec) int {
 	if !bok {
 		return -1
 	}
-	return CompareSortValues(av, bv)
+	return compareSortValues(av, bv)
 }
 
 // SortOutputValue is the value a hit reports in "sort" for one sort spec.
 func SortOutputValue(h MultiHit, sp SortSpec) any {
 	v, ok, missing := searchSortSpecValue(h, sp)
-	if ik, isIP := v.(IPSortKey); isIP {
+	if ik, isIP := v.(ipSortKey); isIP {
 		return ik.Out
 	}
 	if f, isF := v.(float64); isF && math.IsInf(f, 0) {
@@ -366,7 +366,7 @@ func geoSortDistance(h MultiHit, sp SortSpec) any {
 	} else {
 		candidates = []any{raw}
 	}
-	mult, _ := GeoUnitMeters(sp.GeoUnit)
+	mult, _ := geoUnitMeters(sp.GeoUnit)
 	if mult == 0 {
 		mult = 1
 	}
@@ -448,7 +448,7 @@ func compareSearchAfterValue(h MultiHit, sp SortSpec, av, bv any) int {
 		}
 		return 0
 	}
-	return CompareSortValues(av, bv)
+	return compareSortValues(av, bv)
 }
 
 // HashString is the 32-bit FNV-1a hash of s.

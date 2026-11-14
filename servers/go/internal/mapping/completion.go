@@ -45,7 +45,7 @@ func CompletionContextNames(ctxs []CompletionContextDef) string {
 }
 
 // validateCompletionMapping checks the completion specific mapping parameters.
-func validateCompletionMapping(def map[string]any) *ValidationError {
+func validateCompletionMapping(def map[string]any) *validationError {
 	if v, has := def["max_input_length"]; has {
 		if n, ok := intFromAny(v); ok && n <= 0 {
 			return mve(fmt.Sprintf("[max_input_length] must be > 0 but was [%d]", n), "")

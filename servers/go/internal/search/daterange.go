@@ -19,7 +19,7 @@ func rangeDateParseError(value, queryFormat string, def map[string]any) *apierr.
 		Reason: fmt.Sprintf("failed to parse date field [%s] with format [%s]", value, format)}
 }
 
-func ParseRangeDateBound(def map[string]any, v any, tz, queryFormat string, roundUp bool) (any, *apierr.Error) {
+func parseRangeDateBound(def map[string]any, v any, tz, queryFormat string, roundUp bool) (any, *apierr.Error) {
 	if m, ok := v.(map[string]any); ok {
 		if mv, ok := m["value"]; ok {
 			v = mv

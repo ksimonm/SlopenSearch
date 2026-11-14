@@ -2390,7 +2390,7 @@ func (c *QueryCtx) evalPinned(body any) (bool, float64, *apierr.Error) {
 	return false, 0, nil
 }
 
-func PercolateFieldName(bm map[string]any) string {
+func percolateFieldName(bm map[string]any) string {
 	field, _ := bm["field"].(string)
 	if field == "" {
 		field = "query"
@@ -2448,7 +2448,7 @@ func (c *QueryCtx) evalPercolate(body any) (bool, float64, *apierr.Error) {
 	if !ok {
 		return false, 0, apierr.Parsing("[percolate] query malformed")
 	}
-	field := PercolateFieldName(bm)
+	field := percolateFieldName(bm)
 	def, mapped := mapping.FieldDef(c.Idx, field)
 	ftype := ""
 	if mapped {
@@ -2458,7 +2458,7 @@ func (c *QueryCtx) evalPercolate(body any) (bool, float64, *apierr.Error) {
 		if ftype == "" {
 			ftype = "object"
 		}
-		return false, 0, MatchShardError(
+		return false, 0, matchShardError(
 			fmt.Sprintf("expected field [%s] to be of type [percolator], but is of type [%s]", field, ftype))
 	}
 	docs, derr := percolateInputDocs(c.Idx, bm)
@@ -2539,7 +2539,7 @@ func PercolateSlotsForHit(c *QueryCtx, query map[string]any) []any {
 	}
 	slotSet := map[int]bool{}
 	for _, bm := range clauses {
-		field := PercolateFieldName(bm)
+		field := percolateFieldName(bm)
 		docs, err := percolateInputDocs(c.Idx, bm)
 		if err != nil {
 			continue
@@ -2578,7 +2578,7 @@ func PercolateHighlights(c *QueryCtx, query map[string]any, cfg *highlightConfig
 		return nil
 	}
 	bm := clauses[0]
-	field := PercolateFieldName(bm)
+	field := percolateFieldName(bm)
 	stored, ok := c.Doc[field].(map[string]any)
 	if !ok {
 		return nil
@@ -3033,7 +3033,7 @@ func (c *QueryCtx) spanQuery(body any) ([]intervalSpan, string, *apierr.Error) {
 			}
 		case "fuzzy":
 			for _, p := range positions {
-				if fuzzyDistance(p.Term, val, true) <= AutoFuzziness(val) {
+				if fuzzyDistance(p.Term, val, true) <= autoFuzziness(val) {
 					spans = append(spans, intervalSpan{p.Pos, p.Pos})
 				}
 			}
@@ -3379,7 +3379,7 @@ func (c *QueryCtx) intervalRule(rule map[string]any, positions []analysis.Token,
 		}
 	case "fuzzy":
 		term, _ := bm["term"].(string)
-		fuzz := AutoFuzziness(term)
+		fuzz := autoFuzziness(term)
 		if v, ok := bm["fuzziness"]; ok {
 			if n, ok2 := fuzzinessValue(v, term); ok2 {
 				fuzz = n
@@ -3857,7 +3857,7 @@ func (c *QueryCtx) valuesMap() map[string][]any {
 // function_score
 // ---------------------------------------------------------------------------
 
-func HasScoreFunctionKey(bm map[string]any) bool {
+func hasScoreFunctionKey(bm map[string]any) bool {
 	for _, k := range []string{"weight", "field_value_factor", "random_score", "script_score",
 		"gauss", "exp", "linear"} {
 		if _, ok := bm[k]; ok {
@@ -3884,7 +3884,7 @@ func javaDoubleString(f float64) string {
 	return s
 }
 
-func NewFunctionScoreFailure(marker, reason string) *apierr.Error {
+func functionScoreFailure(marker, reason string) *apierr.Error {
 	return &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 		Reason: reason, SearchFailure: marker}
 }
@@ -3954,7 +3954,7 @@ func (c *QueryCtx) evalFunctionScore(body any) (bool, float64, *apierr.Error) {
 	if len(functions) == 0 {
 		if f, ok := bm["function"].(map[string]any); ok {
 			functions = []any{f}
-		} else if HasScoreFunctionKey(bm) {
+		} else if hasScoreFunctionKey(bm) {
 			functions = []any{bm}
 		}
 	}
@@ -4072,22 +4072,22 @@ func (c *QueryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 		if present && len(vals) > 0 {
 			n, ok := jsonv.ToFloat(vals[0])
 			if !ok {
-				return 0, NewFunctionScoreFailure("fvf_unmapped",
+				return 0, functionScoreFailure("fvf_unmapped",
 					"Unable to find a field mapper for field ["+field+"]. No 'missing' value defined.")
 			}
 			value = n
 		} else if hasMissing {
 			n, ok := jsonv.ToFloat(missingRaw)
 			if !ok {
-				return 0, NewFunctionScoreFailure("fvf_missing",
+				return 0, functionScoreFailure("fvf_missing",
 					"Missing value for field ["+field+"]")
 			}
 			value = n
 		} else if _, mapped := mapping.FieldDef(c.Idx, field); !mapped {
-			return 0, NewFunctionScoreFailure("fvf_unmapped",
+			return 0, functionScoreFailure("fvf_unmapped",
 				"Unable to find a field mapper for field ["+field+"]. No 'missing' value defined.")
 		} else {
-			return 0, NewFunctionScoreFailure("fvf_missing",
+			return 0, functionScoreFailure("fvf_missing",
 				"Missing value for field ["+field+"]")
 		}
 		result := value * factor
@@ -4115,7 +4115,7 @@ func (c *QueryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 			reason := "field value function must not produce negative scores, but got: [" +
 				javaDoubleString(result) + "] for field value: [" + javaDoubleString(value) +
 				"]; consider using log1p or log2p instead of log to avoid negative scores"
-			return 0, NewFunctionScoreFailure("fvf_log", reason)
+			return 0, functionScoreFailure("fvf_log", reason)
 		}
 		return result, nil
 	}
@@ -4850,7 +4850,7 @@ func (p *QueryStringParser) valueQuery(field, value string) (map[string]any, *ap
 	if strings.HasSuffix(value, "^") {
 		return nil, apierr.Parsing("invalid boost")
 	}
-	if FieldUnderNested(p.C.Idx, field) {
+	if fieldUnderNested(p.C.Idx, field) {
 		return map[string]any{"match_none": map[string]any{}}, nil
 	}
 	if value == "*" {
@@ -5324,7 +5324,7 @@ func expandMultifield(q map[string]any, c *QueryCtx) map[string]any {
 	return q
 }
 
-func FieldUnderNested(idx *model.Index, field string) bool {
+func fieldUnderNested(idx *model.Index, field string) bool {
 	parts := strings.Split(field, ".")
 	props := mapping.EnsureProperties(idx.Mappings)
 	for i := 0; i < len(parts)-1; i++ {

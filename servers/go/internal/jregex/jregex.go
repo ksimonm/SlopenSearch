@@ -15,15 +15,15 @@ import (
 // rune indices back to UTF-16 offsets.
 
 const (
-	FlagCaseInsensitive = 1 << iota
-	FlagMultiline
-	FlagDotall
-	FlagUnicodeCase
-	FlagComments
-	FlagUnixLines
-	FlagUnicodeClass
-	FlagLiteral
-	FlagCanonEq
+	flagCaseInsensitive = 1 << iota
+	flagMultiline
+	flagDotall
+	flagUnicodeCase
+	flagComments
+	flagUnixLines
+	flagUnicodeClass
+	flagLiteral
+	flagCanonEq
 )
 
 // ParseFlags parses the pipe separated flag names accepted by
@@ -37,23 +37,23 @@ func ParseFlags(s string) (int, *Error) {
 		}
 		switch strings.ToUpper(name) {
 		case "CASE_INSENSITIVE":
-			f |= FlagCaseInsensitive
+			f |= flagCaseInsensitive
 		case "MULTILINE":
-			f |= FlagMultiline
+			f |= flagMultiline
 		case "DOTALL":
-			f |= FlagDotall
+			f |= flagDotall
 		case "UNICODE_CASE":
-			f |= FlagUnicodeCase
+			f |= flagUnicodeCase
 		case "COMMENTS":
-			f |= FlagComments
+			f |= flagComments
 		case "UNIX_LINES":
-			f |= FlagUnixLines
+			f |= flagUnixLines
 		case "UNICODE_CHARACTER_CLASS":
-			f |= FlagUnicodeClass
+			f |= flagUnicodeClass
 		case "LITERAL":
-			f |= FlagLiteral
+			f |= flagLiteral
 		case "CANON_EQ":
-			f |= FlagCanonEq
+			f |= flagCanonEq
 		default:
 			return 0, newError("illegal_argument_exception", "Unknown regex flag ["+name+"]")
 		}
@@ -139,7 +139,7 @@ type jParser struct {
 // Compile parses a Java pattern with the given Flag* bits.
 func Compile(pattern string, flags int) (*Regexp, *PatternError) {
 	p := &jParser{src: []rune(pattern), flags: flags, names: map[string]int{}, pat: pattern}
-	if flags&FlagLiteral != 0 {
+	if flags&flagLiteral != 0 {
 		seq := &jNode{kind: jnSeq}
 		for _, r := range p.src {
 			seq.subs = append(seq.subs, p.lit(r))
@@ -173,7 +173,7 @@ func (p *jParser) peek() rune {
 }
 
 func (p *jParser) skipComments() {
-	if p.flags&FlagComments == 0 {
+	if p.flags&flagComments == 0 {
 		return
 	}
 	for p.more() {
@@ -312,7 +312,7 @@ func (p *jParser) readInt() (int, bool) {
 }
 
 func (p *jParser) lit(r rune) *jNode {
-	return &jNode{kind: jnLit, r: r, fold: p.flags & (FlagCaseInsensitive | FlagUnicodeCase)}
+	return &jNode{kind: jnLit, r: r, fold: p.flags & (flagCaseInsensitive | flagUnicodeCase)}
 }
 
 func (p *jParser) parseAtom() (*jNode, *PatternError) {
@@ -329,8 +329,8 @@ func (p *jParser) parseAtom() (*jNode, *PatternError) {
 		return &jNode{kind: jnSet, set: set}, nil
 	case '.':
 		p.pos++
-		dotall := p.flags&FlagDotall != 0
-		unix := p.flags&FlagUnixLines != 0
+		dotall := p.flags&flagDotall != 0
+		unix := p.flags&flagUnixLines != 0
 		return &jNode{kind: jnSet, set: func(c rune) bool {
 			if dotall {
 				return true
@@ -342,10 +342,10 @@ func (p *jParser) parseAtom() (*jNode, *PatternError) {
 		}}, nil
 	case '^':
 		p.pos++
-		return &jNode{kind: jnAssert, assert: '^', multi: p.flags&FlagMultiline != 0, unixLn: p.flags&FlagUnixLines != 0}, nil
+		return &jNode{kind: jnAssert, assert: '^', multi: p.flags&flagMultiline != 0, unixLn: p.flags&flagUnixLines != 0}, nil
 	case '$':
 		p.pos++
-		return &jNode{kind: jnAssert, assert: '$', multi: p.flags&FlagMultiline != 0, unixLn: p.flags&FlagUnixLines != 0}, nil
+		return &jNode{kind: jnAssert, assert: '$', multi: p.flags&flagMultiline != 0, unixLn: p.flags&flagUnixLines != 0}, nil
 	case '\\':
 		return p.parseEscape()
 	case '*', '+', '?':
@@ -401,19 +401,19 @@ func (p *jParser) parseGroup() (*jNode, *PatternError) {
 				var bit int
 				switch ch {
 				case 'i':
-					bit = FlagCaseInsensitive
+					bit = flagCaseInsensitive
 				case 'm':
-					bit = FlagMultiline
+					bit = flagMultiline
 				case 's':
-					bit = FlagDotall
+					bit = flagDotall
 				case 'u':
-					bit = FlagUnicodeCase
+					bit = flagUnicodeCase
 				case 'x':
-					bit = FlagComments
+					bit = flagComments
 				case 'd':
-					bit = FlagUnixLines
+					bit = flagUnixLines
 				case 'U':
-					bit = FlagUnicodeClass
+					bit = flagUnicodeClass
 				case '-':
 					on = false
 					p.pos++
@@ -488,7 +488,7 @@ func (p *jParser) parseEscape() (*jNode, *PatternError) {
 	switch c {
 	case 'b', 'B', 'A', 'z', 'Z', 'G':
 		p.pos++
-		return &jNode{kind: jnAssert, assert: byte(c), asciiWrd: p.flags&FlagUnicodeClass == 0, unixLn: p.flags&FlagUnixLines != 0}, nil
+		return &jNode{kind: jnAssert, assert: byte(c), asciiWrd: p.flags&flagUnicodeClass == 0, unixLn: p.flags&flagUnixLines != 0}, nil
 	case 'Q':
 		p.pos++
 		seq := &jNode{kind: jnSeq}
@@ -520,7 +520,7 @@ func (p *jParser) parseEscape() (*jNode, *PatternError) {
 		if !ok {
 			return nil, p.errAt("named capturing group <"+name+"> does not exist", p.pos-1)
 		}
-		return &jNode{kind: jnBackref, group: g, fold: p.flags & (FlagCaseInsensitive | FlagUnicodeCase)}, nil
+		return &jNode{kind: jnBackref, group: g, fold: p.flags & (flagCaseInsensitive | flagUnicodeCase)}, nil
 	}
 	if c >= '1' && c <= '9' {
 		p.pos++
@@ -534,7 +534,7 @@ func (p *jParser) parseEscape() (*jNode, *PatternError) {
 			g = ng
 			p.pos++
 		}
-		return &jNode{kind: jnBackref, group: g, fold: p.flags & (FlagCaseInsensitive | FlagUnicodeCase)}, nil
+		return &jNode{kind: jnBackref, group: g, fold: p.flags & (flagCaseInsensitive | flagUnicodeCase)}, nil
 	}
 	p.pos = start
 	set, r, err := p.classEscape()
@@ -556,7 +556,7 @@ func (p *jParser) classEscape() (func(rune) bool, rune, *PatternError) {
 	}
 	c := p.src[p.pos]
 	p.pos++
-	uni := p.flags&FlagUnicodeClass != 0
+	uni := p.flags&flagUnicodeClass != 0
 	switch c {
 	case 'd':
 		if uni {
@@ -823,7 +823,7 @@ func (p *jParser) parseClass() (func(rune) bool, *PatternError) {
 	var parts []func(rune) bool
 	var inter []func(rune) bool
 	first := true
-	fold := p.flags & (FlagCaseInsensitive | FlagUnicodeCase)
+	fold := p.flags & (flagCaseInsensitive | flagUnicodeCase)
 	for {
 		if !p.more() {
 			return nil, p.errAt("Unclosed character class", len(p.src)-1)
@@ -934,10 +934,10 @@ func unionSet(parts []func(rune) bool) func(rune) bool {
 }
 
 func foldVariants(r rune, fold int) []rune {
-	if fold&FlagCaseInsensitive == 0 {
+	if fold&flagCaseInsensitive == 0 {
 		return nil
 	}
-	if fold&FlagUnicodeCase == 0 {
+	if fold&flagUnicodeCase == 0 {
 		if r >= 'a' && r <= 'z' {
 			return []rune{r - 32}
 		}
@@ -957,7 +957,7 @@ func runeEqFold(a, b rune, fold int) bool {
 	if a == b {
 		return true
 	}
-	if fold&FlagCaseInsensitive == 0 {
+	if fold&flagCaseInsensitive == 0 {
 		return false
 	}
 	for _, f := range foldVariants(a, fold) {
@@ -1209,7 +1209,7 @@ func (m *jMatcher) atEndOrFinalTerm(i int, isTerm func(rune) bool) bool {
 
 // findAt returns the capture positions (rune indices) of the first match at
 // or after start, or nil.
-func (re *Regexp) FindAt(in []rune, start int) []int {
+func (re *Regexp) findAt(in []rune, start int) []int {
 	m := &jMatcher{re: re, in: in, caps: make([]int, 2*(re.groups+1))}
 	for s := start; s <= len(in); s++ {
 		for x := range m.caps {
@@ -1229,7 +1229,7 @@ func (re *Regexp) FindAll(in []rune) [][]int {
 	var out [][]int
 	pos := 0
 	for pos <= len(in) {
-		m := re.FindAt(in, pos)
+		m := re.findAt(in, pos)
 		if m == nil {
 			break
 		}
@@ -1318,7 +1318,7 @@ func (re *Regexp) Replace(s, repl string, all bool) (string, *Error) {
 	last := 0
 	pos := 0
 	for pos <= len(in) {
-		m := re.FindAt(in, pos)
+		m := re.findAt(in, pos)
 		if m == nil {
 			break
 		}

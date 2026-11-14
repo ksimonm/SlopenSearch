@@ -18,7 +18,7 @@ var knnSpaceTypes = []string{"l2", "cosinesimil", "l1", "linf", "innerproduct", 
 
 func knnValidation(msg string) *apierr.Error {
 	r := "Validation Failed: 1: " + msg + ";"
-	return WrappedError(r, "validation_exception")
+	return wrappedError(r, "validation_exception")
 }
 
 // KnnIndexMappings validates and normalizes knn_vector fields of an index
@@ -46,8 +46,8 @@ func KnnIndexMappings(props map[string]any) *apierr.Error {
 
 func knnValidateField(name string, def map[string]any) *apierr.Error {
 	for _, k := range SortedAnyKeys(def) {
-		if !KnnFieldParams[k] {
-			return WrappedError(fmt.Sprintf("unknown parameter [%s] on mapper [%s] of type [knn_vector]", k, name), "mapper_parsing_exception")
+		if !knnFieldParams[k] {
+			return wrappedError(fmt.Sprintf("unknown parameter [%s] on mapper [%s] of type [knn_vector]", k, name), "mapper_parsing_exception")
 		}
 	}
 	var dim int64
@@ -61,7 +61,7 @@ func knnValidateField(name string, def map[string]any) *apierr.Error {
 	case string:
 		n, err := strconv.ParseInt(d, 10, 64)
 		if err != nil {
-			return WrappedError(fmt.Sprintf("Unable to parse [dimension] from provided value [%s] for vector [%s]", d, name), "illegal_argument_exception")
+			return wrappedError(fmt.Sprintf("Unable to parse [dimension] from provided value [%s] for vector [%s]", d, name), "illegal_argument_exception")
 		}
 		dim = n
 	default:
@@ -70,12 +70,12 @@ func knnValidateField(name string, def map[string]any) *apierr.Error {
 		}
 	}
 	if dim <= 0 {
-		return WrappedError("Dimension value must be greater than 0 for vector: "+name, "illegal_argument_exception")
+		return wrappedError("Dimension value must be greater than 0 for vector: "+name, "illegal_argument_exception")
 	}
 	if m, ok := def["mode"]; ok {
 		s, _ := m.(string)
 		if s != "in_memory" && s != "on_disk" {
-			return WrappedError(fmt.Sprintf("Unknown value [%v] for field [mode] - accepted values are [null, in_memory, on_disk]", m), "mapper_parsing_exception")
+			return wrappedError(fmt.Sprintf("Unknown value [%v] for field [mode] - accepted values are [null, in_memory, on_disk]", m), "mapper_parsing_exception")
 		}
 	}
 	if c, ok := def["compression_level"]; ok {
@@ -83,7 +83,7 @@ func knnValidateField(name string, def map[string]any) *apierr.Error {
 		switch s {
 		case "1x", "2x", "4x", "8x", "16x", "32x":
 		default:
-			return WrappedError(fmt.Sprintf("Unknown value [%v] for field [compression_level] - accepted values are [, 1x, 2x, 4x, 8x, 16x, 32x]", c), "mapper_parsing_exception")
+			return wrappedError(fmt.Sprintf("Unknown value [%v] for field [compression_level] - accepted values are [, 1x, 2x, 4x, 8x, 16x, 32x]", c), "mapper_parsing_exception")
 		}
 	}
 	dataType := "float"
@@ -93,7 +93,7 @@ func knnValidateField(name string, def map[string]any) *apierr.Error {
 		switch s {
 		case "binary", "byte", "float", "half_float":
 		default:
-			return WrappedError("Invalid value provided for [data_type] field. Supported values are [binary,byte,float,half_float]", "illegal_argument_exception")
+			return wrappedError("Invalid value provided for [data_type] field. Supported values are [binary,byte,float,half_float]", "illegal_argument_exception")
 		}
 		dataType = s
 		def["data_type"] = strings.ToUpper(s)
@@ -105,7 +105,7 @@ func knnValidateField(name string, def map[string]any) *apierr.Error {
 	if hasMethod {
 		n, ok := method["name"].(string)
 		if !ok {
-			return WrappedError("name needs to be set", "mapper_parsing_exception")
+			return wrappedError("name needs to be set", "mapper_parsing_exception")
 		}
 		methodName = n
 		if e, ok := method["engine"].(string); ok {
@@ -114,13 +114,13 @@ func knnValidateField(name string, def map[string]any) *apierr.Error {
 		switch engine {
 		case "faiss", "lucene":
 		case "nmslib":
-			return WrappedError("nmslib engine is deprecated in OpenSearch  and cannot be used for new index creation in OpenSearch from  3.0.0.", "illegal_argument_exception")
+			return wrappedError("nmslib engine is deprecated in OpenSearch  and cannot be used for new index creation in OpenSearch from  3.0.0.", "illegal_argument_exception")
 		default:
-			return WrappedError("Invalid engine: "+engine, "mapper_parsing_exception")
+			return wrappedError("Invalid engine: "+engine, "mapper_parsing_exception")
 		}
 		methodSpace, _ = method["space_type"].(string)
 		if topSpace != "" && methodSpace != "" && topSpace != methodSpace {
-			return WrappedError(fmt.Sprintf(`Cannot specify conflicting space types: "[%s]" "[%s]"`, methodSpace, topSpace), "mapper_parsing_exception")
+			return wrappedError(fmt.Sprintf(`Cannot specify conflicting space types: "[%s]" "[%s]"`, methodSpace, topSpace), "mapper_parsing_exception")
 		}
 		params, _ = method["parameters"].(map[string]any)
 	}
@@ -136,13 +136,13 @@ func knnValidateField(name string, def map[string]any) *apierr.Error {
 			}
 		}
 		if !found {
-			return WrappedError("Unable to find space: "+space+" . Valid values are: [l2, cosinesimil, l1, linf, innerproduct, hamming]", "illegal_argument_exception")
+			return wrappedError("Unable to find space: "+space+" . Valid values are: [l2, cosinesimil, l1, linf, innerproduct, hamming]", "illegal_argument_exception")
 		}
 		if space == "hamming" && dataType != "binary" {
-			return WrappedError(fmt.Sprintf("Space type [hamming] is not supported with [%s] data type", dataType), "illegal_argument_exception")
+			return wrappedError(fmt.Sprintf("Space type [hamming] is not supported with [%s] data type", dataType), "illegal_argument_exception")
 		}
 		if dataType == "binary" && space != "hamming" {
-			return WrappedError(fmt.Sprintf("Space type [%s] is not supported with [binary] data type", space), "illegal_argument_exception")
+			return wrappedError(fmt.Sprintf("Space type [%s] is not supported with [binary] data type", space), "illegal_argument_exception")
 		}
 	}
 	if hasMethod {
@@ -151,7 +151,7 @@ func knnValidateField(name string, def map[string]any) *apierr.Error {
 		case methodName == "ivf" && engine == "faiss":
 			return knnValidation(`"method" requires training.`)
 		default:
-			return WrappedError("Invalid method name: "+methodName, "illegal_argument_exception")
+			return wrappedError("Invalid method name: "+methodName, "illegal_argument_exception")
 		}
 	}
 	if dim > 16000 {

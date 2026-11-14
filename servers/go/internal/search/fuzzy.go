@@ -21,7 +21,7 @@ func Levenshtein(a, b string) int {
 	return prev[len(br)]
 }
 
-func AutoFuzziness(term string) int {
+func autoFuzziness(term string) int {
 	n := len([]rune(term))
 	switch {
 	case n <= 2:

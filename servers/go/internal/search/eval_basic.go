@@ -129,7 +129,7 @@ func FormatDocValue(idx *model.Index, field, ftype string, v any, format string)
 	return v
 }
 
-func (h MultiHit) SortValue(field string, desc bool, mode string) (any, bool) {
+func (h MultiHit) sortValue(field string, desc bool, mode string) (any, bool) {
 	switch field {
 	case "_score":
 		return h.Score, true
@@ -157,7 +157,7 @@ func (h MultiHit) SortValue(field string, desc bool, mode string) (any, bool) {
 			if len(list) == 1 {
 				if s, ok := jsonv.ScalarString(list[0]); ok {
 					if ip := net.ParseIP(s); ip != nil {
-						return IPSortKey{key: string(ip.To16()), Out: CanonicalIP(s)}, true
+						return ipSortKey{key: string(ip.To16()), Out: canonicalIP(s)}, true
 					}
 				}
 			}
@@ -186,17 +186,17 @@ func (h MultiHit) SortValue(field string, desc bool, mode string) (any, bool) {
 	if len(list) == 1 {
 		return list[0], true
 	}
-	return ReduceSortValues(list, desc, mode), true
+	return reduceSortValues(list, desc, mode), true
 }
 
-type IPSortKey struct {
+type ipSortKey struct {
 	key string
 	Out string
 }
 
-func CompareSortValues(a, b any) int {
-	if aip, ok := a.(IPSortKey); ok {
-		if bip, ok2 := b.(IPSortKey); ok2 {
+func compareSortValues(a, b any) int {
+	if aip, ok := a.(ipSortKey); ok {
+		if bip, ok2 := b.(ipSortKey); ok2 {
 			return strings.Compare(aip.key, bip.key)
 		}
 	}
@@ -309,7 +309,7 @@ func EvalQuery(idx *model.Index, query map[string]any, doc map[string]any) (bool
 			return evalPrefix(idx, raw, doc)
 		case "script":
 			id, _ := doc["__slop_id"].(string)
-			return NewQueryCtxForDoc(idx, id, doc).EvalScriptQuery(raw)
+			return NewQueryCtxForDoc(idx, id, doc).evalScriptQuery(raw)
 		default:
 			return false, 0, apierr.Parsing("unknown query [" + clause + "]")
 		}
@@ -318,7 +318,7 @@ func EvalQuery(idx *model.Index, query map[string]any, doc map[string]any) (bool
 }
 
 func evalMatch(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
-	field, val, ok := SingleEntry(raw.(map[string]any))
+	field, val, ok := singleEntry(raw.(map[string]any))
 	if !ok {
 		return false, 0, apierr.Parsing("empty match")
 	}
@@ -363,7 +363,7 @@ func evalMatch(idx *model.Index, raw any, doc map[string]any) (bool, float64, *a
 }
 
 func evalPrefix(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
-	field, val, ok := SingleEntry(raw.(map[string]any))
+	field, val, ok := singleEntry(raw.(map[string]any))
 	if !ok {
 		return false, 0, apierr.Parsing("empty prefix")
 	}
@@ -393,7 +393,7 @@ func evalPrefix(idx *model.Index, raw any, doc map[string]any) (bool, float64, *
 }
 
 func evalTerm(idx *model.Index, raw any, doc map[string]any, fuzz int) (bool, float64, *apierr.Error) {
-	field, val, ok := SingleEntry(raw.(map[string]any))
+	field, val, ok := singleEntry(raw.(map[string]any))
 	if !ok {
 		return false, 0, apierr.Parsing("empty term")
 	}
@@ -431,19 +431,19 @@ func evalTerm(idx *model.Index, raw any, doc map[string]any, fuzz int) (bool, fl
 }
 
 func evalFuzzy(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
-	field, val, _ := SingleEntry(raw.(map[string]any))
-	fuzz := AutoFuzziness(field)
+	field, val, _ := singleEntry(raw.(map[string]any))
+	fuzz := autoFuzziness(field)
 	if m, ok := val.(map[string]any); ok {
 		if v, ok := m["value"]; ok {
 			text, _ := jsonv.ToString(v)
-			fuzz = AutoFuzziness(text)
+			fuzz = autoFuzziness(text)
 		}
 	}
 	return evalTerm(idx, raw, doc, fuzz)
 }
 
 func evalTerms(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
-	field, val, ok := SingleEntry(raw.(map[string]any))
+	field, val, ok := singleEntry(raw.(map[string]any))
 	if !ok {
 		return false, 0, apierr.Parsing("empty terms")
 	}
@@ -506,7 +506,7 @@ func evalRange(idx *model.Index, raw any, doc map[string]any) (bool, float64, *a
 	if !ok {
 		return false, 0, apierr.Parsing("bad range")
 	}
-	field, condRaw, ok := SingleEntry(m)
+	field, condRaw, ok := singleEntry(m)
 	if !ok {
 		return false, 0, apierr.Parsing("empty range")
 	}
@@ -612,7 +612,7 @@ func evalBool(idx *model.Index, raw any, doc map[string]any) (bool, float64, *ap
 }
 
 func evalMatchPhrase(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
-	field, val, ok := SingleEntry(raw.(map[string]any))
+	field, val, ok := singleEntry(raw.(map[string]any))
 	if !ok {
 		return false, 0, apierr.Parsing("empty match_phrase")
 	}
@@ -672,7 +672,7 @@ func evalMultiMatch(idx *model.Index, raw any, doc map[string]any) (bool, float6
 }
 
 func evalWildcard(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
-	field, val, ok := SingleEntry(raw.(map[string]any))
+	field, val, ok := singleEntry(raw.(map[string]any))
 	if !ok {
 		return false, 0, apierr.Parsing("empty wildcard")
 	}
@@ -733,10 +733,10 @@ func HighlightText(text string, terms []string) string {
 	return text
 }
 
-func ReduceSortValues(list []any, desc bool, mode string) any {
+func reduceSortValues(list []any, desc bool, mode string) any {
 	sorted := append([]any{}, list...)
 	sort.SliceStable(sorted, func(i, j int) bool {
-		return CompareSortValues(sorted[i], sorted[j]) < 0
+		return compareSortValues(sorted[i], sorted[j]) < 0
 	})
 	switch mode {
 	case "min":

@@ -6,7 +6,7 @@ import (
 	"slopensearch/internal/jsonv"
 )
 
-var KnnFieldParams = map[string]bool{
+var knnFieldParams = map[string]bool{
 	"type": true, "dimension": true, "data_type": true, "space_type": true, "method": true,
 	"mode": true, "compression_level": true, "doc_values": true, "model_id": true,
 }
