@@ -754,13 +754,13 @@ func (c *QueryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 	if def, ok := mapping.FieldDef(c.Idx, field); ok {
 		t, _ := def["type"].(string)
 		if t == "rank_feature" || t == "rank_features" {
-			return false, 0, MatchSearchError("query_shard_exception", "failed to create query: Queries on [rank_feature] fields are not supported")
+			return false, 0, AllShardsFailed("query_shard_exception", "failed to create query: Queries on [rank_feature] fields are not supported")
 		}
 		if t == "completion" {
 			return false, 0, nil
 		}
 		if t == "binary" {
-			return false, 0, MatchSearchError("query_shard_exception", "Binary fields do not support searching")
+			return false, 0, AllShardsFailed("query_shard_exception", "Binary fields do not support searching")
 		}
 		notIndexed := false
 		if iv, ok := def["index"].(bool); ok && !iv {
@@ -776,10 +776,10 @@ func (c *QueryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 			if textField {
 				reason = "failed to create query: Cannot search on field [" + field + "] since it is not indexed."
 			}
-			return false, 0, MatchSearchError("query_shard_exception", reason)
+			return false, 0, AllShardsFailed("query_shard_exception", reason)
 		}
 		if notIndexed && (t == "text" || t == "match_only_text" || t == "search_as_you_type") {
-			return false, 0, MatchSearchError("query_shard_exception",
+			return false, 0, AllShardsFailed("query_shard_exception",
 				"failed to create query: Cannot search on field ["+field+"] since it is not indexed.")
 		}
 	}
@@ -2034,7 +2034,7 @@ func (c *QueryCtx) evalFuzzy(field string, raw any, boost float64) (bool, float6
 	if !multitermFieldSupported(ftype) || ftype == "wildcard" {
 		reason := fmt.Sprintf("Can only use fuzzy queries on keyword and text fields - not on [%s] which is of type [%s]",
 			field, ftype)
-		return false, 0, MatchSearchError("query_shard_exception", "failed to create query: "+reason)
+		return false, 0, AllShardsFailed("query_shard_exception", "failed to create query: "+reason)
 	}
 	vals, present := c.Values(field)
 	if !present {
@@ -2233,7 +2233,7 @@ func matchShardError(reason string) *apierr.Error {
 	return &apierr.Error{Type: "query_shard_exception", Status: 400, Reason: reason}
 }
 
-func MatchSearchError(rootType, reason string) *apierr.Error {
+func AllShardsFailed(rootType, reason string) *apierr.Error {
 	return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
 		RootCause: &apierr.Error{Type: rootType, Status: 400, Reason: reason},
 		CausedBy:  &apierr.Error{Type: rootType, Status: 400, Reason: reason}}
@@ -2357,7 +2357,7 @@ func msmRequired(spec any, n int, defaultAll bool) (int, *apierr.Error) {
 		if strings.HasSuffix(text, "%") {
 			p, err := strconv.Atoi(strings.TrimSuffix(text, "%"))
 			if err != nil {
-				return 0, MatchSearchError("query_shard_exception", "failed to create query: For input string: \""+text+"\"")
+				return 0, AllShardsFailed("query_shard_exception", "failed to create query: For input string: \""+text+"\"")
 			}
 			if p >= 0 {
 				req := int(math.Floor(float64(n) * float64(p) / 100.0))
@@ -2381,7 +2381,7 @@ func msmRequired(spec any, n int, defaultAll bool) (int, *apierr.Error) {
 			}
 			return k, nil
 		}
-		return 0, MatchSearchError("query_shard_exception", "failed to create query: For input string: \""+text+"\"")
+		return 0, AllShardsFailed("query_shard_exception", "failed to create query: For input string: \""+text+"\"")
 	}
 	if f, ok := jsonv.ToFloat(spec); ok {
 		k := int(f)
@@ -2393,7 +2393,7 @@ func msmRequired(spec any, n int, defaultAll bool) (int, *apierr.Error) {
 		}
 		return k, nil
 	}
-	return 0, MatchSearchError("query_shard_exception", "failed to create query: For input string: \""+fmt.Sprint(spec)+"\"")
+	return 0, AllShardsFailed("query_shard_exception", "failed to create query: For input string: \""+fmt.Sprint(spec)+"\"")
 }
 
 func (c *QueryCtx) fieldHasAnalyzedTerm(field, term string) bool {
@@ -2486,8 +2486,8 @@ func (c *QueryCtx) evalMatch(field string, raw any, boost float64) (bool, float6
 			}
 			operator = strings.ToLower(u)
 		}
-		if a, ok := m["analyzer"].(string); ok && a != "" && !mapping.MatchAnalyzerExists(c.Idx, a) {
-			return false, 0, MatchSearchError("query_shard_exception", "[match] analyzer ["+a+"] not found")
+		if a, ok := m["analyzer"].(string); ok && a != "" && !mapping.AnalyzerExists(c.Idx, a) {
+			return false, 0, AllShardsFailed("query_shard_exception", "[match] analyzer ["+a+"] not found")
 		}
 		if z, ok := m["zero_terms_query"].(string); ok {
 			u := strings.ToUpper(z)
@@ -2503,7 +2503,7 @@ func (c *QueryCtx) evalMatch(field string, raw any, boost float64) (bool, float6
 	ftype, _ := def["type"].(string)
 	if iv, ok := def["index"].(bool); ok && !iv {
 		if ftype == "text" || ftype == "match_only_text" || ftype == "search_as_you_type" {
-			return false, 0, MatchSearchError("query_shard_exception",
+			return false, 0, AllShardsFailed("query_shard_exception",
 				"failed to create query: Cannot search on field ["+field+"] since it is not indexed.")
 		}
 	}
@@ -2523,7 +2523,7 @@ func (c *QueryCtx) evalMatch(field string, raw any, boost float64) (bool, float6
 			return false, 0, nil
 		}
 		if hasFuzziness {
-			return false, 0, MatchSearchError("query_shard_exception",
+			return false, 0, AllShardsFailed("query_shard_exception",
 				"Can only use fuzzy queries on keyword and text fields - not on ["+field+"] which is of type ["+ftype+"]")
 		}
 		parsed, err := parseTermValue(ftype, def, text)
@@ -2533,18 +2533,18 @@ func (c *QueryCtx) evalMatch(field string, raw any, boost float64) (bool, float6
 			}
 			switch {
 			case ftype == "date" || ftype == "date_nanos":
-				return false, 0, MatchSearchError("parse_exception",
+				return false, 0, AllShardsFailed("parse_exception",
 					"failed to parse date field ["+text+"] with format ["+dates.FormatOf(def)+"]")
 			case mapping.IsNumericType(ftype):
-				me := MatchSearchError("query_shard_exception",
+				me := AllShardsFailed("query_shard_exception",
 					"failed to create query: For input string: \""+text+"\"")
 				me.CausedBy.CausedBy = &apierr.Error{Type: "number_format_exception", Status: 400,
 					Reason: "For input string: \"" + text + "\""}
 				return false, 0, me
 			case ftype == "boolean":
-				return false, 0, MatchSearchError("query_shard_exception", "Can't parse boolean value ["+text+"]")
+				return false, 0, AllShardsFailed("query_shard_exception", "Can't parse boolean value ["+text+"]")
 			default:
-				return false, 0, MatchSearchError("query_shard_exception", err.Reason)
+				return false, 0, AllShardsFailed("query_shard_exception", err.Reason)
 			}
 		}
 		for _, v := range vals {

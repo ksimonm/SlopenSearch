@@ -14,9 +14,9 @@ import (
 // knn_vector values at index time
 // ---------------------------------------------------------------------------
 
-// KnnPutMappingCheck validates knn_vector fields of a put-mapping request and
+// CheckKnnMappingUpdate validates knn_vector fields of a put-mapping request and
 // rejects updates of their fixed parameters.
-func KnnPutMappingCheck(idx *model.Index, existing, incoming map[string]any) *apierr.Error {
+func CheckKnnMappingUpdate(idx *model.Index, existing, incoming map[string]any) *apierr.Error {
 	if IndexKnnEnabled(idx) {
 		if err := KnnIndexMappings(incoming); err != nil {
 			return err

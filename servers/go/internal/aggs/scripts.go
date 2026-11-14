@@ -43,7 +43,7 @@ func aggScriptRun(cs *search.CompiledScript, idx *model.Index, doc map[string]an
 func prepareAggScript(idx *model.Index, raw any) (*search.CompiledScript, *apierr.Error) {
 	cs, se, ae := search.PrepareScript(raw, "aggs")
 	if se != nil || ae != nil {
-		return nil, search.ScriptErrForShard(idx, se, ae, false)
+		return nil, search.ScriptFailure(idx, se, ae, false)
 	}
 	return cs, nil
 }
@@ -97,7 +97,7 @@ func scriptedMetric(name string, spec map[string]any, docs []map[string]any, idx
 	}
 	for _, req := range []struct{ key, label string }{{"combine_script", "combineScript"}, {"reduce_script", "reduceScript"}} {
 		if _, ok := spec[req.key]; !ok {
-			return nil, search.PlainShardError(idx, apierr.BadRequest("["+req.label+"] must not be null: ["+name+"]"))
+			return nil, search.ShardError(idx, apierr.BadRequest("["+req.label+"] must not be null: ["+name+"]"))
 		}
 	}
 	aggParams, _ := spec["params"].(map[string]any)
@@ -106,7 +106,7 @@ func scriptedMetric(name string, spec map[string]any, docs []map[string]any, idx
 	prep := func(key, ctxName string) (*search.CompiledScript, *apierr.Error) {
 		cs, se, ae := search.PrepareScript(spec[key], ctxName)
 		if se != nil || ae != nil {
-			return nil, search.ScriptErrForShard(idx, se, ae, false)
+			return nil, search.ScriptFailure(idx, se, ae, false)
 		}
 		return cs, nil
 	}

@@ -759,7 +759,7 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 			return nil, err
 		}
 	}
-	if err := mapping.ValidateBuiltinFieldNameLength(canonical); err != nil {
+	if err := mapping.CheckFieldNameLimit(canonical); err != nil {
 		return nil, err
 	}
 	fieldLimit := 1000

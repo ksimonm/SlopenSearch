@@ -24,7 +24,7 @@ func EvalScriptFields(hit MultiHit, specs map[string]any) (map[string]any, *apie
 		ignore, _ := spec["ignore_failure"].(bool)
 		cs, se, ae := PrepareScript(spec["script"], "field")
 		if se != nil || ae != nil {
-			return nil, ScriptErrForShard(hit.Idx, se, ae, false)
+			return nil, ScriptFailure(hit.Idx, se, ae, false)
 		}
 		v, rerr := cs.Run(qc, RunOpts{Source: source})
 		if rerr != nil {

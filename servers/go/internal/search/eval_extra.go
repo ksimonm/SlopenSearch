@@ -378,7 +378,7 @@ func (c *QueryCtx) evalCombinedFields(bm map[string]any) (bool, float64, *apierr
 		name, fb := stripFieldBoost(f)
 		if fb < 1 {
 			reason := "weight must be greater or equal to 1"
-			return false, 0, MatchSearchError("query_shard_exception", reason)
+			return false, 0, AllShardsFailed("query_shard_exception", reason)
 		}
 		if strings.ContainsAny(name, "*?") {
 			re := WildcardRegex(name)
@@ -417,7 +417,7 @@ func (c *QueryCtx) evalCombinedFields(bm map[string]any) (bool, float64, *apierr
 		}
 		ft, _ := def["type"].(string)
 		if ft != "" && ft != "text" && ft != "match_only_text" && ft != "search_as_you_type" {
-			return false, 0, MatchSearchError("query_shard_exception",
+			return false, 0, AllShardsFailed("query_shard_exception",
 				"Field ["+name+"] of type ["+ft+"] does not support [combined_fields] queries")
 		}
 	}
@@ -492,11 +492,11 @@ func (c *QueryCtx) evalNested(body any) (bool, float64, *apierr.Error) {
 		if ignoreUnmapped {
 			return false, 0, nil
 		}
-		return false, 0, MatchSearchError("query_shard_exception",
+		return false, 0, AllShardsFailed("query_shard_exception",
 			"failed to create query: [nested] failed to find nested object under path ["+path+"]")
 	}
 	if t, _ := def["type"].(string); t != "nested" {
-		return false, 0, MatchSearchError("query_shard_exception",
+		return false, 0, AllShardsFailed("query_shard_exception",
 			"failed to create query: [nested] nested object under path ["+path+"] is not of nested type")
 	}
 	objects, ok := nestedObjectsForCtx(c, path)
@@ -897,7 +897,7 @@ func JoinParentRelation(relations map[string]any, child string) string {
 }
 
 func joinError(clause, reason string) *apierr.Error {
-	return MatchSearchError("query_shard_exception", "["+clause+"] "+reason)
+	return AllShardsFailed("query_shard_exception", "["+clause+"] "+reason)
 }
 
 func (c *QueryCtx) joinChildContexts(childType string, inner map[string]any) ([]*QueryCtx, []float64, *apierr.Error) {
@@ -1109,14 +1109,14 @@ func (c *QueryCtx) evalParentId(body any) (bool, float64, *apierr.Error) {
 
 func joinInnerSource(doc map[string]any, spec any) map[string]any {
 	body := map[string]any{"_source": spec}
-	inc, exc, omit, ok := SourceFilterFromBody(body)
+	inc, exc, omit, ok := ParseSourceFilter(body)
 	if !ok || omit {
 		if omit {
 			return nil
 		}
 		return doc
 	}
-	return FilterSourceDoc(doc, inc, exc)
+	return FilterSource(doc, inc, exc)
 }
 
 func joinSortOutput(ctx *QueryCtx, sp SortSpec) any {
@@ -1478,7 +1478,7 @@ func geoFieldTypeOf(idx *model.Index, field string) (string, bool) {
 }
 
 func geoQueryShardError(reason string) *apierr.Error {
-	return MatchSearchError("query_shard_exception", reason)
+	return AllShardsFailed("query_shard_exception", reason)
 }
 
 func geoFloatString(f float64) string {
@@ -2531,7 +2531,7 @@ func collectPercolateClauses(q map[string]any, out *[]map[string]any) {
 	}
 }
 
-func PercolateSlotsForHit(c *QueryCtx, query map[string]any) []any {
+func PercolateSlots(c *QueryCtx, query map[string]any) []any {
 	var clauses []map[string]any
 	collectPercolateClauses(query, &clauses)
 	if len(clauses) == 0 {
@@ -2782,14 +2782,14 @@ func (c *QueryCtx) spanTermSpans(bm map[string]any) ([]intervalSpan, string, *ap
 	ftype, _ := def["type"].(string)
 	if ftype == "match_only_text" {
 		reason := "field \"" + field + "\" was indexed without position data; cannot run SpanTermQuery (term=" + term + ")"
-		e := MatchSearchError("illegal_state_exception", reason)
+		e := AllShardsFailed("illegal_state_exception", reason)
 		e.Status = 500
 		return nil, field, e
 	}
 	if ftype == "integer" || ftype == "long" || ftype == "short" || ftype == "byte" || ftype == "double" ||
 		ftype == "float" || ftype == "half_float" || ftype == "scaled_float" || ftype == "unsigned_long" ||
 		ftype == "date" || ftype == "date_nanos" || ftype == "boolean" || ftype == "ip" {
-		return nil, field, MatchSearchError("query_shard_exception",
+		return nil, field, AllShardsFailed("query_shard_exception",
 			"Cannot extract a term from a query of type ["+ftype+"]")
 	}
 	spans := []intervalSpan{}
@@ -2837,7 +2837,7 @@ func (c *QueryCtx) spanQuery(body any) ([]intervalSpan, string, *apierr.Error) {
 				if ck == "span_term" {
 					_, term, _ = spanTermValue(cinner)
 				}
-				return nil, "", MatchSearchError("query_shard_exception",
+				return nil, "", AllShardsFailed("query_shard_exception",
 					"Cannot add clause "+f+":"+term+" to SpanNearQuery for field "+field)
 			}
 			lists = append(lists, spans)
@@ -2867,7 +2867,7 @@ func (c *QueryCtx) spanQuery(body any) ([]intervalSpan, string, *apierr.Error) {
 			if field == "" {
 				field = f
 			} else if f != field {
-				return nil, "", MatchSearchError("query_shard_exception", "Clauses must have same field.")
+				return nil, "", AllShardsFailed("query_shard_exception", "Clauses must have same field.")
 			}
 			spans = append(spans, sp...)
 		}
@@ -3164,11 +3164,11 @@ func (c *QueryCtx) evalIntervals(body any) (bool, float64, *apierr.Error) {
 	}
 	ftype, _ := def["type"].(string)
 	if ftype == "match_only_text" {
-		return false, 0, MatchSearchError("query_shard_exception",
+		return false, 0, AllShardsFailed("query_shard_exception",
 			"failed to create query: Cannot create intervals over field ["+field+"] with no positions indexed")
 	}
 	if ftype != "" && ftype != "text" && ftype != "match_only_text" && ftype != "search_as_you_type" {
-		return false, 0, MatchSearchError("query_shard_exception",
+		return false, 0, AllShardsFailed("query_shard_exception",
 			"Can only use interval queries on text fields - not on ["+field+"] which is of type ["+ftype+"]")
 	}
 	ruleKeys := []string{}
@@ -4132,7 +4132,7 @@ func (c *QueryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 	if ss, ok := fn["script_score"].(map[string]any); ok {
 		cs, se, ae := PrepareScript(ss["script"], "score")
 		if se != nil || ae != nil {
-			return 0, ScriptErrForShard(c.Idx, se, ae, true)
+			return 0, ScriptFailure(c.Idx, se, ae, true)
 		}
 		v, rerr := cs.Run(c, RunOpts{Score: float64(float32(baseScore))})
 		if rerr != nil {
@@ -4140,7 +4140,7 @@ func (c *QueryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 		}
 		score := painless.F64(v)
 		if score < 0 {
-			return 0, PlainShardError(c.Idx, apierr.BadRequest("script score function must not produce negative scores, but got: ["+painless.FormatDouble(score)+"]"))
+			return 0, ShardError(c.Idx, apierr.BadRequest("script score function must not produce negative scores, but got: ["+painless.FormatDouble(score)+"]"))
 		}
 		return float64(float32(score)), nil
 	}

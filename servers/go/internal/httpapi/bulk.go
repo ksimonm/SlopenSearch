@@ -681,7 +681,7 @@ func bulkGetObject(idx *model.Index, id string, src map[string]any, seq int64, m
 	}
 	out := ojson.Object{{"_seq_no", seq}, {"_primary_term", int64(1)}, {"found", true}}
 	if idx.SourceEnabled() {
-		out = append(out, ojson.KV{"_source", search.FilterSourceDoc(src, includes, excludes)})
+		out = append(out, ojson.KV{"_source", search.FilterSource(src, includes, excludes)})
 	}
 	return out, true
 }

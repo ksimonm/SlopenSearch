@@ -296,7 +296,6 @@ func (p *exParser) primary() (exNode, *Error) {
 
 // ---- linking ----
 
-// exBinding resolves one variable for a document.
 // Doc gives access to the values of a document.
 type Doc interface {
 	Values(field string) []any
@@ -324,6 +323,7 @@ type Env struct {
 	AllowScore bool // _score is bound
 }
 
+// exBinding resolves one variable for a document.
 type exBinding func(doc Doc, score float64, value any) float64
 
 // Linked is an expression whose variables are bound.

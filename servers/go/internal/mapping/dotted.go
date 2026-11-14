@@ -225,8 +225,8 @@ func mergeDottedDocs(a, b map[string]any) map[string]any {
 // Mapping validation that needs index settings
 // ---------------------------------------------------------------------------
 
-// builtinAnalyzer reports whether name is an analyzer that OpenSearch ships
-// with, so a mapping may reference it without declaring it in settings.
+// settingsHasAnalyzer reports whether the index settings define an analysis
+// component of kind key ("analyzer", "normalizer", ...) called name.
 func settingsHasAnalyzer(indexSettings map[string]any, key, name string) bool {
 	if _, ok := settings.Find(indexSettings, "analysis."+key+"."+name); ok {
 		return true
@@ -318,7 +318,7 @@ var builtinMetadataFields = []string{
 	"_ignored", "_id", "_index", "_routing", "_source", "_data_stream_timestamp",
 }
 
-func ValidateBuiltinFieldNameLength(indexSettings map[string]any) *apierr.Error {
+func CheckFieldNameLimit(indexSettings map[string]any) *apierr.Error {
 	limit, ok := settings.Int(indexSettings, "mapping.field_name_length.limit")
 	if !ok {
 		return nil

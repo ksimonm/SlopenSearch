@@ -397,8 +397,8 @@ func (p *gmcPorter) step2() {
 	}
 }
 
-// gmcPorterRules is a list of (suffix, replacement) pairs tried in order; the
-// first matching suffix wins (and r() is applied), as in the Java switch.
+// gmcPorterRule is a (suffix, replacement) pair; the rules are tried in order
+// and the first matching suffix wins (and r() is applied), as in the Java switch.
 type gmcPorterRule struct{ suf, rep string }
 
 var gmcPorterStep3 = map[rune][]gmcPorterRule{

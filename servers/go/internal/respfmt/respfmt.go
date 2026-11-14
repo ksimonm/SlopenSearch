@@ -70,7 +70,7 @@ func Process(h http.Header, ordered bool, r *http.Request, status int, body []by
 // on an order-preserving view of the handler's JSON, so the key order the
 // handler wrote survives every transformation.
 
-// parseOrdered decodes JSON keeping object key order (objects become
+// parseResp decodes JSON keeping object key order (objects become
 // ojson.Object, numbers json.Number). With rawSource, a "_source" object is
 // kept as its verbatim bytes, the way OpenSearch copies stored sources
 // into pretty output.

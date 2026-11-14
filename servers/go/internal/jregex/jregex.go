@@ -1224,7 +1224,7 @@ func (re *Regexp) findAt(in []rune, start int) []int {
 	return nil
 }
 
-// findAll returns every non-overlapping match, Java Matcher.find style.
+// FindAll returns every non-overlapping match, Java Matcher.find style.
 func (re *Regexp) FindAll(in []rune) [][]int {
 	var out [][]int
 	pos := 0
@@ -1243,7 +1243,7 @@ func (re *Regexp) FindAll(in []rune) [][]int {
 	return out
 }
 
-// fullMatch reports whether the whole input matches (Matcher.matches).
+// FullMatch reports whether the whole input matches (Matcher.matches).
 func (re *Regexp) FullMatch(in []rune) bool {
 	m := &jMatcher{re: re, in: in, caps: make([]int, 2*(re.groups+1))}
 	for x := range m.caps {
@@ -1252,7 +1252,7 @@ func (re *Regexp) FullMatch(in []rune) bool {
 	return m.match(re.root, 0, func(e int) bool { return e == len(in) })
 }
 
-// expandReplacement applies a Java replacement string ($n, ${name}, \x).
+// ExpandReplacement applies a Java replacement string ($n, ${name}, \x).
 func (re *Regexp) ExpandReplacement(in []rune, caps []int, repl string) ([]rune, *Error) {
 	var out []rune
 	rr := []rune(repl)
@@ -1311,7 +1311,7 @@ func (re *Regexp) ExpandReplacement(in []rune, caps []int, repl string) ([]rune,
 	return out, nil
 }
 
-// replace replaces the first or every match in s.
+// Replace replaces the first or every match in s.
 func (re *Regexp) Replace(s, repl string, all bool) (string, *Error) {
 	in := []rune(s)
 	var out []rune

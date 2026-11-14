@@ -14,7 +14,7 @@ import (
 )
 
 func matrixStatsAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) (any, *apierr.Error) {
-	fields := search.AnyStringList(spec["fields"])
+	fields := search.StringList(spec["fields"])
 	cols := map[string][]float64{}
 	for _, f := range fields {
 		cols[f] = []float64{}
@@ -259,7 +259,7 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *model.Index) (a
 	storedNone := false
 	_, sourceExplicit := spec["_source"]
 	if sf, ok := spec["stored_fields"]; ok {
-		names := search.AnyStringList(sf)
+		names := search.StringList(sf)
 		for _, n := range names {
 			if n == "_none_" {
 				storedNone = true
@@ -292,7 +292,7 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *model.Index) (a
 			h = append(h, ojson.KV{"_score", nil})
 		}
 		if includeSource {
-			src := search.FilterSourceDoc(d, sourceIncludes, sourceExcludes)
+			src := search.FilterSource(d, sourceIncludes, sourceExcludes)
 			delete(src, "__slop_id")
 			delete(src, "__slop_score")
 			h = append(h, ojson.KV{"_source", jsonv.NormalizeNumbers(src)})
@@ -331,7 +331,7 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *model.Index) (a
 		}
 		fields := ojson.Object{}
 		if dv, ok := spec["docvalue_fields"]; ok {
-			for _, f := range search.AnyStringList(dv) {
+			for _, f := range search.StringList(dv) {
 				if v, ok := mapping.FieldValue(d, f); ok {
 					fields = append(fields, ojson.KV{f, []any{jsonv.NormalizeNumbers(v)}})
 				}
@@ -476,15 +476,15 @@ func parseTopHitsSource(raw any) (bool, []string, []string) {
 		}
 		return true, search.SplitSourceList(t), nil
 	case []any:
-		return true, search.AnyStringList(t), nil
+		return true, search.StringList(t), nil
 	case map[string]any:
-		inc := search.AnyStringList(t["includes"])
+		inc := search.StringList(t["includes"])
 		if len(inc) == 0 {
-			inc = search.AnyStringList(t["include"])
+			inc = search.StringList(t["include"])
 		}
-		exc := search.AnyStringList(t["excludes"])
+		exc := search.StringList(t["excludes"])
 		if len(exc) == 0 {
-			exc = search.AnyStringList(t["exclude"])
+			exc = search.StringList(t["exclude"])
 		}
 		return true, inc, exc
 	}

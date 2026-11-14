@@ -412,7 +412,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				mapping.EnsureFieldTypes(vidx)
 			}()
 		}
-		if kerr := search.KnnParseCheck(bodyRaw); kerr != nil {
+		if kerr := search.CheckKnnClauses(bodyRaw); kerr != nil {
 			writeError(w, kerr)
 			return
 		}
@@ -726,7 +726,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			}
 			anyMapped := false
 			for _, idx := range indices {
-				if kerr := search.KnnUnsupportedSort(idx, sp.Field); kerr != nil {
+				if kerr := search.CheckKnnSort(idx, sp.Field); kerr != nil {
 					writeError(w, kerr)
 					return
 				}
@@ -812,7 +812,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	if after, ok := body["search_after"].([]any); ok && len(after) > 0 && len(searchSortSpecs) > 0 {
 		kept := matched[:0]
 		for _, h := range matched {
-			if search.HitAfterSearchAfter(h, searchSortSpecs, after) {
+			if search.IsAfter(h, searchSortSpecs, after) {
 				kept = append(kept, h)
 			}
 		}
@@ -859,7 +859,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		scrollID = sid
 	}
 
-	srcIncludes, srcExcludes, omitSource, bodyHasSource := search.SourceFilterFromBody(body)
+	srcIncludes, srcExcludes, omitSource, bodyHasSource := search.ParseSourceFilter(body)
 	qIncludes, qExcludes, qOmit, qHas := sourceFilterFromQuery(r.URL.Query())
 	if qHas || qOmit {
 		srcIncludes, srcExcludes, omitSource = qIncludes, qExcludes, qOmit
@@ -1083,7 +1083,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				hitOmit = true
 			}
 		}
-		src := search.FilterSourceDoc(h.Doc, hitIncludes, hitExcludes)
+		src := search.FilterSource(h.Doc, hitIncludes, hitExcludes)
 		var scoreVal any = h.Score
 		if omitScores {
 			scoreVal = nil
@@ -1206,7 +1206,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 						if !found {
 							continue
 						}
-						if existing, done := out[name]; done && !search.KnnIsVectorField(h.Idx, name) {
+						if existing, done := out[name]; done && !search.IsKnnVectorField(h.Idx, name) {
 							if list, ok := existing.([]any); ok {
 								out[name] = append(list, vals...)
 								continue
@@ -1276,7 +1276,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				entry["fields"] = got
 			}
 		}
-		if slots := search.PercolateSlotsForHit(hitCtx, query); len(slots) > 0 {
+		if slots := search.PercolateSlots(hitCtx, query); len(slots) > 0 {
 			if existing, ok := entry["fields"].(map[string]any); ok {
 				existing["_percolator_document_slot"] = slots
 			} else {

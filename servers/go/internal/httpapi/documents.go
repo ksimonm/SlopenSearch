@@ -1103,10 +1103,10 @@ func (s *Server) handleGetDocV2(w http.ResponseWriter, r *http.Request, name, id
 			if filtered, ok2 := filterRawSource(raw, includes, excludes); ok2 {
 				resp = append(resp, ojson.KV{"_source", ojson.Verbatim(filtered)})
 			} else {
-				resp = append(resp, ojson.KV{"_source", jsonv.NormalizeNumbers(search.FilterSourceDoc(doc, includes, excludes))})
+				resp = append(resp, ojson.KV{"_source", jsonv.NormalizeNumbers(search.FilterSource(doc, includes, excludes))})
 			}
 		} else {
-			resp = append(resp, ojson.KV{"_source", jsonv.NormalizeNumbers(search.FilterSourceDoc(doc, includes, excludes))})
+			resp = append(resp, ojson.KV{"_source", jsonv.NormalizeNumbers(search.FilterSource(doc, includes, excludes))})
 		}
 	}
 	if fields := storedFieldsFor(idx, doc, storedSpec(storedSpecRaw, idx)); fields != nil {
@@ -1169,7 +1169,7 @@ func (s *Server) handleGetSourceV2(w http.ResponseWriter, r *http.Request, name,
 			return
 		}
 	}
-	writeJSON(w, 200, jsonv.NormalizeNumbers(search.FilterSourceDoc(doc, includes, excludes)))
+	writeJSON(w, 200, jsonv.NormalizeNumbers(search.FilterSource(doc, includes, excludes)))
 }
 
 func (s *Server) handleDeleteDocV2(w http.ResponseWriter, r *http.Request, name, id string) {
@@ -1560,7 +1560,7 @@ func updateGetObject(idx *model.Index, id string, src map[string]any, seq int64,
 	}
 	out := ojson.Object{{"_seq_no", seq}, {"_primary_term", int64(1)}, {"found", true}}
 	if idx.SourceEnabled() {
-		out = append(out, ojson.KV{"_source", search.FilterSourceDoc(src, includes, excludes)})
+		out = append(out, ojson.KV{"_source", search.FilterSource(src, includes, excludes)})
 	}
 	return out
 }
@@ -1850,7 +1850,7 @@ func (s *Server) handleMget(w http.ResponseWriter, r *http.Request, pathIndex st
 			omit = true
 		}
 		if !omit {
-			doc["_source"] = search.FilterSourceDoc(src, inc, exc)
+			doc["_source"] = search.FilterSource(src, inc, exc)
 		}
 		if fields := storedFieldsFor(idx, src, storedSpec(storedRaw, idx)); fields != nil {
 			doc["fields"] = fields

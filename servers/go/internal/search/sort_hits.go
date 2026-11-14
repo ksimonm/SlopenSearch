@@ -92,7 +92,7 @@ func SortHits(hits []MultiHit, specs []SortSpec, indices []*model.Index) *apierr
 		}
 		cs, se, ae := PrepareScript(sp.ScriptRaw, ctxName)
 		if se != nil || ae != nil {
-			return ScriptErrForShard(indices[0], se, ae, false)
+			return ScriptFailure(indices[0], se, ae, false)
 		}
 		sp.ScriptVals = map[string]any{}
 		for _, h := range hits {
@@ -108,7 +108,7 @@ func SortHits(hits []MultiHit, specs []SortSpec, indices []*model.Index) *apierr
 	}
 	sort.SliceStable(hits, func(i, j int) bool {
 		for _, sp := range specs {
-			c := CompareSortSpec(hits[i], hits[j], sp)
+			c := compareSortSpec(hits[i], hits[j], sp)
 			if c != 0 {
 				if sp.Desc {
 					return c > 0

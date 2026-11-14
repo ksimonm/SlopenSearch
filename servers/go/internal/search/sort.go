@@ -113,8 +113,8 @@ func searchSortSpecValueRaw(h MultiHit, sp SortSpec) (any, bool, bool) {
 	return nil, false, true
 }
 
-// CompareSortSpec compares two hits by one sort spec.
-func CompareSortSpec(a, b MultiHit, sp SortSpec) int {
+// compareSortSpec compares two hits by one sort spec.
+func compareSortSpec(a, b MultiHit, sp SortSpec) int {
 	av, aok, amissing := searchSortSpecValue(a, sp)
 	bv, bok, bmissing := searchSortSpecValue(b, sp)
 	if amissing || bmissing {
@@ -402,8 +402,8 @@ func geoSortDistance(h MultiHit, sp SortSpec) any {
 	return best
 }
 
-// HitAfterSearchAfter reports whether a hit sorts after the search_after values.
-func HitAfterSearchAfter(h MultiHit, specs []SortSpec, after []any) bool {
+// IsAfter reports whether a hit sorts after the search_after values.
+func IsAfter(h MultiHit, specs []SortSpec, after []any) bool {
 	for i, sp := range specs {
 		if i >= len(after) {
 			break

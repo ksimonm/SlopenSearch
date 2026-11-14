@@ -180,9 +180,9 @@ func knnXContentErr(raw []byte, off int, msg string, cause ojson.Object) *apierr
 		Shard: &ShardFailure{Raw: body, Status: 400}}
 }
 
-// KnnParseCheck validates every knn clause of a search body the way the
+// CheckKnnClauses validates every knn clause of a search body the way the
 // query parser does, before any shard is involved.
-func KnnParseCheck(raw []byte) *apierr.Error {
+func CheckKnnClauses(raw []byte) *apierr.Error {
 	if len(raw) == 0 {
 		return nil
 	}
@@ -304,7 +304,7 @@ func knnParseVector(raw []byte, e jsonEntry) *apierr.Error {
 	}
 }
 
-func KnnIsVectorField(idx *model.Index, field string) bool {
+func IsKnnVectorField(idx *model.Index, field string) bool {
 	def, _ := mapping.FieldDef(idx, field)
 	t, _ := def["type"].(string)
 	return t == "knn_vector"

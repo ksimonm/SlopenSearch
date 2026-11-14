@@ -725,7 +725,7 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *mode
 	}
 	if search.IsRangeFieldType(ft) {
 		reason := "Field [" + field + "] of type [" + ft + "] is not supported for aggregation [terms]"
-		return nil, search.MatchSearchError("illegal_argument_exception", reason)
+		return nil, search.AllShardsFailed("illegal_argument_exception", reason)
 	}
 	if ft == "text" {
 		fd := false

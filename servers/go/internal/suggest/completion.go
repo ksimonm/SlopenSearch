@@ -607,7 +607,7 @@ func completionSuggest(spec, body map[string]any, indices []*model.Index, global
 		return nil, suggestShardError(first, "no mapping found for field ["+field+"]")
 	}
 
-	includes, excludes, omitSource, _ := search.SourceFilterFromBody(searchBody)
+	includes, excludes, omitSource, _ := search.ParseSourceFilter(searchBody)
 
 	var hits []*completionHit
 	for _, tg := range targets {
@@ -793,7 +793,7 @@ func completionSuggest(spec, body map[string]any, indices []*model.Index, global
 		if !omitSource {
 			src := h.idx.Docs[h.id]
 			if len(includes) > 0 || len(excludes) > 0 {
-				src = search.FilterSourceDoc(src, includes, excludes)
+				src = search.FilterSource(src, includes, excludes)
 			}
 			opt = append(opt, ojson.KV{"_source", src})
 		}

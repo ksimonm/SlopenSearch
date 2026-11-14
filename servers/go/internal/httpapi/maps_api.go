@@ -120,7 +120,7 @@ func (s *Server) putMappingAPI(w http.ResponseWriter, r *http.Request, spec stri
 		}
 		existingProps := mapping.EnsureProperties(idx.Mappings)
 		if props, ok := body["properties"].(map[string]any); ok {
-			if err := mapping.KnnPutMappingCheck(idx, existingProps, props); err != nil {
+			if err := mapping.CheckKnnMappingUpdate(idx, existingProps, props); err != nil {
 				writeError(w, err)
 				return
 			}
