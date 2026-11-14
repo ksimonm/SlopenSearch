@@ -6,6 +6,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/ingest"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/painless"
 	"slopensearch/internal/search"
 	"slopensearch/internal/wildcard"
@@ -145,8 +146,11 @@ func (s *Server) resolvePipelineNames(expr string) []string {
 }
 
 func (s *Server) simulatePipeline(w http.ResponseWriter, r *http.Request, stored string) {
-	body, apiErr := readJSON(r)
+	body, raw, apiErr := readJSONRaw(r)
 	if apiErr != nil {
+		if t := mapping.FindNonStandardToken(raw); t != nil {
+			apiErr = t.IngestError() // the body is read into a map
+		}
 		writeError(w, apiErr)
 		return
 	}

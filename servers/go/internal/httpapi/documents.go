@@ -841,7 +841,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 	}
 	body, rawBody, berr := readDocBody(r)
 	if berr != nil {
-		if e := mapping.NonStandardTokenError(idx, id, rawBody); e != nil {
+		if e := nonStdDocError(idx, id, r.URL.Query().Get("pipeline"), rawBody); e != nil {
 			berr = e
 		}
 		writeError(w, berr)
@@ -1296,8 +1296,11 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		writeError(w, routingMissing(idx, id))
 		return
 	}
-	body, _, berr := readDocBody(r)
+	body, rawBody, berr := readDocBody(r)
 	if berr != nil {
+		if t := mapping.FindNonStandardToken(rawBody); t != nil {
+			berr = t.ObjectParserError("UpdateRequest")
+		}
 		writeError(w, berr)
 		return
 	}
