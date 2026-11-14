@@ -145,7 +145,7 @@ type phCand struct {
 	user  bool
 }
 
-// phCandLess orders candidates like Collections.reverseOrder() of
+// phCandBefore orders candidates like Collections.reverseOrder() of
 // Candidate.compareTo: score descending, then term ascending.
 func phCandBefore(a, b *phCand) bool {
 	if a.score != b.score {
@@ -517,18 +517,18 @@ func (m *phMultiGen) drawCandidates(set *phSet) {
 // ---------------------------------------------------------------- word scorers
 
 type phScorer struct {
-	terms        *phTerms
-	vocabulary   int64
-	numTerms     int64
-	realWord     float64
-	separator    string
-	model        string // stupid_backoff, laplace, linear
-	discount     float64
-	alpha        float64
-	triLambda    float64
-	biLambda     float64
-	uniLambda    float64
-	frequencyMap map[string]int64
+	terms      *phTerms
+	vocabulary int64
+	numTerms   int64
+	realWord   float64
+	separator  string
+	model      string // stupid_backoff, laplace, linear
+	discount   float64
+	alpha      float64
+	triLambda  float64
+	biLambda   float64
+	uniLambda  float64
+	logCache   map[float64]float64
 }
 
 func newPhScorer(terms *phTerms, realWord float64, separator string, sm *phSmoothing) *phScorer {
@@ -565,13 +565,26 @@ func (s *phScorer) channelScore(c *phCand) float64 {
 	return c.dist
 }
 
+// log10 memoizes phLog10: the same word scores recur across many paths.
+func (s *phScorer) log10(x float64) float64 {
+	if v, ok := s.logCache[x]; ok {
+		return v
+	}
+	if s.logCache == nil {
+		s.logCache = map[float64]float64{}
+	}
+	v := phLog10(x)
+	s.logCache[x] = v
+	return v
+}
+
 func (s *phScorer) score(path []*phCand, sets []*phSet, at, gramSize int) float64 {
 	if at == 0 || gramSize == 1 {
-		return phLog10(s.channelScore(path[at]) * s.unigram(path[at]))
+		return s.log10(s.channelScore(path[at]) * s.unigram(path[at]))
 	} else if at == 1 || gramSize == 2 {
-		return phLog10(s.channelScore(path[at]) * s.bigram(path[at], path[at-1]))
+		return s.log10(s.channelScore(path[at]) * s.bigram(path[at], path[at-1]))
 	}
-	return phLog10(s.channelScore(path[at]) * s.trigram(path[at], path[at-1], path[at-2]))
+	return s.log10(s.channelScore(path[at]) * s.trigram(path[at], path[at-1], path[at-2]))
 }
 
 func (s *phScorer) unigram(w *phCand) float64 {
