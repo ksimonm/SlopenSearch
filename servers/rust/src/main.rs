@@ -45,6 +45,7 @@ mod search;
 mod shared;
 mod store;
 mod suggest;
+mod tasks_async;
 mod templates;
 
 use axum::body::Bytes;
@@ -420,6 +421,9 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
     // wait on the store lock: run them on the blocking pool so the async runtime keeps
     // accepting and answering connections.
     let (mut resp, req) = match tokio::task::spawn_blocking(move || {
+        if let Some(resp) = tasks_async::route(&store, &req) {
+            return (resp, req);
+        }
         let resp = {
             let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
             // Requests that may compile or run scripts get a large stack: the
