@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -127,7 +128,7 @@ func (s *Server) nodeInfoForMetric(metric string) map[string]any {
 		return map[string]any{
 			"process": map[string]any{
 				"refresh_interval_in_millis": 1000,
-				"id":                         1,
+				"id":                         os.Getpid(),
 				"mlockall":                   false,
 				"cpu":                        map[string]any{"percent": 0, "total_in_millis": int64(0)},
 				"mem":                        map[string]any{"total_virtual_in_bytes": int64(1)},

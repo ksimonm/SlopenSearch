@@ -228,6 +228,7 @@ type Server struct {
 	pits                map[string]*pitContext
 	pitMu               sync.Mutex
 	pitCounter          int64
+	persist             *persister // nil unless SLOP_DATA_DIR is set
 }
 
 type dataStreamInfo struct {
