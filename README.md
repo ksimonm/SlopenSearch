@@ -46,7 +46,7 @@ Share of the suite passing (2026-11-15, `make go-score` / `make rust-score`):
 | Persistence (opt-in `test_95`) | 100% | 100% |
 | **Total** | **100%** | **100%** |
 
-Both servers pass the whole suite (6,693 tests). The multi-node and cross-DC suites (`test_96`, `test_97`) are not implemented:
+Both servers pass the whole suite (6,693 tests); the new `test_23_nonstandard_json` (16 tests) is in progress. The multi-node and cross-DC suites (`test_96`, `test_97`) are not implemented:
 both servers are single-node (see [ROADMAP.md](ROADMAP.md)).
 Both servers store their state on disk by default (`SLOP_DATA_DIR`, default `./data`; in Docker a named volume per server) and survive restarts and crashes; `SLOP_IN_MEMORY=true` keeps everything in memory instead (see [servers/go/README.md](servers/go/README.md#persistence) and [servers/rust/README.md](servers/rust/README.md)).
 
@@ -98,6 +98,7 @@ Each file has a pytest marker, so an area can be run on its own (`ARGS="-m <mark
 | `cluster` | `test_01_cluster.py` | root, health, state, settings, nodes, tasks, `_cat/*` |
 | `admin` | `test_11_index_admin.py` | index lifecycle, settings, aliases, templates, rollover, data streams, reindex |
 | `documents` | `test_21_documents.py` | CRUD, versioning, routing, `_mget`, `_update`, `_bulk`, by-query APIs |
+| `documents` | `test_23_nonstandard_json.py` | `NaN`/`Infinity` tokens in `_bulk`, `_update` and ingest bodies |
 | `ingest` | `test_22_ingest.py` | ingest pipelines and processors, search pipelines |
 | `fulltext` | `test_31_fulltext.py` | match family, multi_match, query_string, intervals, span queries |
 | `queries` | `test_32_queries.py` | term-level, bool, function_score, nested, join, geo, percolate |
