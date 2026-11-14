@@ -364,6 +364,9 @@ func plDocValuesFor(qc *queryCtx, field string, off int) (*plDocValues, *plRtErr
 		return plDocValuesFor(qc, resolveAliasField(qc.idx, field), off)
 	}
 	vals, _ := qc.values(field)
+	if ft == "knn_vector" {
+		return plKnnDocValues(field, vals), nil
+	}
 	dv := &plDocValues{field: field}
 	switch ft {
 	case "text", "match_only_text", "search_as_you_type":
@@ -471,7 +474,8 @@ func plScoreBindings(qc *queryCtx) map[string]func(args []any, off int) (any, *p
 		}
 		return d
 	}
-	return map[string]func(args []any, off int) (any, *plRtErr){
+	m := plKnnBindings()
+	for k, v := range map[string]func(args []any, off int) (any, *plRtErr){
 		"saturation": func(a []any, off int) (any, *plRtErr) { return f(a, 0) / (f(a, 1) + f(a, 0)), nil },
 		"sigmoid": func(a []any, off int) (any, *plRtErr) {
 			v, k, e := f(a, 0), f(a, 1), f(a, 2)
@@ -500,7 +504,10 @@ func plScoreBindings(qc *queryCtx) map[string]func(args []any, off int) (any, *p
 			h.Write([]byte(itoa(int(plI64(a[0]))) + "\x00" + key))
 			return float64(h.Sum32()&0x00FFFFFF) / float64(1<<24), nil
 		},
+	} {
+		m[k] = v
 	}
+	return m
 }
 
 // ---- _execute ----
