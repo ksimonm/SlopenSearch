@@ -56,7 +56,11 @@ func evalSuggest(suggest map[string]any, indices []*Index, typed bool) (map[stri
 			if typed {
 				key = "phrase#" + name
 			}
-			out[key] = []any{phraseSuggester(spec, t, idx)}
+			entries, err := phraseSuggest(spec, t, indices, globalText)
+			if err != nil {
+				return nil, err
+			}
+			out[key] = entries
 		} else if t, ok := spec["completion"].(map[string]any); ok {
 			key := name
 			if typed {
