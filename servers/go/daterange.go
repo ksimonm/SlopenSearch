@@ -7,6 +7,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/dates"
+	"slopensearch/internal/mapping"
 )
 
 func rangeDateParseError(value, queryFormat string, def map[string]any) *apierr.Error {
@@ -63,12 +64,12 @@ func parseRangeDateBound(def map[string]any, v any, tz, queryFormat string, roun
 		}
 		return t.UnixMilli(), nil
 	}
-	ctx := &indexCtx{indexCoerce: true}
+	ctx := &mapping.ParseContext{IndexCoerce: true}
 	typ := "date"
 	if t, _ := def["type"].(string); t == "date_nanos" {
 		typ = "date_nanos"
 	}
-	parsed, err := ctx.parseDateValue("_value", typ, def, v)
+	parsed, err := ctx.ParseDateValue("_value", typ, def, v)
 	if err != nil {
 		return nil, err
 	}

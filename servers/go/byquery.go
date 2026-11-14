@@ -9,6 +9,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
 )
@@ -176,7 +177,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 			seq := nextSeq(idx)
 			delete(idx.Docs, id)
 			delete(idx.Pending, id)
-			removeDocValues(idx, id)
+			mapping.RemoveDocValues(idx, id)
 			idx.DeleteTotal++
 			idx.Versions[id] = base + 1
 			idx.SeqNos[id] = seq
@@ -214,7 +215,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 			seq := nextSeq(idx)
 			delete(idx.Docs, id)
 			delete(idx.Pending, id)
-			removeDocValues(idx, id)
+			mapping.RemoveDocValues(idx, id)
 			idx.DeleteTotal++
 			idx.Versions[id] = base + 1
 			idx.SeqNos[id] = seq
@@ -251,8 +252,8 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 			failures = append(failures, byQueryFailure(idx.Name, id, derr))
 			continue
 		}
-		ensureFieldTypes(idx)
-		if derr := computeDocValues(idx, id, newDoc); derr != nil {
+		mapping.EnsureFieldTypes(idx)
+		if derr := mapping.ComputeDocValues(idx, id, newDoc); derr != nil {
 			failures = append(failures, byQueryFailure(idx.Name, id, derr))
 			continue
 		}

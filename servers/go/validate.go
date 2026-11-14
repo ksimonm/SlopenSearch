@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 )
 
@@ -127,7 +129,7 @@ func (s *Server) handleValidateQuery(w http.ResponseWriter, r *http.Request, nam
 
 func validateExplanationWithCtx(q map[string]any, qc *queryCtx) string {
 	if qs, ok := q["query_string"].(map[string]any); ok {
-		query, _ := toString(qs["query"])
+		query, _ := jsonv.ToString(qs["query"])
 		operator := "OR"
 		if o, ok := qs["default_operator"].(string); ok {
 			operator = strings.ToUpper(o)
@@ -165,7 +167,7 @@ func explainParsed(q map[string]any) string {
 	}
 	if m, ok := q["match"].(map[string]any); ok {
 		for field, raw := range m {
-			s, _ := toString(raw)
+			s, _ := jsonv.ToString(raw)
 			return field + ":" + s
 		}
 	}
@@ -177,7 +179,7 @@ func validateExplanation(q map[string]any) string {
 		parts := []string{}
 		for field, raw := range m {
 			text, _ := queryText(raw)
-			for _, tok := range analyze(text) {
+			for _, tok := range mapping.Analyze(text) {
 				parts = append(parts, field+":"+tok)
 			}
 		}
@@ -203,7 +205,7 @@ func validateExplanation(q map[string]any) string {
 			if vm, ok := raw.(map[string]any); ok {
 				val = vm["value"]
 			}
-			s, _ := toString(val)
+			s, _ := jsonv.ToString(val)
 			return field + ":" + s
 		}
 	}
@@ -213,7 +215,7 @@ func validateExplanation(q map[string]any) string {
 			if vm, ok := raw.(map[string]any); ok {
 				val = vm["value"]
 			}
-			s, _ := toString(val)
+			s, _ := jsonv.ToString(val)
 			return field + ":" + s
 		}
 	}

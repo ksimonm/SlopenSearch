@@ -9,6 +9,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 )
@@ -33,8 +34,8 @@ func knnExplain(idx *model.Index, query map[string]any, id string, score float64
 			return nil
 		}
 		def, _ := knnFieldDef(idx, field)
-		fi := knnInfo(def)
-		if fi.engine == "lucene" {
+		fi := mapping.KnnInfo(def)
+		if fi.Engine == "lucene" {
 			return ojson.Object{{"value", scoreJSON(score)},
 				{"description", fmt.Sprintf("within top %d docs", int(k))}, {"details", []any{}}}
 		}
@@ -44,9 +45,9 @@ func knnExplain(idx *model.Index, query map[string]any, id string, score float64
 		raw := 0.0
 		formula := "`1 / (1 + rawScore)`"
 		if len(dv) == len(qv) {
-			raw, _ = knnDistanceScore(fi.space, qv, dv)
+			raw, _ = knnDistanceScore(fi.Space, qv, dv)
 		}
-		switch fi.space {
+		switch fi.Space {
 		case "innerproduct":
 			raw = -raw
 			formula = "`rawScore >= 0 ? 1 + rawScore : 1 / (1 - rawScore)`"
@@ -58,7 +59,7 @@ func knnExplain(idx *model.Index, query map[string]any, id string, score float64
 			{"description", "the type of knn search executed was Approximate-NN"},
 			{"details", []any{ojson.Object{{"value", scoreJSON(score)},
 				{"description", fmt.Sprintf("the type of knn search executed at leaf was Approximate-NN with vectorDataType = %s, spaceType = %s where score is computed as %s from:",
-					strings.ToUpper(fi.dataType), fi.space, formula)},
+					strings.ToUpper(fi.DataType), fi.Space, formula)},
 				{"details", []any{ojson.Object{{"value", scoreJSON(float64(float32(raw)))},
 					{"description", "rawScore, returned from FAISS library"}, {"details", []any{}}}}}}}}}
 	}

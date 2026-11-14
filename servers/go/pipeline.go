@@ -203,7 +203,7 @@ func bucketPathsOf(body map[string]any) []string {
 	}
 	if m, ok := body["buckets_path"].(map[string]any); ok {
 		for _, v := range m {
-			if s, ok := toString(v); ok {
+			if s, ok := jsonv.ToString(v); ok {
 				out = append(out, s)
 			}
 		}
@@ -212,7 +212,7 @@ func bucketPathsOf(body map[string]any) []string {
 }
 
 func gapPolicyOf(body map[string]any) (string, *apierr.Error) {
-	gp, _ := toString(body["gap_policy"])
+	gp, _ := jsonv.ToString(body["gap_policy"])
 	if gp == "" {
 		return "skip", nil
 	}
@@ -389,7 +389,7 @@ func pipelineValue(out any) any {
 }
 
 func applyDerivative(name string, body map[string]any, buckets []map[string]any, kind string) *apierr.Error {
-	path, _ := toString(body["buckets_path"])
+	path, _ := jsonv.ToString(body["buckets_path"])
 	if path == "" {
 		return &apierr.Error{Type: "parsing_exception", Status: 400, Reason: "Missing required field [buckets_path] for aggregation [" + name + "]"}
 	}
@@ -397,13 +397,13 @@ func applyDerivative(name string, body map[string]any, buckets []map[string]any,
 	if err != nil {
 		return err
 	}
-	unit, _ := toString(body["unit"])
+	unit, _ := jsonv.ToString(body["unit"])
 	unitMs := durationMillis(unit)
 	if unit != "" && unitMs == 0 {
 		return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "failed to parse [" + unit + "]",
 			CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "failed to parse [" + unit + "]"}}
 	}
-	format, _ := toString(body["format"])
+	format, _ := jsonv.ToString(body["format"])
 	var prev any
 	prevOK := false
 	for i, b := range buckets {
@@ -504,11 +504,11 @@ func applyCumulativeSum(name string, body map[string]any, buckets []map[string]a
 		return &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason: "[cumulative_sum] unknown field [gap_policy]"}
 	}
-	path, _ := toString(body["buckets_path"])
+	path, _ := jsonv.ToString(body["buckets_path"])
 	if path == "" {
 		return &apierr.Error{Type: "parsing_exception", Status: 400, Reason: "Missing required field [buckets_path] for aggregation [" + name + "]"}
 	}
-	format, _ := toString(body["format"])
+	format, _ := jsonv.ToString(body["format"])
 	total := 0.0
 	for _, b := range buckets {
 		v, ok := parentMetricValue(b, path, "skip")
@@ -526,7 +526,7 @@ func applyCumulativeSum(name string, body map[string]any, buckets []map[string]a
 }
 
 func applySerialDiff(name string, body map[string]any, buckets []map[string]any) *apierr.Error {
-	path, _ := toString(body["buckets_path"])
+	path, _ := jsonv.ToString(body["buckets_path"])
 	if path == "" {
 		return &apierr.Error{Type: "parsing_exception", Status: 400, Reason: "Missing required field [buckets_path] for aggregation [" + name + "]"}
 	}
@@ -539,7 +539,7 @@ func applySerialDiff(name string, body map[string]any, buckets []map[string]any)
 	if err != nil {
 		return err
 	}
-	format, _ := toString(body["format"])
+	format, _ := jsonv.ToString(body["format"])
 	for i := range buckets {
 		if i < lag {
 			continue
@@ -576,13 +576,13 @@ func applyBucketScript(name string, body map[string]any, buckets []map[string]an
 	if err != nil {
 		return err
 	}
-	format, _ := toString(body["format"])
+	format, _ := jsonv.ToString(body["format"])
 	_, params := scriptText(body["script"])
 	for _, b := range buckets {
 		pvals := map[string]any{}
 		missing := false
 		for k, raw := range paths {
-			path, _ := toString(raw)
+			path, _ := jsonv.ToString(raw)
 			v, ok := parentMetricValue(b, path, gap)
 			if !ok {
 				missing = true
@@ -642,7 +642,7 @@ func applyBucketSelector(name string, body map[string]any, buckets []map[string]
 		pvals := map[string]any{}
 		missing := false
 		for k, raw := range paths {
-			path, _ := toString(raw)
+			path, _ := jsonv.ToString(raw)
 			v, ok := parentMetricValue(b, path, gap)
 			if !ok {
 				missing = true
@@ -825,7 +825,7 @@ func isMultiValue(v any) bool {
 }
 
 func evalSiblingPipeline(name string, body map[string]any, typ string, out map[string]any) (any, *apierr.Error) {
-	path, _ := toString(body["buckets_path"])
+	path, _ := jsonv.ToString(body["buckets_path"])
 	if path == "" {
 		return nil, &apierr.Error{Type: "parsing_exception", Status: 400,
 			Reason: "Missing required field [buckets_path] for aggregation [" + name + "]"}
@@ -838,7 +838,7 @@ func evalSiblingPipeline(name string, body map[string]any, typ string, out map[s
 	if err != nil {
 		return nil, err
 	}
-	format, _ := toString(body["format"])
+	format, _ := jsonv.ToString(body["format"])
 	switch typ {
 	case "avg_bucket":
 		if len(vals) == 0 {
@@ -1268,7 +1268,7 @@ func applyMovingFn(name string, body map[string]any, buckets []map[string]any) *
 	if err != nil {
 		return err
 	}
-	path, _ := toString(body["buckets_path"])
+	path, _ := jsonv.ToString(body["buckets_path"])
 	src, params := scriptText(scriptRaw)
 	for i, b := range buckets {
 		dc, _ := jsonv.ToFloat(b["doc_count"])
@@ -1429,8 +1429,8 @@ func movingFnResult(src string, params map[string]any, vals []float64) (*float64
 }
 
 func applyMovingAvg(name string, body map[string]any, buckets []map[string]any) *apierr.Error {
-	path, _ := toString(body["buckets_path"])
-	model, _ := toString(body["model"])
+	path, _ := jsonv.ToString(body["buckets_path"])
+	model, _ := jsonv.ToString(body["model"])
 	if model == "" {
 		model = "simple"
 	}

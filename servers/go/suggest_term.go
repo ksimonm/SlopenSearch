@@ -8,6 +8,7 @@ import (
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
@@ -71,7 +72,7 @@ func termSuggester(spec, body map[string]any, indices []*model.Index, globalText
 			return nil, &apierr.Error{Type: "parsing_exception", Status: 400, Reason: "suggester[term] doesn't support field [" + k + "]"}
 		}
 	}
-	field, ok := toString(body["field"])
+	field, ok := jsonv.ToString(body["field"])
 	if !ok || field == "" {
 		return nil, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "the required field option [field] is missing"}
 	}
@@ -93,21 +94,21 @@ func termSuggester(spec, body map[string]any, indices []*model.Index, globalText
 		}
 	}
 	mode := "missing"
-	if s, ok := toString(body["suggest_mode"]); ok {
+	if s, ok := jsonv.ToString(body["suggest_mode"]); ok {
 		mode = strings.ToLower(s)
 		if mode != "missing" && mode != "popular" && mode != "always" {
 			return nil, suggestIllegal("No enum constant org.opensearch.search.suggest.term.TermSuggestionBuilder.SuggestMode." + strings.ToUpper(s))
 		}
 	}
 	sortBy := "score"
-	if s, ok := toString(body["sort"]); ok {
+	if s, ok := jsonv.ToString(body["sort"]); ok {
 		sortBy = strings.ToLower(s)
 		if sortBy != "score" && sortBy != "frequency" {
 			return nil, suggestIllegal("No enum constant org.opensearch.search.suggest.SortBy." + strings.ToUpper(s))
 		}
 	}
 	distance := "internal"
-	if s, ok := toString(body["string_distance"]); ok {
+	if s, ok := jsonv.ToString(body["string_distance"]); ok {
 		distance = strings.ToLower(s)
 		switch distance {
 		case "internal", "damerau_levenshtein", "levenshtein", "jaro_winkler", "ngram":
@@ -136,15 +137,15 @@ func termSuggester(spec, body map[string]any, indices []*model.Index, globalText
 	if !hasText {
 		return nil, suggestShardError(idx, "The required text option is missing")
 	}
-	input, _ := toString(rawText)
+	input, _ := jsonv.ToString(rawText)
 	if f, ok := rawText.(float64); ok {
 		input = jsonv.FormatNumber(f)
 	}
 
-	analyzer, _ := toString(body["analyzer"])
+	analyzer, _ := jsonv.ToString(body["analyzer"])
 	found := false
 	for _, ix := range indices {
-		if _, ok := mappingFieldDef(ix, field); ok {
+		if _, ok := mapping.FieldDef(ix, field); ok {
 			found = true
 		}
 	}
@@ -153,7 +154,7 @@ func termSuggester(spec, body map[string]any, indices []*model.Index, globalText
 	}
 	if analyzer != "" {
 		if _, ok := analysis.GlobalAnalyzerTokens(analyzer, ""); !ok && analysis.PrebuiltChain(analyzer) == nil &&
-			(idx == nil || !(analysis.Scope{Index: analysisIndex(idx)}).IndexHasAnalyzer(analyzer)) {
+			(idx == nil || !(analysis.Scope{Index: mapping.AnalysisIndex(idx)}).IndexHasAnalyzer(analyzer)) {
 			return nil, suggestShardError(idx, "analyzer ["+analyzer+"] doesn't exists")
 		}
 	}
@@ -168,13 +169,13 @@ func termSuggester(spec, body map[string]any, indices []*model.Index, globalText
 				continue
 			}
 			maxDoc++
-			v, ok := fieldValue(doc, field)
+			v, ok := mapping.FieldValue(doc, field)
 			if !ok {
 				continue
 			}
 			seen := map[string]bool{}
 			for _, s := range docStrings(v) {
-				for _, tok := range analysis.Terms(analysisIndex(ix), fa, s) {
+				for _, tok := range analysis.Terms(mapping.AnalysisIndex(ix), fa, s) {
 					if !seen[tok] {
 						seen[tok] = true
 						df[tok]++
@@ -192,7 +193,7 @@ func termSuggester(spec, body map[string]any, indices []*model.Index, globalText
 	if analyzer == "" {
 		analyzer = fieldAnalyzer(idx, field, "")
 	}
-	toks := analysis.Tokens(analysisIndex(idx), analyzer, input)
+	toks := analysis.Tokens(mapping.AnalysisIndex(idx), analyzer, input)
 	entries := []any{}
 	for _, tok := range toks {
 		options := termCandidates(tok.Term, terms, df, maxDoc, mode, distance, maxEdits, accuracy,

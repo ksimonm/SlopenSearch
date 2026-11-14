@@ -8,6 +8,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/dates"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/wildcard"
 )
@@ -97,7 +98,7 @@ func (s *Server) createBackingIndex(info *model.DataStream, tpl map[string]any) 
 	settings["index.hidden"] = "true"
 	body["settings"] = settings
 	mappings := map[string]any{}
-	mergeMappingsDeep(mappings, composed.mappings)
+	mapping.MergeDeep(mappings, composed.mappings)
 	props, _ := mappings["properties"].(map[string]any)
 	if props == nil {
 		props = map[string]any{}
@@ -317,7 +318,7 @@ func (s *Server) handleDataStreamStats(w http.ResponseWriter, r *http.Request, s
 			}
 			for _, id := range idx.Order {
 				doc := idx.Docs[id]
-				if v, ok := fieldValue(doc, ds.TimestampField); ok {
+				if v, ok := mapping.FieldValue(doc, ds.TimestampField); ok {
 					if t, ok := dates.ParseMillis(v); ok {
 						if int64(t) > maxTs {
 							maxTs = int64(t)

@@ -17,6 +17,7 @@ import (
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/dates"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
@@ -31,7 +32,7 @@ type multiHit struct {
 }
 
 func checkDocValuesLoadable(idx *model.Index, field string) *apierr.Error {
-	def, ok := mappingFieldDef(idx, field)
+	def, ok := mapping.FieldDef(idx, field)
 	if !ok {
 		return nil
 	}
@@ -77,11 +78,11 @@ func parseFieldSpecs(raw any) []fieldSpec {
 		case string:
 			out = append(out, fieldSpec{name: t})
 		case map[string]any:
-			name, _ := toString(t["field"])
+			name, _ := jsonv.ToString(t["field"])
 			if name == "" {
 				continue
 			}
-			format, _ := toString(t["format"])
+			format, _ := jsonv.ToString(t["format"])
 			out = append(out, fieldSpec{name: name, format: format})
 		}
 	}
@@ -95,10 +96,10 @@ var textLikeTypes = map[string]bool{
 
 // docValuesOutput returns the values to render for docvalue_fields / fields.
 func docValuesOutput(idx *model.Index, id, field string, spec fieldSpec, fallbackSource bool) ([]any, bool, *apierr.Error) {
-	field = resolveAliasField(idx, field)
+	field = mapping.ResolveAliasField(idx, field)
 	if i := strings.Index(field, "#"); i > 0 {
 		base := field[:i]
-		if bdef, ok := mappingFieldDef(idx, base); ok {
+		if bdef, ok := mapping.FieldDef(idx, base); ok {
 			if bt, _ := bdef["type"].(string); bt == "join" {
 				name, parent := joinParts(idx.Docs[id][base])
 				relations, _ := bdef["relations"].(map[string]any)
@@ -109,7 +110,7 @@ func docValuesOutput(idx *model.Index, id, field string, spec fieldSpec, fallbac
 			}
 		}
 	}
-	def, hasDef := mappingFieldDef(idx, field)
+	def, hasDef := mapping.FieldDef(idx, field)
 	if !hasDef {
 		return nil, false, nil
 	}
@@ -183,7 +184,7 @@ func docValuesOutput(idx *model.Index, id, field string, spec fieldSpec, fallbac
 			return nil, false, nil
 		}
 		// fall back to _source values
-		if v, ok := fieldValue(idx.Docs[id], field); ok {
+		if v, ok := mapping.FieldValue(idx.Docs[id], field); ok {
 			list := flattenAny(v)
 			return formatted(list), true, nil
 		}
@@ -249,7 +250,7 @@ func formatDocValue(idx *model.Index, field, ftype string, v any, format string)
 		}
 		eff := format
 		if eff == "" || eff == "use_field_mapping" {
-			if def, ok := mappingFieldDef(idx, field); ok {
+			if def, ok := mapping.FieldDef(idx, field); ok {
 				if mf, ok := def["format"].(string); ok && mf != "" {
 					eff = strings.TrimSpace(strings.Split(mf, "||")[0])
 				}
@@ -301,11 +302,11 @@ func (h multiHit) sortValue(field string, desc bool, mode string) (any, bool) {
 	case "_id":
 		return h.id, true
 	}
-	def, mapped := mappingFieldDef(h.idx, field)
+	def, mapped := mapping.FieldDef(h.idx, field)
 	if mapped {
 		if t, _ := def["type"].(string); t == "alias" {
-			field = resolveAliasField(h.idx, field)
-			def, mapped = mappingFieldDef(h.idx, field)
+			field = mapping.ResolveAliasField(h.idx, field)
+			def, mapped = mapping.FieldDef(h.idx, field)
 		}
 	}
 	vals := h.idx.DocValues[h.id]
@@ -320,7 +321,7 @@ func (h multiHit) sortValue(field string, desc bool, mode string) (any, bool) {
 		ft, _ := def["type"].(string)
 		if ft == "ip" {
 			if len(list) == 1 {
-				if s, ok := valueScalarString(list[0]); ok {
+				if s, ok := jsonv.ScalarString(list[0]); ok {
 					if ip := net.ParseIP(s); ip != nil {
 						return ipSortKey{key: string(ip.To16()), out: canonicalIP(s)}, true
 					}
@@ -332,8 +333,8 @@ func (h multiHit) sortValue(field string, desc bool, mode string) (any, bool) {
 				analyzer, _ := def["analyzer"].(string)
 				toks := []string{}
 				for _, v := range list {
-					s, _ := valueScalarString(v)
-					for _, t := range analysis.Tokens(analysisIndex(h.idx), analyzer, s) {
+					s, _ := jsonv.ScalarString(v)
+					for _, t := range analysis.Tokens(mapping.AnalysisIndex(h.idx), analyzer, s) {
 						toks = append(toks, t.Term)
 					}
 				}
@@ -366,7 +367,7 @@ func compareSortValues(a, b any) int {
 		}
 	}
 	if as, ok := a.(string); ok {
-		bs, _ := toString(b)
+		bs, _ := jsonv.ToString(b)
 		if _, bok := b.(string); bok {
 			return strings.Compare(as, bs)
 		}
@@ -622,7 +623,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	if vidx != nil {
 		if defs, ok := body["derived"]; ok && defs != nil {
 			oldDerived, hadDerived := vidx.Mappings["derived"]
-			if derr := applyRequestDerived(vidx, defs); derr != nil {
+			if derr := mapping.ApplyRequestDerived(vidx, defs); derr != nil {
 				writeError(w, derr)
 				return
 			}
@@ -632,8 +633,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				} else {
 					delete(vidx.Mappings, "derived")
 				}
-				recomputeAllDocValues(vidx)
-				ensureFieldTypes(vidx)
+				mapping.RecomputeAllDocValues(vidx)
+				mapping.EnsureFieldTypes(vidx)
 			}()
 		}
 		if kerr := knnParseCheck(bodyRaw); kerr != nil {
@@ -916,12 +917,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		}
 		if len(indices) > 0 {
 			for i, sp := range searchSortSpecs {
-				def, ok := mappingFieldDef(indices[0], sp.field)
+				def, ok := mapping.FieldDef(indices[0], sp.field)
 				if !ok {
 					continue
 				}
 				ft, _ := def["type"].(string)
-				if isNumericType(ft) && ft != "date" && ft != "date_nanos" {
+				if mapping.IsNumericType(ft) && ft != "date" && ft != "date_nanos" {
 					if _, conv := jsonv.ToFloat(after[i]); !conv {
 						reason := "Failed to parse search_after value for field [" + sp.field + "]."
 						writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
@@ -1058,7 +1059,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			}
 			for _, idx := range indices {
 				if sp.field == "_geo_distance" {
-					def, ok := mappingFieldDef(idx, sp.geoField)
+					def, ok := mapping.FieldDef(idx, sp.geoField)
 					t, _ := def["type"].(string)
 					if (!ok || t != "geo_point") && !sp.geoIgnore {
 						reason := "failed to find mapper for [" + sp.geoField + "] for geo distance based sort"
@@ -1070,7 +1071,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 					continue
 				}
 				if sp.nestedPath != "" {
-					def, ok := mappingFieldDef(idx, sp.nestedPath)
+					def, ok := mapping.FieldDef(idx, sp.nestedPath)
 					t, _ := def["type"].(string)
 					if !ok || t != "nested" {
 						reason := "[nested] failed to find nested object under path [" + sp.nestedPath + "]"
@@ -1081,9 +1082,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 					}
 				}
 				if sp.mode == "avg" || sp.mode == "sum" || sp.mode == "median" {
-					if def, ok := mappingFieldDef(idx, sp.field); ok {
+					if def, ok := mapping.FieldDef(idx, sp.field); ok {
 						t, _ := def["type"].(string)
-						if !isNumericType(t) && t != "date" {
+						if !mapping.IsNumericType(t) && t != "date" {
 							reason := "we only support AVG, MEDIAN and SUM on number based fields"
 							writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 								Reason: reason, Phase: "query",
@@ -1092,7 +1093,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 						}
 					}
 				}
-				if def, ok := mappingFieldDef(idx, sp.field); ok {
+				if def, ok := mapping.FieldDef(idx, sp.field); ok {
 					t, _ := def["type"].(string)
 					fd, _ := def["fielddata"].(bool)
 					if (t == "text" || t == "match_only_text") && !fd {
@@ -1221,7 +1222,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			items = sv
 		}
 		for _, item := range items {
-			name, _ := toString(item)
+			name, _ := jsonv.ToString(item)
 			if name == "_none_" {
 				storedNone = true
 			} else if name != "" {
@@ -1571,7 +1572,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 					sort.Strings(names)
 				}
 				for _, n := range names {
-					def, ok := mappingFieldDef(h.idx, n)
+					def, ok := mapping.FieldDef(h.idx, n)
 					if !ok {
 						continue
 					}
@@ -1794,7 +1795,7 @@ func profileQuery(query map[string]any) map[string]any {
 		for field, raw := range m {
 			text, _ := queryText(raw)
 			term := ""
-			if toks := analyze(text); len(toks) > 0 {
+			if toks := mapping.Analyze(text); len(toks) > 0 {
 				term = toks[0]
 			}
 			base["type"] = "TermQuery"
@@ -1808,7 +1809,7 @@ func profileQuery(query map[string]any) map[string]any {
 			if vm, ok := raw.(map[string]any); ok {
 				val = vm["value"]
 			}
-			s, _ := toString(val)
+			s, _ := jsonv.ToString(val)
 			base["type"] = "TermQuery"
 			base["description"] = field + ":" + s
 			return base
@@ -2247,9 +2248,9 @@ func sortOutputValue(h multiHit, sp searchSortSpec) any {
 	}
 	if missing {
 		numeric := false
-		if def, ok := mappingFieldDef(h.idx, sp.field); ok {
+		if def, ok := mapping.FieldDef(h.idx, sp.field); ok {
 			t, _ := def["type"].(string)
-			numeric = isNumericType(t)
+			numeric = mapping.IsNumericType(t)
 		}
 		if numeric && !sp.hasMissing {
 			switch sp.numericType {
@@ -2264,7 +2265,7 @@ func sortOutputValue(h multiHit, sp searchSortSpec) any {
 				}
 				return int64(2147483647)
 			}
-			if def, ok := mappingFieldDef(h.idx, sp.field); ok {
+			if def, ok := mapping.FieldDef(h.idx, sp.field); ok {
 				t, _ := def["type"].(string)
 				if t == "integer" || t == "long" || t == "short" || t == "byte" {
 					if sp.desc {
@@ -2315,7 +2316,7 @@ func parseSort(spec any) (string, bool) {
 			if k == "_score" {
 				continue
 			}
-			dir, _ := toString(v)
+			dir, _ := jsonv.ToString(v)
 			return k, dir == "desc"
 		}
 	}
@@ -2335,8 +2336,8 @@ func compareValues(a, b any) int {
 			return 0
 		}
 	}
-	as, _ := toString(a)
-	bs, _ := toString(b)
+	as, _ := jsonv.ToString(a)
+	bs, _ := jsonv.ToString(b)
 	return strings.Compare(as, bs)
 }
 
@@ -2347,20 +2348,12 @@ func fieldType(idx *model.Index, field string) string {
 	return "text"
 }
 
-func isNumericType(t string) bool {
-	switch t {
-	case "integer", "long", "short", "byte", "float", "double", "half_float", "scaled_float", "date":
-		return true
-	}
-	return false
-}
-
 func docStrings(v any) []string {
 	switch t := v.(type) {
 	case []any:
 		out := []string{}
 		for _, e := range t {
-			if s, ok := toString(e); ok {
+			if s, ok := jsonv.ToString(e); ok {
 				out = append(out, s)
 			}
 		}
@@ -2368,7 +2361,7 @@ func docStrings(v any) []string {
 	case nil:
 		return nil
 	default:
-		if s, ok := toString(t); ok {
+		if s, ok := jsonv.ToString(t); ok {
 			return []string{s}
 		}
 	}
@@ -2481,7 +2474,7 @@ func validateQuery(idx *model.Index, query map[string]any) *apierr.Error {
 		case "percolate":
 			if bm, ok := raw.(map[string]any); ok {
 				field := percolateFieldName(bm)
-				def, mapped := mappingFieldDef(idx, field)
+				def, mapped := mapping.FieldDef(idx, field)
 				ftype := ""
 				if mapped {
 					ftype, _ = def["type"].(string)
@@ -2581,7 +2574,7 @@ func validateFunctionScore(idx *model.Index, raw any) *apierr.Error {
 		}
 		if fvf, ok := fn["field_value_factor"].(map[string]any); ok {
 			field, _ := fvf["field"].(string)
-			if _, mapped := mappingFieldDef(idx, field); !mapped {
+			if _, mapped := mapping.FieldDef(idx, field); !mapped {
 				if _, hasMissing := fvf["missing"]; !hasMissing {
 					return newFunctionScoreFailure("fvf_unmapped",
 						"Unable to find a field mapper for field ["+field+"]. No 'missing' value defined.")
@@ -2651,12 +2644,12 @@ func validateTermQuery(idx *model.Index, raw any) *apierr.Error {
 		if ci, has := vm["case_insensitive"]; has {
 			if _, isBool := ci.(bool); !isBool {
 				return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
-					Reason:   "Failed to parse value [" + previewValue(ci) + "] as only [true] or [false] are allowed.",
+					Reason:   "Failed to parse value [" + mapping.PreviewValue(ci) + "] as only [true] or [false] are allowed.",
 					ForceTop: true}
 			}
 		}
 	}
-	def, ok := mappingFieldDef(idx, field)
+	def, ok := mapping.FieldDef(idx, field)
 	if !ok {
 		return nil
 	}
@@ -2676,9 +2669,9 @@ func validateTermQuery(idx *model.Index, raw any) *apierr.Error {
 	}
 	if ftype == "boolean" {
 		if _, isBool := val.(bool); !isBool {
-			s, isStr := valueScalarString(val)
+			s, isStr := jsonv.ScalarString(val)
 			if !isStr || (s != "true" && s != "false") {
-				reason := fmt.Sprintf("Failed to parse value [%s] as only [true] or [false] are allowed.", previewValue(val))
+				reason := fmt.Sprintf("Failed to parse value [%s] as only [true] or [false] are allowed.", mapping.PreviewValue(val))
 				return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 					Reason:   reason,
 					CausedBy: &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: reason}}
@@ -2701,7 +2694,7 @@ func validateRangeQuery(idx *model.Index, raw any) *apierr.Error {
 	if !ok {
 		return nil
 	}
-	def, ok := mappingFieldDef(idx, field)
+	def, ok := mapping.FieldDef(idx, field)
 	if !ok {
 		return nil
 	}
@@ -2733,28 +2726,28 @@ func validateRangeQuery(idx *model.Index, raw any) *apierr.Error {
 				err = err.RootCause
 			}
 		case "ip", "ip_range":
-			ctx := &indexCtx{indexCoerce: true}
-			_, err = ctx.parseIPValue(field, bound)
+			ctx := &mapping.ParseContext{IndexCoerce: true}
+			_, err = ctx.ParseIPValue(field, bound)
 		case "integer", "long", "short", "byte", "unsigned_long":
-			ctx := &indexCtx{indexCoerce: true}
+			ctx := &mapping.ParseContext{IndexCoerce: true}
 			if isFractionalNumber(bound) {
-				_, err = ctx.parseFloatValue(field, ftype, def, bound)
+				_, err = ctx.ParseFloatValue(field, ftype, def, bound)
 			} else {
-				_, err = ctx.parseIntValue(field, ftype, def, bound)
+				_, err = ctx.ParseIntValue(field, ftype, def, bound)
 			}
 		case "float", "double", "half_float", "scaled_float":
-			ctx := &indexCtx{indexCoerce: true}
-			_, err = ctx.parseFloatValue(field, ftype, def, bound)
+			ctx := &mapping.ParseContext{IndexCoerce: true}
+			_, err = ctx.ParseFloatValue(field, ftype, def, bound)
 		case "integer_range", "long_range":
-			ctx := &indexCtx{indexCoerce: true}
+			ctx := &mapping.ParseContext{IndexCoerce: true}
 			if isFractionalNumber(bound) {
-				_, err = ctx.parseFloatValue(field, strings.TrimSuffix(ftype, "_range"), def, bound)
+				_, err = ctx.ParseFloatValue(field, strings.TrimSuffix(ftype, "_range"), def, bound)
 			} else {
-				_, err = ctx.parseIntValue(field, strings.TrimSuffix(ftype, "_range"), def, bound)
+				_, err = ctx.ParseIntValue(field, strings.TrimSuffix(ftype, "_range"), def, bound)
 			}
 		case "float_range", "double_range":
-			ctx := &indexCtx{indexCoerce: true}
-			_, err = ctx.parseFloatValue(field, strings.TrimSuffix(ftype, "_range"), def, bound)
+			ctx := &mapping.ParseContext{IndexCoerce: true}
+			_, err = ctx.ParseFloatValue(field, strings.TrimSuffix(ftype, "_range"), def, bound)
 		}
 		if err != nil {
 			return err
@@ -3067,11 +3060,11 @@ func singleEntry(m map[string]any) (string, any, bool) {
 func queryText(raw any) (string, any) {
 	if m, ok := raw.(map[string]any); ok {
 		if q, ok := m["query"]; ok {
-			s, _ := toString(q)
+			s, _ := jsonv.ToString(q)
 			return s, m
 		}
 	}
-	s, _ := toString(raw)
+	s, _ := jsonv.ToString(raw)
 	return s, nil
 }
 
@@ -3088,11 +3081,11 @@ func evalMatch(idx *model.Index, raw any, doc map[string]any) (bool, float64, *a
 		}
 	}
 	ft := fieldType(idx, field)
-	v, present := fieldValue(doc, field)
+	v, present := mapping.FieldValue(doc, field)
 	if !present {
 		return false, 0, nil
 	}
-	if isNumericType(ft) || ft == "keyword" || ft == "boolean" {
+	if mapping.IsNumericType(ft) || ft == "keyword" || ft == "boolean" {
 		for _, s := range docStrings(v) {
 			if s == text {
 				return true, 1, nil
@@ -3100,10 +3093,10 @@ func evalMatch(idx *model.Index, raw any, doc map[string]any) (bool, float64, *a
 		}
 		return false, 0, nil
 	}
-	qTokens := analyze(text)
+	qTokens := mapping.Analyze(text)
 	var docTokens []string
 	for _, s := range docStrings(v) {
-		docTokens = append(docTokens, analyze(s)...)
+		docTokens = append(docTokens, mapping.Analyze(s)...)
 	}
 	score := 0.0
 	for _, qt := range qTokens {
@@ -3127,19 +3120,19 @@ func evalPrefix(idx *model.Index, raw any, doc map[string]any) (bool, float64, *
 	}
 	prefix := ""
 	if m, ok := val.(map[string]any); ok {
-		prefix, _ = toString(m["value"])
+		prefix, _ = jsonv.ToString(m["value"])
 	} else {
-		prefix, _ = toString(val)
+		prefix, _ = jsonv.ToString(val)
 	}
 	ft := fieldType(idx, field)
-	v, present := fieldValue(doc, field)
+	v, present := mapping.FieldValue(doc, field)
 	if !present {
 		return false, 0, nil
 	}
 	for _, s := range docStrings(v) {
 		candidates := []string{s}
 		if ft == "text" {
-			candidates = analyze(s)
+			candidates = mapping.Analyze(s)
 		}
 		for _, c := range candidates {
 			if strings.HasPrefix(c, prefix) {
@@ -3165,16 +3158,16 @@ func evalTerm(idx *model.Index, raw any, doc map[string]any, fuzz int) (bool, fl
 			}
 		}
 	}
-	term, _ := toString(val)
+	term, _ := jsonv.ToString(val)
 	ft := fieldType(idx, field)
-	v, present := fieldValue(doc, field)
+	v, present := mapping.FieldValue(doc, field)
 	if !present {
 		return false, 0, nil
 	}
 	for _, s := range docStrings(v) {
 		candidates := []string{s}
 		if ft == "text" {
-			candidates = analyze(s)
+			candidates = mapping.Analyze(s)
 		}
 		for _, c := range candidates {
 			if c == term {
@@ -3193,7 +3186,7 @@ func evalFuzzy(idx *model.Index, raw any, doc map[string]any) (bool, float64, *a
 	fuzz := autoFuzziness(field)
 	if m, ok := val.(map[string]any); ok {
 		if v, ok := m["value"]; ok {
-			text, _ := toString(v)
+			text, _ := jsonv.ToString(v)
 			fuzz = autoFuzziness(text)
 		}
 	}
@@ -3209,17 +3202,17 @@ func evalTerms(idx *model.Index, raw any, doc map[string]any) (bool, float64, *a
 	if !ok {
 		return false, 0, errParsing("terms expects array")
 	}
-	v, present := fieldValue(doc, field)
+	v, present := mapping.FieldValue(doc, field)
 	if !present {
 		return false, 0, nil
 	}
 	ft := fieldType(idx, field)
 	for _, item := range list {
-		want, _ := toString(item)
+		want, _ := jsonv.ToString(item)
 		for _, s := range docStrings(v) {
 			candidates := []string{s}
 			if ft == "text" {
-				candidates = analyze(s)
+				candidates = mapping.Analyze(s)
 			}
 			for _, c := range candidates {
 				if c == want {
@@ -3272,7 +3265,7 @@ func evalRange(idx *model.Index, raw any, doc map[string]any) (bool, float64, *a
 	if !ok {
 		return false, 0, errParsing("bad range condition")
 	}
-	v, present := fieldValue(doc, field)
+	v, present := mapping.FieldValue(doc, field)
 	if !present {
 		return false, 0, nil
 	}
@@ -3284,16 +3277,16 @@ func evalRange(idx *model.Index, raw any, doc map[string]any) (bool, float64, *a
 		}
 		return compareRange(dv, cond, field, dates.ParseMillis)
 	}
-	if isNumericType(ft) {
+	if mapping.IsNumericType(ft) {
 		dv, ok := jsonv.ToFloat(v)
 		if !ok {
 			return false, 0, nil
 		}
 		return compareRange(dv, cond, field, jsonv.ToFloat)
 	}
-	ds, _ := toString(v)
+	ds, _ := jsonv.ToString(v)
 	for op, bound := range cond {
-		bs, _ := toString(bound)
+		bs, _ := jsonv.ToString(bound)
 		c := strings.Compare(ds, bs)
 		switch op {
 		case "gt":
@@ -3385,13 +3378,13 @@ func evalMatchPhrase(idx *model.Index, raw any, doc map[string]any) (bool, float
 		return false, 0, errParsing("empty match_phrase")
 	}
 	text, _ := queryText(val)
-	qTokens := analyze(text)
-	v, present := fieldValue(doc, field)
+	qTokens := mapping.Analyze(text)
+	v, present := mapping.FieldValue(doc, field)
 	if !present {
 		return false, 0, nil
 	}
 	for _, s := range docStrings(v) {
-		dTokens := analyze(s)
+		dTokens := mapping.Analyze(s)
 		if containsSubsequence(dTokens, qTokens) {
 			return true, float64(len(qTokens)), nil
 		}
@@ -3423,11 +3416,11 @@ func evalMultiMatch(idx *model.Index, raw any, doc map[string]any) (bool, float6
 	if !ok {
 		return false, 0, errParsing("bad multi_match")
 	}
-	q, _ := toString(m["query"])
+	q, _ := jsonv.ToString(m["query"])
 	fields, _ := m["fields"].([]any)
 	total := 0.0
 	for _, f := range fields {
-		fs, _ := toString(f)
+		fs, _ := jsonv.ToString(f)
 		ok, sc, err := evalMatch(idx, map[string]any{fs: q}, doc)
 		if err != nil {
 			return false, 0, err
@@ -3480,17 +3473,17 @@ func evalWildcard(idx *model.Index, raw any, doc map[string]any) (bool, float64,
 	if !ok {
 		return false, 0, errParsing("bad wildcard body")
 	}
-	pattern, _ := toString(m["value"])
+	pattern, _ := jsonv.ToString(m["value"])
 	re := wildcardRegex(pattern)
 	ft := fieldType(idx, field)
-	v, present := fieldValue(doc, field)
+	v, present := mapping.FieldValue(doc, field)
 	if !present {
 		return false, 0, nil
 	}
 	for _, s := range docStrings(v) {
 		candidates := []string{s}
 		if ft == "text" {
-			candidates = analyze(s)
+			candidates = mapping.Analyze(s)
 		}
 		for _, c := range candidates {
 			if re.MatchString(c) {
@@ -3506,8 +3499,8 @@ func evalExists(raw any, doc map[string]any) (bool, float64, *apierr.Error) {
 	if !ok {
 		return false, 0, errParsing("bad exists")
 	}
-	field, _ := toString(m["field"])
-	_, present := fieldValue(doc, field)
+	field, _ := jsonv.ToString(m["field"])
+	_, present := mapping.FieldValue(doc, field)
 	return present, 1, nil
 }
 
@@ -3518,14 +3511,14 @@ func filterSource(doc map[string]any, spec any) map[string]any {
 		includes = []string{t}
 	case []any:
 		for _, e := range t {
-			if s, ok := toString(e); ok {
+			if s, ok := jsonv.ToString(e); ok {
 				includes = append(includes, s)
 			}
 		}
 	case map[string]any:
 		if inc, ok := t["includes"].([]any); ok {
 			for _, e := range inc {
-				if s, ok := toString(e); ok {
+				if s, ok := jsonv.ToString(e); ok {
 					includes = append(includes, s)
 				}
 			}
@@ -3581,14 +3574,14 @@ func collectTokens(query map[string]any) map[string]bool {
 				if mm, ok := raw.(map[string]any); ok {
 					_, val, _ := singleEntry(mm)
 					text, _ := queryText(val)
-					for _, t := range analyze(text) {
+					for _, t := range mapping.Analyze(text) {
 						out[t] = true
 					}
 				}
 			case "multi_match":
 				if mm, ok := raw.(map[string]any); ok {
-					text, _ := toString(mm["query"])
-					for _, t := range analyze(text) {
+					text, _ := jsonv.ToString(mm["query"])
+					for _, t := range mapping.Analyze(text) {
 						out[t] = true
 					}
 				}
@@ -3938,7 +3931,7 @@ func hitAfterSearchAfter(h multiHit, specs []searchSortSpec, after []any) bool {
 }
 
 func compareSearchAfterValue(h multiHit, sp searchSortSpec, av, bv any) int {
-	def, _ := mappingFieldDef(h.idx, sp.field)
+	def, _ := mapping.FieldDef(h.idx, sp.field)
 	ft, _ := def["type"].(string)
 	if ft == "date" || ft == "date_nanos" {
 		am, ok1 := dateMillisFor(h.idx, sp.field, ft, av)
@@ -4081,7 +4074,7 @@ func explainDescription(query map[string]any) string {
 		for field, raw := range q {
 			text, _ := queryText(raw)
 			term := ""
-			if toks := analyze(text); len(toks) > 0 {
+			if toks := mapping.Analyze(text); len(toks) > 0 {
 				term = toks[0]
 			}
 			return "weight(" + field + ":" + term + " in 0) [PerFieldSimilarity], result of:"
@@ -4091,7 +4084,7 @@ func explainDescription(query map[string]any) string {
 		for field, raw := range q {
 			text, _ := queryText(raw)
 			term := ""
-			if toks := analyze(text); len(toks) > 0 {
+			if toks := mapping.Analyze(text); len(toks) > 0 {
 				term = toks[0]
 			}
 			return "weight(" + field + ":" + term + " in 0) [PerFieldSimilarity], result of:"
@@ -4118,7 +4111,7 @@ func applyCollapse(matched []multiHit, body map[string]any) ([]multiHit, map[str
 	var def map[string]any
 	found := false
 	for _, h := range matched {
-		if d, ok := mappingFieldDef(h.idx, field); ok {
+		if d, ok := mapping.FieldDef(h.idx, field); ok {
 			def = d
 			found = true
 			break
@@ -4149,7 +4142,7 @@ func applyCollapse(matched []multiHit, body map[string]any) ([]multiHit, map[str
 		key := ""
 		vals := h.idx.DocValues[h.id]
 		if vals != nil && len(vals[field]) > 0 {
-			s, _ := valueScalarString(vals[field][0])
+			s, _ := jsonv.ScalarString(vals[field][0])
 			key = s
 		} else {
 			key = "\x00missing:" + h.idx.Name + ":" + h.id

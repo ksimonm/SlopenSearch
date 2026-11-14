@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 )
 
@@ -21,7 +22,7 @@ type tvToken struct {
 // tvTokensIdx analyzes with the index's own analyzers when the field uses
 // one, falling back to the built-in term vector tokenizer.
 func tvTokensIdx(idx *model.Index, text, analyzer string) []tvToken {
-	if toks, ok := analysis.IndexAnalyzerTokens(analysisIndex(idx), analyzer, text); ok {
+	if toks, ok := analysis.IndexAnalyzerTokens(mapping.AnalysisIndex(idx), analyzer, text); ok {
 		out := make([]tvToken, 0, len(toks))
 		for _, t := range toks {
 			out = append(out, tvToken{term: t.Term, position: t.Pos, start: t.Start, end: t.End})
@@ -39,7 +40,7 @@ func tvTokens(text, analyzer string) []tvToken {
 	pos := 0
 	start := -1
 	for i, r := range text {
-		if isCJK(r) {
+		if mapping.IsCJK(r) {
 			if start >= 0 {
 				out = append(out, tvToken{term: strings.ToLower(text[start:i]), position: pos, start: start, end: i})
 				pos++
@@ -71,7 +72,7 @@ func fieldAnalyzer(idx *model.Index, field string, override string) string {
 	if override != "" {
 		return override
 	}
-	def, ok := mappingFieldDef(idx, field)
+	def, ok := mapping.FieldDef(idx, field)
 	if !ok {
 		return "standard"
 	}
@@ -92,7 +93,7 @@ func tvFieldStats(idx *model.Index, field string) map[string]any {
 		if !live {
 			continue
 		}
-		v, ok := fieldValue(doc, field)
+		v, ok := mapping.FieldValue(doc, field)
 		if !ok {
 			continue
 		}
@@ -118,7 +119,7 @@ func tvIndexTermStats(idx *model.Index, field string) map[string]map[string]int 
 		if !live {
 			continue
 		}
-		v, ok := fieldValue(doc, field)
+		v, ok := mapping.FieldValue(doc, field)
 		if !ok {
 			continue
 		}
@@ -140,7 +141,7 @@ func tvIndexTermStats(idx *model.Index, field string) map[string]map[string]int 
 }
 
 func termVectorFor(idx *model.Index, field string, doc map[string]any, analyzer string, termStats, fieldStats, positions, offsets bool, filter map[string]any) map[string]any {
-	v, ok := fieldValue(doc, field)
+	v, ok := mapping.FieldValue(doc, field)
 	if !ok {
 		return nil
 	}

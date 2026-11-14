@@ -11,6 +11,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/wildcard"
 )
@@ -631,7 +632,7 @@ func (s *Server) catIndices(r *http.Request, spec, endpoint string) ([]catCol, [
 			row.values["store.size"] = nil
 			row.values["pri.store.size"] = nil
 		} else {
-			row.values["docs.count"] = strconv.Itoa(indexDocCount(idx))
+			row.values["docs.count"] = strconv.Itoa(mapping.IndexDocCount(idx))
 			row.values["docs.deleted"] = "0"
 			row.values["store.size"] = formatCatBytes(storeBytes(idx), r.URL.Query().Get("bytes"))
 			row.values["pri.store.size"] = formatCatBytes(storeBytes(idx), r.URL.Query().Get("bytes"))

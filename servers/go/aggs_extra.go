@@ -7,6 +7,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 )
@@ -118,7 +119,7 @@ func indexOfString(xs []string, s string) int {
 }
 
 func geoBoundsAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) (any, *apierr.Error) {
-	field, _ := toString(spec["field"])
+	field, _ := jsonv.ToString(spec["field"])
 	lats, lons := []float64{}, []float64{}
 	for _, d := range docs {
 		v, ok := aggFieldValue(d, field, pathPrefix)
@@ -185,7 +186,7 @@ func geoBoundsAgg(spec map[string]any, docs []map[string]any, idx *model.Index, 
 }
 
 func geoCentroidAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) (any, *apierr.Error) {
-	field, _ := toString(spec["field"])
+	field, _ := jsonv.ToString(spec["field"])
 	latSum, lonSum := 0.0, 0.0
 	count := 0
 	for _, d := range docs {
@@ -330,7 +331,7 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *model.Index) (a
 		fields := ojson.Object{}
 		if dv, ok := spec["docvalue_fields"]; ok {
 			for _, f := range anyStringList(dv) {
-				if v, ok := fieldValue(d, f); ok {
+				if v, ok := mapping.FieldValue(d, f); ok {
 					fields = append(fields, ojson.KV{f, []any{normalizeNumbers(v)}})
 				}
 			}
@@ -352,7 +353,7 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *model.Index) (a
 				terms, _ := d["__slop_query_terms"].([]string)
 				hl := ojson.Object{}
 				for fname := range hf {
-					txt, ok := toString(d[fname])
+					txt, ok := jsonv.ToString(d[fname])
 					if !ok {
 						continue
 					}
@@ -406,7 +407,7 @@ func parseSortEntry(raw any) []sortSpec {
 			case string:
 				s.desc = vv == "desc"
 			case map[string]any:
-				if o, _ := toString(vv["order"]); o == "desc" {
+				if o, _ := jsonv.ToString(vv["order"]); o == "desc" {
 					s.desc = true
 				}
 			}
@@ -421,11 +422,11 @@ func sortValue(doc map[string]any, field string, idx *model.Index) (any, bool) {
 	if field == "_score" {
 		return doc["__slop_score"], true
 	}
-	v, ok := fieldValue(doc, field)
+	v, ok := mapping.FieldValue(doc, field)
 	if !ok {
 		return nil, false
 	}
-	def, _ := mappingFieldDef(idx, field)
+	def, _ := mapping.FieldDef(idx, field)
 	ft, _ := def["type"].(string)
 	if ft == "date" || ft == "date_nanos" {
 		if ms, ok := dateMillisFor(idx, field, ft, v); ok {
@@ -447,8 +448,8 @@ func compareAggSortValues(a, b any) int {
 		}
 		return 0
 	}
-	as, _ := toString(a)
-	bs, _ := toString(b)
+	as, _ := jsonv.ToString(a)
+	bs, _ := jsonv.ToString(b)
 	if as < bs {
 		return -1
 	}

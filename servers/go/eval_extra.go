@@ -16,6 +16,7 @@ import (
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/dates"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/painless"
 )
@@ -55,8 +56,8 @@ func (c *queryCtx) fieldMatchedCount(field string, terms []string) int {
 	analyzer := c.indexAnalyzerName(field)
 	tf := map[string]int{}
 	for _, v := range vals {
-		s, _ := valueScalarString(v)
-		for _, t := range analysis.Tokens(analysisIndex(c.idx), analyzer, s) {
+		s, _ := jsonv.ScalarString(v)
+		for _, t := range analysis.Tokens(mapping.AnalysisIndex(c.idx), analyzer, s) {
 			tf[t.Term]++
 		}
 	}
@@ -73,7 +74,7 @@ func (c *queryCtx) bm25FieldScore(field string, qtokens []string, operator strin
 	if c.idx == nil || c.id == "" {
 		return -1
 	}
-	def, _ := mappingFieldDef(c.idx, field)
+	def, _ := mapping.FieldDef(c.idx, field)
 	ftype, _ := def["type"].(string)
 	if ftype != "" && ftype != "text" && ftype != "match_only_text" && ftype != "search_as_you_type" {
 		return -1
@@ -82,8 +83,8 @@ func (c *queryCtx) bm25FieldScore(field string, qtokens []string, operator strin
 	docTerms := func(vals []any) []string {
 		out := []string{}
 		for _, v := range vals {
-			s, _ := valueScalarString(v)
-			for _, t := range analysis.Tokens(analysisIndex(c.idx), analyzer, s) {
+			s, _ := jsonv.ScalarString(v)
+			for _, t := range analysis.Tokens(mapping.AnalysisIndex(c.idx), analyzer, s) {
 				out = append(out, t.Term)
 			}
 		}
@@ -92,10 +93,10 @@ func (c *queryCtx) bm25FieldScore(field string, qtokens []string, operator strin
 	var myTokens []string
 	var st *fieldTermStats
 	if c.vals == nil {
-		st = termStatsFor(c.idx, resolveAliasField(c.idx, field), analyzer, docTerms)
+		st = termStatsFor(c.idx, mapping.ResolveAliasField(c.idx, field), analyzer, docTerms)
 		myTokens = st.docTokens[c.id]
 	} else {
-		myTokens = docTerms(c.vals[resolveAliasField(c.idx, field)])
+		myTokens = docTerms(c.vals[mapping.ResolveAliasField(c.idx, field)])
 	}
 	if len(myTokens) == 0 {
 		return 0
@@ -112,7 +113,7 @@ func (c *queryCtx) bm25FieldScore(field string, qtokens []string, operator strin
 		}
 	}
 	if st == nil {
-		st = termStatsFor(c.idx, resolveAliasField(c.idx, field), analyzer, docTerms)
+		st = termStatsFor(c.idx, mapping.ResolveAliasField(c.idx, field), analyzer, docTerms)
 	}
 	N := st.n
 	df := st.df
@@ -150,7 +151,7 @@ func (c *queryCtx) bm25FieldScore(field string, qtokens []string, operator strin
 }
 
 func (c *queryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apierr.Error) {
-	query, _ := toString(bm["query"])
+	query, _ := jsonv.ToString(bm["query"])
 	if query == "" {
 		return false, 0, errParsing("[multi_match] requires 'query'")
 	}
@@ -168,7 +169,7 @@ func (c *queryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apierr.Err
 	switch t := bm["fields"].(type) {
 	case []any:
 		for _, e := range t {
-			if s, ok := toString(e); ok {
+			if s, ok := jsonv.ToString(e); ok {
 				fields = append(fields, s)
 			}
 		}
@@ -244,7 +245,7 @@ func (c *queryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apierr.Err
 		if _, has := bm["fuzziness"]; has {
 			return false, 0, errParsing("Fuzziness not allowed for type [cross_fields]")
 		}
-		terms := analyze(query)
+		terms := mapping.Analyze(query)
 		operator, _ := bm["operator"].(string)
 		operator = strings.ToLower(operator)
 		required := 1
@@ -282,7 +283,7 @@ func (c *queryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apierr.Err
 		for _, f := range expanded {
 			name, fb := stripFieldBoost(f)
 			if fromWildcard[name] {
-				if def, ok := mappingFieldDef(c.idx, name); ok {
+				if def, ok := mapping.FieldDef(c.idx, name); ok {
 					ft, _ := def["type"].(string)
 					if ft != "" && ft != "text" && ft != "keyword" && ft != "constant_keyword" &&
 						ft != "wildcard" && ft != "match_only_text" && ft != "search_as_you_type" && ft != "flat_object" {
@@ -359,12 +360,12 @@ func (c *queryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apierr.Err
 }
 
 func (c *queryCtx) evalCombinedFields(bm map[string]any) (bool, float64, *apierr.Error) {
-	query, _ := toString(bm["query"])
+	query, _ := jsonv.ToString(bm["query"])
 	var fields []string
 	switch t := bm["fields"].(type) {
 	case []any:
 		for _, e := range t {
-			if s, ok := toString(e); ok {
+			if s, ok := jsonv.ToString(e); ok {
 				fields = append(fields, s)
 			}
 		}
@@ -412,7 +413,7 @@ func (c *queryCtx) evalCombinedFields(bm map[string]any) (bool, float64, *apierr
 	expanded = finalFields
 	for _, f := range expanded {
 		name, _ := stripFieldBoost(f)
-		def, ok := mappingFieldDef(c.idx, name)
+		def, ok := mapping.FieldDef(c.idx, name)
 		if !ok {
 			continue
 		}
@@ -422,7 +423,7 @@ func (c *queryCtx) evalCombinedFields(bm map[string]any) (bool, float64, *apierr
 				"Field ["+name+"] of type ["+ft+"] does not support [combined_fields] queries")
 		}
 	}
-	terms := analyze(query)
+	terms := mapping.Analyze(query)
 	if len(terms) == 0 {
 		return false, 0, nil
 	}
@@ -488,7 +489,7 @@ func (c *queryCtx) evalNested(body any) (bool, float64, *apierr.Error) {
 		scoreMode = "avg"
 	}
 	ignoreUnmapped, _ := bm["ignore_unmapped"].(bool)
-	def, mapped := mappingFieldDef(c.idx, path)
+	def, mapped := mapping.FieldDef(c.idx, path)
 	if !mapped {
 		if ignoreUnmapped {
 			return false, 0, nil
@@ -636,8 +637,8 @@ func nestedSortCompare(a, b any) int {
 			return 0
 		}
 	}
-	as, _ := valueScalarString(a)
-	bs, _ := valueScalarString(b)
+	as, _ := jsonv.ScalarString(a)
+	bs, _ := jsonv.ScalarString(b)
 	return strings.Compare(as, bs)
 }
 
@@ -1406,7 +1407,7 @@ func geoPointOf(v any) (float64, float64, bool) {
 				}
 			}
 		}
-		if lat, lon, ok := decodeGeohash(t); ok {
+		if lat, lon, ok := mapping.DecodeGeohash(t); ok {
 			return lat, lon, true
 		}
 	}
@@ -1470,7 +1471,7 @@ func haversineMeters(lat1, lon1, lat2, lon2 float64) float64 {
 }
 
 func geoFieldTypeOf(idx *model.Index, field string) (string, bool) {
-	def, ok := mappingFieldDef(idx, field)
+	def, ok := mapping.FieldDef(idx, field)
 	if !ok {
 		return "", false
 	}
@@ -1568,29 +1569,6 @@ func (c *queryCtx) evalGeoDistance(body any) (bool, float64, *apierr.Error) {
 	return false, 0, nil
 }
 
-func parseWktBBox(s string) (top, left, bottom, right float64, ok bool) {
-	u := strings.ToUpper(strings.TrimSpace(s))
-	if !strings.HasPrefix(u, "BBOX") {
-		return 0, 0, 0, 0, false
-	}
-	body := strings.TrimSpace(strings.TrimPrefix(u, "BBOX"))
-	body = strings.TrimPrefix(body, "(")
-	body = strings.TrimSuffix(body, ")")
-	parts := strings.Split(body, ",")
-	if len(parts) != 4 {
-		return 0, 0, 0, 0, false
-	}
-	nums := make([]float64, 4)
-	for i, p := range parts {
-		f, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
-		if err != nil {
-			return 0, 0, 0, 0, false
-		}
-		nums[i] = f
-	}
-	return nums[2], nums[0], nums[3], nums[1], true
-}
-
 func (c *queryCtx) evalGeoBoundingBox(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
@@ -1644,7 +1622,7 @@ func (c *queryCtx) evalGeoBoundingBox(body any) (bool, float64, *apierr.Error) {
 	}
 	if !have {
 		if w, ok := spec["wkt"].(string); ok {
-			t, l, b, r, ok2 := parseWktBBox(w)
+			t, l, b, r, ok2 := mapping.ParseWktBBox(w)
 			if ok2 {
 				top, left, bottom, right, have = t, l, b, r, true
 			}
@@ -1756,15 +1734,6 @@ func pointInRing(lon, lat float64, ring [][2]float64) bool {
 	return inside
 }
 
-type geoShape struct {
-	typ        string
-	lat, lon   float64
-	radiusM    float64
-	top, left  float64
-	bot, right float64
-	points     [][2]float64 // lon, lat
-}
-
 func shapeCoordPair(v any) (float64, float64, bool) {
 	arr, ok := v.([]any)
 	if !ok || len(arr) < 2 {
@@ -1775,57 +1744,43 @@ func shapeCoordPair(v any) (float64, float64, bool) {
 	return lon, lat, ok1 && ok2
 }
 
-func parseWktNumbers(s string) []float64 {
-	repl := strings.NewReplacer("(", " ", ")", " ", ",", " ")
-	fields := strings.Fields(repl.Replace(s))
-	out := make([]float64, 0, len(fields))
-	for _, f := range fields {
-		n, err := strconv.ParseFloat(f, 64)
-		if err != nil {
-			return nil
-		}
-		out = append(out, n)
-	}
-	return out
-}
-
-func parseGeoShape(v any) (*geoShape, bool) {
+func parseGeoShape(v any) (*mapping.GeoShape, bool) {
 	if s, ok := v.(string); ok {
-		return parseWktGeoShape(s)
+		return mapping.ParseWktGeoShape(s)
 	}
 	m, ok := v.(map[string]any)
 	if !ok {
 		return nil, false
 	}
 	typ, _ := m["type"].(string)
-	gs := &geoShape{typ: strings.ToLower(typ)}
-	switch gs.typ {
+	gs := &mapping.GeoShape{Typ: strings.ToLower(typ)}
+	switch gs.Typ {
 	case "point":
 		if c, ok := m["coordinates"].(string); ok {
 			lat, lon, ok := geoPointOf(c)
 			if !ok {
 				return nil, false
 			}
-			gs.lat, gs.lon = lat, lon
+			gs.Lat, gs.Lon = lat, lon
 			return gs, true
 		}
 		lon, lat, ok := shapeCoordPair(m["coordinates"])
 		if !ok {
 			return nil, false
 		}
-		gs.lon, gs.lat = lon, lat
+		gs.Lon, gs.Lat = lon, lat
 		return gs, true
 	case "circle":
 		if r, ok := m["radius"].(string); ok {
-			gs.radiusM, _ = parseDistanceMeters(r)
+			gs.RadiusM, _ = parseDistanceMeters(r)
 		} else if r, ok := jsonv.ToFloat(m["radius"]); ok {
-			gs.radiusM = r
+			gs.RadiusM = r
 		}
 		lon, lat, ok := shapeCoordPair(m["coordinates"])
 		if !ok {
 			return nil, false
 		}
-		gs.lon, gs.lat = lon, lat
+		gs.Lon, gs.Lat = lon, lat
 		return gs, true
 	case "envelope":
 		coords, _ := m["coordinates"].([]any)
@@ -1837,7 +1792,7 @@ func parseGeoShape(v any) (*geoShape, bool) {
 		if !ok1 || !ok2 {
 			return nil, false
 		}
-		gs.left, gs.top, gs.right, gs.bot = left, top, right, bot
+		gs.Left, gs.Top, gs.Right, gs.Bot = left, top, right, bot
 		return gs, true
 	case "polygon":
 		rings, _ := m["coordinates"].([]any)
@@ -1848,110 +1803,65 @@ func parseGeoShape(v any) (*geoShape, bool) {
 		for _, pt := range ring {
 			lon, lat, ok := shapeCoordPair(pt)
 			if ok {
-				gs.points = append(gs.points, [2]float64{lon, lat})
+				gs.Points = append(gs.Points, [2]float64{lon, lat})
 			}
 		}
-		return gs, len(gs.points) >= 3
+		return gs, len(gs.Points) >= 3
 	case "linestring":
 		coords, _ := m["coordinates"].([]any)
 		for _, pt := range coords {
 			lon, lat, ok := shapeCoordPair(pt)
 			if ok {
-				gs.points = append(gs.points, [2]float64{lon, lat})
+				gs.Points = append(gs.Points, [2]float64{lon, lat})
 			}
 		}
-		return gs, len(gs.points) >= 2
+		return gs, len(gs.Points) >= 2
 	case "multipoint":
 		coords, _ := m["coordinates"].([]any)
 		for _, pt := range coords {
 			lon, lat, ok := shapeCoordPair(pt)
 			if ok {
-				gs.points = append(gs.points, [2]float64{lon, lat})
+				gs.Points = append(gs.Points, [2]float64{lon, lat})
 			}
 		}
-		return gs, len(gs.points) > 0
+		return gs, len(gs.Points) > 0
 	case "geometrycollection":
 		geoms, _ := m["geometries"].([]any)
 		if len(geoms) == 0 {
 			return nil, false
 		}
-		gs.typ = "multipoint"
+		gs.Typ = "multipoint"
 		for _, g := range geoms {
 			sub, ok := parseGeoShape(g)
 			if !ok {
 				return nil, false
 			}
-			gs.points = append(gs.points, shapeVertices(sub)...)
+			gs.Points = append(gs.Points, shapeVertices(sub)...)
 		}
-		return gs, len(gs.points) > 0
+		return gs, len(gs.Points) > 0
 	}
 	return nil, false
 }
 
-func parseWktGeoShape(s string) (*geoShape, bool) {
-	u := strings.ToUpper(strings.TrimSpace(s))
-	switch {
-	case strings.HasPrefix(u, "POINT"):
-		nums := parseWktNumbers(strings.TrimSpace(s[len("POINT"):]))
-		if len(nums) < 2 {
-			return nil, false
-		}
-		return &geoShape{typ: "point", lon: nums[0], lat: nums[1]}, true
-	case strings.HasPrefix(u, "BBOX"):
-		top, left, bottom, right, ok := parseWktBBox(s)
-		if !ok {
-			return nil, false
-		}
-		return &geoShape{typ: "envelope", top: top, left: left, bot: bottom, right: right}, true
-	case strings.HasPrefix(u, "MULTIPOINT"):
-		body := strings.TrimSpace(s[len("MULTIPOINT"):])
-		body = strings.TrimSpace(strings.TrimPrefix(body, "("))
-		body = strings.TrimSpace(strings.TrimSuffix(body, ")"))
-		gs := &geoShape{typ: "multipoint"}
-		for _, pt := range strings.Split(body, ",") {
-			nums := parseWktNumbers(pt)
-			if len(nums) >= 2 {
-				gs.points = append(gs.points, [2]float64{nums[0], nums[1]})
-			}
-		}
-		return gs, len(gs.points) > 0
-	case strings.HasPrefix(u, "POLYGON"):
-		nums := parseWktNumbers(strings.TrimSpace(s[len("POLYGON"):]))
-		gs := &geoShape{typ: "polygon"}
-		for i := 0; i+1 < len(nums); i += 2 {
-			gs.points = append(gs.points, [2]float64{nums[i], nums[i+1]})
-		}
-		return gs, len(gs.points) >= 3
-	case strings.HasPrefix(u, "LINESTRING"):
-		nums := parseWktNumbers(strings.TrimSpace(s[len("LINESTRING"):]))
-		gs := &geoShape{typ: "linestring"}
-		for i := 0; i+1 < len(nums); i += 2 {
-			gs.points = append(gs.points, [2]float64{nums[i], nums[i+1]})
-		}
-		return gs, len(gs.points) >= 2
-	}
-	return nil, false
-}
-
-func shapeContainsPoint(gs *geoShape, lon, lat float64) bool {
-	switch gs.typ {
+func shapeContainsPoint(gs *mapping.GeoShape, lon, lat float64) bool {
+	switch gs.Typ {
 	case "point":
-		return math.Abs(gs.lon-lon) < 1e-9 && math.Abs(gs.lat-lat) < 1e-9
+		return math.Abs(gs.Lon-lon) < 1e-9 && math.Abs(gs.Lat-lat) < 1e-9
 	case "envelope":
-		return lat <= gs.top && lat >= gs.bot && lon >= gs.left && lon <= gs.right
+		return lat <= gs.Top && lat >= gs.Bot && lon >= gs.Left && lon <= gs.Right
 	case "circle":
-		return haversineMeters(gs.lat, gs.lon, lat, lon) <= gs.radiusM
+		return haversineMeters(gs.Lat, gs.Lon, lat, lon) <= gs.RadiusM
 	case "polygon":
-		return pointInRing(lon, lat, gs.points)
+		return pointInRing(lon, lat, gs.Points)
 	case "linestring":
-		for i := 0; i+1 < len(gs.points); i++ {
-			if pointOnSegment(lon, lat, gs.points[i], gs.points[i+1]) {
+		for i := 0; i+1 < len(gs.Points); i++ {
+			if pointOnSegment(lon, lat, gs.Points[i], gs.Points[i+1]) {
 				return true
 			}
 		}
 		return false
 	case "multipoint":
-		for _, p := range gs.points {
+		for _, p := range gs.Points {
 			if math.Abs(p[0]-lon) < 1e-9 && math.Abs(p[1]-lat) < 1e-9 {
 				return true
 			}
@@ -1974,23 +1884,23 @@ func pointOnSegment(px, py float64, a, b [2]float64) bool {
 	return true
 }
 
-func shapeVertices(gs *geoShape) [][2]float64 {
-	switch gs.typ {
+func shapeVertices(gs *mapping.GeoShape) [][2]float64 {
+	switch gs.Typ {
 	case "point":
-		return [][2]float64{{gs.lon, gs.lat}}
+		return [][2]float64{{gs.Lon, gs.Lat}}
 	case "envelope":
-		return [][2]float64{{gs.left, gs.top}, {gs.right, gs.top}, {gs.right, gs.bot}, {gs.left, gs.bot}}
+		return [][2]float64{{gs.Left, gs.Top}, {gs.Right, gs.Top}, {gs.Right, gs.Bot}, {gs.Left, gs.Bot}}
 	case "circle":
-		return [][2]float64{{gs.lon, gs.lat}}
+		return [][2]float64{{gs.Lon, gs.Lat}}
 	case "polygon", "linestring", "multipoint":
-		return gs.points
+		return gs.Points
 	}
 	return nil
 }
 
-func shapeEdges(gs *geoShape) [][2][2]float64 {
+func shapeEdges(gs *mapping.GeoShape) [][2][2]float64 {
 	pts := shapeVertices(gs)
-	if gs.typ == "envelope" || gs.typ == "polygon" || gs.typ == "circle" {
+	if gs.Typ == "envelope" || gs.Typ == "polygon" || gs.Typ == "circle" {
 		if len(pts) >= 3 {
 			pts = append(append([][2]float64{}, pts...), pts[0])
 		}
@@ -2028,15 +1938,15 @@ func segmentsIntersect(a, b, c, d [2]float64) bool {
 	return false
 }
 
-func shapeIntersectsShape(a, b *geoShape) bool {
+func shapeIntersectsShape(a, b *mapping.GeoShape) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	if a.typ == "point" {
-		return shapeContainsPoint(b, a.lon, a.lat)
+	if a.Typ == "point" {
+		return shapeContainsPoint(b, a.Lon, a.Lat)
 	}
-	if b.typ == "point" {
-		return shapeContainsPoint(a, b.lon, b.lat)
+	if b.Typ == "point" {
+		return shapeContainsPoint(a, b.Lon, b.Lat)
 	}
 	for _, p := range shapeVertices(a) {
 		if shapeContainsPoint(b, p[0], p[1]) {
@@ -2060,12 +1970,12 @@ func shapeIntersectsShape(a, b *geoShape) bool {
 	return false
 }
 
-func shapeContainsShape(outer, inner *geoShape) bool {
+func shapeContainsShape(outer, inner *mapping.GeoShape) bool {
 	if outer == nil || inner == nil {
 		return false
 	}
-	if inner.typ == "point" {
-		return shapeContainsPoint(outer, inner.lon, inner.lat)
+	if inner.Typ == "point" {
+		return shapeContainsPoint(outer, inner.Lon, inner.Lat)
 	}
 	for _, p := range shapeVertices(inner) {
 		if !shapeContainsPoint(outer, p[0], p[1]) {
@@ -2166,13 +2076,13 @@ func (c *queryCtx) evalGeoShape(body any) (bool, float64, *apierr.Error) {
 		return false, 0, nil
 	}
 	for _, v := range vals {
-		var ds *geoShape
+		var ds *mapping.GeoShape
 		if ftype == "geo_point" {
 			lat, lon, ok := geoPointOf(v)
 			if !ok {
 				continue
 			}
-			ds = &geoShape{typ: "point", lat: lat, lon: lon}
+			ds = &mapping.GeoShape{Typ: "point", Lat: lat, Lon: lon}
 		} else {
 			var ok bool
 			ds, ok = parseGeoShape(v)
@@ -2203,7 +2113,7 @@ func (c *queryCtx) evalGeoShape(body any) (bool, float64, *apierr.Error) {
 // ---------------------------------------------------------------------------
 
 func rankFeatureFieldDef(idx *model.Index, field string) (map[string]any, string) {
-	if def, ok := mappingFieldDef(idx, field); ok {
+	if def, ok := mapping.FieldDef(idx, field); ok {
 		t, _ := def["type"].(string)
 		if t == "rank_feature" || t == "rank_features" {
 			return def, t
@@ -2212,7 +2122,7 @@ func rankFeatureFieldDef(idx *model.Index, field string) (map[string]any, string
 	}
 	for i := strings.LastIndex(field, "."); i > 0; i = strings.LastIndex(field[:i], ".") {
 		parent := field[:i]
-		if def, ok := mappingFieldDef(idx, parent); ok {
+		if def, ok := mapping.FieldDef(idx, parent); ok {
 			t, _ := def["type"].(string)
 			if t == "rank_features" {
 				return def, t
@@ -2353,7 +2263,7 @@ func (c *queryCtx) evalDistanceFeature(body any) (bool, float64, *apierr.Error) 
 	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		boost = b
 	}
-	def, _ := mappingFieldDef(c.idx, field)
+	def, _ := mapping.FieldDef(c.idx, field)
 	ftype, _ := def["type"].(string)
 	if ftype != "date" && ftype != "date_nanos" && ftype != "geo_point" {
 		shown := ftype
@@ -2458,7 +2368,7 @@ func (c *queryCtx) evalPinned(body any) (bool, float64, *apierr.Error) {
 	for _, key := range []string{"ids"} {
 		if list, ok := bm[key].([]any); ok {
 			for _, e := range list {
-				if s, _ := toString(e); s == c.id {
+				if s, _ := jsonv.ToString(e); s == c.id {
 					pinned = true
 				}
 			}
@@ -2467,7 +2377,7 @@ func (c *queryCtx) evalPinned(body any) (bool, float64, *apierr.Error) {
 	if docs, ok := bm["docs"].([]any); ok {
 		for _, e := range docs {
 			if m, ok := e.(map[string]any); ok {
-				if s, _ := toString(m["_id"]); s == c.id {
+				if s, _ := jsonv.ToString(m["_id"]); s == c.id {
 					pinned = true
 				}
 			}
@@ -2504,7 +2414,7 @@ func percolateInputDocs(idx *model.Index, bm map[string]any) ([]map[string]any, 
 		return docs, nil
 	}
 	if idv, has := bm["id"]; has {
-		id, _ := toString(idv)
+		id, _ := jsonv.ToString(idv)
 		idxName, _ := bm["index"].(string)
 		if idxName == "" {
 			idxName = idx.Name
@@ -2527,12 +2437,12 @@ func percolateInputDocs(idx *model.Index, bm map[string]any) ([]map[string]any, 
 }
 
 func percolateInputCtx(idx *model.Index, doc map[string]any) *queryCtx {
-	inputCtx := newIndexCtx(idx, "_percolate")
-	inputCtx.doc = doc
-	if err := inputCtx.buildDocValues(); err != nil {
+	inputCtx := mapping.NewParseContext(idx, "_percolate")
+	inputCtx.Doc = doc
+	if err := inputCtx.BuildDocValues(); err != nil {
 		return &queryCtx{idx: idx, id: "_percolate", doc: doc}
 	}
-	return &queryCtx{idx: idx, id: "_percolate", doc: doc, vals: inputCtx.values}
+	return &queryCtx{idx: idx, id: "_percolate", doc: doc, vals: inputCtx.Values}
 }
 
 func (c *queryCtx) evalPercolate(body any) (bool, float64, *apierr.Error) {
@@ -2541,7 +2451,7 @@ func (c *queryCtx) evalPercolate(body any) (bool, float64, *apierr.Error) {
 		return false, 0, errParsing("[percolate] query malformed")
 	}
 	field := percolateFieldName(bm)
-	def, mapped := mappingFieldDef(c.idx, field)
+	def, mapped := mapping.FieldDef(c.idx, field)
 	ftype := ""
 	if mapped {
 		ftype, _ = def["type"].(string)
@@ -2733,8 +2643,8 @@ func (c *queryCtx) evalTermsSet(body any) (bool, float64, *apierr.Error) {
 			if v == nil {
 				continue
 			}
-			vs, _ := valueScalarString(v)
-			is, _ := valueScalarString(item)
+			vs, _ := jsonv.ScalarString(v)
+			is, _ := jsonv.ScalarString(item)
 			if vs == is || numericEqual(v, item) {
 				matched++
 				break
@@ -2843,9 +2753,9 @@ func spanTermValue(bm map[string]any) (string, string, *apierr.Error) {
 	val := bm[field]
 	term := ""
 	if m, ok := val.(map[string]any); ok {
-		term, _ = toString(m["value"])
+		term, _ = jsonv.ToString(m["value"])
 	} else {
-		term, _ = toString(val)
+		term, _ = jsonv.ToString(val)
 	}
 	return field, term, nil
 }
@@ -2867,7 +2777,7 @@ func (c *queryCtx) spanTermSpans(bm map[string]any) ([]intervalSpan, string, *ap
 	if err != nil {
 		return nil, "", err
 	}
-	def, known := mappingFieldDef(c.idx, field)
+	def, known := mapping.FieldDef(c.idx, field)
 	if !known {
 		return nil, field, nil
 	}
@@ -3083,16 +2993,16 @@ func (c *queryCtx) spanQuery(body any) ([]intervalSpan, string, *apierr.Error) {
 			field = k
 			if m, ok := v.(map[string]any); ok {
 				if x, ok := m["value"]; ok {
-					val, _ = toString(x)
+					val, _ = jsonv.ToString(x)
 				} else if x, ok := m["pattern"]; ok {
-					val, _ = toString(x)
+					val, _ = jsonv.ToString(x)
 				} else if x, ok := m["prefix"]; ok {
-					val, _ = toString(x)
+					val, _ = jsonv.ToString(x)
 				} else if x, ok := m["term"]; ok {
-					val, _ = toString(x)
+					val, _ = jsonv.ToString(x)
 				}
 			} else {
-				val, _ = toString(v)
+				val, _ = jsonv.ToString(v)
 			}
 			break
 		}
@@ -3250,7 +3160,7 @@ func (c *queryCtx) evalIntervals(body any) (bool, float64, *apierr.Error) {
 	if field == "" || rules == nil {
 		return false, 0, errParsing("intervals malformed")
 	}
-	def, known := mappingFieldDef(c.idx, field)
+	def, known := mapping.FieldDef(c.idx, field)
 	if !known {
 		return false, 0, nil
 	}
@@ -3302,7 +3212,7 @@ func isKnownIntervalType(k string) bool {
 
 func (c *queryCtx) intervalPositions(field string) []analysis.Token {
 	vals := c.mustValues(field)
-	def, _ := mappingFieldDef(c.idx, field)
+	def, _ := mapping.FieldDef(c.idx, field)
 	gap := 100
 	if g, ok := jsonv.ToFloat(def["position_increment_gap"]); ok {
 		gap = int(g)
@@ -3310,8 +3220,8 @@ func (c *queryCtx) intervalPositions(field string) []analysis.Token {
 	out := []analysis.Token{}
 	last := -1
 	for _, v := range vals {
-		s, _ := valueScalarString(v)
-		toks := analysis.Tokens(analysisIndex(c.idx), c.indexAnalyzerName(field), s)
+		s, _ := jsonv.ScalarString(v)
+		toks := analysis.Tokens(mapping.AnalysisIndex(c.idx), c.indexAnalyzerName(field), s)
 		base := 0
 		if last >= 0 {
 			base = last + gap + 1
@@ -3423,7 +3333,7 @@ func (c *queryCtx) intervalRule(rule map[string]any, positions []analysis.Token,
 		} else {
 			analyzer = c.searchAnalyzerName(field, bm)
 		}
-		toks := analysis.Tokens(analysisIndex(c.idx), analyzer, q)
+		toks := analysis.Tokens(mapping.AnalysisIndex(c.idx), analyzer, q)
 		terms := []string{}
 		for _, t := range toks {
 			terms = append(terms, t.Term)
@@ -3639,11 +3549,11 @@ func (c *queryCtx) evalIntervalsSimple(pred func(field string, tokens []string) 
 	for f, vals := range c.valuesMap() {
 		tokens := []string{}
 		for _, v := range vals {
-			s, ok := valueScalarString(v)
+			s, ok := jsonv.ScalarString(v)
 			if !ok {
 				continue
 			}
-			tokens = append(tokens, analyze(s)...)
+			tokens = append(tokens, mapping.Analyze(s)...)
 		}
 		if pred(f, tokens) {
 			return true
@@ -3657,13 +3567,13 @@ func (c *queryCtx) evalIntervalsSimple(pred func(field string, tokens []string) 
 // ---------------------------------------------------------------------------
 
 func mltFieldTokens(idx *model.Index, field, text string) []string {
-	if def, ok := mappingFieldDef(idx, field); ok {
+	if def, ok := mapping.FieldDef(idx, field); ok {
 		switch t, _ := def["type"].(string); t {
 		case "keyword", "constant_keyword", "wildcard":
 			return []string{text}
 		}
 	}
-	return analyze(text)
+	return mapping.Analyze(text)
 }
 
 func mltLikeTexts(c *queryCtx, raw any, fields []string, include bool, excluded map[string]bool) []string {
@@ -3677,7 +3587,7 @@ func mltLikeTexts(c *queryCtx, raw any, fields []string, include bool, excluded 
 				texts = append(texts, collectDocTexts(doc, fields)...)
 				return
 			}
-			if id, ok := toString(t["_id"]); ok {
+			if id, ok := jsonv.ToString(t["_id"]); ok {
 				if sd, live := c.idx.Docs[id]; live {
 					texts = append(texts, collectDocTexts(sd, fields)...)
 					if !include {
@@ -3704,7 +3614,7 @@ func mltTermSet(c *queryCtx, raw any, fields []string) map[string]bool {
 	out := map[string]bool{}
 	for _, text := range mltLikeTexts(c, raw, fields, true, map[string]bool{}) {
 		if len(fields) == 0 {
-			for _, tok := range analyze(text) {
+			for _, tok := range mapping.Analyze(text) {
 				out[tok] = true
 			}
 			continue
@@ -3721,7 +3631,7 @@ func mltTermSet(c *queryCtx, raw any, fields []string) map[string]bool {
 func mltDocHasTerm(idx *model.Index, doc map[string]any, fields []string, term string) bool {
 	found := false
 	for _, f := range fields {
-		v, ok := fieldValue(doc, f)
+		v, ok := mapping.FieldValue(doc, f)
 		if !ok {
 			continue
 		}
@@ -3753,7 +3663,7 @@ func (c *queryCtx) evalMoreLikeThis(bm map[string]any) (bool, float64, *apierr.E
 	switch t := bm["fields"].(type) {
 	case []any:
 		for _, e := range t {
-			if s, ok := toString(e); ok {
+			if s, ok := jsonv.ToString(e); ok {
 				fields = append(fields, s)
 			}
 		}
@@ -3799,7 +3709,7 @@ func (c *queryCtx) evalMoreLikeThis(bm map[string]any) (bool, float64, *apierr.E
 	for _, text := range texts {
 		var toks []string
 		if len(fields) == 0 {
-			toks = analyze(text)
+			toks = mapping.Analyze(text)
 		} else {
 			for _, f := range fields {
 				toks = append(toks, mltFieldTokens(c.idx, f, text)...)
@@ -3895,7 +3805,7 @@ func collectDocTexts(doc map[string]any, fields []string) []string {
 	}
 	if len(fields) > 0 {
 		for _, f := range fields {
-			if v, ok := fieldValue(doc, f); ok {
+			if v, ok := mapping.FieldValue(doc, f); ok {
 				walk(v)
 			}
 		}
@@ -4207,7 +4117,7 @@ func (c *queryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 					"Missing value for field ["+field+"]")
 			}
 			value = n
-		} else if _, mapped := mappingFieldDef(c.idx, field); !mapped {
+		} else if _, mapped := mapping.FieldDef(c.idx, field); !mapped {
 			return 0, newFunctionScoreFailure("fvf_unmapped",
 				"Unable to find a field mapper for field ["+field+"]. No 'missing' value defined.")
 		} else {
@@ -4290,7 +4200,7 @@ func (c *queryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 		if !present || len(vals) == 0 {
 			return 1, nil
 		}
-		def, _ := mappingFieldDef(c.idx, field)
+		def, _ := mapping.FieldDef(c.idx, field)
 		ftype, _ := def["type"].(string)
 		decayV := 0.5
 		if d, ok := jsonv.ToFloat(spec["decay"]); ok {
@@ -4699,7 +4609,7 @@ func (p *qsParser) parseTerm() (map[string]any, *apierr.Error) {
 		field = unescapeQueryString(field)
 		if strings.Contains(rawField, "\\*") || strings.Contains(rawField, "\\?") {
 			field = p.default_
-		} else if _, known := mappingFieldDef(p.c.idx, field); !known && field != "_id" && field != "_index" && field != "_routing" {
+		} else if _, known := mapping.FieldDef(p.c.idx, field); !known && field != "_id" && field != "_index" && field != "_routing" {
 			if value == "*" {
 				return map[string]any{"match_none": map[string]any{}}, nil
 			}
@@ -4861,7 +4771,7 @@ func firstKey(m map[string]any) string {
 func textFieldNames(c *queryCtx) []string {
 	all := []string{}
 	for f := range c.valuesMap() {
-		def, ok := mappingFieldDef(c.idx, f)
+		def, ok := mapping.FieldDef(c.idx, f)
 		if !ok {
 			continue
 		}
@@ -5054,7 +4964,7 @@ func (p *qsParser) valueQuery(field, value string) (map[string]any, *apierr.Erro
 		}
 		return map[string]any{"wildcard": map[string]any{field: map[string]any{"value": strings.ToLower(value)}}}, nil
 	}
-	def, ok := mappingFieldDef(p.c.idx, field)
+	def, ok := mapping.FieldDef(p.c.idx, field)
 	ftype, _ := def["type"].(string)
 	if (ftype == "keyword" || ftype == "constant_keyword") && def != nil {
 		if split, _ := def["split_queries_on_whitespace"].(bool); split && len(strings.Fields(value)) > 1 {
@@ -5074,13 +4984,13 @@ func (p *qsParser) valueQuery(field, value string) (map[string]any, *apierr.Erro
 		return map[string]any{"match": map[string]any{field: value}}, nil
 	}
 	if ftype == "date" || ftype == "date_nanos" {
-		ctx := &indexCtx{idx: nil, indexCoerce: true}
-		if _, err := ctx.parseDateValue("_value", ftype, def, value); err != nil {
+		ctx := &mapping.ParseContext{Idx: nil, IndexCoerce: true}
+		if _, err := ctx.ParseDateValue("_value", ftype, def, value); err != nil {
 			return map[string]any{"match_none": map[string]any{}}, nil
 		}
 		return map[string]any{"term": map[string]any{field: value}}, nil
 	}
-	if isNumericType(ftype) {
+	if mapping.IsNumericType(ftype) {
 		if _, isNum := jsonv.ToFloat(lintValue(value)); !isNum {
 			return map[string]any{"match_none": map[string]any{}}, nil
 		}
@@ -5217,12 +5127,12 @@ func (c *queryCtx) evalQueryString(body any, simple bool) (bool, float64, *apier
 			}
 		}
 	}
-	query, _ := toString(bm["query"])
+	query, _ := jsonv.ToString(bm["query"])
 	if strings.TrimSpace(query) == "" {
 		return false, 0, nil
 	}
 	if query == "" && simple {
-		query, _ = toString(bm["query"])
+		query, _ = jsonv.ToString(bm["query"])
 	}
 	operator := "OR"
 	if o, ok := bm["default_operator"].(string); ok {
@@ -5243,7 +5153,7 @@ func (c *queryCtx) evalQueryString(body any, simple bool) (bool, float64, *apier
 	switch t := bm["fields"].(type) {
 	case []any:
 		for _, e := range t {
-			if s, ok := toString(e); ok {
+			if s, ok := jsonv.ToString(e); ok {
 				fields = append(fields, s)
 			}
 		}
@@ -5261,7 +5171,7 @@ func (c *queryCtx) evalQueryString(body any, simple bool) (bool, float64, *apier
 					if !re.MatchString(path) {
 						continue
 					}
-					def, ok := mappingFieldDef(c.idx, path)
+					def, ok := mapping.FieldDef(c.idx, path)
 					if !ok {
 						continue
 					}
@@ -5281,7 +5191,7 @@ func (c *queryCtx) evalQueryString(body any, simple bool) (bool, float64, *apier
 	}
 	if !simple && len(fields) == 0 && defaultField != "*" &&
 		!strings.ContainsAny(query, ":\"()[]{}^~*?\\+-!&|") && len(strings.Fields(query)) > 1 {
-		if def, ok := mappingFieldDef(c.idx, defaultField); ok {
+		if def, ok := mapping.FieldDef(c.idx, defaultField); ok {
 			ftype, _ := def["type"].(string)
 			split, _ := def["split_queries_on_whitespace"].(bool)
 			if (ftype == "keyword" || ftype == "constant_keyword" || ftype == "wildcard") && !split {
@@ -5407,7 +5317,7 @@ func expandMultifield(q map[string]any, c *queryCtx) map[string]any {
 			if field == "*" {
 				all := []string{}
 				for f := range c.valuesMap() {
-					def, ok := mappingFieldDef(c.idx, f)
+					def, ok := mapping.FieldDef(c.idx, f)
 					if !ok {
 						continue
 					}

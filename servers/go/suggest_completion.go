@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"regexp"
 	"sort"
 	"strconv"
@@ -11,6 +10,7 @@ import (
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 )
@@ -39,7 +39,7 @@ func validateSuggestBody(v any) *apierr.Error {
 		return &apierr.Error{Type: "parsing_exception", Status: 400,
 			Reason: "Unknown key for a " + searchValueType(v) + " in [suggest]."}
 	}
-	for _, name := range sortedAnyKeys(m) {
+	for _, name := range mapping.SortedAnyKeys(m) {
 		if name == "text" {
 			continue
 		}
@@ -48,7 +48,7 @@ func validateSuggestBody(v any) *apierr.Error {
 			continue
 		}
 		found := false
-		for _, k := range sortedAnyKeys(spec) {
+		for _, k := range mapping.SortedAnyKeys(spec) {
 			switch k {
 			case "text", "prefix", "regex":
 				continue
@@ -80,7 +80,7 @@ var completionSuggestOptions = map[string]bool{
 }
 
 func validateCompletionOptions(body map[string]any) *apierr.Error {
-	for _, k := range sortedAnyKeys(body) {
+	for _, k := range mapping.SortedAnyKeys(body) {
 		if !completionSuggestOptions[k] {
 			return &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "[completion] unknown field [" + k + "]"}
@@ -99,7 +99,7 @@ func validateCompletionOptions(body map[string]any) *apierr.Error {
 			}
 		}
 	}
-	if f, ok := toString(body["field"]); !ok || f == "" {
+	if f, ok := jsonv.ToString(body["field"]); !ok || f == "" {
 		return &apierr.Error{Type: "parse_exception", Status: 400, Reason: "the required field option [field] is missing"}
 	}
 	return nil
@@ -132,7 +132,7 @@ func orderSearchResponse(resp map[string]any) ojson.Object {
 			seen[k] = true
 		}
 	}
-	for _, k := range sortedAnyKeys(resp) {
+	for _, k := range mapping.SortedAnyKeys(resp) {
 		if !seen[k] {
 			out = append(out, ojson.KV{k, resp[k]})
 		}
@@ -142,178 +142,7 @@ func orderSearchResponse(resp map[string]any) ojson.Object {
 
 // ---------------------------------------------------------------- mapping
 
-type completionContextDef struct {
-	name      string
-	typ       string // "category" or "geo"
-	path      string
-	precision int
-}
-
-func completionContextDefs(def map[string]any) []completionContextDef {
-	list, _ := def["contexts"].([]any)
-	var out []completionContextDef
-	for _, raw := range list {
-		m, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		c := completionContextDef{precision: 6}
-		c.name, _ = toString(m["name"])
-		t, _ := toString(m["type"])
-		c.typ = strings.ToLower(t)
-		c.path, _ = toString(m["path"])
-		if p, ok := jsonv.ToFloat(m["precision"]); ok {
-			c.precision = int(p)
-		}
-		out = append(out, c)
-	}
-	return out
-}
-
-func completionContextNames(ctxs []completionContextDef) string {
-	names := make([]string, len(ctxs))
-	for i, c := range ctxs {
-		names[i] = c.name
-	}
-	return strings.Join(names, ", ")
-}
-
-// validateCompletionMapping checks the completion specific mapping parameters.
-func validateCompletionMapping(def map[string]any) *mappingValidationError {
-	if v, has := def["max_input_length"]; has {
-		if n, ok := intFromAny(v); ok && n <= 0 {
-			return mve(fmt.Sprintf("[max_input_length] must be > 0 but was [%d]", n), "")
-		}
-	}
-	if raw, has := def["contexts"]; has {
-		list, ok := raw.([]any)
-		if !ok {
-			list = []any{raw}
-		}
-		for _, e := range list {
-			m, ok := e.(map[string]any)
-			if !ok {
-				return mve("expected map or list of maps for [contexts] but got "+previewValue(e), "")
-			}
-			if _, ok := m["name"]; !ok {
-				return mve("missing [name] in context mapping", "")
-			}
-			t, ok := toString(m["type"])
-			if !ok {
-				return mve("missing [type] in context mapping", "")
-			}
-			switch strings.ToLower(t) {
-			case "category", "geo":
-			default:
-				return mve("No context type for ["+t+"]", "")
-			}
-		}
-	}
-	return nil
-}
-
-// normalizeCompletionMapping fills the implicit completion parameters so the
-// mapping renders like OpenSearch's.
-func normalizeCompletionMapping(def map[string]any) {
-	if _, has := def["analyzer"]; !has {
-		def["analyzer"] = "simple"
-	}
-	for _, k := range []string{"preserve_separators", "preserve_position_increments"} {
-		if _, has := def[k]; !has {
-			def[k] = true
-		}
-	}
-	if _, has := def["max_input_length"]; !has {
-		def["max_input_length"] = 50
-	}
-	if list, ok := def["contexts"].([]any); ok {
-		for _, e := range list {
-			m, ok := e.(map[string]any)
-			if !ok {
-				continue
-			}
-			if t, ok := m["type"].(string); ok {
-				m["type"] = strings.ToUpper(t)
-				if strings.EqualFold(t, "geo") {
-					if _, has := m["precision"]; !has {
-						m["precision"] = 6
-					}
-				}
-			}
-		}
-	}
-}
-
 // ---------------------------------------------------------------- indexing
-
-func completionParseError(causeType, reason string) *apierr.Error {
-	e := mapperErr("mapper_parsing_exception", "failed to parse", causeType, reason)
-	if causeType == "parsing_exception" {
-		e.RootCause = &apierr.Error{Type: causeType, Reason: reason}
-	}
-	return e
-}
-
-// checkCompletionContexts validates the contexts of a completion value at
-// index time against the field's context mappings.
-func (c *indexCtx) checkCompletionContexts(path string, def map[string]any, v any) *apierr.Error {
-	ctxs := completionContextDefs(def)
-	known := map[string]bool{}
-	for _, cd := range ctxs {
-		known[cd.name] = true
-	}
-	count := 0
-	var visit func(v any) *apierr.Error
-	visit = func(v any) *apierr.Error {
-		switch t := v.(type) {
-		case []any:
-			for _, e := range t {
-				if err := visit(e); err != nil {
-					return err
-				}
-			}
-		case map[string]any:
-			if cm, ok := t["contexts"].(map[string]any); ok {
-				for _, name := range sortedAnyKeys(cm) {
-					if !known[name] {
-						return completionParseError("illegal_argument_exception",
-							"Unknown context name ["+name+"], must be one of ["+completionContextNames(ctxs)+"]")
-					}
-					count += len(completionValueList(cm[name]))
-				}
-			}
-		}
-		return nil
-	}
-	if err := visit(v); err != nil {
-		return err
-	}
-	if len(ctxs) == 0 {
-		return nil
-	}
-	for _, cd := range ctxs {
-		if cd.path != "" && c.doc != nil {
-			if pv, ok := fieldValue(c.doc, cd.path); ok {
-				count += len(completionValueList(pv))
-			}
-		}
-	}
-	if count == 0 {
-		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
-			Reason: "Contexts are mandatory in context enabled completion field [" + path + "]"}
-	}
-	return nil
-}
-
-func completionValueList(v any) []any {
-	switch t := v.(type) {
-	case nil:
-		return nil
-	case []any:
-		return t
-	}
-	return []any{v}
-}
 
 // completionEntry is one input of a document with its weight and contexts.
 type completionEntry struct {
@@ -347,11 +176,11 @@ func completionEntriesOf(v any) []completionEntry {
 			ctx := map[string][]any{}
 			if cm, ok := t["contexts"].(map[string]any); ok {
 				for k, cv := range cm {
-					ctx[k] = completionValueList(cv)
+					ctx[k] = mapping.CompletionValueList(cv)
 				}
 			}
-			for _, in := range completionValueList(t["input"]) {
-				if s, ok := valueScalarString(in); ok {
+			for _, in := range mapping.CompletionValueList(t["input"]) {
+				if s, ok := jsonv.ScalarString(in); ok {
 					out = append(out, completionEntry{input: s, weight: w, contexts: ctx})
 				}
 			}
@@ -431,7 +260,7 @@ func fuzzinessDistance(v any, text string) int {
 	if n, ok := jsonv.ToFloat(v); ok {
 		return min(max(int(n), 0), 2)
 	}
-	s, _ := toString(v)
+	s, _ := jsonv.ToString(v)
 	up := strings.ToUpper(strings.TrimSpace(s))
 	if strings.HasPrefix(up, "AUTO") {
 		low, high := 3, 6
@@ -537,11 +366,11 @@ type completionQueryCtx struct {
 
 func parseCategoryQueryContexts(v any) []completionQueryCtx {
 	var out []completionQueryCtx
-	for _, e := range completionValueList(v) {
+	for _, e := range mapping.CompletionValueList(v) {
 		switch t := e.(type) {
 		case map[string]any:
 			q := completionQueryCtx{boost: 1}
-			q.value, _ = valueScalarString(t["context"])
+			q.value, _ = jsonv.ScalarString(t["context"])
 			if b, ok := jsonv.ToFloat(t["boost"]); ok {
 				q.boost = b
 			}
@@ -550,7 +379,7 @@ func parseCategoryQueryContexts(v any) []completionQueryCtx {
 			}
 			out = append(out, q)
 		default:
-			if s, ok := valueScalarString(e); ok {
+			if s, ok := jsonv.ScalarString(e); ok {
 				out = append(out, completionQueryCtx{value: s, boost: 1})
 			}
 		}
@@ -560,7 +389,7 @@ func parseCategoryQueryContexts(v any) []completionQueryCtx {
 
 func geoContextPoint(v any) (float64, float64, bool) {
 	if s, ok := v.(string); ok && !strings.Contains(s, ",") {
-		if lat, lon, ok := decodeGeohash(s); ok {
+		if lat, lon, ok := mapping.DecodeGeohash(s); ok {
 			return lat, lon, true
 		}
 	}
@@ -569,7 +398,7 @@ func geoContextPoint(v any) (float64, float64, bool) {
 
 // geohashNeighbors returns the cells around a geohash at the same precision.
 func geohashNeighbors(hash string) []string {
-	lat, lon, ok := decodeGeohash(hash)
+	lat, lon, ok := mapping.DecodeGeohash(hash)
 	if !ok {
 		return nil
 	}
@@ -633,7 +462,7 @@ func parseGeoQueryContexts(v any, mappingPrecision int) []completionQueryCtx {
 			if b, ok := jsonv.ToFloat(m["boost"]); ok {
 				boost = b
 			}
-			for _, nb := range completionValueList(m["neighbours"]) {
+			for _, nb := range mapping.CompletionValueList(m["neighbours"]) {
 				if n, ok := jsonv.ToFloat(nb); ok {
 					neighbours = append(neighbours, int(n))
 				}
@@ -670,16 +499,16 @@ func parseGeoQueryContexts(v any, mappingPrecision int) []completionQueryCtx {
 }
 
 // indexedContexts returns the context values indexed for an entry.
-func indexedContexts(ctxs []completionContextDef, e completionEntry, doc map[string]any) map[string][]string {
+func indexedContexts(ctxs []mapping.CompletionContextDef, e completionEntry, doc map[string]any) map[string][]string {
 	out := map[string][]string{}
 	for _, cd := range ctxs {
-		vals := append([]any{}, e.contexts[cd.name]...)
-		if cd.path != "" {
-			if pv, ok := fieldValue(doc, cd.path); ok {
-				vals = append(vals, completionValueList(pv)...)
+		vals := append([]any{}, e.contexts[cd.Name]...)
+		if cd.Path != "" {
+			if pv, ok := mapping.FieldValue(doc, cd.Path); ok {
+				vals = append(vals, mapping.CompletionValueList(pv)...)
 			}
 		}
-		if cd.typ == "geo" {
+		if cd.Typ == "geo" {
 			var points []any
 			for _, v := range vals {
 				if arr, ok := v.([]any); ok && len(arr) != 2 {
@@ -690,14 +519,14 @@ func indexedContexts(ctxs []completionContextDef, e completionEntry, doc map[str
 			}
 			for _, p := range points {
 				if lat, lon, ok := geoContextPoint(p); ok {
-					out[cd.name] = append(out[cd.name], geohashEncode(lat, lon, cd.precision))
+					out[cd.Name] = append(out[cd.Name], geohashEncode(lat, lon, cd.Precision))
 				}
 			}
 			continue
 		}
 		for _, v := range vals {
-			if s, ok := valueScalarString(v); ok {
-				out[cd.name] = append(out[cd.name], s)
+			if s, ok := jsonv.ScalarString(v); ok {
+				out[cd.Name] = append(out[cd.Name], s)
 			}
 		}
 	}
@@ -725,7 +554,7 @@ func completionSuggest(spec, body map[string]any, indices []*model.Index, global
 	if err := validateCompletionOptions(body); err != nil {
 		return nil, err
 	}
-	field, _ := toString(body["field"])
+	field, _ := jsonv.ToString(body["field"])
 	var first *model.Index
 	if len(indices) > 0 {
 		first = indices[0]
@@ -735,7 +564,7 @@ func completionSuggest(spec, body map[string]any, indices []*model.Index, global
 	var regex *regexp.Regexp
 	hasText := false
 	if rv, ok := spec["regex"]; ok {
-		text, _ = valueScalarString(rv)
+		text, _ = jsonv.ScalarString(rv)
 		hasText = true
 		re, err := regexp.Compile("^(?s:" + text + ")")
 		if err != nil {
@@ -745,13 +574,13 @@ func completionSuggest(spec, body map[string]any, indices []*model.Index, global
 	} else {
 		for _, k := range []string{"prefix", "text"} {
 			if v, ok := spec[k]; ok {
-				text, _ = valueScalarString(v)
+				text, _ = jsonv.ScalarString(v)
 				hasText = true
 				break
 			}
 		}
 		if !hasText && globalText != nil {
-			text, _ = valueScalarString(globalText)
+			text, _ = jsonv.ScalarString(globalText)
 			hasText = true
 		}
 	}
@@ -781,7 +610,7 @@ func completionSuggest(spec, body map[string]any, indices []*model.Index, global
 	var targets []target
 	notCompletion := false
 	for i, ix := range indices {
-		def, ok := mappingFieldDef(ix, field)
+		def, ok := mapping.FieldDef(ix, field)
 		if !ok {
 			continue
 		}
@@ -803,25 +632,25 @@ func completionSuggest(spec, body map[string]any, indices []*model.Index, global
 	var hits []*completionHit
 	for _, tg := range targets {
 		ix, def := tg.idx, tg.def
-		ctxs := completionContextDefs(def)
+		ctxs := mapping.CompletionContextDefs(def)
 		qctx := map[string][]completionQueryCtx{}
 		if raw, has := body["contexts"]; has {
 			cm, _ := raw.(map[string]any)
 			if len(ctxs) == 0 {
 				return nil, suggestShardError(first, "suggester ["+field+"] doesn't expect any context")
 			}
-			for _, name := range sortedAnyKeys(cm) {
-				var cd *completionContextDef
+			for _, name := range mapping.SortedAnyKeys(cm) {
+				var cd *mapping.CompletionContextDef
 				for i := range ctxs {
-					if ctxs[i].name == name {
+					if ctxs[i].Name == name {
 						cd = &ctxs[i]
 					}
 				}
 				if cd == nil {
-					return nil, suggestShardError(first, "Unknown context name ["+name+"], must be one of ["+completionContextNames(ctxs)+"]")
+					return nil, suggestShardError(first, "Unknown context name ["+name+"], must be one of ["+mapping.CompletionContextNames(ctxs)+"]")
 				}
-				if cd.typ == "geo" {
-					qctx[name] = parseGeoQueryContexts(cm[name], cd.precision)
+				if cd.Typ == "geo" {
+					qctx[name] = parseGeoQueryContexts(cm[name], cd.Precision)
 				} else {
 					qctx[name] = parseCategoryQueryContexts(cm[name])
 				}
@@ -857,7 +686,7 @@ func completionSuggest(spec, body map[string]any, indices []*model.Index, global
 		var qkey string
 		var qunits []int
 		if regex == nil {
-			k, ok := completionKey(analysis.Tokens(analysisIndex(ix), searchAnalyzer, text), preserveSep, preservePos)
+			k, ok := completionKey(analysis.Tokens(mapping.AnalysisIndex(ix), searchAnalyzer, text), preserveSep, preservePos)
 			if !ok {
 				continue
 			}
@@ -872,14 +701,14 @@ func completionSuggest(spec, body map[string]any, indices []*model.Index, global
 			if !live {
 				continue
 			}
-			v, ok := fieldValue(doc, field)
+			v, ok := mapping.FieldValue(doc, field)
 			if !ok {
 				continue
 			}
 			var hit *completionHit
 			for _, e := range completionEntriesOf(v) {
 				input := analysis.TruncateUTF16(e.input, maxLen)
-				key, ok := completionKey(analysis.Tokens(analysisIndex(ix), analyzer, input), preserveSep, preservePos)
+				key, ok := completionKey(analysis.Tokens(mapping.AnalysisIndex(ix), analyzer, input), preserveSep, preservePos)
 				if !ok {
 					continue
 				}
@@ -911,11 +740,11 @@ func completionSuggest(spec, body map[string]any, indices []*model.Index, global
 				if len(qctx) > 0 {
 					indexed := indexedContexts(ctxs, e, doc)
 					for _, cd := range ctxs {
-						qs, asked := qctx[cd.name]
+						qs, asked := qctx[cd.Name]
 						if !asked {
 							continue
 						}
-						for _, val := range indexed[cd.name] {
+						for _, val := range indexed[cd.Name] {
 							matched := false
 							cb := 0.0
 							for _, q := range qs {
@@ -930,7 +759,7 @@ func completionSuggest(spec, body map[string]any, indices []*model.Index, global
 								continue
 							}
 							sc := completionScore(e.weight, cb+boost)
-							ctxHits = append(ctxHits, completionCtxHit{cd.name, val, sc})
+							ctxHits = append(ctxHits, completionCtxHit{cd.Name, val, sc})
 							best = max(best, sc)
 						}
 					}

@@ -368,8 +368,8 @@ func applySearchResponseProcessors(resp map[string]any, pipe map[string]any, st 
 						continue
 					}
 					sort.SliceStable(arr, func(i, j int) bool {
-						a, _ := toString(arr[i])
-						b, _ := toString(arr[j])
+						a, _ := jsonv.ToString(arr[i])
+						b, _ := jsonv.ToString(arr[j])
 						if desc {
 							return a > b
 						}

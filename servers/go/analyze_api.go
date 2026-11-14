@@ -9,6 +9,7 @@ import (
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/settings"
@@ -260,7 +261,7 @@ func resolveAnalyzeChain(idx *model.Index, sc analysis.Scope, req *analyzeReques
 		if sc.Global() {
 			return nil, analysis.RequestError("illegal_argument_exception", "analysis based on a specific field requires an index")
 		}
-		if def, ok := mappingFieldDef(idx, req.field); ok && def != nil {
+		if def, ok := mapping.FieldDef(idx, req.field); ok && def != nil {
 			typ, _ := def["type"].(string)
 			switch typ {
 			case "text", "match_only_text", "search_as_you_type", "":
@@ -410,7 +411,7 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request, name stri
 		writeError(w, verr)
 		return
 	}
-	sc := analysis.Scope{Index: analysisIndex(idx)}
+	sc := analysis.Scope{Index: mapping.AnalysisIndex(idx)}
 	chain, apiErr := resolveAnalyzeChain(idx, sc, req)
 	if apiErr != nil {
 		writeError(w, apiErr)
@@ -428,7 +429,7 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request, name stri
 	}
 	tl := newTokenListCreator()
 	for _, text := range req.texts {
-		res, rerr := chain.Run(analysisIndex(idx), text, false)
+		res, rerr := chain.Run(mapping.AnalysisIndex(idx), text, false)
 		if rerr != nil {
 			writeError(w, rerr)
 			return
@@ -450,7 +451,7 @@ func (s *Server) writeAnalyzeExplain(w http.ResponseWriter, idx *model.Index, ch
 	if !chain.Custom {
 		tl := newTokenListCreator()
 		for _, text := range req.texts {
-			res, err := chain.Run(analysisIndex(idx), text, false)
+			res, err := chain.Run(mapping.AnalysisIndex(idx), text, false)
 			if err != nil {
 				writeError(w, err)
 				return
@@ -480,7 +481,7 @@ func (s *Server) writeAnalyzeExplain(w http.ResponseWriter, idx *model.Index, ch
 		stages[i] = newTokenListCreator()
 	}
 	for _, text := range req.texts {
-		res, err := chain.Run(analysisIndex(idx), text, true)
+		res, err := chain.Run(mapping.AnalysisIndex(idx), text, true)
 		if err != nil {
 			writeError(w, err)
 			return

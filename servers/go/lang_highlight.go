@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 )
 
@@ -54,16 +56,16 @@ func queryHighlightTexts(q map[string]any) []hlQueryText {
 					}
 					if arr, ok := val.([]any); ok {
 						for _, e := range arr {
-							text, _ := toString(e)
+							text, _ := jsonv.ToString(e)
 							out = append(out, hlQueryText{text: text, exact: true})
 						}
 					}
 				}
 			case "multi_match":
-				text, _ := toString(mm["query"])
+				text, _ := jsonv.ToString(mm["query"])
 				out = append(out, hlQueryText{text: text, opts: mm})
 			case "query_string", "simple_query_string":
-				text, _ := toString(mm["query"])
+				text, _ := jsonv.ToString(mm["query"])
 				clean := strings.NewReplacer("(", " ", ")", " ", ":", " ", "\"", " ", "AND", " ", "OR", " ", "NOT", " ").Replace(text)
 				out = append(out, hlQueryText{text: clean, opts: mm})
 			case "bool":
@@ -90,14 +92,14 @@ func hlAnalyzedSpans(idx *model.Index, field, text string, query map[string]any)
 			terms[qt.text] = true
 			continue
 		}
-		for _, t := range analysis.Tokens(analysisIndex(idx), qc.searchAnalyzerName(field, qt.opts), qt.text) {
+		for _, t := range analysis.Tokens(mapping.AnalysisIndex(idx), qc.searchAnalyzerName(field, qt.opts), qt.text) {
 			terms[t.Term] = true
 		}
 	}
 	if len(terms) == 0 {
 		return nil
 	}
-	toks := analysis.Tokens(analysisIndex(idx), qc.indexAnalyzerName(field), text)
+	toks := analysis.Tokens(mapping.AnalysisIndex(idx), qc.indexAnalyzerName(field), text)
 	// UTF-16 offset -> byte offset.
 	byteAt := make([]int, 0, len(text)+1)
 	for i, r := range text {

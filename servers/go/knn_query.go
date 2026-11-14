@@ -9,6 +9,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 )
@@ -304,7 +305,7 @@ func knnParseVector(raw []byte, e jsonEntry) *apierr.Error {
 }
 
 func knnIsVectorField(idx *model.Index, field string) bool {
-	def, _ := mappingFieldDef(idx, field)
+	def, _ := mapping.FieldDef(idx, field)
 	t, _ := def["type"].(string)
 	return t == "knn_vector"
 }
@@ -316,7 +317,7 @@ func knnFieldOutput(idx *model.Index, id, field string, def map[string]any, fiel
 	if len(vals) == 0 {
 		return nil, false, nil
 	}
-	dt := knnInfo(def).dataType
+	dt := mapping.KnnInfo(def).DataType
 	if fields {
 		out := make([]any, 0, len(vals))
 		for _, v := range vals {
@@ -348,7 +349,7 @@ func knnTermCheck(idx *model.Index, raw any) *apierr.Error {
 		return nil
 	}
 	for field := range bm {
-		def, _ := mappingFieldDef(idx, field)
+		def, _ := mapping.FieldDef(idx, field)
 		if t, _ := def["type"].(string); t != "knn_vector" {
 			continue
 		}
@@ -386,36 +387,36 @@ func validateKnnQuery(idx *model.Index, raw any) *apierr.Error {
 			}
 			return knnShardFail(idx, fmt.Sprintf("Field '%s' is not knn_vector type.", field))
 		}
-		if !indexKnnEnabled(idx) {
+		if !mapping.IndexKnnEnabled(idx) {
 			return knnShardFail(idx, fmt.Sprintf("Field '%s' is not built for ANN search.", field))
 		}
-		fi := knnInfo(def)
+		fi := mapping.KnnInfo(def)
 		n := len(vec)
-		if fi.dataType == "binary" {
+		if fi.DataType == "binary" {
 			n *= 8
 		}
-		if n != fi.dim {
-			return knnShardFail(idx, fmt.Sprintf("Query vector has invalid dimension: %d. Dimension should be: %d", n, fi.dim))
+		if n != fi.Dim {
+			return knnShardFail(idx, fmt.Sprintf("Query vector has invalid dimension: %d. Dimension should be: %d", n, fi.Dim))
 		}
-		if fi.dataType == "byte" || fi.dataType == "binary" {
+		if fi.DataType == "byte" || fi.DataType == "binary" {
 			for _, f := range vec {
 				if f != math.Trunc(f) {
-					return knnShardFail(idx, fmt.Sprintf("[data_type] field was set as [%s] in index mapping. But, KNN vector values are floats instead of byte integers", fi.dataType))
+					return knnShardFail(idx, fmt.Sprintf("[data_type] field was set as [%s] in index mapping. But, KNN vector values are floats instead of byte integers", fi.DataType))
 				}
 			}
 			for _, f := range vec {
 				if f < -128 || f > 127 {
-					return knnShardFail(idx, fmt.Sprintf("[data_type] field was set as [%s] in index mapping. But, KNN vector values are not within in the byte range [-128, 127]", fi.dataType))
+					return knnShardFail(idx, fmt.Sprintf("[data_type] field was set as [%s] in index mapping. But, KNN vector values are not within in the byte range [-128, 127]", fi.DataType))
 				}
 			}
 		}
-		if md, ok := jsonv.ToFloat(p["max_distance"]); ok && md < 0 && fi.space != "innerproduct" {
-			return knnShardFail(idx, "[knn] requires distance to be non-negative for space type: "+strings.ToUpper(fi.space))
+		if md, ok := jsonv.ToFloat(p["max_distance"]); ok && md < 0 && fi.Space != "innerproduct" {
+			return knnShardFail(idx, "[knn] requires distance to be non-negative for space type: "+strings.ToUpper(fi.Space))
 		}
 		if en, _ := p["expand_nested_docs"].(bool); en && !nested {
 			return knnShardFail(idx, "Invalid value provided for the [expand_nested_docs] field. [expand_nested_docs] is only supported with a nested field.")
 		}
-		if fi.space == "cosinesimil" {
+		if fi.Space == "cosinesimil" {
 			zero := true
 			for _, f := range vec {
 				if f != 0 {

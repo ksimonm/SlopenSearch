@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 )
 
@@ -90,7 +92,7 @@ func searchShardMultiplier(idx *model.Index, id string, query map[string]any, df
 	if field == "" {
 		return 1
 	}
-	tokens := analyze(text)
+	tokens := mapping.Analyze(text)
 	if len(tokens) == 0 {
 		return 1
 	}
@@ -123,7 +125,7 @@ func searchShardMultiplier(idx *model.Index, id string, query map[string]any, df
 		}
 		found := false
 		for _, v := range vals {
-			s, _ := valueScalarString(v)
+			s, _ := jsonv.ScalarString(v)
 			for _, tok := range qc.analyzeDocField(field, s) {
 				for _, want := range tokens {
 					if tok == want {

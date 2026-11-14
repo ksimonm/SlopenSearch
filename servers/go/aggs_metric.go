@@ -11,6 +11,7 @@ import (
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/dates"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
@@ -41,7 +42,7 @@ func metricUnsupported(idx *model.Index, field, name, pathPrefix string) *apierr
 	resolved := resolveField(field, pathPrefix)
 	ft, _ := idx.FieldTypes[resolved]
 	if ft == "" {
-		if def, ok := mappingFieldDef(idx, resolved); ok {
+		if def, ok := mapping.FieldDef(idx, resolved); ok {
 			ft, _ = def["type"].(string)
 		}
 	}
@@ -63,7 +64,7 @@ func metricUnsupported(idx *model.Index, field, name, pathPrefix string) *apierr
 }
 
 func numericFromRaw(idx *model.Index, field string, v any) (float64, bool) {
-	def, _ := mappingFieldDef(idx, field)
+	def, _ := mapping.FieldDef(idx, field)
 	ft, _ := def["type"].(string)
 	if ft == "date" || ft == "date_nanos" {
 		switch t := v.(type) {
@@ -159,7 +160,7 @@ func scriptNumericValuesErr(docs []map[string]any, idx *model.Index, script any,
 }
 
 func metricValues(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) ([]float64, *apierr.Error) {
-	field, _ := toString(spec["field"])
+	field, _ := jsonv.ToString(spec["field"])
 	script, hasScript := spec["script"]
 	if field == "" && !hasScript {
 		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
@@ -193,7 +194,7 @@ func metricValues(spec map[string]any, docs []map[string]any, idx *model.Index, 
 }
 
 func countValues(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) int {
-	field, _ := toString(spec["field"])
+	field, _ := jsonv.ToString(spec["field"])
 	if script, ok := spec["script"]; ok && field == "" {
 		return len(scriptNumericValues(docs, idx, script, "", pathPrefix))
 	}
@@ -262,8 +263,8 @@ func metricValueObject(value float64, hasValue bool, spec map[string]any, idx *m
 		return out
 	}
 	out = append(out, ojson.KV{"value", jsonv.Float(value)})
-	format, _ := toString(spec["format"])
-	def, _ := mappingFieldDef(idx, resolveField(field, ""))
+	format, _ := jsonv.ToString(spec["format"])
+	def, _ := mapping.FieldDef(idx, resolveField(field, ""))
 	ft, _ := def["type"].(string)
 	if ft == "date" || ft == "date_nanos" {
 		if format == "" {
@@ -279,7 +280,7 @@ func metricValueObject(value float64, hasValue bool, spec map[string]any, idx *m
 }
 
 func extendedStatsAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) (any, *apierr.Error) {
-	field, _ := toString(spec["field"])
+	field, _ := jsonv.ToString(spec["field"])
 	if err := metricUnsupported(idx, field, "extended_stats", pathPrefix); err != nil {
 		return nil, err
 	}
@@ -350,7 +351,7 @@ func anyOrNil(v any, f func(float64) float64) interface{} {
 }
 
 func statsAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) (any, *apierr.Error) {
-	field, _ := toString(spec["field"])
+	field, _ := jsonv.ToString(spec["field"])
 	if err := metricUnsupported(idx, field, "stats", pathPrefix); err != nil {
 		return nil, err
 	}
@@ -358,8 +359,8 @@ func statsAgg(spec map[string]any, docs []map[string]any, idx *model.Index, path
 	if err != nil {
 		return nil, err
 	}
-	format, _ := toString(spec["format"])
-	def, _ := mappingFieldDef(idx, resolveField(field, pathPrefix))
+	format, _ := jsonv.ToString(spec["format"])
+	def, _ := mapping.FieldDef(idx, resolveField(field, pathPrefix))
 	ft, _ := def["type"].(string)
 	isDate := ft == "date" || ft == "date_nanos"
 	if len(vals) == 0 {
@@ -401,7 +402,7 @@ func weightedAvgAgg(spec map[string]any, docs []map[string]any, idx *model.Index
 			Reason:    "Could not find field name [weight] in multiValuesSource",
 			RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: "Could not find field name [weight] in multiValuesSource"}}
 	}
-	vf, _ := toString(valueSpec["field"])
+	vf, _ := jsonv.ToString(valueSpec["field"])
 	if err := metricUnsupported(idx, vf, "weighted_avg", pathPrefix); err != nil {
 		if err.RootCause != nil {
 			err.RootCause.Reason = "Expected numeric type on field [" + vf + "], but got [keyword]"
@@ -409,7 +410,7 @@ func weightedAvgAgg(spec map[string]any, docs []map[string]any, idx *model.Index
 		}
 		return nil, err
 	}
-	wf, _ := toString(weightSpec["field"])
+	wf, _ := jsonv.ToString(weightSpec["field"])
 	wScript, hasWScript := weightSpec["script"]
 	total, weightSum := 0.0, 0.0
 	vMissing, hasVMissing := metricMissingValue(valueSpec)
@@ -468,14 +469,14 @@ func weightedAvgAgg(spec map[string]any, docs []map[string]any, idx *model.Index
 	}
 	val := total / weightSum
 	out := ojson.Object{{"value", jsonv.Float(val)}}
-	if format, _ := toString(spec["format"]); format != "" {
+	if format, _ := jsonv.ToString(spec["format"]); format != "" {
 		out = append(out, ojson.KV{"value_as_string", fmtMetricNumber(val, format)})
 	}
 	return out, nil
 }
 
 func cardinalityAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) (any, *apierr.Error) {
-	field, _ := toString(spec["field"])
+	field, _ := jsonv.ToString(spec["field"])
 	if field == "" {
 		if script, ok := spec["script"]; ok {
 			seen := map[string]bool{}
@@ -516,7 +517,7 @@ func cardinalityAgg(spec map[string]any, docs []map[string]any, idx *model.Index
 }
 
 func medianAbsoluteDeviation(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) (any, *apierr.Error) {
-	field, _ := toString(spec["field"])
+	field, _ := jsonv.ToString(spec["field"])
 	if err := metricUnsupported(idx, field, "median_absolute_deviation", pathPrefix); err != nil {
 		return nil, err
 	}
@@ -787,7 +788,7 @@ func percentilesAgg(spec map[string]any, docs []map[string]any, idx *model.Index
 	if err := validateMetricParams("percentiles", spec, allowed); err != nil {
 		return nil, err
 	}
-	field, _ := toString(spec["field"])
+	field, _ := jsonv.ToString(spec["field"])
 	if err := metricUnsupported(idx, field, "percentiles", pathPrefix); err != nil {
 		return nil, err
 	}
@@ -829,9 +830,9 @@ func percentilesAgg(spec map[string]any, docs []map[string]any, idx *model.Index
 	if k, ok := spec["keyed"].(bool); ok {
 		keyed = k
 	}
-	format, _ := toString(spec["format"])
+	format, _ := jsonv.ToString(spec["format"])
 	resolved := resolveField(field, pathPrefix)
-	def, _ := mappingFieldDef(idx, resolved)
+	def, _ := mapping.FieldDef(idx, resolved)
 	ft, _ := def["type"].(string)
 	if keyed {
 		values := ojson.Object{}
@@ -886,7 +887,7 @@ func percentileRanksAgg(spec map[string]any, docs []map[string]any, idx *model.I
 	if err := validateMetricParams("percentile_ranks", spec, allowed); err != nil {
 		return nil, err
 	}
-	field, _ := toString(spec["field"])
+	field, _ := jsonv.ToString(spec["field"])
 	if err := metricUnsupported(idx, field, "percentile_ranks", pathPrefix); err != nil {
 		return nil, err
 	}

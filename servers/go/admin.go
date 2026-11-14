@@ -13,6 +13,7 @@ import (
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/settings"
 	"slopensearch/internal/wildcard"
@@ -352,21 +353,6 @@ func materializedFlat(idx *model.Index) map[string]any {
 	return out
 }
 
-func matchAnySettingPattern(patterns []string, key string) bool {
-	if len(patterns) == 0 {
-		return true
-	}
-	for _, p := range patterns {
-		if p == "" {
-			continue
-		}
-		if wildcard.Match(p, key) || strings.HasPrefix(key, strings.TrimSuffix(p, "*")) && strings.HasSuffix(p, "*") {
-			return true
-		}
-	}
-	return false
-}
-
 func parseSettingsFilter(filter string) []string {
 	if filter == "" {
 		return nil
@@ -389,7 +375,7 @@ func settingsView(idx *model.Index, flat, includeDefaults bool, filter string) m
 	flatAll := materializedFlat(idx)
 	matched := map[string]any{}
 	for k, v := range flatAll {
-		if matchAnySettingPattern(patterns, k) {
+		if mapping.MatchAnySettingPattern(patterns, k) {
 			matched[k] = v
 		}
 	}
@@ -400,7 +386,7 @@ func settingsView(idx *model.Index, flat, includeDefaults bool, filter string) m
 			if _, isSet := flatAll[k]; isSet {
 				continue
 			}
-			if matchAnySettingPattern(patterns, k) {
+			if mapping.MatchAnySettingPattern(patterns, k) {
 				defaultsMatched[k] = v
 			}
 		}
@@ -742,12 +728,12 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 	}
 	mergedMappings := map[string]any{}
 	if composed != nil {
-		mergeMappingsDeep(mergedMappings, composed.mappings)
+		mapping.MergeDeep(mergedMappings, composed.mappings)
 	}
 	if mappingsRaw != nil {
-		mergeMappingsDeep(mergedMappings, mappingsRaw)
+		mapping.MergeDeep(mergedMappings, mappingsRaw)
 	}
-	if err := expandDottedMapping(mergedMappings); err != nil {
+	if err := mapping.ExpandDottedMapping(mergedMappings); err != nil {
 		reason := err.Reason
 		return nil, &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 			Reason:   "Failed to parse mapping [_doc]: " + reason,
@@ -768,11 +754,11 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 		canonical["index.knn.derived_source.enabled"] = "true"
 	}
 	if props, ok := mergedMappings["properties"].(map[string]any); ok {
-		if err := validateMappingAnalyzers(props, canonical); err != nil {
+		if err := mapping.ValidateAnalyzers(props, canonical); err != nil {
 			return nil, err
 		}
 	}
-	if err := validateBuiltinFieldNameLength(canonical); err != nil {
+	if err := mapping.ValidateBuiltinFieldNameLength(canonical); err != nil {
 		return nil, err
 	}
 	fieldLimit := 1000
@@ -842,7 +828,7 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 		Pending:      map[string]map[string]any{},
 		Routing:      map[string]string{},
 	}
-	ensureFieldTypes(idx)
+	mapping.EnsureFieldTypes(idx)
 	s.Indices[name] = idx
 	s.bumpState()
 	return idx, nil
@@ -887,7 +873,7 @@ func dynamicConvertError(path string, v any) *apierr.Error {
 		Reason: "Failed to parse mapping [_doc]: " + reason,
 		CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: reason,
 			CausedBy: &apierr.Error{Type: "illegal_argument_exception",
-				Reason: "Failed to parse value [" + previewValue(v) + "] as only [true] or [false] are allowed."}}}
+				Reason: "Failed to parse value [" + mapping.PreviewValue(v) + "] as only [true] or [false] are allowed."}}}
 }
 
 // normalizeDynamicMapping converts the accepted "dynamic" spellings to the
@@ -1019,35 +1005,35 @@ func checkNestedFields(idx *model.Index) *apierr.Error {
 }
 
 func validateMappingFull(mappings map[string]any) *apierr.Error {
-	normalizeDerivedMappings(mappings)
+	mapping.NormalizeDerivedMappings(mappings)
 	if err := normalizeDynamicMapping(mappings); err != nil {
 		return err
 	}
-	if err := validateMappingSource(mappings); err != nil {
+	if err := mapping.ValidateSource(mappings); err != nil {
 		return err
 	}
 	props, ok := mappings["properties"].(map[string]any)
 	if !ok {
 		return nil
 	}
-	if err := validatePropsMeta(props); err != nil {
+	if err := mapping.ValidatePropsMeta(props); err != nil {
 		return err
 	}
-	if err := validateProps(props); err != nil {
+	if err := mapping.ValidateProps(props); err != nil {
 		return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 			Reason:   "Failed to parse mapping [_doc]: " + err.Reason,
 			CausedBy: &apierr.Error{Type: err.Cause, Reason: err.Reason}}
 	}
-	if err := validateAliasMappings(props); err != nil {
+	if err := mapping.ValidateAliasMappings(props); err != nil {
 		return err
 	}
-	if err := validateCopyToTargets(props); err != nil {
+	if err := mapping.ValidateCopyToTargets(props); err != nil {
 		return err
 	}
-	if err := validateJoinPlacement(props, ""); err != nil {
+	if err := mapping.ValidateJoinPlacement(props, ""); err != nil {
 		return err
 	}
-	normalizeKnnVectors(props)
+	mapping.NormalizeKnnVectors(props)
 	return nil
 }
 

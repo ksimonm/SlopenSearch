@@ -16,6 +16,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
@@ -382,7 +383,7 @@ func storedFieldsFor(idx *model.Index, doc map[string]any, spec []string) map[st
 }
 
 func addStoredField(out map[string]any, doc map[string]any, path string) {
-	v, ok := fieldValue(doc, path)
+	v, ok := mapping.FieldValue(doc, path)
 	if !ok {
 		return
 	}
@@ -432,58 +433,6 @@ func sourceSpecFromValue(v any) ([]string, []string, bool) {
 	return nil, nil, false
 }
 
-func checkObjectDepth(v any, depth, limit int) *apierr.Error {
-	if depth > limit {
-		reason := "The depth of the field has exceeded the allowed limit of [" + strconv.Itoa(limit) + "]. This limit can be set by changing the [index.mapping.depth.limit] index level setting."
-		return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
-			Reason:    "failed to parse",
-			RootCause: &apierr.Error{Type: "parse_exception", Reason: reason},
-			CausedBy:  &apierr.Error{Type: "parse_exception", Reason: reason}}
-	}
-	switch t := v.(type) {
-	case map[string]any:
-		for _, e := range t {
-			if err := checkObjectDepth(e, depth+1, limit); err != nil {
-				return err
-			}
-		}
-	case []any:
-		for _, e := range t {
-			if err := checkObjectDepth(e, depth, limit); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// checkArrayDepth enforces index.mapping.depth.limit on arrays nested in
-// arrays (DocumentParser's field array depth).
-func checkArrayDepth(v any, depth, limit int) *apierr.Error {
-	switch t := v.(type) {
-	case map[string]any:
-		for _, e := range t {
-			if err := checkArrayDepth(e, depth, limit); err != nil {
-				return err
-			}
-		}
-	case []any:
-		if depth+1 > limit {
-			reason := "The depth of the nested array field has exceeded the allowed limit of [" + strconv.Itoa(limit) + "]. This limit can be set by changing the [index.mapping.depth.limit] index level setting."
-			return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
-				Reason:    "failed to parse",
-				RootCause: &apierr.Error{Type: "parse_exception", Reason: reason},
-				CausedBy:  &apierr.Error{Type: "parse_exception", Reason: reason}}
-		}
-		for _, e := range t {
-			if err := checkArrayDepth(e, depth+1, limit); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func checkMixedArray(idx *model.Index, v any, path string) *apierr.Error {
 	if enabled, ok := idx.Mappings["enabled"].(bool); ok && !enabled {
 		return nil
@@ -495,7 +444,7 @@ func checkMixedArray(idx *model.Index, v any, path string) *apierr.Error {
 			if path != "" {
 				p = path + "." + k
 			}
-			if def, ok := mappingFieldDef(idx, p); ok {
+			if def, ok := mapping.FieldDef(idx, p); ok {
 				if b, ok := def["enabled"].(bool); ok && !b {
 					continue
 				}
@@ -846,7 +795,7 @@ func validatePercolatorDocs(idx *model.Index, body map[string]any, raw []byte) *
 			if f == "_id" || f == "_index" || f == "_routing" {
 				continue
 			}
-			if _, mapped := mappingFieldDef(idx, f); !mapped {
+			if _, mapped := mapping.FieldDef(idx, f); !mapped {
 				reason := "No field mapping can be found for the field with name [" + f + "]"
 				cause := &apierr.Error{Type: "query_shard_exception", Status: 400, Reason: reason,
 					Fields: map[string]any{"index": idx.Name, "index_uuid": idx.UUID}}
@@ -1068,12 +1017,12 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 		writeError(w, derr)
 		return
 	}
-	ensureFieldTypes(idx)
+	mapping.EnsureFieldTypes(idx)
 	if derr := checkTotalFields(idx); derr != nil {
 		writeError(w, derr)
 		return
 	}
-	if derr := computeDocValues(idx, id, body); derr != nil {
+	if derr := mapping.ComputeDocValues(idx, id, body); derr != nil {
 		writeError(w, derr)
 		return
 	}
@@ -1081,7 +1030,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 		idx.Order = append(idx.Order, id)
 	}
 	idx.Docs[id] = body
-	if knnDeriveSource(idx, body) {
+	if mapping.KnnDeriveSource(idx, body) {
 		rawBody = nil
 	}
 	idx.RawDocs[id] = append([]byte(nil), rawBody...)
@@ -1367,7 +1316,7 @@ func (s *Server) handleDeleteDocV2(w http.ResponseWriter, r *http.Request, name,
 	delete(idx.Docs, id)
 	delete(idx.Pending, id)
 	delete(idx.RawDocs, id)
-	removeDocValues(idx, id)
+	mapping.RemoveDocValues(idx, id)
 	idx.DeleteTotal++
 	idx.Versions[id] = ver
 	resp := ojson.Object{
@@ -1534,8 +1483,8 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 			writeError(w, derr)
 			return
 		}
-		ensureFieldTypes(idx)
-		if derr := computeDocValues(idx, id, src); derr != nil {
+		mapping.EnsureFieldTypes(idx)
+		if derr := mapping.ComputeDocValues(idx, id, src); derr != nil {
 			writeError(w, derr)
 			return
 		}
@@ -1587,7 +1536,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		seq := nextSeq(idx)
 		delete(idx.Docs, id)
 		delete(idx.Pending, id)
-		removeDocValues(idx, id)
+		mapping.RemoveDocValues(idx, id)
 		idx.DeleteTotal++
 		idx.Versions[id] = ver
 		idx.SeqNos[id] = seq
@@ -1633,8 +1582,8 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		writeError(w, derr)
 		return
 	}
-	ensureFieldTypes(idx)
-	if derr := computeDocValues(idx, id, newDoc); derr != nil {
+	mapping.EnsureFieldTypes(idx)
+	if derr := mapping.ComputeDocValues(idx, id, newDoc); derr != nil {
 		writeError(w, derr)
 		return
 	}

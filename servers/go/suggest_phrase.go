@@ -11,6 +11,7 @@ import (
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/mustache"
 	"slopensearch/internal/ojson"
@@ -61,7 +62,7 @@ func phraseSearchAnalyzer(idx *model.Index, def map[string]any) string {
 	if a, ok := def["analyzer"].(string); ok && a != "" {
 		return a
 	}
-	sc := analysis.Scope{Index: analysisIndex(idx)}
+	sc := analysis.Scope{Index: mapping.AnalysisIndex(idx)}
 	if sc.IndexHasAnalyzer("default_search") {
 		return "default_search"
 	}
@@ -74,7 +75,7 @@ func phraseSearchAnalyzer(idx *model.Index, def map[string]any) string {
 // phraseFieldTerms collects the inverted index statistics of a field, or nil
 // when the field has no terms (unmapped, not indexed, or no values).
 func phraseFieldTerms(idx *model.Index, field string) *phTerms {
-	def, ok := mappingFieldDef(idx, field)
+	def, ok := mapping.FieldDef(idx, field)
 	if !ok {
 		return nil
 	}
@@ -105,7 +106,7 @@ func phraseFieldTerms(idx *model.Index, field string) *phTerms {
 			continue
 		}
 		t.maxDoc++
-		v, ok := fieldValue(doc, field)
+		v, ok := mapping.FieldValue(doc, field)
 		if !ok {
 			continue
 		}
@@ -118,7 +119,7 @@ func phraseFieldTerms(idx *model.Index, field string) *phTerms {
 				}
 				toks = []string{s}
 			} else {
-				toks = analysis.Terms(analysisIndex(idx), analyzer, s)
+				toks = analysis.Terms(mapping.AnalysisIndex(idx), analyzer, s)
 			}
 			for _, tok := range toks {
 				st := t.stats[tok]
@@ -240,7 +241,7 @@ func (g *phGen) preFilter(term string) string {
 	if g.spec.preFilter == "" {
 		return term
 	}
-	for _, tok := range analysis.Tokens(analysisIndex(g.idx), g.spec.preFilter, term) {
+	for _, tok := range analysis.Tokens(mapping.AnalysisIndex(g.idx), g.spec.preFilter, term) {
 		g.spare = tok.Term
 	}
 	return g.spare
@@ -305,7 +306,7 @@ func (g *phGen) postFilter(c *phCand, out []*phCand) []*phCand {
 		return append(out, c)
 	}
 	prev := -1
-	for _, tok := range analysis.Tokens(analysisIndex(g.idx), g.spec.postFilter, c.term) {
+	for _, tok := range analysis.Tokens(mapping.AnalysisIndex(g.idx), g.spec.postFilter, c.term) {
 		posInc := tok.Pos - prev
 		prev = tok.Pos
 		g.spare = tok.Term
@@ -911,9 +912,9 @@ func parsePhraseRequest(body map[string]any) (*phraseRequest, *apierr.Error) {
 		if phIsScalar(v) {
 			switch k {
 			case "analyzer":
-				r.analyzer, _ = toString(v)
+				r.analyzer, _ = jsonv.ToString(v)
 			case "field":
-				r.field, _ = toString(v)
+				r.field, _ = jsonv.ToString(v)
 				hasField = true
 			case "size":
 				n := int(phNum(v))
@@ -937,7 +938,7 @@ func parsePhraseRequest(body map[string]any) (*phraseRequest, *apierr.Error) {
 				}
 				r.confidence = f
 			case "separator":
-				r.separator, _ = toString(v)
+				r.separator, _ = jsonv.ToString(v)
 			case "max_errors":
 				f := float32(phNum(v))
 				if f <= 0 {
@@ -998,7 +999,7 @@ func parsePhraseRequest(body map[string]any) (*phraseRequest, *apierr.Error) {
 				if !phIsScalar(hv) {
 					continue
 				}
-				s, _ := toString(hv)
+				s, _ := jsonv.ToString(hv)
 				switch hk {
 				case "pre_tag":
 					pre = &s
@@ -1089,7 +1090,7 @@ func parsePhGenerator(m map[string]any) (*phGenRequest, *apierr.Error) {
 	if !ok {
 		return nil, suggestIllegal("Required [field]")
 	}
-	g.field, _ = toString(f)
+	g.field, _ = jsonv.ToString(f)
 	return g, nil
 }
 
@@ -1173,7 +1174,7 @@ func buildPhGenSpec(idx *model.Index, g *phGenRequest) (*phGenSpec, *apierr.Erro
 	}
 	for _, k := range []string{"pre_filter", "post_filter"} {
 		if v, ok := m[k]; ok {
-			name, _ := toString(v)
+			name, _ := jsonv.ToString(v)
 			if !phAnalyzerExists(idx, name) {
 				return nil, suggestShardError(idx, "Analyzer ["+name+"] doesn't exists")
 			}
@@ -1188,7 +1189,7 @@ func buildPhGenSpec(idx *model.Index, g *phGenRequest) (*phGenSpec, *apierr.Erro
 		sp.accuracy = float32(phNum(v))
 	}
 	if v, ok := m["suggest_mode"]; ok {
-		s, _ := toString(v)
+		s, _ := jsonv.ToString(v)
 		s = strings.ToLower(s)
 		if s != "missing" && s != "popular" && s != "always" {
 			return nil, suggestShardError(idx, "Illegal suggest mode "+s)
@@ -1196,7 +1197,7 @@ func buildPhGenSpec(idx *model.Index, g *phGenRequest) (*phGenSpec, *apierr.Erro
 		sp.mode = s
 	}
 	if v, ok := m["sort"]; ok {
-		s, _ := toString(v)
+		s, _ := jsonv.ToString(v)
 		ls := strings.ToLower(s)
 		if ls != "score" && ls != "frequency" {
 			return nil, suggestShardError(idx, "No enum constant org.opensearch.search.suggest.SortBy."+strings.ToUpper(s))
@@ -1204,7 +1205,7 @@ func buildPhGenSpec(idx *model.Index, g *phGenRequest) (*phGenSpec, *apierr.Erro
 		sp.sortBy = ls
 	}
 	if v, ok := m["string_distance"]; ok {
-		s, _ := toString(v)
+		s, _ := jsonv.ToString(v)
 		ls := strings.ToLower(s)
 		switch ls {
 		case "internal", "damerau_levenshtein", "levenshtein", "jaro_winkler", "ngram":
@@ -1238,7 +1239,7 @@ func phAnalyzerExists(idx *model.Index, name string) bool {
 	if name == "" {
 		return false
 	}
-	if idx != nil && (analysis.Scope{Index: analysisIndex(idx)}).IndexHasAnalyzer(name) {
+	if idx != nil && (analysis.Scope{Index: mapping.AnalysisIndex(idx)}).IndexHasAnalyzer(name) {
 		return true
 	}
 	if _, ok := analysis.GlobalAnalyzerTokens(name, ""); ok {
@@ -1249,10 +1250,10 @@ func phAnalyzerExists(idx *model.Index, name string) bool {
 
 // phShingle returns the first shingle filter of an analyzer.
 func phShingle(idx *model.Index, analyzer string) (minS, maxS int, unigrams, found bool) {
-	if idx == nil || !(analysis.Scope{Index: analysisIndex(idx)}).IndexHasAnalyzer(analyzer) {
+	if idx == nil || !(analysis.Scope{Index: mapping.AnalysisIndex(idx)}).IndexHasAnalyzer(analyzer) {
 		return
 	}
-	c, err := (analysis.Scope{Index: analysisIndex(idx)}).IndexAnalyzerChain(analyzer)
+	c, err := (analysis.Scope{Index: mapping.AnalysisIndex(idx)}).IndexAnalyzerChain(analyzer)
 	if err != nil || c == nil {
 		return
 	}
@@ -1304,7 +1305,7 @@ func phraseSuggest(spec, body map[string]any, indices []*model.Index, globalText
 	if !hasText {
 		return nil, suggestShardError(first, "The required text option is missing")
 	}
-	text, _ := toString(rawText)
+	text, _ := jsonv.ToString(rawText)
 
 	var entries []*phEntry
 	var lastErr *apierr.Error
@@ -1380,7 +1381,7 @@ func phraseSuggest(spec, body map[string]any, indices []*model.Index, globalText
 }
 
 func phraseSuggestIndex(req *phraseRequest, idx *model.Index, text string) (*phEntry, *apierr.Error) {
-	def, ok := mappingFieldDef(idx, req.field)
+	def, ok := mapping.FieldDef(idx, req.field)
 	if !ok {
 		return nil, suggestShardError(idx, "no mapping found for field ["+req.field+"]")
 	}
@@ -1439,7 +1440,7 @@ func phraseSuggestIndex(req *phraseRequest, idx *model.Index, text string) (*phE
 	var cur *phSet
 	anyUnigram, anyTokens := false, false
 	prev := -1
-	for _, tok := range analysis.Tokens(analysisIndex(idx), analyzer, text) {
+	for _, tok := range analysis.Tokens(mapping.AnalysisIndex(idx), analyzer, text) {
 		posInc := tok.Pos - prev
 		prev = tok.Pos
 		anyTokens = true

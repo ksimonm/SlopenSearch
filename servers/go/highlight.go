@@ -8,6 +8,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 )
 
@@ -50,10 +51,10 @@ func parseHighlightConfig(body map[string]any, query map[string]any) (*highlight
 		cfg.typ = v
 	}
 	if v, ok := raw["pre_tags"].([]any); ok && len(v) > 0 {
-		cfg.pre, _ = toString(v[0])
+		cfg.pre, _ = jsonv.ToString(v[0])
 	}
 	if v, ok := raw["post_tags"].([]any); ok && len(v) > 0 {
-		cfg.post, _ = toString(v[0])
+		cfg.post, _ = jsonv.ToString(v[0])
 	}
 	if _, hasPre := raw["pre_tags"]; hasPre {
 		if _, hasPost := raw["post_tags"]; !hasPost {
@@ -87,10 +88,10 @@ func parseHighlightConfig(body map[string]any, query map[string]any) (*highlight
 				fs.typ = v
 			}
 			if v, ok := opts["pre_tags"].([]any); ok && len(v) > 0 {
-				fs.pre, _ = toString(v[0])
+				fs.pre, _ = jsonv.ToString(v[0])
 			}
 			if v, ok := opts["post_tags"].([]any); ok && len(v) > 0 {
-				fs.post, _ = toString(v[0])
+				fs.post, _ = jsonv.ToString(v[0])
 			}
 			if _, hasPre := opts["pre_tags"]; hasPre {
 				if _, hasPost := opts["post_tags"]; !hasPost {
@@ -181,7 +182,7 @@ func (cfg *highlightConfig) validate(idx *model.Index) *apierr.Error {
 			if f.typ != "fvh" {
 				continue
 			}
-			def, ok := mappingFieldDef(idx, name)
+			def, ok := mapping.FieldDef(idx, name)
 			if !ok {
 				continue
 			}
@@ -250,7 +251,7 @@ func queryHighlightInfo(q map[string]any) (map[string]bool, map[string]bool, []s
 						}
 					}
 					text, _ := queryText(val)
-					for _, t := range analyze(text) {
+					for _, t := range mapping.Analyze(text) {
 						terms[t] = true
 					}
 				}
@@ -266,8 +267,8 @@ func queryHighlightInfo(q map[string]any) (map[string]bool, map[string]bool, []s
 					fields[field] = true
 					if arr, ok := val.([]any); ok {
 						for _, e := range arr {
-							text, _ := toString(e)
-							for _, t := range analyze(text) {
+							text, _ := jsonv.ToString(e)
+							for _, t := range mapping.Analyze(text) {
 								terms[t] = true
 							}
 						}
@@ -278,13 +279,13 @@ func queryHighlightInfo(q map[string]any) (map[string]bool, map[string]bool, []s
 				if !ok {
 					continue
 				}
-				text, _ := toString(mm["query"])
-				for _, t := range analyze(text) {
+				text, _ := jsonv.ToString(mm["query"])
+				for _, t := range mapping.Analyze(text) {
 					terms[t] = true
 				}
 				if arr, ok := mm["fields"].([]any); ok {
 					for _, e := range arr {
-						name, _ := toString(e)
+						name, _ := jsonv.ToString(e)
 						if name != "" {
 							patterns = append(patterns, name)
 						}
@@ -295,14 +296,14 @@ func queryHighlightInfo(q map[string]any) (map[string]bool, map[string]bool, []s
 				if !ok {
 					continue
 				}
-				text, _ := toString(mm["query"])
+				text, _ := jsonv.ToString(mm["query"])
 				clean := strings.NewReplacer("(", " ", ")", " ", ":", " ", "\"", " ", "AND", " ", "OR", " ", "NOT", " ").Replace(text)
-				for _, t := range analyze(clean) {
+				for _, t := range mapping.Analyze(clean) {
 					terms[t] = true
 				}
 				if arr, ok := mm["fields"].([]any); ok {
 					for _, e := range arr {
-						name, _ := toString(e)
+						name, _ := jsonv.ToString(e)
 						if name != "" {
 							patterns = append(patterns, name)
 						}
@@ -342,14 +343,14 @@ func (cfg *highlightConfig) render(idx *model.Index, doc map[string]any) map[str
 			sort.Strings(names)
 		}
 		for _, name := range names {
-			def, mapped := mappingFieldDef(idx, name)
+			def, mapped := mapping.FieldDef(idx, name)
 			ftype := ""
 			target := name
 			if mapped {
 				ftype, _ = def["type"].(string)
 				if ftype == "alias" {
-					target = resolveAliasField(idx, name)
-					if tdef, tok := mappingFieldDef(idx, target); tok {
+					target = mapping.ResolveAliasField(idx, name)
+					if tdef, tok := mapping.FieldDef(idx, target); tok {
 						def = tdef
 						ftype, _ = def["type"].(string)
 					}
@@ -358,11 +359,11 @@ func (cfg *highlightConfig) render(idx *model.Index, doc map[string]any) map[str
 			if ftype != "text" && ftype != "keyword" {
 				continue
 			}
-			val, ok := fieldValue(doc, target)
+			val, ok := mapping.FieldValue(doc, target)
 			if !ok {
 				continue
 			}
-			text, ok := toString(val)
+			text, ok := jsonv.ToString(val)
 			if !ok {
 				continue
 			}

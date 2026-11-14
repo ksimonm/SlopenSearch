@@ -7,6 +7,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/painless"
 	"slopensearch/internal/settings"
@@ -318,8 +319,8 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		destIdx.FieldTypes = map[string]string{}
-		buildFieldTypes(destIdx.Mappings, "", destIdx.FieldTypes)
-		if derr := computeDocValues(destIdx, id, doc); derr != nil {
+		mapping.BuildFieldTypes(destIdx.Mappings, "", destIdx.FieldTypes)
+		if derr := mapping.ComputeDocValues(destIdx, id, doc); derr != nil {
 			if existing {
 				updated--
 			} else {

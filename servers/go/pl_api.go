@@ -11,6 +11,7 @@ import (
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
@@ -176,7 +177,7 @@ func plDocLookup(qc *queryCtx) *painless.DocMap {
 		if field == "_id" || field == "_index" || field == "_seq_no" || field == "_version" {
 			return true
 		}
-		_, ok := mappingFieldDef(qc.idx, field)
+		_, ok := mapping.FieldDef(qc.idx, field)
 		return ok
 	}
 	get := func(field string, off int) (any, *painless.RuntimeError) {
@@ -202,7 +203,7 @@ func plDocValuesFor(qc *queryCtx, field string, off int) (*painless.DocValues, *
 	case "_seq_no":
 		return &painless.DocValues{Kind: "Longs", Field: field, Values: []any{qc.idx.SeqNos[qc.id]}}, nil
 	}
-	def, ok := mappingFieldDef(qc.idx, field)
+	def, ok := mapping.FieldDef(qc.idx, field)
 	if !ok {
 		return nil, &painless.RuntimeError{Type: "illegal_argument_exception", Offset: off,
 			Reason: "No field found for [" + field + "] in mapping",
@@ -211,7 +212,7 @@ func plDocValuesFor(qc *queryCtx, field string, off int) (*painless.DocValues, *
 	}
 	ft, _ := def["type"].(string)
 	if ft == "alias" {
-		return plDocValuesFor(qc, resolveAliasField(qc.idx, field), off)
+		return plDocValuesFor(qc, mapping.ResolveAliasField(qc.idx, field), off)
 	}
 	vals, _ := qc.values(field)
 	if ft == "knn_vector" {
@@ -237,8 +238,8 @@ func plDocValuesFor(qc *queryCtx, field string, off int) (*painless.DocValues, *
 		terms := []string{}
 		seen := map[string]bool{}
 		for _, v := range vals {
-			s, _ := valueScalarString(v)
-			for _, t := range analysis.Tokens(analysisIndex(qc.idx), analyzer, s) {
+			s, _ := jsonv.ScalarString(v)
+			for _, t := range analysis.Tokens(mapping.AnalysisIndex(qc.idx), analyzer, s) {
 				if !seen[t.Term] {
 					seen[t.Term] = true
 					terms = append(terms, t.Term)
@@ -300,7 +301,7 @@ func plDocValuesFor(qc *queryCtx, field string, off int) (*painless.DocValues, *
 	default:
 		dv.Kind = "Strings"
 		for _, v := range vals {
-			s, ok := valueScalarString(v)
+			s, ok := jsonv.ScalarString(v)
 			if !ok {
 				s = painless.ToString(v)
 			}
@@ -489,8 +490,8 @@ func plTempIndex(idx *model.Index, doc map[string]any) *model.Index {
 		Routing:    map[string]string{},
 		FieldTypes: map[string]string{},
 	}
-	ensureFieldTypes(tmp)
-	_ = computeDocValues(tmp, "_execute", doc)
+	mapping.EnsureFieldTypes(tmp)
+	_ = mapping.ComputeDocValues(tmp, "_execute", doc)
 	return tmp
 }
 

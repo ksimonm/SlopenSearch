@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/ojson"
 )
 
@@ -121,7 +122,7 @@ func (s *Server) handleKnnWarmup(w http.ResponseWriter, r *http.Request, spec st
 	}
 	shards := 0
 	for _, idx := range indices {
-		if !indexKnnEnabled(idx) {
+		if !mapping.IndexKnnEnabled(idx) {
 			writeError(w, &apierr.Error{Type: "k_n_n_invalid_indices_exception", Status: 500,
 				Reason: "Warm up request rejected. One or more indices have 'index.knn' set to false."})
 			return

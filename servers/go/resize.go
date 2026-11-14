@@ -7,6 +7,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/settings"
 )
 
@@ -132,7 +133,7 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request, src, op, t
 		doc := jsonv.DeepCopy(idx.Docs[id]).(map[string]any)
 		newIdx.Docs[id] = doc
 		newIdx.Order = append(newIdx.Order, id)
-		_ = computeDocValues(newIdx, id, doc)
+		_ = mapping.ComputeDocValues(newIdx, id, doc)
 	}
 	s.bumpState()
 	writeJSON(w, 200, map[string]any{"acknowledged": true, "shards_acknowledged": true, "index": target})

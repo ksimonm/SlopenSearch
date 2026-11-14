@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 )
 
@@ -60,7 +61,7 @@ func sigTextBuckets(docs []map[string]any, field string, idx *model.Index, pathP
 		}
 		seen := map[string]bool{}
 		for _, e := range flattenTermValues(v) {
-			s, ok := toString(e)
+			s, ok := jsonv.ToString(e)
 			if !ok {
 				continue
 			}
@@ -180,17 +181,17 @@ func sigScore(heuristic string, fg, bg int, fgTotal, bgTotal int) float64 {
 }
 
 func significantAgg(name string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool, text bool) (any, *apierr.Error) {
-	field, _ := toString(spec["field"])
+	field, _ := jsonv.ToString(spec["field"])
 	resolved := resolveField(field, pathPrefix)
 	ft, _ := idx.FieldTypes[resolved]
-	valueType, _ := toString(spec["value_type"])
-	format, _ := toString(spec["format"])
+	valueType, _ := jsonv.ToString(spec["value_type"])
+	format, _ := jsonv.ToString(spec["format"])
 	minDoc := intField(spec, "min_doc_count", 3)
 	if minDoc < 1 {
 		minDoc = 1
 	}
 	size := intField(spec, "size", 10)
-	heuristic, _ := toString(spec["background_filter"])
+	heuristic, _ := jsonv.ToString(spec["background_filter"])
 	_ = heuristic
 	heur := "jlh"
 	for _, h := range []string{"jlh", "chi_square", "gnd", "mutual_information", "percentage"} {
@@ -290,9 +291,9 @@ func rareTermsAgg(name string, spec map[string]any, docs []map[string]any, idx *
 	if maxDoc < 1 {
 		maxDoc = 1
 	}
-	field, _ := toString(spec["field"])
-	valueType, _ := toString(spec["value_type"])
-	format, _ := toString(spec["format"])
+	field, _ := jsonv.ToString(spec["field"])
+	valueType, _ := jsonv.ToString(spec["value_type"])
+	format, _ := jsonv.ToString(spec["format"])
 	terms, err := sigTermBuckets(docs, field, idx, pathPrefix, valueType, format)
 	if err != nil {
 		return nil, err

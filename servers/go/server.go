@@ -16,6 +16,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/respfmt"
@@ -957,7 +958,7 @@ func (s *Server) handleCreateIndex(w http.ResponseWriter, r *http.Request, name 
 		FieldTypes:   map[string]string{},
 		Aliases:      map[string]map[string]any{},
 	}
-	buildFieldTypes(mappings, "", idx.FieldTypes)
+	mapping.BuildFieldTypes(mappings, "", idx.FieldTypes)
 	s.Indices[name] = idx
 	s.bumpState()
 	writeJSON(w, 200, map[string]any{"acknowledged": true, "shards_acknowledged": true, "index": name})
@@ -1107,11 +1108,11 @@ func (s *Server) handleIndexDoc(w http.ResponseWriter, r *http.Request, name, id
 		writeError(w, derr)
 		return
 	}
-	ensureFieldTypes(idx)
+	mapping.EnsureFieldTypes(idx)
 	if id == "" {
 		id = s.nextID()
 	}
-	if derr := computeDocValues(idx, id, body); derr != nil {
+	if derr := mapping.ComputeDocValues(idx, id, body); derr != nil {
 		writeError(w, derr)
 		return
 	}
@@ -1235,7 +1236,7 @@ func (s *Server) handleDeleteDoc(w http.ResponseWriter, r *http.Request, name, i
 	delete(idx.Docs, id)
 	delete(idx.Pending, id)
 	delete(idx.Routing, id)
-	removeDocValues(idx, id)
+	mapping.RemoveDocValues(idx, id)
 	idx.DeleteTotal++
 	writeJSON(w, 200, map[string]any{"_index": idx.Name, "_id": id, "result": "deleted"})
 }
@@ -1275,12 +1276,12 @@ func (s *Server) handleUpdateDoc(w http.ResponseWriter, r *http.Request, name, i
 			writeError(w, derr)
 			return
 		}
-		ensureFieldTypes(idx)
+		mapping.EnsureFieldTypes(idx)
 		for k, v := range patch {
 			doc[k] = v
 		}
 	}
-	if derr := computeDocValues(idx, id, doc); derr != nil {
+	if derr := mapping.ComputeDocValues(idx, id, doc); derr != nil {
 		writeError(w, derr)
 		return
 	}
@@ -1544,7 +1545,7 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, name string)
 			delete(idx.Docs, docID)
 			delete(idx.Pending, docID)
 			delete(idx.Routing, docID)
-			removeDocValues(idx, docID)
+			mapping.RemoveDocValues(idx, docID)
 			idx.DeleteTotal++
 			items = append(items, map[string]any{"delete": map[string]any{"_index": idx.Name, "_id": docID, "status": 200}})
 			continue
@@ -1597,11 +1598,11 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, name string)
 				items = append(items, bulkErrAPI("update", idx.Name, docID, derr))
 				continue
 			}
-			ensureFieldTypes(idx)
+			mapping.EnsureFieldTypes(idx)
 			for k, v := range source {
 				doc[k] = v
 			}
-			if derr := computeDocValues(idx, docID, doc); derr != nil {
+			if derr := mapping.ComputeDocValues(idx, docID, doc); derr != nil {
 				hasErrors = true
 				items = append(items, bulkErrAPI("update", idx.Name, docID, derr))
 				continue
@@ -1648,11 +1649,11 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, name string)
 			items = append(items, bulkErrAPI(op, idx.Name, docID, derr))
 			continue
 		}
-		ensureFieldTypes(idx)
+		mapping.EnsureFieldTypes(idx)
 		if docID == "" {
 			docID = s.nextID()
 		}
-		if derr := computeDocValues(idx, docID, source); derr != nil {
+		if derr := mapping.ComputeDocValues(idx, docID, source); derr != nil {
 			hasErrors = true
 			items = append(items, bulkErrAPI(op, idx.Name, docID, derr))
 			continue
@@ -1714,7 +1715,7 @@ func bulkErrAPI(op, index, id string, e *apierr.Error) map[string]any {
 
 // checkDynamicStrict enforces a mapping-level "dynamic":"strict" setting.
 func checkDynamicStrict(idx *model.Index, props map[string]any, source map[string]any) *apierr.Error {
-	dyn := rootDynamicString(idx)
+	dyn := mapping.RootDynamicString(idx)
 	if dyn != "strict" && dyn != "strict_allow_templates" {
 		return nil
 	}
@@ -1726,7 +1727,7 @@ func checkDynamicStrict(idx *model.Index, props map[string]any, source map[strin
 			continue
 		}
 		if dyn == "strict_allow_templates" {
-			if _, matched, _ := dynamicDefFor(idx, k, k, v); matched {
+			if _, matched, _ := mapping.DynamicDefFor(idx, k, k, v); matched {
 				continue
 			}
 		}

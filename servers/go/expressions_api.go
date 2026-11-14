@@ -5,6 +5,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/expressions"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/painless"
 )
@@ -46,7 +47,7 @@ func exprFields(idx *model.Index) func(field string) (expressions.Kind, bool) {
 		return nil
 	}
 	return func(field string) (expressions.Kind, bool) {
-		def, found := mappingFieldDef(idx, field)
+		def, found := mapping.FieldDef(idx, field)
 		if !found {
 			return expressions.KindOther, false
 		}
@@ -54,7 +55,7 @@ func exprFields(idx *model.Index) func(field string) (expressions.Kind, bool) {
 		switch {
 		case ft == "date" || ft == "date_nanos":
 			return expressions.KindDate, true
-		case isNumericType(ft) || ft == "boolean":
+		case mapping.IsNumericType(ft) || ft == "boolean":
 			return expressions.KindNumber, true
 		case ft == "geo_point":
 			return expressions.KindGeo, true

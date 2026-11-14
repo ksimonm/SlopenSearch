@@ -2,6 +2,7 @@ package main
 
 import (
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 )
 
@@ -53,11 +54,11 @@ func evalSuggest(suggest map[string]any, indices []*model.Index, typed bool, sea
 
 func suggestText(spec map[string]any) string {
 	if v, ok := spec["text"]; ok {
-		s, _ := toString(v)
+		s, _ := jsonv.ToString(v)
 		return s
 	}
 	if v, ok := spec["prefix"]; ok {
-		s, _ := toString(v)
+		s, _ := jsonv.ToString(v)
 		return s
 	}
 	return ""

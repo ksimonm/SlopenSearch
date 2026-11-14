@@ -7,6 +7,8 @@ import (
 
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 )
 
 func (c *queryCtx) bm25Explain(field, term string, score float64) map[string]any {
@@ -23,7 +25,7 @@ func (c *queryCtx) bm25Explain(field, term string, score float64) map[string]any
 	if c.idx == nil || field == "" || term == "" {
 		return generic
 	}
-	def, _ := mappingFieldDef(c.idx, field)
+	def, _ := mapping.FieldDef(c.idx, field)
 	ftype, _ := def["type"].(string)
 	if ftype != "" && ftype != "text" && ftype != "match_only_text" && ftype != "search_as_you_type" {
 		return generic
@@ -32,8 +34,8 @@ func (c *queryCtx) bm25Explain(field, term string, score float64) map[string]any
 	docTerms := func(vals []any) []string {
 		out := []string{}
 		for _, v := range vals {
-			s, _ := valueScalarString(v)
-			for _, t := range analysis.Tokens(analysisIndex(c.idx), analyzer, s) {
+			s, _ := jsonv.ScalarString(v)
+			for _, t := range analysis.Tokens(mapping.AnalysisIndex(c.idx), analyzer, s) {
 				out = append(out, t.Term)
 			}
 		}
@@ -41,7 +43,7 @@ func (c *queryCtx) bm25Explain(field, term string, score float64) map[string]any
 	}
 	myVals := []any{}
 	if dv, ok := c.rawValues(); ok {
-		myVals = dv[resolveAliasField(c.idx, field)]
+		myVals = dv[mapping.ResolveAliasField(c.idx, field)]
 	}
 	myTokens := docTerms(myVals)
 	freq := 0
@@ -54,7 +56,7 @@ func (c *queryCtx) bm25Explain(field, term string, score float64) map[string]any
 	avgdl := 0.0
 	df := 0
 	for _, dv := range c.idx.DocValues {
-		vals := dv[resolveAliasField(c.idx, field)]
+		vals := dv[mapping.ResolveAliasField(c.idx, field)]
 		if len(vals) == 0 {
 			continue
 		}

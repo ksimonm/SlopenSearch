@@ -1,4 +1,4 @@
-package main
+package mapping
 
 import (
 	"encoding/json"
@@ -11,21 +11,21 @@ import (
 	"slopensearch/internal/jsonv"
 )
 
-// mappingValidationError carries the OpenSearch mapper validation message and
+// ValidationError carries the OpenSearch mapper validation message and
 // the type of the caused_by error used when the error is wrapped in an index
 // creation response.
-type mappingValidationError struct {
+type ValidationError struct {
 	Reason string
 	Cause  string
 }
 
-func (e *mappingValidationError) Error() string { return e.Reason }
+func (e *ValidationError) Error() string { return e.Reason }
 
-func mve(reason, cause string) *mappingValidationError {
+func mve(reason, cause string) *ValidationError {
 	if cause == "" {
 		cause = "mapper_parsing_exception"
 	}
-	return &mappingValidationError{Reason: reason, Cause: cause}
+	return &ValidationError{Reason: reason, Cause: cause}
 }
 
 var allowedMappingParams = map[string]bool{
@@ -51,7 +51,7 @@ var allowedMappingParams = map[string]bool{
 	"space_type": true, "ef_construction": true, "m": true, "encoder": true,
 }
 
-func sortedAnyKeys(m map[string]any) []string {
+func SortedAnyKeys(m map[string]any) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -97,7 +97,7 @@ func javaMetaRepr(v any) string {
 		}
 		return "ArrayList[" + strings.Join(parts, ", ") + "]"
 	default:
-		return "String[" + previewValue(v) + "]"
+		return "String[" + PreviewValue(v) + "]"
 	}
 }
 
@@ -108,7 +108,7 @@ func previewJSON(v any) string {
 	case json.Number:
 		return t.String()
 	default:
-		return previewValue(v)
+		return PreviewValue(v)
 	}
 }
 
@@ -120,7 +120,7 @@ var knownDateFormatParts = map[string]bool{
 	"date": true, "basic_date": true,
 }
 
-func validateDateFormat(name, fmtStr string) *mappingValidationError {
+func validateDateFormat(name, fmtStr string) *ValidationError {
 	if fmtStr == "" {
 		return nil
 	}
@@ -140,8 +140,8 @@ func validateDateFormat(name, fmtStr string) *mappingValidationError {
 	return nil
 }
 
-func validateProps(props map[string]any) *mappingValidationError {
-	for _, name := range sortedAnyKeys(props) {
+func ValidateProps(props map[string]any) *ValidationError {
+	for _, name := range SortedAnyKeys(props) {
 		raw := props[name]
 		def, ok := raw.(map[string]any)
 		if !ok {
@@ -249,7 +249,7 @@ func validateProps(props map[string]any) *mappingValidationError {
 			}
 		}
 		if meta, ok := def["meta"].(map[string]any); ok {
-			for _, mk := range sortedAnyKeys(meta) {
+			for _, mk := range SortedAnyKeys(meta) {
 				mv := meta[mk]
 				if _, isStr := mv.(string); !isStr {
 					return mve(fmt.Sprintf("[meta] values can only be strings, but got %s for field [%s]", javaMetaRepr(mv), name), "")
@@ -266,12 +266,12 @@ func validateProps(props map[string]any) *mappingValidationError {
 		if t == "integer" || t == "long" || t == "short" || t == "byte" {
 			if nv, ok := def["null_value"]; ok && nv != nil {
 				if _, isNum := jsonv.ToFloat(nv); !isNum {
-					return mve("For input string: \""+previewValue(nv)+"\"", "number_format_exception")
+					return mve("For input string: \""+PreviewValue(nv)+"\"", "number_format_exception")
 				}
 			}
 		}
-		for _, k := range sortedAnyKeys(def) {
-			if t == "knn_vector" && knnFieldParams[k] {
+		for _, k := range SortedAnyKeys(def) {
+			if t == "knn_vector" && KnnFieldParams[k] {
 				continue
 			}
 			if !allowedMappingParams[k] {
@@ -279,12 +279,12 @@ func validateProps(props map[string]any) *mappingValidationError {
 			}
 		}
 		if sub, ok := def["properties"].(map[string]any); ok {
-			if err := validateProps(sub); err != nil {
+			if err := ValidateProps(sub); err != nil {
 				return err
 			}
 		}
 		if fields, ok := def["fields"].(map[string]any); ok {
-			for _, fname := range sortedAnyKeys(fields) {
+			for _, fname := range SortedAnyKeys(fields) {
 				if strings.Contains(fname, ".") {
 					return mve(fmt.Sprintf("Field name [%s] which is a multi field of [%s] cannot contain '.'", fname, name), "")
 				}
@@ -294,7 +294,7 @@ func validateProps(props map[string]any) *mappingValidationError {
 					}
 				}
 			}
-			if err := validateProps(fields); err != nil {
+			if err := ValidateProps(fields); err != nil {
 				return err
 			}
 		}
@@ -320,18 +320,18 @@ func countMappingType(props map[string]any, wanted string) int {
 }
 
 // validatePropsMeta performs the checks OpenSearch runs before mapper parsing.
-func validatePropsMeta(props map[string]any) *apierr.Error {
+func ValidatePropsMeta(props map[string]any) *apierr.Error {
 	var walk func(props map[string]any) *apierr.Error
 	walk = func(props map[string]any) *apierr.Error {
-		for _, name := range sortedAnyKeys(props) {
+		for _, name := range SortedAnyKeys(props) {
 			if name == "" || strings.Contains(name, "..") {
 				reason := "name cannot be empty string"
-				return wrappedMappingError(reason, "illegal_argument_exception")
+				return WrappedError(reason, "illegal_argument_exception")
 			}
 			switch name {
 			case "_id", "_source", "_index", "_ignored":
 				reason := fmt.Sprintf("Field [%s] is defined more than once", name)
-				return wrappedMappingError(reason, "mapper_parsing_exception")
+				return WrappedError(reason, "mapper_parsing_exception")
 			}
 			def, ok := props[name].(map[string]any)
 			if !ok {
@@ -340,7 +340,7 @@ func validatePropsMeta(props map[string]any) *apierr.Error {
 			t, _ := def["type"].(string)
 			if _, has := def["enabled"]; has && t != "" && t != "object" && t != "nested" {
 				reason := fmt.Sprintf("unknown parameter [enabled] on mapper [%s] of type [%s]", name, t)
-				return wrappedMappingError(reason, "mapper_parsing_exception")
+				return WrappedError(reason, "mapper_parsing_exception")
 			}
 			if ia, has := def["ignore_above"]; has {
 				if _, ok := jsonv.ToFloat(ia); !ok {
@@ -362,12 +362,12 @@ func validatePropsMeta(props map[string]any) *apierr.Error {
 		return err
 	}
 	if countMappingType(props, "join") > 1 {
-		return wrappedMappingError("Field [_parent_join] is defined more than once", "illegal_argument_exception")
+		return WrappedError("Field [_parent_join] is defined more than once", "illegal_argument_exception")
 	}
 	return nil
 }
 
-func wrappedMappingError(reason, cause string) *apierr.Error {
+func WrappedError(reason, cause string) *apierr.Error {
 	return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 		Reason:   "Failed to parse mapping [_doc]: " + reason,
 		CausedBy: &apierr.Error{Type: cause, Reason: reason}}
@@ -397,8 +397,8 @@ func aliasInvalidError(reason string) *apierr.Error {
 		CausedBy: &apierr.Error{Type: "mapper_parsing_exception", Reason: reason}}
 }
 
-func validateAliasMappings(props map[string]any) *apierr.Error {
-	for _, name := range sortedAnyKeys(props) {
+func ValidateAliasMappings(props map[string]any) *apierr.Error {
+	for _, name := range SortedAnyKeys(props) {
 		def, ok := props[name].(map[string]any)
 		if !ok {
 			continue
@@ -408,18 +408,18 @@ func validateAliasMappings(props map[string]any) *apierr.Error {
 		}
 		path, _ := def["path"].(string)
 		if path == "" {
-			return wrappedMappingError(fmt.Sprintf("The [path] property must be specified for field [%s].", name), "mapper_parsing_exception")
+			return WrappedError(fmt.Sprintf("The [path] property must be specified for field [%s].", name), "mapper_parsing_exception")
 		}
 		var unsupported []string
-		for _, k := range sortedAnyKeys(def) {
+		for _, k := range SortedAnyKeys(def) {
 			if k == "type" || k == "path" {
 				continue
 			}
-			unsupported = append(unsupported, k+" : "+previewValue(def[k]))
+			unsupported = append(unsupported, k+" : "+PreviewValue(def[k]))
 		}
 		if len(unsupported) > 0 {
 			reason := fmt.Sprintf("Mapping definition for [%s] has unsupported parameters:  [%s]", name, strings.Join(unsupported, ", "))
-			return wrappedMappingError(reason, "mapper_parsing_exception")
+			return WrappedError(reason, "mapper_parsing_exception")
 		}
 		target := aliasTarget(props, path)
 		if target == nil {
@@ -444,8 +444,8 @@ func validateAliasMappings(props map[string]any) *apierr.Error {
 	return nil
 }
 
-func validateCopyToTargets(props map[string]any) *apierr.Error {
-	for _, name := range sortedAnyKeys(props) {
+func ValidateCopyToTargets(props map[string]any) *apierr.Error {
+	for _, name := range SortedAnyKeys(props) {
 		def, ok := props[name].(map[string]any)
 		if !ok {
 			continue
@@ -474,7 +474,7 @@ func validateCopyToTargets(props map[string]any) *apierr.Error {
 			}
 		}
 		if sub, ok := def["properties"].(map[string]any); ok {
-			if err := validateCopyToTargets(sub); err != nil {
+			if err := ValidateCopyToTargets(sub); err != nil {
 				return err
 			}
 		}
@@ -482,8 +482,8 @@ func validateCopyToTargets(props map[string]any) *apierr.Error {
 	return nil
 }
 
-func validateJoinPlacement(props map[string]any, prefix string) *apierr.Error {
-	for _, name := range sortedAnyKeys(props) {
+func ValidateJoinPlacement(props map[string]any, prefix string) *apierr.Error {
+	for _, name := range SortedAnyKeys(props) {
 		def, ok := props[name].(map[string]any)
 		if !ok {
 			continue
@@ -494,19 +494,19 @@ func validateJoinPlacement(props map[string]any, prefix string) *apierr.Error {
 		}
 		if t, _ := def["type"].(string); t == "join" && prefix != "" {
 			reason := fmt.Sprintf("join field [%s] cannot be added inside an object or in a multi-field", path)
-			return wrappedMappingError(reason, "mapper_parsing_exception")
+			return WrappedError(reason, "mapper_parsing_exception")
 		}
 		if sub, ok := def["properties"].(map[string]any); ok {
-			if err := validateJoinPlacement(sub, path); err != nil {
+			if err := ValidateJoinPlacement(sub, path); err != nil {
 				return err
 			}
 		}
 		if fields, ok := def["fields"].(map[string]any); ok {
-			for _, fname := range sortedAnyKeys(fields) {
+			for _, fname := range SortedAnyKeys(fields) {
 				if fdef, ok := fields[fname].(map[string]any); ok {
 					if ft, _ := fdef["type"].(string); ft == "join" {
 						reason := fmt.Sprintf("join field [%s.%s] cannot be added inside an object or in a multi-field", path, fname)
-						return wrappedMappingError(reason, "mapper_parsing_exception")
+						return WrappedError(reason, "mapper_parsing_exception")
 					}
 				}
 			}
@@ -515,27 +515,27 @@ func validateJoinPlacement(props map[string]any, prefix string) *apierr.Error {
 	return nil
 }
 
-func validateMappingSource(mappings map[string]any) *apierr.Error {
+func ValidateSource(mappings map[string]any) *apierr.Error {
 	if src, ok := mappings["_source"].(map[string]any); ok {
-		for _, k := range sortedAnyKeys(src) {
+		for _, k := range SortedAnyKeys(src) {
 			switch k {
 			case "enabled", "includes", "excludes", "include", "exclude":
 			default:
 				reason := fmt.Sprintf("unknown parameter [%s] on mapper [_source] of type [null]", k)
-				return wrappedMappingError(reason, "illegal_argument_exception")
+				return WrappedError(reason, "illegal_argument_exception")
 			}
 		}
 	}
 	if rt, ok := mappings["runtime"]; ok {
 		reason := fmt.Sprintf("Root mapping definition has unsupported parameters:  [runtime : %s]", javaMapDebug(rt))
-		return wrappedMappingError(reason, "illegal_argument_exception")
+		return WrappedError(reason, "illegal_argument_exception")
 	}
 	return nil
 }
 
 // normalizeKnnVectors fills the implicit mapper parameters (doc_values and
 // similar) so they are rendered back in the mapping.
-func normalizeKnnVectors(props map[string]any) {
+func NormalizeKnnVectors(props map[string]any) {
 	for _, raw := range props {
 		def, ok := raw.(map[string]any)
 		if !ok {
@@ -565,10 +565,10 @@ func normalizeKnnVectors(props map[string]any) {
 			}
 		}
 		if sub, ok := def["properties"].(map[string]any); ok {
-			normalizeKnnVectors(sub)
+			NormalizeKnnVectors(sub)
 		}
 		if fields, ok := def["fields"].(map[string]any); ok {
-			normalizeKnnVectors(fields)
+			NormalizeKnnVectors(fields)
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"strings"
 
+	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 )
 
@@ -25,7 +26,7 @@ func anyStringList(v any) []string {
 		out = append(out, t)
 	case []any:
 		for _, e := range t {
-			if s, ok := toString(e); ok {
+			if s, ok := jsonv.ToString(e); ok {
 				out = append(out, s)
 			}
 		}

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/settings"
 	"slopensearch/internal/wildcard"
@@ -566,7 +567,7 @@ func (s *Server) composeForIndex(name string) *composedTemplate {
 						}
 					}
 					if m, ok := ctpl["mappings"].(map[string]any); ok {
-						mergeMappingsDeep(out.mappings, m)
+						mapping.MergeDeep(out.mappings, m)
 					}
 					if a, ok := ctpl["aliases"].(map[string]any); ok {
 						for k, v := range a {
@@ -583,7 +584,7 @@ func (s *Server) composeForIndex(name string) *composedTemplate {
 				}
 			}
 			if m, ok := tpl0["mappings"].(map[string]any); ok {
-				mergeMappingsDeep(out.mappings, m)
+				mapping.MergeDeep(out.mappings, m)
 			}
 			if a, ok := tpl0["aliases"].(map[string]any); ok {
 				for k, v := range a {
@@ -643,7 +644,7 @@ func (s *Server) composeForIndex(name string) *composedTemplate {
 			}
 		}
 		if m, ok := tpl["mappings"].(map[string]any); ok {
-			mergeMappingsDeep(out.mappings, m)
+			mapping.MergeDeep(out.mappings, m)
 		}
 		if a, ok := tpl["aliases"].(map[string]any); ok {
 			for k, v := range a {
@@ -653,35 +654,6 @@ func (s *Server) composeForIndex(name string) *composedTemplate {
 		}
 	}
 	return out
-}
-
-// mergeMappingsDeep merges src into dst; values in src win.
-func mergeMappingsDeep(dst, src map[string]any) {
-	for k, v := range src {
-		if k == "properties" {
-			sv, ok := v.(map[string]any)
-			if !ok {
-				dst[k] = v
-				continue
-			}
-			dv, ok := dst["properties"].(map[string]any)
-			if !ok {
-				dv = map[string]any{}
-				dst["properties"] = dv
-			}
-			for fk, fv := range sv {
-				dfv, ok := dv[fk].(map[string]any)
-				sfv, ok2 := fv.(map[string]any)
-				if ok && ok2 {
-					mergeMappingsDeep(dfv, sfv)
-				} else {
-					dv[fk] = fv
-				}
-			}
-			continue
-		}
-		dst[k] = v
-	}
 }
 
 // overlappingFor returns other templates (composable + legacy) whose patterns
@@ -743,7 +715,7 @@ func (s *Server) simulateTemplate(w http.ResponseWriter, r *http.Request, name s
 				}
 			}
 			if m, ok := tpl["mappings"].(map[string]any); ok {
-				mergeMappingsDeep(composed.mappings, m)
+				mapping.MergeDeep(composed.mappings, m)
 			}
 			if a, ok := tpl["aliases"].(map[string]any); ok {
 				for k, v := range a {
@@ -775,7 +747,7 @@ func (s *Server) simulateTemplate(w http.ResponseWriter, r *http.Request, name s
 						}
 					}
 					if m, ok := ctpl["mappings"].(map[string]any); ok {
-						mergeMappingsDeep(composed.mappings, m)
+						mapping.MergeDeep(composed.mappings, m)
 					}
 					if a, ok := ctpl["aliases"].(map[string]any); ok {
 						for k, v := range a {
@@ -792,7 +764,7 @@ func (s *Server) simulateTemplate(w http.ResponseWriter, r *http.Request, name s
 				}
 			}
 			if m, ok := tpl0["mappings"].(map[string]any); ok {
-				mergeMappingsDeep(composed.mappings, m)
+				mapping.MergeDeep(composed.mappings, m)
 			}
 			if a, ok := tpl0["aliases"].(map[string]any); ok {
 				for k, v := range a {

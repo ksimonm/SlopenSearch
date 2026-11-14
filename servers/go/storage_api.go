@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/storage"
 )
 
@@ -55,7 +56,7 @@ func (s *Server) openPersistence(dir string) error {
 		return nil
 	}
 	locks := storage.Locks{State: &s.mu, Ingest: &s.ingestMu, Scripts: &s.scriptsMu}
-	p, err := storage.Open(dir, &s.State, locks, recomputeAllDocValues)
+	p, err := storage.Open(dir, &s.State, locks, mapping.RecomputeAllDocValues)
 	if err != nil {
 		return err
 	}

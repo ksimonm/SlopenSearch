@@ -240,7 +240,7 @@ func (s *Server) handleMsearchTemplate(w http.ResponseWriter, r *http.Request, p
 			case []any:
 				parts := []string{}
 				for _, e := range t {
-					if sv, ok := toString(e); ok && sv != "" {
+					if sv, ok := jsonv.ToString(e); ok && sv != "" {
 						parts = append(parts, sv)
 					}
 				}

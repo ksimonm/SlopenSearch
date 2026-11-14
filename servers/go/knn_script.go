@@ -8,6 +8,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
@@ -68,17 +69,17 @@ func (c *queryCtx) knnScriptScore(sm map[string]any) (float64, *apierr.Error) {
 	if t, _ := def["type"].(string); t != "knn_vector" {
 		return 0, knnShardFail(c.idx, fmt.Sprintf("Incompatible field_type for %s space. The field type must be knn_vector.", space))
 	}
-	fi := knnInfo(def)
-	dt := strings.ToUpper(fi.dataType)
+	fi := mapping.KnnInfo(def)
+	dt := strings.ToUpper(fi.DataType)
 	if space == "hamming" && dt != "BINARY" {
 		return 0, knnShardFail(c.idx, "Incompatible field_type for hamming space. The data type should be [BINARY] but got "+dt)
 	}
 	if space != "hamming" && dt == "BINARY" {
 		return 0, knnShardFail(c.idx, fmt.Sprintf("Incompatible field_type for %s space. The data type should be [HALF_FLOAT, BYTE, FLOAT] but got BINARY", space))
 	}
-	want := fi.dim
+	want := fi.Dim
 	if dt == "BINARY" {
-		want = fi.dim / 8
+		want = fi.Dim / 8
 	}
 	if len(qv) != want {
 		return 0, knnShardFail(c.idx, fmt.Sprintf("Object's length=%d does not match the expected length=%d.", len(qv), want))
@@ -222,7 +223,7 @@ func plKnnBindings() map[string]func(args []any, off int) (any, *painless.Runtim
 
 // knnUnsupportedSort reports a sort on a knn_vector field.
 func knnUnsupportedSort(idx *model.Index, field string) *apierr.Error {
-	def, _ := mappingFieldDef(idx, field)
+	def, _ := mapping.FieldDef(idx, field)
 	if t, _ := def["type"].(string); t != "knn_vector" {
 		return nil
 	}

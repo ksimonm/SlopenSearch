@@ -10,6 +10,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/wildcard"
 )
@@ -694,7 +695,7 @@ func (s *Server) handleClusterStats(w http.ResponseWriter, r *http.Request, node
 		}
 		open++
 		docCount += len(idx.Docs)
-		ensureFieldTypes(idx)
+		mapping.EnsureFieldTypes(idx)
 		for _, ft := range idx.FieldTypes {
 			entry := fieldTypes[ft]
 			entry[0]++
@@ -1474,7 +1475,7 @@ func (s *Server) handlePutMapping(w http.ResponseWriter, r *http.Request, indexS
 			return
 		}
 		idx.MappingVersion++
-		ensureFieldTypes(idx)
+		mapping.EnsureFieldTypes(idx)
 	}
 	s.bumpState()
 	writeJSON(w, 200, map[string]any{"acknowledged": true})

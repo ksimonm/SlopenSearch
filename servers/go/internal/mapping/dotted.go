@@ -1,4 +1,4 @@
-package main
+package mapping
 
 import (
 	"strconv"
@@ -55,7 +55,7 @@ func insertDottedProperty(root map[string]any, key string, val map[string]any) *
 			if !isObjectMappingDef(val) {
 				return dottedConflict(part)
 			}
-			mergeMappingsDeep(existing, val)
+			MergeDeep(existing, val)
 			return nil
 		}
 		if !has {
@@ -82,8 +82,8 @@ func insertDottedProperty(root map[string]any, key string, val map[string]any) *
 
 // expandDottedProperties rewrites every properties map so dotted names become
 // nested object mappings.
-func expandDottedProperties(props map[string]any) *apierr.Error {
-	keys := sortedAnyKeys(props)
+func ExpandDottedProperties(props map[string]any) *apierr.Error {
+	keys := SortedAnyKeys(props)
 	out := map[string]any{}
 	for _, key := range keys {
 		def, ok := props[key].(map[string]any)
@@ -106,7 +106,7 @@ func expandDottedProperties(props map[string]any) *apierr.Error {
 			continue
 		}
 		if sub, ok := def["properties"].(map[string]any); ok {
-			if err := expandDottedProperties(sub); err != nil {
+			if err := ExpandDottedProperties(sub); err != nil {
 				return err
 			}
 		}
@@ -115,16 +115,16 @@ func expandDottedProperties(props map[string]any) *apierr.Error {
 }
 
 // expandDottedMapping expands the properties of a full mapping document.
-func expandDottedMapping(mappings map[string]any) *apierr.Error {
+func ExpandDottedMapping(mappings map[string]any) *apierr.Error {
 	if props, ok := mappings["properties"].(map[string]any); ok {
-		return expandDottedProperties(props)
+		return ExpandDottedProperties(props)
 	}
 	return nil
 }
 
 // expandDottedObject rewrites a source document into the nested shape used for
 // dynamic mapping detection. The caller keeps the original _source.
-func expandDottedObject(src map[string]any) (map[string]any, *apierr.Error) {
+func ExpandDottedObject(src map[string]any) (map[string]any, *apierr.Error) {
 	keys := make([]string, 0, len(src))
 	for k := range src {
 		keys = append(keys, k)
@@ -158,7 +158,7 @@ func insertDottedObject(root map[string]any, key string, val any) *apierr.Error 
 			em, eok := existing.(map[string]any)
 			vm, vok := val.(map[string]any)
 			if eok && vok {
-				merged, err := expandDottedObject(mergeDottedDocs(em, vm))
+				merged, err := ExpandDottedObject(mergeDottedDocs(em, vm))
 				if err != nil {
 					return err
 				}
@@ -189,7 +189,7 @@ func insertDottedObject(root map[string]any, key string, val any) *apierr.Error 
 func expandDottedValue(val any) any {
 	switch t := val.(type) {
 	case map[string]any:
-		out, err := expandDottedObject(t)
+		out, err := ExpandDottedObject(t)
 		if err != nil {
 			return t
 		}
@@ -256,8 +256,8 @@ func normalizerFound(settings map[string]any, name string) bool {
 
 // validateMappingAnalyzers checks analyzers and normalizers referenced from a
 // mapping against the index settings.
-func validateMappingAnalyzers(props map[string]any, settings map[string]any) *apierr.Error {
-	for _, name := range sortedAnyKeys(props) {
+func ValidateAnalyzers(props map[string]any, settings map[string]any) *apierr.Error {
+	for _, name := range SortedAnyKeys(props) {
 		def, ok := props[name].(map[string]any)
 		if !ok {
 			continue
@@ -299,12 +299,12 @@ func validateMappingAnalyzers(props map[string]any, settings map[string]any) *ap
 			}
 		}
 		if sub, ok := def["properties"].(map[string]any); ok {
-			if err := validateMappingAnalyzers(sub, settings); err != nil {
+			if err := ValidateAnalyzers(sub, settings); err != nil {
 				return err
 			}
 		}
 		if fields, ok := def["fields"].(map[string]any); ok {
-			if err := validateMappingAnalyzers(fields, settings); err != nil {
+			if err := ValidateAnalyzers(fields, settings); err != nil {
 				return err
 			}
 		}
@@ -318,7 +318,7 @@ var builtinMetadataFields = []string{
 	"_ignored", "_id", "_index", "_routing", "_source", "_data_stream_timestamp",
 }
 
-func validateBuiltinFieldNameLength(indexSettings map[string]any) *apierr.Error {
+func ValidateBuiltinFieldNameLength(indexSettings map[string]any) *apierr.Error {
 	limit, ok := settings.Int(indexSettings, "mapping.field_name_length.limit")
 	if !ok {
 		return nil
@@ -425,7 +425,7 @@ func nestedObjectsLimitError(limit int) *apierr.Error {
 
 // indexDocCount returns the number of documents including nested documents,
 // which is what _cat/indices reports as docs.count.
-func indexDocCount(idx *model.Index) int {
+func IndexDocCount(idx *model.Index) int {
 	count := len(idx.Docs)
 	props, _ := idx.Mappings["properties"].(map[string]any)
 	if props == nil {

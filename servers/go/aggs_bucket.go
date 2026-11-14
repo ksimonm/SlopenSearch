@@ -14,6 +14,7 @@ import (
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/dates"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 )
@@ -67,7 +68,7 @@ func missingAgg(field string, docs []map[string]any, idx *model.Index, pathPrefi
 	parts := strings.Split(resolved, ".")
 	for i := 1; i < len(parts); i++ {
 		parent := strings.Join(parts[:i], ".")
-		def, ok := mappingFieldDef(idx, parent)
+		def, ok := mapping.FieldDef(idx, parent)
 		if ok {
 			if t, _ := def["type"].(string); t == "nested" {
 				nestedParent = true
@@ -81,7 +82,7 @@ func missingAgg(field string, docs []map[string]any, idx *model.Index, pathPrefi
 			bucket = append(bucket, d)
 			continue
 		}
-		v, ok := fieldValue(d, resolved)
+		v, ok := mapping.FieldValue(d, resolved)
 		if !ok || isEmptyAggValue(v) {
 			bucket = append(bucket, d)
 		}
@@ -117,7 +118,7 @@ func rangeAggSpec(name, field string, spec map[string]any, docs []map[string]any
 			Reason: "No [ranges] specified for the [" + name + "] aggregation"}
 	}
 	missing, hasMissing := spec["missing"]
-	format, _ := toString(spec["format"])
+	format, _ := jsonv.ToString(spec["format"])
 	keyed, _ := spec["keyed"].(bool)
 	type rng struct {
 		from, to float64
@@ -142,7 +143,7 @@ func rangeAggSpec(name, field string, spec map[string]any, docs []map[string]any
 		if v, ok := jsonv.ToFloat(r["to"]); ok {
 			x.to, x.hasTo = v, true
 		}
-		if k, ok := toString(r["key"]); ok {
+		if k, ok := jsonv.ToString(r["key"]); ok {
 			x.key, x.custom = k, true
 		}
 		parsed = append(parsed, x)
@@ -250,7 +251,7 @@ func parseRangeDateValue(v any, def map[string]any, format, tz string, now time.
 	case float64:
 		return int64(t), true
 	}
-	s, ok := toString(v)
+	s, ok := jsonv.ToString(v)
 	if !ok {
 		return 0, false
 	}
@@ -352,13 +353,13 @@ func dateRangeAgg(name, field string, spec map[string]any, docs []map[string]any
 			Reason: "No [ranges] specified for the [" + name + "] aggregation"}
 	}
 	resolved := resolveField(field, pathPrefix)
-	def, _ := mappingFieldDef(idx, resolved)
+	def, _ := mapping.FieldDef(idx, resolved)
 	ft, _ := def["type"].(string)
 	if ft == "" {
 		ft = "date"
 	}
-	format, _ := toString(spec["format"])
-	tz, _ := toString(spec["time_zone"])
+	format, _ := jsonv.ToString(spec["format"])
+	tz, _ := jsonv.ToString(spec["time_zone"])
 	keyed, _ := spec["keyed"].(bool)
 	missing, hasMissing := spec["missing"]
 	now := time.Now().UTC()
@@ -388,7 +389,7 @@ func dateRangeAgg(name, field string, spec map[string]any, docs []map[string]any
 				x.to, x.hasTo = ms, true
 			}
 		}
-		if k, ok := toString(r["key"]); ok {
+		if k, ok := jsonv.ToString(r["key"]); ok {
 			x.key, x.custom = k, true
 		}
 		parsed = append(parsed, x)
@@ -531,7 +532,7 @@ func ipRangeAgg(name, field string, spec map[string]any, docs []map[string]any, 
 			continue
 		}
 		x := &rng{}
-		if mask, ok := toString(r["mask"]); ok {
+		if mask, ok := jsonv.ToString(r["mask"]); ok {
 			_, ipnet, err := net.ParseCIDR(mask)
 			if err != nil {
 				prefix := ""
@@ -554,25 +555,25 @@ func ipRangeAgg(name, field string, spec map[string]any, docs []map[string]any, 
 			x.to, x.hasTo = to, true
 			x.key = mask
 			x.custom = true
-			if k, ok := toString(r["key"]); ok {
+			if k, ok := jsonv.ToString(r["key"]); ok {
 				x.key = k
 			}
 		} else {
-			if v, ok := toString(r["from"]); ok {
+			if v, ok := jsonv.ToString(r["from"]); ok {
 				ip := ipToBytes(v)
 				if ip != nil {
 					x.from, x.hasFrom = ip, true
 					x.fromS = ip.String()
 				}
 			}
-			if v, ok := toString(r["to"]); ok {
+			if v, ok := jsonv.ToString(r["to"]); ok {
 				ip := ipToBytes(v)
 				if ip != nil {
 					x.to, x.hasTo = ip, true
 					x.toS = ip.String()
 				}
 			}
-			if k, ok := toString(r["key"]); ok {
+			if k, ok := jsonv.ToString(r["key"]); ok {
 				x.key, x.custom = k, true
 			}
 		}
@@ -600,7 +601,7 @@ func ipRangeAgg(name, field string, spec map[string]any, docs []map[string]any, 
 			if !ok {
 				continue
 			}
-			s, _ := toString(v)
+			s, _ := jsonv.ToString(v)
 			ip := ipToBytes(s)
 			if ip == nil {
 				continue
@@ -677,7 +678,7 @@ func filtersAgg(name string, spec map[string]any, docs []map[string]any, idx *mo
 	if !ok {
 		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "[filters] cannot be empty."}
 	}
-	otherKey, hasOtherKey := toString(spec["other_bucket_key"])
+	otherKey, hasOtherKey := jsonv.ToString(spec["other_bucket_key"])
 	other, _ := spec["other_bucket"].(bool)
 	if hasOtherKey {
 		other = true
@@ -833,7 +834,7 @@ func multiTermsAgg(name string, spec map[string]any, docs []map[string]any, idx 
 	infos := make([]fieldInfo, 0, len(terms))
 	for _, raw := range terms {
 		m, _ := raw.(map[string]any)
-		f, _ := toString(m["field"])
+		f, _ := jsonv.ToString(m["field"])
 		resolved := resolveField(f, pathPrefix)
 		ft, _ := idx.FieldTypes[resolved]
 		mi, hm := m["missing"]
@@ -851,7 +852,7 @@ func multiTermsAgg(name string, spec map[string]any, docs []map[string]any, idx 
 	for _, d := range docs {
 		combos := [][]any{{}}
 		for _, fi := range infos {
-			v, ok := fieldValue(d, fi.resolved)
+			v, ok := mapping.FieldValue(d, fi.resolved)
 			var vals []any
 			if ok {
 				vals = flattenTermValues(v)
@@ -890,7 +891,7 @@ func multiTermsAgg(name string, spec map[string]any, docs []map[string]any, idx 
 					if hasKas {
 						kasParts[i] = kas
 					} else {
-						s, _ := toString(k)
+						s, _ := jsonv.ToString(k)
 						kasParts[i] = s
 					}
 				}
@@ -997,7 +998,7 @@ func multiKeyString(v any) string {
 	arr, _ := v.([]any)
 	parts := make([]string, len(arr))
 	for i, e := range arr {
-		s, _ := toString(e)
+		s, _ := jsonv.ToString(e)
 		parts[i] = s
 	}
 	return strings.Join(parts, "|")
@@ -1047,21 +1048,21 @@ func compositeAgg(name string, spec map[string]any, docs []map[string]any, idx *
 				switch kind {
 				case "terms":
 					src.kind = "terms"
-					src.field, _ = toString(ss["field"])
+					src.field, _ = jsonv.ToString(ss["field"])
 					src.script = ss["script"]
 					src.missingBucket, _ = ss["missing_bucket"].(bool)
-					if o, _ := toString(ss["order"]); o == "desc" {
+					if o, _ := jsonv.ToString(ss["order"]); o == "desc" {
 						src.desc = true
 					}
 				case "histogram":
 					src.kind = "histogram"
-					src.field, _ = toString(ss["field"])
+					src.field, _ = jsonv.ToString(ss["field"])
 					src.interval, _ = jsonv.ToFloat(ss["interval"])
 					if src.interval <= 0 {
 						src.interval = 1
 					}
 					src.missingBucket, _ = ss["missing_bucket"].(bool)
-					if o, _ := toString(ss["order"]); o == "desc" {
+					if o, _ := jsonv.ToString(ss["order"]); o == "desc" {
 						src.desc = true
 					}
 					src.offsetMs = int64(0)
@@ -1070,19 +1071,19 @@ func compositeAgg(name string, spec map[string]any, docs []map[string]any, idx *
 					}
 				case "date_histogram":
 					src.kind = "date_histogram"
-					src.field, _ = toString(ss["field"])
-					src.format, _ = toString(ss["format"])
-					src.tz, _ = toString(ss["time_zone"])
+					src.field, _ = jsonv.ToString(ss["field"])
+					src.format, _ = jsonv.ToString(ss["format"])
+					src.tz, _ = jsonv.ToString(ss["time_zone"])
 					loc, terr := loadAggLocation(src.tz)
 					if terr != nil {
 						return nil, terr
 					}
 					src.loc = loc
-					if off, ok := toString(ss["offset"]); ok {
+					if off, ok := jsonv.ToString(ss["offset"]); ok {
 						src.offsetMs = parseDateOffsetMillis(off)
 					}
 					if v, ok := ss["calendar_interval"]; ok {
-						s, _ := toString(v)
+						s, _ := jsonv.ToString(v)
 						u, ok := parseCalendarUnit(s)
 						if !ok {
 							return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
@@ -1092,7 +1093,7 @@ func compositeAgg(name string, spec map[string]any, docs []map[string]any, idx *
 						}
 						src.calUnit = u
 					} else if v, ok := ss["fixed_interval"]; ok {
-						s, _ := toString(v)
+						s, _ := jsonv.ToString(v)
 						ms, ok := parseFixedInterval(s)
 						if !ok {
 							return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
@@ -1102,7 +1103,7 @@ func compositeAgg(name string, spec map[string]any, docs []map[string]any, idx *
 						}
 						src.fixedMs, src.isFixed = ms, true
 					} else if v, ok := ss["interval"]; ok {
-						s, _ := toString(v)
+						s, _ := jsonv.ToString(v)
 						if u, ok := parseCalendarUnit(s); ok {
 							src.calUnit = u
 						} else if ms, ok := parseFixedInterval(s); ok {
@@ -1110,7 +1111,7 @@ func compositeAgg(name string, spec map[string]any, docs []map[string]any, idx *
 						}
 					}
 					src.missingBucket, _ = ss["missing_bucket"].(bool)
-					if o, _ := toString(ss["order"]); o == "desc" {
+					if o, _ := jsonv.ToString(ss["order"]); o == "desc" {
 						src.desc = true
 					}
 				}
@@ -1298,7 +1299,7 @@ func compositeValues(src *compositeSource, doc map[string]any, idx *model.Index,
 					out = append(out, f != 0)
 				}
 			default:
-				s, _ := toString(e)
+				s, _ := jsonv.ToString(e)
 				out = append(out, s)
 			}
 		}
@@ -1493,7 +1494,7 @@ func geotileKey(lat, lon float64, precision int) string {
 }
 
 func geoHashGridAgg(name string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool, tile bool) (any, *apierr.Error) {
-	field, _ := toString(spec["field"])
+	field, _ := jsonv.ToString(spec["field"])
 	precision := intField(spec, "precision", 5)
 	maxP := 12
 	minP := 1
@@ -1564,13 +1565,13 @@ func geoHashGridAgg(name string, spec map[string]any, docs []map[string]any, idx
 }
 
 func geoDistanceAgg(name string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
-	field, _ := toString(spec["field"])
+	field, _ := jsonv.ToString(spec["field"])
 	olat, olon, ok := geoPointOf(spec["origin"])
 	if !ok {
 		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "failed to parse geo_distance point"}
 	}
-	unit, _ := toString(spec["unit"])
+	unit, _ := jsonv.ToString(spec["unit"])
 	unitM := unitToMeters(unit)
 	if unitM == 0 {
 		unitM = 1
@@ -1594,7 +1595,7 @@ func geoDistanceAgg(name string, spec map[string]any, docs []map[string]any, idx
 		if v, ok := jsonv.ToFloat(r["to"]); ok {
 			x.to, x.hasTo = v, true
 		}
-		if k, ok := toString(r["key"]); ok {
+		if k, ok := jsonv.ToString(r["key"]); ok {
 			x.key = k
 		}
 		parsed = append(parsed, x)
@@ -1672,7 +1673,7 @@ func adjacencyMatrixAgg(name string, spec map[string]any, docs []map[string]any,
 		return nil, &apierr.Error{Type: "aggregation_execution_exception", Status: 500,
 			Reason: "[" + name + "] is missing : filters parameter"}
 	}
-	sep, _ := toString(spec["separator"])
+	sep, _ := jsonv.ToString(spec["separator"])
 	if sep == "" {
 		sep = "&"
 	}
@@ -1761,7 +1762,7 @@ func samplerAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pa
 		}
 		selected = sorted
 	} else {
-		field, _ := toString(spec["field"])
+		field, _ := jsonv.ToString(spec["field"])
 		maxPer := intField(spec, "max_docs_per_value", 1)
 		if maxPer <= 0 {
 			maxPer = 1
@@ -1779,7 +1780,7 @@ func samplerAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pa
 			if len(vals) == 0 {
 				continue
 			}
-			key, _ := toString(vals[0])
+			key, _ := jsonv.ToString(vals[0])
 			if counts[key] >= maxPer {
 				continue
 			}
@@ -1893,8 +1894,8 @@ func autoDateHistogramAgg(field string, spec map[string]any, docs []map[string]a
 	}
 	resolved := resolveField(field, pathPrefix)
 	ft, _ := idx.FieldTypes[resolved]
-	format, _ := toString(spec["format"])
-	tz, _ := toString(spec["time_zone"])
+	format, _ := jsonv.ToString(spec["format"])
+	tz, _ := jsonv.ToString(spec["time_zone"])
 	loc, terr := loadAggLocation(tz)
 	if terr != nil {
 		return nil, terr

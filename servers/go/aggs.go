@@ -15,6 +15,7 @@ import (
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/dates"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
@@ -28,7 +29,7 @@ func resolveField(field, pathPrefix string) string {
 }
 
 func aggFieldValue(doc map[string]any, field, pathPrefix string) (any, bool) {
-	return fieldValue(doc, resolveField(field, pathPrefix))
+	return mapping.FieldValue(doc, resolveField(field, pathPrefix))
 }
 
 // injectAliasValues copies field-alias values into the aggregation document
@@ -52,10 +53,10 @@ func injectAliasValues(mappings map[string]any, prefix string, doc map[string]an
 			if target == "" {
 				continue
 			}
-			if _, present := fieldValue(doc, path); present {
+			if _, present := mapping.FieldValue(doc, path); present {
 				continue
 			}
-			if v, ok := fieldValue(doc, target); ok {
+			if v, ok := mapping.FieldValue(doc, target); ok {
 				doc[path] = deepCopySource(v)
 			}
 			continue
@@ -95,7 +96,7 @@ func injectAggDocValues(h aggHit, doc map[string]any) {
 		return
 	}
 	for field, vals := range dv {
-		def, ok := mappingFieldDef(h.idx, field)
+		def, ok := mapping.FieldDef(h.idx, field)
 		if !ok {
 			continue
 		}
@@ -108,8 +109,8 @@ func injectAggDocValues(h aggHit, doc map[string]any) {
 			analyzer, _ := def["analyzer"].(string)
 			toks := []any{}
 			for _, v := range vals {
-				s, _ := valueScalarString(v)
-				for _, t := range analysis.Tokens(analysisIndex(h.idx), analyzer, s) {
+				s, _ := jsonv.ScalarString(v)
+				for _, t := range analysis.Tokens(mapping.AnalysisIndex(h.idx), analyzer, s) {
 					toks = append(toks, t.Term)
 				}
 			}
@@ -160,7 +161,7 @@ func aggDocs(hits []aggHit) []map[string]any {
 					if !ok || len(vals) == 0 {
 						continue
 					}
-					if _, present := fieldValue(d, name); present {
+					if _, present := mapping.FieldValue(d, name); present {
 						continue
 					}
 					if len(vals) == 1 {
@@ -254,7 +255,7 @@ func evalAggsMode(aggs map[string]any, hits []aggHit, idx *model.Index, pathPref
 
 func typedAggPrefix(def map[string]any, idx *model.Index, pathPrefix string) string {
 	if t, ok := def["terms"].(map[string]any); ok {
-		field, _ := toString(t["field"])
+		field, _ := jsonv.ToString(t["field"])
 		switch fieldType(idx, resolveField(field, pathPrefix)) {
 		case "byte", "short", "integer", "long", "unsigned_long", "date", "date_nanos", "boolean":
 			return "lterms"
@@ -264,7 +265,7 @@ func typedAggPrefix(def map[string]any, idx *model.Index, pathPrefix string) str
 		return "sterms"
 	}
 	if t, ok := def["rare_terms"].(map[string]any); ok {
-		field, _ := toString(t["field"])
+		field, _ := jsonv.ToString(t["field"])
 		switch fieldType(idx, resolveField(field, pathPrefix)) {
 		case "byte", "short", "integer", "long", "unsigned_long", "date", "date_nanos", "boolean":
 			return "lrareterms"
@@ -349,11 +350,11 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *mod
 		return rareTermsAgg(name, t, docs, idx, pathPrefix, subAggsOf(def), typed)
 	}
 	if t, ok := def["date_histogram"].(map[string]any); ok {
-		field, _ := toString(t["field"])
+		field, _ := jsonv.ToString(t["field"])
 		return dateHistogramAgg(field, t, docs, idx, pathPrefix, subAggsOf(def), typed)
 	}
 	if t, ok := def["histogram"].(map[string]any); ok {
-		field, _ := toString(t["field"])
+		field, _ := jsonv.ToString(t["field"])
 		docs, field, err := scriptValueDocs(t, docs, idx, field)
 		if err != nil {
 			return nil, err
@@ -364,26 +365,26 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *mod
 		return filterAgg(t, docs, idx, pathPrefix, subAggsOf(def), typed)
 	}
 	if t, ok := def["nested"].(map[string]any); ok {
-		path, _ := toString(t["path"])
+		path, _ := jsonv.ToString(t["path"])
 		return nestedAgg(path, docs, idx, pathPrefix, subAggsOf(def), typed)
 	}
 	if t, ok := def["reverse_nested"].(map[string]any); ok {
-		path, _ := toString(t["path"])
+		path, _ := jsonv.ToString(t["path"])
 		return reverseNestedAgg(name, path, docs, idx, pathPrefix, subAggsOf(def), typed)
 	}
 	if t, ok := def["children"].(map[string]any); ok {
-		typ, _ := toString(t["type"])
+		typ, _ := jsonv.ToString(t["type"])
 		return childrenAgg(typ, docs, idx, subAggsOf(def), typed)
 	}
 	if t, ok := def["parent"].(map[string]any); ok {
-		typ, _ := toString(t["type"])
+		typ, _ := jsonv.ToString(t["type"])
 		return parentAgg(typ, docs, idx, subAggsOf(def), typed)
 	}
 	if t, ok := def["avg"].(map[string]any); ok {
 		if err := validateMetricParams("avg", t, commonMetricParams); err != nil {
 			return nil, err
 		}
-		field, _ := toString(t["field"])
+		field, _ := jsonv.ToString(t["field"])
 		if err := metricUnsupported(idx, field, "avg", pathPrefix); err != nil {
 			return nil, err
 		}
@@ -397,7 +398,7 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *mod
 		if err := validateMetricParams("min", t, commonMetricParams); err != nil {
 			return nil, err
 		}
-		field, _ := toString(t["field"])
+		field, _ := jsonv.ToString(t["field"])
 		if err := metricUnsupported(idx, field, "min", pathPrefix); err != nil {
 			return nil, err
 		}
@@ -411,7 +412,7 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *mod
 		if err := validateMetricParams("max", t, commonMetricParams); err != nil {
 			return nil, err
 		}
-		field, _ := toString(t["field"])
+		field, _ := jsonv.ToString(t["field"])
 		if err := metricUnsupported(idx, field, "max", pathPrefix); err != nil {
 			return nil, err
 		}
@@ -425,7 +426,7 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *mod
 		if err := validateMetricParams("sum", t, commonMetricParams); err != nil {
 			return nil, err
 		}
-		field, _ := toString(t["field"])
+		field, _ := jsonv.ToString(t["field"])
 		if err := metricUnsupported(idx, field, "sum", pathPrefix); err != nil {
 			return nil, err
 		}
@@ -513,7 +514,7 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *mod
 	}
 	if _, ok := def["missing"].(map[string]any); ok {
 		t := def["missing"].(map[string]any)
-		field, _ := toString(t["field"])
+		field, _ := jsonv.ToString(t["field"])
 		return missingAgg(field, docs, idx, pathPrefix, subAggsOf(def), typed)
 	}
 	if t, ok := def["global"].(map[string]any); ok {
@@ -526,7 +527,7 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *mod
 		return filtersAgg(name, t, docs, idx, pathPrefix, subAggsOf(def), typed)
 	}
 	if t, ok := def["range"].(map[string]any); ok {
-		field, _ := toString(t["field"])
+		field, _ := jsonv.ToString(t["field"])
 		docs, field, err := scriptValueDocs(t, docs, idx, field)
 		if err != nil {
 			return nil, err
@@ -534,11 +535,11 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *mod
 		return rangeAggSpec(name, field, t, docs, idx, pathPrefix, subAggsOf(def), typed)
 	}
 	if t, ok := def["date_range"].(map[string]any); ok {
-		field, _ := toString(t["field"])
+		field, _ := jsonv.ToString(t["field"])
 		return dateRangeAgg(name, field, t, docs, idx, pathPrefix, subAggsOf(def), typed)
 	}
 	if t, ok := def["ip_range"].(map[string]any); ok {
-		field, _ := toString(t["field"])
+		field, _ := jsonv.ToString(t["field"])
 		return ipRangeAgg(name, field, t, docs, idx, pathPrefix, subAggsOf(def), typed)
 	}
 	if t, ok := def["multi_terms"].(map[string]any); ok {
@@ -566,11 +567,11 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *mod
 		return samplerAgg(t, docs, idx, pathPrefix, subAggsOf(def), typed, true)
 	}
 	if t, ok := def["auto_date_histogram"].(map[string]any); ok {
-		field, _ := toString(t["field"])
+		field, _ := jsonv.ToString(t["field"])
 		return autoDateHistogramAgg(field, t, docs, idx, pathPrefix, subAggsOf(def), typed)
 	}
 	if t, ok := def["variable_width_histogram"].(map[string]any); ok {
-		field, _ := toString(t["field"])
+		field, _ := jsonv.ToString(t["field"])
 		return variableWidthHistogramAgg(field, t, docs, idx, pathPrefix, subAggsOf(def), typed)
 	}
 	if aggName := unknownAggName(def); aggName != "" {
@@ -687,11 +688,11 @@ func termKeyFor(v any, ft, valueType, format string, idx *model.Index, field str
 				return k, "", false, canonicalTermKey(k), true
 			}
 		}
-		if s, ok := toString(v); ok {
+		if s, ok := jsonv.ToString(v); ok {
 			return s, "", false, canonicalTermKey(s), true
 		}
 	}
-	if s, ok := toString(v); ok {
+	if s, ok := jsonv.ToString(v); ok {
 		return s, "", false, canonicalTermKey(s), true
 	}
 	return nil, "", false, "", false
@@ -708,7 +709,7 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *mode
 				Reason: "[terms] unknown field [" + k + "]"}
 		}
 	}
-	field, _ := toString(spec["field"])
+	field, _ := jsonv.ToString(spec["field"])
 	resolved := resolveField(field, pathPrefix)
 	ft, mapped := idx.FieldTypes[resolved]
 	if !mapped && resolved != field {
@@ -736,7 +737,7 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *mode
 	}
 	if ft == "text" {
 		fd := false
-		if def, ok := mappingFieldDef(idx, resolved); ok {
+		if def, ok := mapping.FieldDef(idx, resolved); ok {
 			fd, _ = def["fielddata"].(bool)
 		}
 		if !fd {
@@ -746,7 +747,7 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *mode
 				CausedBy:  &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 		}
 	}
-	if def, ok := mappingFieldDef(idx, resolved); ok {
+	if def, ok := mapping.FieldDef(idx, resolved); ok {
 		if dv, ok := def["doc_values"].(bool); ok && !dv {
 			if err := checkDocValuesLoadable(idx, resolved); err != nil {
 				return nil, err
@@ -760,16 +761,16 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *mode
 			CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 				Reason: fmt.Sprintf("[size] must be greater than 0. Found [%d] in [%s]", size, name)}}
 	}
-	if hint, ok := toString(spec["execution_hint"]); ok && hint != "" && hint != "map" && hint != "global_ordinals" {
+	if hint, ok := jsonv.ToString(spec["execution_hint"]); ok && hint != "" && hint != "map" && hint != "global_ordinals" {
 		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "Unknown `execution_hint`: [" + hint + "], expected any of [map, global_ordinals]"}
 	}
-	if mode, ok := toString(spec["collect_mode"]); ok && mode != "" && mode != "breadth_first" && mode != "depth_first" {
+	if mode, ok := jsonv.ToString(spec["collect_mode"]); ok && mode != "" && mode != "breadth_first" && mode != "depth_first" {
 		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "no [collect_mode] found for value [" + mode + "]"}
 	}
-	valueType, _ := toString(spec["value_type"])
-	format, _ := toString(spec["format"])
+	valueType, _ := jsonv.ToString(spec["value_type"])
+	format, _ := jsonv.ToString(spec["format"])
 	missingRaw, hasMissing := spec["missing"]
 	inc, hasInc := spec["include"]
 	exc, hasExc := spec["exclude"]
@@ -859,11 +860,11 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *mode
 			vals = nil
 		}
 		if mapped && len(vals) > 0 {
-			if def, ok := mappingFieldDef(idx, resolved); ok {
-				if limit, ok := ignoreAboveOf(def); ok {
+			if def, ok := mapping.FieldDef(idx, resolved); ok {
+				if limit, ok := mapping.IgnoreAboveOf(def); ok {
 					filtered := vals[:0]
 					for _, v := range vals {
-						if s, ok := valueScalarString(v); ok && len([]rune(s)) > limit {
+						if s, ok := jsonv.ScalarString(v); ok && len([]rune(s)) > limit {
 							continue
 						}
 						filtered = append(filtered, v)
@@ -1090,7 +1091,7 @@ func parseTermOrders(raw any) ([]termOrder, *apierr.Error) {
 		switch t := v.(type) {
 		case map[string]any:
 			for k, dirRaw := range t {
-				dir, _ := toString(dirRaw)
+				dir, _ := jsonv.ToString(dirRaw)
 				if dir != "asc" && dir != "desc" {
 					return &apierr.Error{Type: "parsing_exception", Status: 400,
 						Reason: "Unknown order direction [" + dir + "]"}
@@ -1498,7 +1499,7 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 	var fixedMs int64
 	isFixed := false
 	if hasCal {
-		s, _ := toString(calRaw)
+		s, _ := jsonv.ToString(calRaw)
 		u, ok := parseCalendarUnit(s)
 		if !ok {
 			return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
@@ -1508,7 +1509,7 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 		}
 		unit = u
 	} else if hasFixed {
-		s, _ := toString(fixedRaw)
+		s, _ := jsonv.ToString(fixedRaw)
 		ms, ok := parseFixedInterval(s)
 		if !ok {
 			return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
@@ -1519,7 +1520,7 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 		fixedMs = ms
 		isFixed = true
 	} else if hasInterval {
-		s, _ := toString(intervalRaw)
+		s, _ := jsonv.ToString(intervalRaw)
 		if u, ok := parseCalendarUnit(s); ok && (u == "month" || u == "quarter" || u == "year" || u == "week") {
 			unit = u
 		} else if ms, ok := parseFixedInterval(s); ok {
@@ -1537,18 +1538,18 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 		return nil, &apierr.Error{Type: "parsing_exception", Status: 400,
 			Reason: "Invalid interval specified, must be non-null and non-empty"}
 	}
-	tz, _ := toString(spec["time_zone"])
+	tz, _ := jsonv.ToString(spec["time_zone"])
 	loc, terr := loadAggLocation(tz)
 	if terr != nil {
 		return nil, terr
 	}
 	offsetMs := int64(0)
 	if offRaw, ok := spec["offset"]; ok {
-		if s, ok := toString(offRaw); ok {
+		if s, ok := jsonv.ToString(offRaw); ok {
 			offsetMs = parseDateOffsetMillis(s)
 		}
 	}
-	format, _ := toString(spec["format"])
+	format, _ := jsonv.ToString(spec["format"])
 	keyed, _ := spec["keyed"].(bool)
 	minDocCount := intField(spec, "min_doc_count", 0)
 	hasKeyString := true
@@ -1772,7 +1773,7 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 	if keyed {
 		out := ojson.Object{}
 		for _, b := range bmaps {
-			kas, _ := toString(b["key_as_string"])
+			kas, _ := jsonv.ToString(b["key_as_string"])
 			out = append(out, ojson.KV{kas, b})
 		}
 		return map[string]any{"buckets": out}, nil
@@ -1829,11 +1830,11 @@ func parseDateHistBound(v any, ft string, idx *model.Index, field, format string
 		n, err := t.Int64()
 		return n, err == nil
 	}
-	s, ok := toString(v)
+	s, ok := jsonv.ToString(v)
 	if !ok {
 		return 0, false
 	}
-	def, _ := mappingFieldDef(idx, field)
+	def, _ := mapping.FieldDef(idx, field)
 	if format != "" {
 		def = map[string]any{"type": "date", "format": format}
 	}
@@ -1858,7 +1859,7 @@ func dateMillisFor(idx *model.Index, field, ft string, v any) (int64, bool) {
 		n, err := t.Int64()
 		return n, err == nil
 	case string:
-		def, _ := mappingFieldDef(idx, field)
+		def, _ := mapping.FieldDef(idx, field)
 		return dates.ParseAny(def, t)
 	}
 	return 0, false
@@ -1874,7 +1875,7 @@ func histogramAgg(name, field string, spec map[string]any, docs []map[string]any
 	rawInterval, hasInterval := spec["interval"]
 	interval, ok := jsonv.ToFloat(rawInterval)
 	if !ok {
-		if s, ok := toString(rawInterval); ok {
+		if s, ok := jsonv.ToString(rawInterval); ok {
 			interval, _ = strconv.ParseFloat(s, 64)
 		}
 	}

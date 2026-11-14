@@ -12,6 +12,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 )
 
@@ -21,20 +22,15 @@ import (
 
 var knnSpaceTypes = []string{"l2", "cosinesimil", "l1", "linf", "innerproduct", "hamming"}
 
-var knnFieldParams = map[string]bool{
-	"type": true, "dimension": true, "data_type": true, "space_type": true, "method": true,
-	"mode": true, "compression_level": true, "doc_values": true, "model_id": true,
-}
-
 func knnValidation(msg string) *apierr.Error {
 	r := "Validation Failed: 1: " + msg + ";"
-	return wrappedMappingError(r, "validation_exception")
+	return mapping.WrappedError(r, "validation_exception")
 }
 
 // knnIndexMappings validates and normalizes knn_vector fields of an index
 // that has index.knn enabled.
 func knnIndexMappings(props map[string]any) *apierr.Error {
-	for _, name := range sortedAnyKeys(props) {
+	for _, name := range mapping.SortedAnyKeys(props) {
 		def, ok := props[name].(map[string]any)
 		if !ok {
 			continue
@@ -55,9 +51,9 @@ func knnIndexMappings(props map[string]any) *apierr.Error {
 }
 
 func knnValidateField(name string, def map[string]any) *apierr.Error {
-	for _, k := range sortedAnyKeys(def) {
-		if !knnFieldParams[k] {
-			return wrappedMappingError(fmt.Sprintf("unknown parameter [%s] on mapper [%s] of type [knn_vector]", k, name), "mapper_parsing_exception")
+	for _, k := range mapping.SortedAnyKeys(def) {
+		if !mapping.KnnFieldParams[k] {
+			return mapping.WrappedError(fmt.Sprintf("unknown parameter [%s] on mapper [%s] of type [knn_vector]", k, name), "mapper_parsing_exception")
 		}
 	}
 	var dim int64
@@ -71,7 +67,7 @@ func knnValidateField(name string, def map[string]any) *apierr.Error {
 	case string:
 		n, err := strconv.ParseInt(d, 10, 64)
 		if err != nil {
-			return wrappedMappingError(fmt.Sprintf("Unable to parse [dimension] from provided value [%s] for vector [%s]", d, name), "illegal_argument_exception")
+			return mapping.WrappedError(fmt.Sprintf("Unable to parse [dimension] from provided value [%s] for vector [%s]", d, name), "illegal_argument_exception")
 		}
 		dim = n
 	default:
@@ -80,12 +76,12 @@ func knnValidateField(name string, def map[string]any) *apierr.Error {
 		}
 	}
 	if dim <= 0 {
-		return wrappedMappingError("Dimension value must be greater than 0 for vector: "+name, "illegal_argument_exception")
+		return mapping.WrappedError("Dimension value must be greater than 0 for vector: "+name, "illegal_argument_exception")
 	}
 	if m, ok := def["mode"]; ok {
 		s, _ := m.(string)
 		if s != "in_memory" && s != "on_disk" {
-			return wrappedMappingError(fmt.Sprintf("Unknown value [%v] for field [mode] - accepted values are [null, in_memory, on_disk]", m), "mapper_parsing_exception")
+			return mapping.WrappedError(fmt.Sprintf("Unknown value [%v] for field [mode] - accepted values are [null, in_memory, on_disk]", m), "mapper_parsing_exception")
 		}
 	}
 	if c, ok := def["compression_level"]; ok {
@@ -93,7 +89,7 @@ func knnValidateField(name string, def map[string]any) *apierr.Error {
 		switch s {
 		case "1x", "2x", "4x", "8x", "16x", "32x":
 		default:
-			return wrappedMappingError(fmt.Sprintf("Unknown value [%v] for field [compression_level] - accepted values are [, 1x, 2x, 4x, 8x, 16x, 32x]", c), "mapper_parsing_exception")
+			return mapping.WrappedError(fmt.Sprintf("Unknown value [%v] for field [compression_level] - accepted values are [, 1x, 2x, 4x, 8x, 16x, 32x]", c), "mapper_parsing_exception")
 		}
 	}
 	dataType := "float"
@@ -103,7 +99,7 @@ func knnValidateField(name string, def map[string]any) *apierr.Error {
 		switch s {
 		case "binary", "byte", "float", "half_float":
 		default:
-			return wrappedMappingError("Invalid value provided for [data_type] field. Supported values are [binary,byte,float,half_float]", "illegal_argument_exception")
+			return mapping.WrappedError("Invalid value provided for [data_type] field. Supported values are [binary,byte,float,half_float]", "illegal_argument_exception")
 		}
 		dataType = s
 		def["data_type"] = strings.ToUpper(s)
@@ -115,7 +111,7 @@ func knnValidateField(name string, def map[string]any) *apierr.Error {
 	if hasMethod {
 		n, ok := method["name"].(string)
 		if !ok {
-			return wrappedMappingError("name needs to be set", "mapper_parsing_exception")
+			return mapping.WrappedError("name needs to be set", "mapper_parsing_exception")
 		}
 		methodName = n
 		if e, ok := method["engine"].(string); ok {
@@ -124,13 +120,13 @@ func knnValidateField(name string, def map[string]any) *apierr.Error {
 		switch engine {
 		case "faiss", "lucene":
 		case "nmslib":
-			return wrappedMappingError("nmslib engine is deprecated in OpenSearch  and cannot be used for new index creation in OpenSearch from  3.0.0.", "illegal_argument_exception")
+			return mapping.WrappedError("nmslib engine is deprecated in OpenSearch  and cannot be used for new index creation in OpenSearch from  3.0.0.", "illegal_argument_exception")
 		default:
-			return wrappedMappingError("Invalid engine: "+engine, "mapper_parsing_exception")
+			return mapping.WrappedError("Invalid engine: "+engine, "mapper_parsing_exception")
 		}
 		methodSpace, _ = method["space_type"].(string)
 		if topSpace != "" && methodSpace != "" && topSpace != methodSpace {
-			return wrappedMappingError(fmt.Sprintf(`Cannot specify conflicting space types: "[%s]" "[%s]"`, methodSpace, topSpace), "mapper_parsing_exception")
+			return mapping.WrappedError(fmt.Sprintf(`Cannot specify conflicting space types: "[%s]" "[%s]"`, methodSpace, topSpace), "mapper_parsing_exception")
 		}
 		params, _ = method["parameters"].(map[string]any)
 	}
@@ -146,13 +142,13 @@ func knnValidateField(name string, def map[string]any) *apierr.Error {
 			}
 		}
 		if !found {
-			return wrappedMappingError("Unable to find space: "+space+" . Valid values are: [l2, cosinesimil, l1, linf, innerproduct, hamming]", "illegal_argument_exception")
+			return mapping.WrappedError("Unable to find space: "+space+" . Valid values are: [l2, cosinesimil, l1, linf, innerproduct, hamming]", "illegal_argument_exception")
 		}
 		if space == "hamming" && dataType != "binary" {
-			return wrappedMappingError(fmt.Sprintf("Space type [hamming] is not supported with [%s] data type", dataType), "illegal_argument_exception")
+			return mapping.WrappedError(fmt.Sprintf("Space type [hamming] is not supported with [%s] data type", dataType), "illegal_argument_exception")
 		}
 		if dataType == "binary" && space != "hamming" {
-			return wrappedMappingError(fmt.Sprintf("Space type [%s] is not supported with [binary] data type", space), "illegal_argument_exception")
+			return mapping.WrappedError(fmt.Sprintf("Space type [%s] is not supported with [binary] data type", space), "illegal_argument_exception")
 		}
 	}
 	if hasMethod {
@@ -161,7 +157,7 @@ func knnValidateField(name string, def map[string]any) *apierr.Error {
 		case methodName == "ivf" && engine == "faiss":
 			return knnValidation(`"method" requires training.`)
 		default:
-			return wrappedMappingError("Invalid method name: "+methodName, "illegal_argument_exception")
+			return mapping.WrappedError("Invalid method name: "+methodName, "illegal_argument_exception")
 		}
 	}
 	if dim > 16000 {
@@ -173,7 +169,7 @@ func knnValidateField(name string, def map[string]any) *apierr.Error {
 	if space == "l1" || space == "linf" {
 		return knnValidation(fmt.Sprintf(`"%s" with "%s" configuration does not support space type: "%s".`, methodName, engine, space))
 	}
-	for _, k := range sortedAnyKeys(params) {
+	for _, k := range mapping.SortedAnyKeys(params) {
 		switch k {
 		case "m", "ef_construction", "ef_search":
 			if n, isNum := params[k].(json.Number); isNum && !strings.ContainsAny(n.String(), ".eE") {
@@ -214,12 +210,6 @@ func knnValidateField(name string, def map[string]any) *apierr.Error {
 // knn query
 // ---------------------------------------------------------------------------
 
-type knnFieldInfo struct {
-	space, engine, dataType string
-	dim                     int
-	nested                  bool
-}
-
 func knnFieldDef(idx *model.Index, path string) (map[string]any, bool) {
 	props, _ := idx.Mappings["properties"].(map[string]any)
 	parts := strings.Split(path, ".")
@@ -238,31 +228,6 @@ func knnFieldDef(idx *model.Index, path string) (map[string]any, bool) {
 		props, _ = def["properties"].(map[string]any)
 	}
 	return nil, false
-}
-
-func knnInfo(def map[string]any) knnFieldInfo {
-	fi := knnFieldInfo{space: "l2", engine: "faiss", dataType: "float"}
-	if f, ok := jsonv.ToFloat(def["dimension"]); ok {
-		fi.dim = int(f)
-	}
-	if dt, ok := def["data_type"].(string); ok {
-		fi.dataType = strings.ToLower(dt)
-	}
-	if fi.dataType == "binary" {
-		fi.space = "hamming"
-	}
-	if m, ok := def["method"].(map[string]any); ok {
-		if e, ok := m["engine"].(string); ok {
-			fi.engine = e
-		}
-		if s, ok := m["space_type"].(string); ok {
-			fi.space = s
-		}
-	}
-	if s, ok := def["space_type"].(string); ok && s != "" {
-		fi.space = s
-	}
-	return fi
 }
 
 // knnDistanceScore returns the raw distance-like value and the OpenSearch score.
@@ -395,13 +360,13 @@ func (c *queryCtx) evalKnnField(field string, p map[string]any) (bool, float64, 
 		boost = b
 	}
 	def, _ := knnFieldDef(c.idx, field)
-	fi := knnInfo(def)
+	fi := mapping.KnnInfo(def)
 	score := func(qc *queryCtx) (bool, float64, float64) {
 		dv, ok := qc.docVector(field)
 		if !ok || len(dv) != len(vec) {
 			return false, 0, 0
 		}
-		d, s := knnDistanceScore(fi.space, vec, dv)
+		d, s := knnDistanceScore(fi.Space, vec, dv)
 		return true, d, s
 	}
 	filter, _ := p["filter"].(map[string]any)
@@ -442,7 +407,7 @@ func (c *queryCtx) evalKnnField(field string, p map[string]any) (bool, float64, 
 		return s >= ms, s * boost, nil
 	}
 	md, _ := jsonv.ToFloat(p["max_distance"])
-	if filter == nil && fi.engine == "faiss" {
+	if filter == nil && fi.Engine == "faiss" {
 		// faiss range search excludes the boundary; exact (filtered) search keeps it
 		return d < md, s * boost, nil
 	}

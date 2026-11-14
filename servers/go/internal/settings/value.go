@@ -3,9 +3,10 @@ package settings
 import (
 	"encoding/json"
 	"fmt"
-	"slopensearch/internal/jsonv"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/jsonv"
 )
 
 func ValueString(v any) string {

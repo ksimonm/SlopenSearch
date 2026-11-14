@@ -99,7 +99,7 @@ func (s *Server) handleMsearch(w http.ResponseWriter, r *http.Request, pathIndex
 			case []any:
 				parts := []string{}
 				for _, e := range t {
-					s, _ := toString(e)
+					s, _ := jsonv.ToString(e)
 					if s != "" {
 						parts = append(parts, s)
 					}
