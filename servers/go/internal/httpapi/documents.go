@@ -841,6 +841,9 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 	}
 	body, rawBody, berr := readDocBody(r)
 	if berr != nil {
+		if e := mapping.NonStandardTokenError(idx, id, rawBody); e != nil {
+			berr = e
+		}
 		writeError(w, berr)
 		return
 	}

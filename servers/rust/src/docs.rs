@@ -437,7 +437,10 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
     };
     let mut body = match parse_index_body(req) {
         Ok(b) => b,
-        Err(e) => return err_response(e),
+        Err(e) => {
+            let idx = store.indices.get(&target);
+            return err_response(crate::nonstd_json::non_standard_token_error(idx, id, &req.body).unwrap_or(e));
+        }
     };
     let depth_limit = crate::store::setting_int(
         &store.indices[&target].settings,

@@ -141,13 +141,12 @@ func errorMetadata(fields map[string]any) ojson.Object {
 	return out
 }
 
-func causedByObject(e *apierr.Error) map[string]any {
-	m := map[string]any{"type": e.Type, "reason": e.Reason}
-	for k, v := range e.Fields {
-		m[k] = v
-	}
+// causedByObject renders a cause the way OpenSearch orders it: type, reason,
+// metadata, then its own cause.
+func causedByObject(e *apierr.Error) ojson.Object {
+	m := append(ojson.Object{{"type", e.Type}, {"reason", e.Reason}}, errorMetadata(e.Fields)...)
 	if e.CausedBy != nil {
-		m["caused_by"] = causedByObject(e.CausedBy)
+		m = append(m, ojson.KV{"caused_by", causedByObject(e.CausedBy)})
 	}
 	return m
 }
