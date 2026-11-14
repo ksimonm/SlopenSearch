@@ -1,4 +1,4 @@
-package main
+package snowball
 
 // A port of the Snowball runtime (SnowballProgram.java) used by the
 // generated stemmers in snowball_generated.go. Working on []rune keeps the

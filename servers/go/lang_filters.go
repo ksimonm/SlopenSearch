@@ -1,5 +1,7 @@
 package main
 
+import "slopensearch/internal/snowball"
+
 // Language-specific token filters (stemmers, normalizers, language
 // lowercasing, elision), mapped the way OpenSearch's analysis-common module
 // registers them, on top of the Lucene 10.5.1 ports.
@@ -94,7 +96,7 @@ func langFilterOne(toks []analyzedToken, spec filterSpec) (out []analyzedToken, 
 		return langStem(toks, f), nil, true
 	case "snowball":
 		cls := capitalizeFirst(fsString(p, "language", fsString(p, "name", "English")))
-		f, ok := snowballStemFunc(cls)
+		f, ok := snowball.StemFunc(cls)
 		if !ok {
 			return nil, stemmerError(cls), true
 		}

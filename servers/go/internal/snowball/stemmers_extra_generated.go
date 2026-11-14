@@ -1,4 +1,4 @@
-package main
+package snowball
 
 // Code generated from Apache Lucene 10.5.1's org.tartarus.snowball.ext Porter, Nepali,
 // Tamil and Yiddish stemmers (Snowball 2.2.0) by j2go.py. DO NOT EDIT.

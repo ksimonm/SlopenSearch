@@ -1,4 +1,4 @@
-package main
+package snowball
 
 // Code generated from Apache Lucene's generated snowball stemmers. DO NOT EDIT.
 

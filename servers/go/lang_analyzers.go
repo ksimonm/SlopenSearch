@@ -1,6 +1,10 @@
 package main
 
-import "strings"
+import (
+	"strings"
+
+	"slopensearch/internal/snowball"
+)
 
 // The built-in language analyzers of OpenSearch 3.9, i.e. the Lucene 10.5.1
 // analyzer classes (ArabicAnalyzer ... TurkishAnalyzer, CJKAnalyzer,
@@ -169,7 +173,7 @@ func langStemExclusion(params map[string]any) langWordSet {
 }
 
 func snowballStem(name string) func(string) string {
-	f, _ := snowballStemFunc(name)
+	f, _ := snowball.StemFunc(name)
 	return f
 }
 
