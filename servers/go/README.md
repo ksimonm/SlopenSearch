@@ -22,6 +22,11 @@ make go-dev                                       # serves :9291
 OS_PORT=9291 .venv/bin/pytest -m aggs
 ```
 
+Unit tests of the `internal/` packages (painless, expressions, mustache, jregex,
+analysis, dates, mapping, respfmt, jsonv, ojson and pure search/aggs helpers) run
+natively in a few seconds: `make go-unit` (or `cd servers/go && go test ./...`). Their
+expected values come from `tests/reference` answers; the black-box suite stays the spec.
+
 To see what OpenSearch really answers in a test, without running OpenSearch:
 `make ref-show T=<part of the test name>` (or add `TB=short` to a test run: a failing
 test then prints the reference exchange). For requests no test makes, start the
