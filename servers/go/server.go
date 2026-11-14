@@ -384,6 +384,9 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	if handled := s.routeServerEndpoints(w, r, segs); handled {
 		return
 	}
+	if segs[0] == "_plugins" && len(segs) >= 2 && segs[1] == "_knn" && s.handleKnnPlugin(w, r, segs) {
+		return
+	}
 	if segs[0] == "_bulk" {
 		s.handleBulkV2(w, r, "")
 		return
