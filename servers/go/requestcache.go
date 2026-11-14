@@ -152,7 +152,7 @@ func (s *Server) requestCacheKey(r *http.Request, raw []byte) string {
 // computing and storing the answer on a miss. It returns false when the
 // request is not cacheable.
 func (s *Server) serveRequestCache(cw *captureWriter, r *http.Request) bool {
-	if r.Body == nil {
+	if r.Body == nil || !strings.HasSuffix(strings.TrimRight(r.URL.Path, "/"), "/_search") {
 		return false
 	}
 	raw, err := io.ReadAll(r.Body)
