@@ -1,6 +1,8 @@
 use crate::errors::ApiError;
 use crate::eval::{mapping_field_def, single_entry, wildcard_regex};
-use crate::store::{analyze, field_value, simple_lower, value_to_string, Index};
+use crate::analysis::basic::{analyze, simple_lower};
+use crate::jsonv::{field_value, value_to_string};
+use crate::model::Index;
 use serde_json::{json, Map, Value};
 
 #[derive(Clone)]

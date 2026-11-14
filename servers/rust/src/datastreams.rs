@@ -4,7 +4,9 @@ use serde_json::{json, Map, Value};
 use crate::errors::{err_response, json_response, method_not_allowed, ApiError};
 use crate::resp::glob_match;
 use crate::shared::err_index_not_found_named;
-use crate::store::{field_value, parse_date_string, DataStreamInfo, Store};
+use crate::dates::parse_date_string;
+use crate::jsonv::field_value;
+use crate::model::{DataStreamInfo, Store};
 use crate::Req;
 
 // ------------------------------------------------------- template matching

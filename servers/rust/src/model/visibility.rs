@@ -14,8 +14,8 @@
 //! while the index does not: a stored script replaced in the meantime is not
 //! run again.
 
-use crate::Req;
-use crate::store::{find_setting, Index, Store};
+use super::{Index, Store};
+use crate::settings::find_setting;
 use serde_json::{Map, Value};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -174,18 +174,19 @@ fn uncacheable(v: &Value) -> bool {
 }
 
 /// The cache key of a search request, when its result may be cached.
-pub fn cache_key(store: &Store, req: &Req, names: &[String], body: &Value) -> Option<String> {
-    if names.is_empty() || req.param("scroll").is_some() {
+pub fn cache_key(store: &Store, path: &str, query: &[(String, String)], names: &[String], body: &Value) -> Option<String> {
+    // a repeated parameter: the last value wins
+    let param = |k: &str| query.iter().rev().find(|(qk, _)| qk == k).map(|(_, v)| v.as_str());
+    if names.is_empty() || param("scroll").is_some() {
         return None;
     }
-    if matches!(req.param("search_type"), Some(t) if t != "query_then_fetch") {
+    if matches!(param("search_type"), Some(t) if t != "query_then_fetch") {
         return None;
     }
-    let size = req
-        .param("size")
+    let size = param("size")
         .and_then(|s| s.parse::<i64>().ok())
         .or_else(|| body.get("size").and_then(|v| v.as_i64()));
-    match req.param("request_cache") {
+    match param("request_cache") {
         Some("false") => return None,
         Some("true") => {}
         _ => {
@@ -204,12 +205,12 @@ pub fn cache_key(store: &Store, req: &Req, names: &[String], body: &Value) -> Op
     if size != Some(0) {
         return None;
     }
-    if uncacheable(body) || req.query.iter().any(|(k, v)| k == "q" && v.contains("now")) {
+    if uncacheable(body) || query.iter().any(|(k, v)| k == "q" && v.contains("now")) {
         return None;
     }
-    let mut params: Vec<&(String, String)> = req.query.iter().filter(|(k, _)| k != "request_cache").collect();
+    let mut params: Vec<&(String, String)> = query.iter().filter(|(k, _)| k != "request_cache").collect();
     params.sort();
-    Some(format!("{}|{:?}|{}|{}", req.path, params, names.join(","), body))
+    Some(format!("{}|{:?}|{}|{}", path, params, names.join(","), body))
 }
 
 pub fn cache_get(store: &Store, names: &[String], key: &str) -> Option<Value> {

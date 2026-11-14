@@ -3,7 +3,9 @@ use serde_json::{json, Map, Value};
 
 use crate::errors::{err_response, json_response, method_not_allowed, ApiError};
 use crate::shared::{resolve_spec2, validate_index_name, ResolveOpts2};
-use crate::store::{ensure_properties, merge_mapping, settings_value_int, Store};
+use crate::mapping::{ensure_properties, merge_mapping};
+use crate::model::Store;
+use crate::settings::settings_value_int;
 use crate::Req;
 
 struct ReindexFailure {

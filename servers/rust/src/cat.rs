@@ -6,8 +6,9 @@ use crate::cluster::{compute_index_health, format_utc_millis, worst_status, NODE
 use crate::errors::{err_response, no_handler, text_response, ApiError};
 use crate::resp::encode_string;
 use crate::shared::{parse_expand_wildcards, resolve_indices, resolve_spec2, ResolveOpts2};
-use crate::store::*;
-use crate::{Req, Store};
+use crate::jsonv::to_f64;
+use crate::model::{CLUSTER_NAME, LUCENE_VERSION, NODE_ID, NODE_NAME, NODE_VERSION, Store, now_millis};
+use crate::Req;
 
 const CAT_ROOT_LISTING: &str = "=^.^=\n/_cat/allocation\n/_cat/segment_replication\n/_cat/segment_replication/{index}\n/_cat/shards\n/_cat/shards/{index}\n/_cat/cluster_manager\n/_cat/nodes\n/_cat/tasks\n/_cat/indices\n/_cat/indices/{index}\n/_cat/segments\n/_cat/segments/{index}\n/_cat/count\n/_cat/count/{index}\n/_cat/recovery\n/_cat/recovery/{index}\n/_cat/health\n/_cat/pending_tasks\n/_cat/aliases\n/_cat/aliases/{alias}\n/_cat/thread_pool\n/_cat/thread_pool/{thread_pools}\n/_cat/plugins\n/_cat/fielddata\n/_cat/fielddata/{fields}\n/_cat/nodeattrs\n/_cat/repositories\n/_cat/snapshots/{repository}\n/_cat/templates\n/_cat/pit_segments\n/_cat/pit_segments/{pit_id}\n";
 
@@ -1594,7 +1595,7 @@ fn glob_match(pattern: &str, value: &str) -> bool {
     crate::resp::glob_match(pattern, value)
 }
 
-fn nested_object_count(idx: &crate::store::Index) -> usize {
+fn nested_object_count(idx: &crate::model::Index) -> usize {
     fn collect(props: &serde_json::Map<String, serde_json::Value>, prefix: &str, out: &mut Vec<String>) {
         for (name, raw) in props {
             let Some(def) = raw.as_object() else { continue };
@@ -1618,7 +1619,7 @@ fn nested_object_count(idx: &crate::store::Index) -> usize {
     let mut total = 0usize;
     for doc in idx.docs.values() {
         for p in &paths {
-            if let Some(v) = crate::store::field_value(doc, p) {
+            if let Some(v) = crate::jsonv::field_value(doc, p) {
                 total += match v {
                     serde_json::Value::Array(a) => a.len(),
                     serde_json::Value::Null => 0,

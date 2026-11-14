@@ -8,7 +8,8 @@
 use crate::analysis::search::{FieldAnalyzer, Side};
 use crate::analysis::Analyzer;
 use crate::eval::QueryCtx;
-use crate::store::{value_to_string, Index};
+use crate::jsonv::value_to_string;
+use crate::model::Index;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 

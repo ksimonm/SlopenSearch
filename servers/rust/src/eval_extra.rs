@@ -5,7 +5,10 @@
 use crate::eval::*;
 use crate::fields::{doc_values_for, preview_value, value_scalar_string};
 use crate::script_env::{script_float, ScriptEnv};
-use crate::store::*;
+use crate::analysis::basic::{analyze, auto_fuzziness, levenshtein};
+use crate::errors::ApiError;
+use crate::jsonv::{field_value, to_f64, value_to_string};
+use crate::model::Index;
 use regex::Regex;
 use serde_json::{json, Map, Number, Value};
 

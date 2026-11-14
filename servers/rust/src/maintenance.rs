@@ -3,7 +3,7 @@ use serde_json::{json, Map, Value};
 
 use crate::errors::{err_response, json_response, ApiError};
 use crate::shared::{parse_resolve_params, resolve_spec2, ResolveOpts2};
-use crate::store::{Store, NODE_ID, NODE_NAME};
+use crate::model::{NODE_ID, NODE_NAME, Store};
 use crate::Req;
 
 // ----------------------------------------------------------- refresh/flush
@@ -101,7 +101,7 @@ fn empty_metric(name: &str) -> Value {
     }
 }
 
-fn index_metrics(idx: &crate::store::Index, requested: Option<&Vec<String>>) -> Value {
+fn index_metrics(idx: &crate::model::Index, requested: Option<&Vec<String>>) -> Value {
     let mut out = Map::new();
     for name in STATS_METRIC_NAMES {
         if let Some(req) = requested {

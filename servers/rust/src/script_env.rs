@@ -2,7 +2,7 @@
 
 use crate::eval::{compare_any, integer_of, QueryCtx};
 use crate::resp::format_number;
-use crate::store::to_f64;
+use crate::jsonv::to_f64;
 use serde_json::{Map, Number, Value};
 
 pub struct ScriptEnv<'a, 'b> {

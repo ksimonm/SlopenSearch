@@ -29,7 +29,7 @@
 //! `index_total` (writes that did not record a seq_no, or one id written twice in one
 //! request) the whole index is written out again, which is always correct.
 
-use crate::store::{DataStreamInfo, Index, Store};
+use crate::model::{DataStreamInfo, Index, Store};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -162,7 +162,7 @@ fn recover(dir: &Path) -> Result<Store, String> {
         crate::fields::recompute_all_doc_values(idx);
     }
     crate::script_ctx::sync_stored(&store.scripts);
-    crate::store::reseed_uuid(crate::store::now_millis() as u64 ^ ((std::process::id() as u64) << 32));
+    crate::model::reseed_uuid(crate::model::now_millis() as u64 ^ ((std::process::id() as u64) << 32));
 
     // start a new generation from the recovered state
     let journal = create_journal(dir, gen + 1)?;

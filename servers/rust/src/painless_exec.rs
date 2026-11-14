@@ -1,6 +1,7 @@
 // The _scripts/painless/_execute API; the engine lives in pl_*.rs.
 
-use crate::{Req, Store};
+use crate::model::Store;
+use crate::Req;
 use axum::response::Response;
 
 pub fn handle_execute(store: &mut Store, req: &Req, _lang: &str) -> Response {

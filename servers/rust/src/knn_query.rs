@@ -4,7 +4,8 @@
 use crate::errors::ApiError;
 use crate::eval::QueryCtx;
 use crate::knn::{f32r, field_def, raw, score, source_vector};
-use crate::store::{to_f64, Index};
+use crate::jsonv::to_f64;
+use crate::model::Index;
 use serde_json::{json, Map, Value};
 
 // ---------------------------------------------------------------- errors

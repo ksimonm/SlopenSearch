@@ -107,7 +107,7 @@ fn humanize_index_settings(m: &mut Map<String, Value>, prefix: &str) {
         } else if full == "index.version.created" || full == "index.version.upgraded" {
             m.insert(
                 format!("{}_string", k),
-                Value::String(crate::store::NODE_VERSION.to_string()),
+                Value::String(crate::model::NODE_VERSION.to_string()),
             );
         } else if let Value::Object(inner) = &mut val {
             if full == "index" || full == "index.version" {

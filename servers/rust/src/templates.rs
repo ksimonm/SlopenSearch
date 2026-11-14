@@ -6,7 +6,8 @@ use crate::resp::glob_match;
 use crate::shared::{
     flatten_settings, is_known_index_setting, validate_setting_value,
 };
-use crate::store::{settings_value_int, settings_value_string, Store};
+use crate::model::Store;
+use crate::settings::{settings_value_int, settings_value_string};
 use crate::Req;
 
 /// Result of composing matching index templates for a concrete index name.

@@ -3,7 +3,8 @@
 //! prefix / fuzzy / regex lookups modelled on Lucene's NRTSuggester.
 
 use crate::errors::ApiError;
-use crate::store::*;
+use crate::jsonv::{doc_strings, field_value, to_f64, value_to_string};
+use crate::model::Index;
 use serde_json::{json, Map, Value};
 
 const SEP: char = '\u{1f}';
@@ -288,7 +289,7 @@ fn geo_precision(v: &Value) -> Option<usize> {
     if let Ok(n) = s.parse::<i64>() {
         return Some(n.clamp(1, 12) as usize);
     }
-    let meters = crate::store::to_f64(&json!(s.trim_end_matches(|c: char| c.is_alphabetic())))?
+    let meters = crate::jsonv::to_f64(&json!(s.trim_end_matches(|c: char| c.is_alphabetic())))?
         * match s.trim_start_matches(|c: char| c.is_ascii_digit() || c == '.').to_lowercase().as_str() {
             "km" => 1000.0,
             "mi" | "miles" => 1609.344,

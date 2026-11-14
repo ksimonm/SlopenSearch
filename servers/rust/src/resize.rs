@@ -3,7 +3,8 @@ use serde_json::{json, Map, Value};
 
 use crate::errors::{err_response, json_response, method_not_allowed, ApiError};
 use crate::shared::{err_index_not_found_named, flatten_settings, validate_index_name};
-use crate::store::{settings_value_int, settings_value_string, Store};
+use crate::model::Store;
+use crate::settings::{settings_value_int, settings_value_string};
 use crate::Req;
 
 pub fn handle_resize(

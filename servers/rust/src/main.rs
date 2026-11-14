@@ -47,13 +47,16 @@ mod resp;
 mod rollover;
 mod search;
 mod shared;
-mod store;
+mod dates;
+mod jsonv;
+mod mapping;
+mod model;
+mod settings;
 mod suggest;
 mod suggest_completion;
 mod suggest_phrase;
 mod tasks_async;
 mod templates;
-mod visibility;
 
 use axum::body::Bytes;
 use axum::extract::State;
@@ -64,9 +67,10 @@ use axum::Router;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use store::*;
+use crate::errors::ApiError;
+use crate::model::Store;
 
-use errors::{json_response, no_handler, text_response, ApiError};
+use errors::{json_response, no_handler, text_response};
 use resp::{filter_path_value, pretty_json};
 
 pub type Shared = Arc<Mutex<Store>>;

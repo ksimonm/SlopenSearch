@@ -5,7 +5,7 @@ use serde_json::{json, Map, Value};
 
 use crate::errors::{err_response, json_response, ApiError};
 use crate::shared::{parse_resolve_params, resolve_spec2, ResolveOpts2};
-use crate::store::{Store, CLUSTER_NAME, NODE_ID};
+use crate::model::{CLUSTER_NAME, NODE_ID, Store};
 use crate::Req;
 
 const CLUSTER_STATS: [&str; 2] = ["circuit_breaker_triggered", "model_index_status"];

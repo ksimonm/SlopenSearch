@@ -1,5 +1,9 @@
 use crate::resp::format_number;
-use crate::store::*;
+use crate::analysis::basic::{analyze, asciifold, simple_lower};
+use crate::errors::ApiError;
+use crate::jsonv::{to_f64, value_to_string};
+use crate::model::Index;
+use crate::settings::{find_setting, settings_value_string};
 use serde_json::{json, Map, Number, Value};
 use std::collections::{BTreeMap, HashSet};
 
@@ -3303,11 +3307,11 @@ pub fn eval_derived(def: &Value, doc: &Value) -> Option<Value> {
     let body = src.split_once("emit(").map(|(_, b)| b).unwrap_or(src);
     if body.contains("toUpperCase") {
         let key = quoted_key(body, "params._source[")?;
-        let v = crate::store::field_value(doc, &key)?;
+        let v = crate::jsonv::field_value(doc, &key)?;
         return v.as_str().map(|s| Value::String(s.to_uppercase()));
     }
     let key = quoted_key(body, "doc[").or_else(|| quoted_key(body, "params._source["))?;
-    let base = crate::store::field_value(doc, &key)?.clone();
+    let base = crate::jsonv::field_value(doc, &key)?.clone();
     if body.contains(".value") {
         let rest = body.split_once(".value").map(|(_, r)| r).unwrap_or("");
         let rest = rest.trim().trim_end_matches(')').trim();

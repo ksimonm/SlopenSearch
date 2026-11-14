@@ -14,7 +14,7 @@ use serde_json::{json, Map, Value};
 
 use crate::errors::{err_response, json_response, ApiError};
 use crate::shared::{resolve_spec2, ResolveOpts2};
-use crate::store::{now_millis, Store, NODE_ID, NODE_NAME};
+use crate::model::{NODE_ID, NODE_NAME, Store, now_millis};
 use crate::{Req, Shared};
 
 const RPS_REASON: &str =

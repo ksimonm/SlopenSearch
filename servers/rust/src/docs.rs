@@ -6,7 +6,8 @@ use crate::search::{eval_doc, precompute_doc_values};
 use crate::shared::{
     parse_resolve_params, resolve_read_target, resolve_write_target, ResolveOpts2,
 };
-use crate::store::{analyze_with, Index, Store};
+use crate::analysis::basic::analyze_with;
+use crate::model::{Index, Store};
 use crate::Req;
 
 // ----------------------------------------------------------------- helpers
@@ -439,7 +440,7 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
         Ok(b) => b,
         Err(e) => return err_response(e),
     };
-    let depth_limit = crate::store::setting_int(
+    let depth_limit = crate::settings::setting_int(
         &store.indices[&target].settings,
         "mapping.depth.limit",
     )
@@ -640,7 +641,7 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
             .get("dynamic")
             .and_then(|d| d.as_str())
             .map(|s| s.to_string());
-        let props = crate::store::ensure_properties(&mut idx.mappings);
+        let props = crate::mapping::ensure_properties(&mut idx.mappings);
         if let Some(derr) = check_dynamic_strict(dynamic.clone(), props, &body) {
             return err_response(derr);
         }
@@ -698,11 +699,11 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
             }
         }
     }
-    crate::visibility::before_write(idx, &doc_id);
+    crate::model::visibility::before_write(idx, &doc_id);
     if let Err(e) = crate::fields::compute_doc_values(idx, &doc_id, &mut body) {
         return err_response(e);
     }
-    let field_limit = crate::store::setting_int(&idx.settings, "mapping.total_fields.limit")
+    let field_limit = crate::settings::setting_int(&idx.settings, "mapping.total_fields.limit")
         .unwrap_or(1000);
     if crate::shared::count_mapped_fields(&idx.mappings) as i64 > field_limit {
         return err_response(ApiError::bad(&format!(
@@ -710,7 +711,7 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
             field_limit
         )));
     }
-    let name_limit = crate::store::setting_int(&idx.settings, "mapping.field_name_length.limit")
+    let name_limit = crate::settings::setting_int(&idx.settings, "mapping.field_name_length.limit")
         .unwrap_or(i64::MAX);
     if let Some(name) = field_name_too_long(&Value::Object(body.clone()), name_limit as usize) {
         return err_response(ApiError::bad(&format!(
@@ -718,7 +719,7 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
             name, name_limit
         )));
     }
-    let nested_limit = crate::store::setting_int(&idx.settings, "mapping.nested_objects.limit")
+    let nested_limit = crate::settings::setting_int(&idx.settings, "mapping.nested_objects.limit")
         .unwrap_or(10000);
     if crate::shared::count_nested_instances(&idx.mappings, &Value::Object(body.clone())) as i64
         > nested_limit
@@ -925,7 +926,7 @@ fn stored_fields_json(idx: &Index, doc: &Value, spec: &str) -> Map<String, Value
     }
     let mut out = Map::new();
     for name in paths {
-        if let Some(v) = crate::store::field_value(doc, &name) {
+        if let Some(v) = crate::jsonv::field_value(doc, &name) {
             let fdef = crate::eval::mapping_field_def(idx, &name);
             let ftype = fdef
                 .as_ref()
@@ -1661,7 +1662,7 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
                 }
             }
             let idx = store.indices.get_mut(&target).unwrap();
-            crate::visibility::before_write(idx, id);
+            crate::model::visibility::before_write(idx, id);
             if let Err(e) = crate::fields::compute_doc_values(idx, id, &mut cur) {
                 return err_response(e);
             }
@@ -2070,9 +2071,9 @@ pub fn parse_q_param(q: &str) -> Value {
 
 pub fn handle_count(store: &mut Store, req: &Req, name: &str) -> Response {
     let names: Vec<String> = store.indices.keys().cloned().collect();
-    let view = crate::visibility::enter(store, &names);
+    let view = crate::model::visibility::enter(store, &names);
     let r = handle_count_visible(store, req, name);
-    crate::visibility::leave(store, view);
+    crate::model::visibility::leave(store, view);
     r
 }
 
@@ -2807,7 +2808,7 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
                 idx.index_total += 1;
                 idx.delete_total += 1;
             } else if changed {
-                crate::visibility::before_write(idx, &doc_id);
+                crate::model::visibility::before_write(idx, &doc_id);
                 if let Err(e) = crate::fields::compute_doc_values(idx, &doc_id, &mut new_doc) {
                     has_errors = true;
                     items.push(bulk_err_api("update", &idx.name, &doc_id, &e));
@@ -3051,7 +3052,7 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
                 .get("dynamic")
                 .and_then(|d| d.as_str())
                 .map(|s| s.to_string());
-            let props = crate::store::ensure_properties(&mut idx.mappings);
+            let props = crate::mapping::ensure_properties(&mut idx.mappings);
             if let Some(derr) = check_dynamic_strict(dynamic.clone(), props, &source) {
                 has_errors = true;
                 items.push(bulk_err_api(&op, &idx.name, &doc_id, &derr));
@@ -3063,7 +3064,7 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
             doc_id = store.next_id();
         }
         let idx = store.indices.get_mut(&target).unwrap();
-        crate::visibility::before_write(idx, &doc_id);
+        crate::model::visibility::before_write(idx, &doc_id);
         if let Err(e) = crate::fields::compute_doc_values(idx, &doc_id, &mut source) {
             has_errors = true;
             items.push(bulk_err_api(&op, &idx.name, &doc_id, &e));
@@ -3253,7 +3254,7 @@ fn tv_field_analyzer(idx: &Index, field: &str, per_field: Option<&Map<String, Va
 }
 
 fn tv_doc_text(doc: &Value, field: &str) -> Option<String> {
-    crate::store::field_value(doc, field).map(|v| match v {
+    crate::jsonv::field_value(doc, field).map(|v| match v {
         Value::String(s) => s.clone(),
         other => match other {
             Value::Array(a) => a.iter().map(|x| x.as_str().unwrap_or("").to_string()).collect::<Vec<_>>().join(" "),
@@ -3604,7 +3605,7 @@ pub fn handle_explain(store: &mut Store, req: &Req, name: &str, id: &str) -> Res
 }
 
 pub fn bm25_explanation(
-    idx: &crate::store::Index,
+    idx: &crate::model::Index,
     doc_id: &str,
     q: &Value,
     score: f64,
@@ -3626,7 +3627,7 @@ pub fn bm25_explanation(
             let mut out = Vec::new();
             for val in crate::eval::array_values(v) {
                 if let Some(s) = crate::fields::value_scalar_string(&val) {
-                    out.extend(crate::store::analyze(&s));
+                    out.extend(crate::analysis::basic::analyze(&s));
                 }
             }
             out
@@ -3646,7 +3647,7 @@ pub fn bm25_explanation(
                 let mut out = Vec::new();
                 for val in crate::eval::array_values(v) {
                     if let Some(s) = crate::fields::value_scalar_string(&val) {
-                        out.extend(crate::store::analyze(&s));
+                        out.extend(crate::analysis::basic::analyze(&s));
                     }
                 }
                 out
@@ -3767,7 +3768,7 @@ fn normalize_filtered_numbers(v: &mut Value) {
 /// filters this server knows; `None` when `analyzer` is not such an analyzer.
 fn custom_analyzer_tokens(idx: &Index, analyzer: &str, text: &str) -> Option<Vec<String>> {
     let base = format!("analysis.analyzer.{}", analyzer);
-    let get = |k: &str| crate::store::find_setting(&idx.settings, &format!("{}.{}", base, k));
+    let get = |k: &str| crate::settings::find_setting(&idx.settings, &format!("{}.{}", base, k));
     let tokenizer = get("tokenizer").and_then(|v| v.as_str())?.to_string();
     if let Some(t) = get("type").and_then(|v| v.as_str()) {
         if t != "custom" {
@@ -3793,7 +3794,7 @@ fn custom_analyzer_tokens(idx: &Index, analyzer: &str, text: &str) -> Option<Vec
             "lowercase" => toks.iter().map(|t| t.to_lowercase()).collect(),
             "uppercase" => toks.iter().map(|t| t.to_uppercase()).collect(),
             "reverse" => toks.iter().map(|t| t.chars().rev().collect()).collect(),
-            "asciifolding" => toks.iter().map(|t| crate::store::asciifold(t)).collect(),
+            "asciifolding" => toks.iter().map(|t| crate::analysis::basic::asciifold(t)).collect(),
             "trim" => toks.iter().map(|t| t.trim().to_string()).collect(),
             _ => return None,
         };
@@ -3860,7 +3861,7 @@ fn validate_data_stream_doc(timestamp_field: &str, body: &Map<String, Value>) ->
         return Some(err());
     }
     if let Some(s) = v.as_str() {
-        if crate::store::parse_date_string(s).is_none() {
+        if crate::dates::parse_date_string(s).is_none() {
             return Some(err());
         }
     }
@@ -3998,13 +3999,13 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
     };
     // The query runs on the last refreshed versions; documents changed since
     // then are version conflicts.
-    let view = crate::visibility::enter(store, std::slice::from_ref(&target));
+    let view = crate::model::visibility::enter(store, std::slice::from_ref(&target));
     let matched = byq_matched(store, &target, req, &body, false);
     let snap_seq: std::collections::HashMap<String, i64> = match (&matched, store.indices.get(&target)) {
         (Ok(ids), Some(idx)) => ids.iter().filter_map(|id| idx.seq_nos.get(id).map(|s| (id.clone(), *s))).collect(),
         _ => std::collections::HashMap::new(),
     };
-    crate::visibility::leave(store, view);
+    crate::model::visibility::leave(store, view);
     let mut ids = match matched {
         Ok(v) => v,
         Err(e) => return err_response(e),
@@ -4107,7 +4108,7 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
             }
         }
         let idx = store.indices.get_mut(&target).unwrap();
-        crate::visibility::before_write(idx, id);
+        crate::model::visibility::before_write(idx, id);
         if let Err(e) = crate::fields::compute_doc_values(idx, id, &mut newdoc) {
             failure_status = e.status;
             failures.push(json!({"id": id, "index": target,

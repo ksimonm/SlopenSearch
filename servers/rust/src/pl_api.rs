@@ -24,8 +24,9 @@ use crate::painless::lex::CompileErr;
 use crate::painless::parse::{parse, Expr, Program, Stmt, SK};
 use crate::painless::time::Zdt;
 use crate::painless::value::*;
-use crate::store::Index;
-use crate::{Req, Store};
+use crate::model::Index;
+use crate::model::Store;
+use crate::Req;
 
 fn contexts() -> &'static HashMap<&'static str, CheckCtx> {
     static C: OnceLock<HashMap<&'static str, CheckCtx>> = OnceLock::new();

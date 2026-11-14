@@ -4,7 +4,9 @@ use serde_json::{json, Map, Value};
 use crate::datastreams::{backing_index_name, create_backing_index};
 use crate::errors::{err_response, json_response, method_not_allowed, ApiError};
 use crate::shared::sorted_index_names;
-use crate::store::{settings_value_int, to_f64, value_to_string, DataStreamInfo, Store};
+use crate::jsonv::{to_f64, value_to_string};
+use crate::model::{DataStreamInfo, Store};
+use crate::settings::settings_value_int;
 use crate::Req;
 
 fn parse_duration_millis(v: &Value) -> Option<i64> {
@@ -55,7 +57,7 @@ fn condition_key(name: &str, v: &Value) -> String {
 fn evaluate_rollover_conditions(
     raw: &Map<String, Value>,
     names: &[String],
-    idx: &crate::store::Index,
+    idx: &crate::model::Index,
 ) -> Map<String, Value> {
     let mut out = Map::new();
     for name in names {
@@ -66,7 +68,7 @@ fn evaluate_rollover_conditions(
                 None => false,
             },
             "max_age" => match parse_duration_millis(&v) {
-                Some(ms) => crate::store::now_millis() - idx.creation_date >= ms,
+                Some(ms) => crate::model::now_millis() - idx.creation_date >= ms,
                 None => false,
             },
             "max_size" | "max_primary_shard_size" => false,

@@ -7,9 +7,14 @@ use crate::eval::{
 };
 use crate::fields::doc_values_for;
 use crate::shared;
-use crate::store::*;
+use crate::analysis::basic::analyze;
+use crate::dates::parse_date;
+use crate::errors::ApiError;
+use crate::jsonv::{field_value, to_f64, value_to_string};
+use crate::model::{Index, PitState, ScrollState, Store, now_millis};
+use crate::settings::{find_setting, settings_value_int};
 use crate::suggest::eval_suggest;
-use crate::{Req, Store};
+use crate::Req;
 use axum::response::Response;
 use serde_json::{json, Map, Value};
 use std::cmp::Ordering;
@@ -892,7 +897,7 @@ fn convert_sort_scalar(sp: &SortSpec, ftype: &str, v: &Value) -> Value {
         if let Some(ms) = integer_of(v) {
             return json!(ms * 1_000_000);
         }
-        if let Some(ms) = crate::store::parse_date(v) {
+        if let Some(ms) = crate::dates::parse_date(v) {
             return json!((ms * 1_000_000.0) as i64);
         }
     }
@@ -905,12 +910,12 @@ fn convert_sort_scalar(sp: &SortSpec, ftype: &str, v: &Value) -> Value {
                 return json!(ns);
             }
         }
-        if let Some(ms) = crate::store::parse_date(v) {
+        if let Some(ms) = crate::dates::parse_date(v) {
             return json!((ms * 1_000_000.0) as i64);
         }
     }
     if ftype == "date" {
-        if let Some(ms) = crate::store::parse_date(v) {
+        if let Some(ms) = crate::dates::parse_date(v) {
             return json!(ms as i64);
         }
     }
@@ -1269,7 +1274,7 @@ fn compute_sort_cell(store: &Store, h: &MultiHit, sp: &SortSpec) -> Result<(bool
         vals = vals
             .iter()
             .filter_map(|v| v.as_str())
-            .flat_map(crate::store::analyze)
+            .flat_map(crate::analysis::basic::analyze)
             .map(Value::String)
             .collect();
     }
@@ -1323,7 +1328,7 @@ fn sort_after_value(v: &Value, sp: &SortSpec) -> Option<Value> {
     if sp.kind == 0 {
         let idx_dummy_type = sp.field.as_str();
         let _ = idx_dummy_type;
-        if let Some(ms) = crate::store::parse_date(v) {
+        if let Some(ms) = crate::dates::parse_date(v) {
             if matches!(sp.numeric_type.as_deref(), Some("date_nanos")) {
                 return Some(json!((ms * 1_000_000.0) as i64));
             }
@@ -1363,7 +1368,7 @@ fn sort_after_valid(sp: &SortSpec, v: &Value, numeric: bool) -> bool {
         return true;
     }
     let Some(text) = v.as_str() else { return false };
-    if crate::store::parse_date(v).is_some() {
+    if crate::dates::parse_date(v).is_some() {
         return true;
     }
     text.parse::<f64>().is_ok()
@@ -1711,7 +1716,7 @@ pub(crate) fn filter_source(doc: &Value, spec: &Value) -> Value {
     for pat in &excludes {
         if let Some(prefix) = pat.strip_suffix(".*") {
             if !prefix.is_empty() && includes.iter().any(|p| path_matches(p, prefix)) {
-                if let Some(v) = crate::store::field_value(doc, prefix) {
+                if let Some(v) = crate::jsonv::field_value(doc, prefix) {
                     if v.is_object() && out.get(prefix).is_none() {
                         let segs: Vec<&str> = prefix.split('.').collect();
                         if segs.len() == 1 {
@@ -1756,7 +1761,7 @@ pub(crate) fn highlight_fragment(text: &str, tokens: &HashSet<String>) -> String
             let clean = w
                 .trim_matches(|c| matches!(c, '.' | ',' | '!' | '?'))
                 .to_string();
-            let clean = crate::store::simple_lower(&clean);
+            let clean = crate::analysis::basic::simple_lower(&clean);
             if tokens.contains(&clean) {
                 format!("<em>{}</em>", w)
             } else {
@@ -3612,7 +3617,7 @@ pub fn run_search(
         if let Some(fields) = &stored_list {
             let mut out = Map::new();
             for f in stored_paths(idx, fields) {
-                if let Some(v) = crate::store::field_value(&h.doc, &f) {
+                if let Some(v) = crate::jsonv::field_value(&h.doc, &f) {
                     let vals = match v {
                         Value::Array(a) => a
                             .iter()
@@ -4299,20 +4304,6 @@ fn apply_search_extras(
     Ok(())
 }
 
-#[derive(Clone)]
-pub struct PitState {
-    pub indices: HashMap<String, Index>,
-    pub keep_ms: i64,
-    pub creation_time: i64,
-}
-
-fn now_millis() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
 fn pit_id_ok(id: &str) -> bool {
     id.starts_with("pit-")
 }
@@ -4375,7 +4366,7 @@ pub fn handle_pit_create(store: &mut Store, req: &Req, name: &str) -> Response {
     let id = format!(
         "pit-{}-{}",
         store.pit_counter,
-        crate::store::NODE_ID.replace('-', "")
+        crate::model::NODE_ID.replace('-', "")
     );
     let created = now_millis();
     store.pits.insert(
@@ -4573,19 +4564,6 @@ fn handle_pit_search(store: &mut Store, req: &Req, mut body: Value) -> Response 
     }
 }
 
-#[derive(Clone)]
-pub struct ScrollState {
-    pub body: Value,
-    pub names: Vec<String>,
-    pub url_name: String,
-    pub pos: usize,
-    pub page: usize,
-    pub slice: Option<(usize, usize)>,
-    /// The searched indices as they were when the scroll started: later pages
-    /// read this point-in-time view, not the live indices.
-    pub snapshot: HashMap<String, Index>,
-}
-
 fn scroll_keepalive_ms(v: &str) -> Option<u64> {
     let (num, mult) = if let Some(x) = v.strip_suffix("ms") {
         (x, 1u64)
@@ -4636,7 +4614,7 @@ fn validate_scroll_keepalive(v: &str, for_pit: bool) -> Result<(), ApiError> {
 
 fn scroll_new_id(store: &mut Store) -> String {
     store.scroll_counter += 1;
-    format!("scroll-{}-{}", store.scroll_counter, crate::store::NODE_ID.replace('-', ""))
+    format!("scroll-{}-{}", store.scroll_counter, crate::model::NODE_ID.replace('-', ""))
 }
 
 fn scroll_slice_of(body: &Value) -> Option<(usize, usize)> {
@@ -4895,13 +4873,13 @@ pub fn handle_search_shards(store: &mut Store, req: &Req, name: &str) -> Respons
             shards_out.push(json!([{
                 "state": "STARTED",
                 "primary": true,
-                "node": crate::store::NODE_ID,
+                "node": crate::model::NODE_ID,
                 "shard": sh,
                 "index": n,
             }]));
         }
     }
-    let nodes = json!({crate::store::NODE_ID: {
+    let nodes = json!({crate::model::NODE_ID: {
         "name": "slopensearch",
         "transport_address": "127.0.0.1:9300",
         "host": "127.0.0.1",
@@ -5269,15 +5247,15 @@ pub fn handle_search(store: &mut Store, req: &Req, name: &str) -> Response {
             }
         }
     }
-    let cache_key = crate::visibility::cache_key(store, req, &names, &body);
-    let result = match cache_key.as_ref().and_then(|k| crate::visibility::cache_get(store, &names, k)) {
+    let cache_key = crate::model::visibility::cache_key(store, &req.path, &req.query, &names, &body);
+    let result = match cache_key.as_ref().and_then(|k| crate::model::visibility::cache_get(store, &names, k)) {
         Some(v) => Ok(v),
         None => {
-            let view = crate::visibility::enter(store, &names);
+            let view = crate::model::visibility::enter(store, &names);
             let r = run_search(store, name, &names, &body, req);
-            crate::visibility::leave(store, view);
+            crate::model::visibility::leave(store, view);
             if let (Some(k), Ok(v)) = (cache_key, &r) {
-                crate::visibility::cache_put(store, &names, k, v);
+                crate::model::visibility::cache_put(store, &names, k, v);
             }
             r
         }

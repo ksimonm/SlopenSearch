@@ -2,7 +2,11 @@ use crate::eval::QueryCtx;
 use crate::fields::canonical_ip;
 use crate::resp::format_number;
 use crate::search::{apply_java_date_format, civil_from_days, field_type, format_epoch_ms};
-use crate::store::*;
+use crate::dates::parse_date_string;
+use crate::errors::ApiError;
+use crate::jsonv::{doc_strings, field_value, to_f64, value_to_string};
+use crate::model::Index;
+use crate::settings::setting_int;
 use serde_json::{json, Map, Value};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -166,7 +170,7 @@ fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<
         {
             vals = vals
                 .into_iter()
-                .filter_map(|v| v.as_str().map(crate::store::analyze))
+                .filter_map(|v| v.as_str().map(crate::analysis::basic::analyze))
                 .flatten()
                 .map(Value::String)
                 .collect();

@@ -4,7 +4,7 @@
 
 use crate::eval::{mapping_field_def, QueryCtx};
 use crate::script_ctx::ScriptErr;
-use crate::store::Index;
+use crate::model::Index;
 use serde_json::{Map, Value};
 
 #[derive(Debug, Clone)]

@@ -9,7 +9,8 @@ use crate::shared::{
     validate_alias_name, validate_index_name, validate_mapping_full, validate_setting_value,
     ResolveOpts2,
 };
-use crate::store::{now_millis, random_uuid, settings_value_string, Index, Store};
+use crate::model::{Index, Store, now_millis, random_uuid};
+use crate::settings::settings_value_string;
 use crate::templates::{compose_for_index, merge_mappings_deep};
 use crate::Req;
 
@@ -28,7 +29,7 @@ fn validate_normalizers(
                     let key = format!("index.analysis.normalizer.{}.type", norm);
                     let defined = settings.contains_key(&key)
                         || settings.contains_key(&format!("analysis.normalizer.{}.type", norm))
-                        || crate::store::find_setting(settings, &format!("analysis.normalizer.{}", norm)).is_some();
+                        || crate::settings::find_setting(settings, &format!("analysis.normalizer.{}", norm)).is_some();
                     if norm != "lowercase" && !defined {
                         let reason = format!(
                             "normalizer [{}] not found for field [{}]",
@@ -212,7 +213,7 @@ pub fn create_index_internal(
         crate::analysis::settings::validate_mapping_analysis(props, &canonical)?;
         validate_normalizers(props, &canonical)?;
     }
-    let name_limit = crate::store::setting_int(&canonical, "mapping.field_name_length.limit")
+    let name_limit = crate::settings::setting_int(&canonical, "mapping.field_name_length.limit")
         .unwrap_or(i64::MAX);
     for meta in ["_ignored", "_data_stream_timestamp"] {
         if meta.len() > name_limit as usize {
@@ -222,7 +223,7 @@ pub fn create_index_internal(
             )));
         }
     }
-    let field_limit = crate::store::setting_int(&canonical, "mapping.total_fields.limit")
+    let field_limit = crate::settings::setting_int(&canonical, "mapping.total_fields.limit")
         .unwrap_or(1000);
     if crate::shared::count_mapped_fields(&Value::Object(merged_mappings.clone())) as i64
         > field_limit
@@ -232,7 +233,7 @@ pub fn create_index_internal(
             field_limit
         )));
     }
-    let nested_limit = crate::store::setting_int(&canonical, "mapping.nested_fields.limit")
+    let nested_limit = crate::settings::setting_int(&canonical, "mapping.nested_fields.limit")
         .unwrap_or(50);
     if crate::shared::count_nested_fields(&Value::Object(merged_mappings.clone())) as i64
         > nested_limit
@@ -696,7 +697,7 @@ pub fn put_mapping_api(store: &mut Store, req: &Req, spec: &str) -> Response {
                 return err_response(e);
             }
         }
-        let field_limit = crate::store::setting_int(&idx.settings, "mapping.total_fields.limit")
+        let field_limit = crate::settings::setting_int(&idx.settings, "mapping.total_fields.limit")
             .unwrap_or(1000);
         if crate::shared::count_mapped_fields(&idx.mappings) as i64 > field_limit {
             return err_response(ApiError::bad(&format!(
@@ -704,7 +705,7 @@ pub fn put_mapping_api(store: &mut Store, req: &Req, spec: &str) -> Response {
                 field_limit
             )));
         }
-        let nested_limit = crate::store::setting_int(&idx.settings, "mapping.nested_fields.limit")
+        let nested_limit = crate::settings::setting_int(&idx.settings, "mapping.nested_fields.limit")
             .unwrap_or(50);
         if crate::shared::count_nested_fields(&idx.mappings) as i64 > nested_limit {
             return err_response(ApiError::bad(&format!(

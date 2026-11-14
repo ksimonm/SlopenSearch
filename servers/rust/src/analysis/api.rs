@@ -7,7 +7,7 @@ use super::tokenizers::Tokenizer;
 use crate::uchar::utf16_len;
 use super::{bad, specs_of, Analyzer, Chain, Ctx, Named, Spec, Stream, Token};
 use crate::errors::{err_response, json_response, ApiError};
-use crate::store::{Index, Store};
+use crate::model::{Index, Store};
 use crate::Req;
 
 fn err400(typ: &str, reason: &str) -> ApiError {
@@ -244,8 +244,8 @@ fn analyze(idx: Option<&Index>, req: &Req) -> Result<Value, ApiError> {
     let attrs: Option<Vec<String>> = body.get("attributes").and_then(super::value_list);
     let texts: Vec<String> = match body.get("text") {
         Some(Value::String(s)) => vec![s.clone()],
-        Some(Value::Array(a)) => a.iter().map(|v| crate::store::value_to_string(v).unwrap_or_default()).collect(),
-        Some(v @ (Value::Number(_) | Value::Bool(_))) => vec![crate::store::value_to_string(v).unwrap_or_default()],
+        Some(Value::Array(a)) => a.iter().map(|v| crate::jsonv::value_to_string(v).unwrap_or_default()).collect(),
+        Some(v @ (Value::Number(_) | Value::Bool(_))) => vec![crate::jsonv::value_to_string(v).unwrap_or_default()],
         _ => Vec::new(),
     };
     let analyzer_name = body.get("analyzer").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -290,7 +290,7 @@ fn analyze(idx: Option<&Index>, req: &Req) -> Result<Value, ApiError> {
         None => Ctx::global(),
     };
     let limit = idx
-        .and_then(|i| crate::store::find_setting(&i.settings, "analyze.max_token_count"))
+        .and_then(|i| crate::settings::find_setting(&i.settings, "analyze.max_token_count"))
         .and_then(|v| match v {
             Value::Number(n) => n.as_u64(),
             Value::String(s) => s.parse().ok(),

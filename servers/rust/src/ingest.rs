@@ -1,7 +1,8 @@
 use crate::errors::{err_response, json_response, ApiError};
 use crate::ingest_script;
 use crate::resp::format_number;
-use crate::{Req, Store};
+use crate::model::Store;
+use crate::Req;
 use axum::response::Response;
 use regex::Regex;
 use serde_json::{json, Map, Value};
@@ -4233,7 +4234,7 @@ pub fn effective_ingest_pipeline(
     let default = store
         .indices
         .get(index)
-        .and_then(|i| crate::store::find_setting(&i.settings, "default_pipeline"))
+        .and_then(|i| crate::settings::find_setting(&i.settings, "default_pipeline"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
     let chosen = if !explicit.is_empty() {
@@ -4260,7 +4261,7 @@ pub fn final_ingest_pipeline(store: &Store, index: &str) -> Option<String> {
     store
         .indices
         .get(index)
-        .and_then(|i| crate::store::find_setting(&i.settings, "final_pipeline"))
+        .and_then(|i| crate::settings::find_setting(&i.settings, "final_pipeline"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
 }
@@ -4482,7 +4483,7 @@ pub fn prepare_search_pipeline(
         let default = store
             .indices
             .get(index)
-            .and_then(|i| crate::store::find_setting(&i.settings, "search.default_pipeline"))
+            .and_then(|i| crate::settings::find_setting(&i.settings, "search.default_pipeline"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         match default {

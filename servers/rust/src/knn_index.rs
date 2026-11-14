@@ -4,7 +4,7 @@ use crate::knn::f32r;
 use serde_json::{json, Map, Value};
 
 /// Whether an index has `index.knn` enabled.
-pub fn index_knn(idx: &crate::store::Index) -> bool {
+pub fn index_knn(idx: &crate::model::Index) -> bool {
     idx.settings.get("index.knn").and_then(|v| v.as_str()) == Some("true")
 }
 

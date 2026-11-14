@@ -5,7 +5,8 @@
 
 use crate::analysis::{Analyzer, Ctx};
 use crate::errors::ApiError;
-use crate::store::*;
+use crate::jsonv::{doc_strings, field_value, to_f64, value_to_string};
+use crate::model::Index;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 

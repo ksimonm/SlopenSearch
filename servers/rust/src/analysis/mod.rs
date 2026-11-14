@@ -15,6 +15,7 @@
 //! Built-in analyzers are created in [`builtin_analyzer`]; language analyzers
 //! (english, french, ...) hook in there.
 
+pub mod basic;
 pub mod api;
 pub mod charfilters;
 pub mod filters;
@@ -30,7 +31,7 @@ pub mod tokenizers;
 use serde_json::{Map, Value};
 
 use crate::errors::ApiError;
-use crate::store::Index;
+use crate::model::Index;
 
 use charfilters::{CharFilter, OffsetMap};
 use filters::Filter;
@@ -144,7 +145,7 @@ pub fn value_list(v: &Value) -> Option<Vec<String>> {
             a.iter()
                 .map(|x| match x {
                     Value::String(s) => s.clone(),
-                    other => crate::store::value_to_string(other).unwrap_or_default(),
+                    other => crate::jsonv::value_to_string(other).unwrap_or_default(),
                 })
                 .collect(),
         ),
@@ -157,7 +158,7 @@ pub fn value_list(v: &Value) -> Option<Vec<String>> {
             }
             Some(vec![s.clone()])
         }
-        Value::Number(_) | Value::Bool(_) => Some(vec![crate::store::value_to_string(v).unwrap_or_default()]),
+        Value::Number(_) | Value::Bool(_) => Some(vec![crate::jsonv::value_to_string(v).unwrap_or_default()]),
         _ => None,
     }
 }
@@ -225,7 +226,7 @@ impl Ctx {
 
     pub fn for_settings(settings: &Map<String, Value>) -> Ctx {
         let get = |k: &str, d: i64| -> i64 {
-            crate::store::find_setting(settings, k)
+            crate::settings::find_setting(settings, k)
                 .and_then(|v| match v {
                     Value::Number(n) => n.as_i64(),
                     Value::String(s) => s.parse().ok(),

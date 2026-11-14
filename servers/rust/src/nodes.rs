@@ -14,8 +14,8 @@ fn bare_no_handler(req: &Req) -> Response {
 }
 use crate::resp::glob_match;
 use crate::shared::resolve_indices;
-use crate::store::*;
-use crate::{Req, Store};
+use crate::model::{CLUSTER_NAME, NODE_ID, NODE_NAME, NODE_VERSION, Store, now_millis};
+use crate::Req;
 use axum::response::Response;
 
 const NODE_TRANSPORT: &str = "127.0.0.1:9300";

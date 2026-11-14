@@ -8,10 +8,9 @@ use std::sync::OnceLock;
 
 use crate::errors::ApiError;
 use crate::resp::{format_number, glob_match};
-use crate::store::{
-    find_setting, settings_value_int, settings_value_string, stringify_scalar, DataStreamInfo,
-    Index, Store, VERSION_CREATED,
-};
+use crate::jsonv::stringify_scalar;
+use crate::model::{DataStreamInfo, Index, Store, VERSION_CREATED};
+use crate::settings::{find_setting, settings_value_int, settings_value_string};
 use crate::Req;
 
 // ---------------------------------------------------------------- name rules
@@ -1650,7 +1649,7 @@ fn validate_props_shared(props: &Map<String, Value>) -> Result<(), String> {
             None => continue,
         };
         if let Some(t) = def.get("type").and_then(|v| v.as_str()) {
-            if !crate::store::valid_type(t) {
+            if !crate::mapping::valid_type(t) {
                 return Err(format!(
                     "No handler for type [{}] declared on field [{}]",
                     t, name
@@ -1914,7 +1913,7 @@ pub fn wildcard_match(pat: &str, s: &str) -> bool {
 }
 
 pub fn float_setting(idx: &Index, key: &str) -> Option<f64> {
-    find_setting(&idx.settings, key).and_then(|v| crate::store::to_f64(v))
+    find_setting(&idx.settings, key).and_then(|v| crate::jsonv::to_f64(v))
 }
 
 pub fn _unused(_: &dyn Fn() -> String, _: &str) -> String {
@@ -1993,7 +1992,7 @@ pub fn nested_mapping_paths(mappings: &Value) -> Vec<String> {
 pub fn count_nested_instances(mappings: &Value, source: &Value) -> usize {
     let mut total = 0usize;
     for path in nested_mapping_paths(mappings) {
-        if let Some(v) = crate::store::field_value(source, &path) {
+        if let Some(v) = crate::jsonv::field_value(source, &path) {
             total += match v {
                 Value::Array(a) => a.iter().filter(|e| e.is_object()).count(),
                 Value::Object(_) => 1,

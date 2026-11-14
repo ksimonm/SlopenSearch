@@ -9,7 +9,7 @@
 use crate::errors::ApiError;
 use crate::eval::QueryCtx;
 use crate::expressions;
-use crate::store::{Index, NODE_ID};
+use crate::model::{Index, NODE_ID};
 use serde_json::{json, Map, Value};
 use crate::pl_api;
 use crate::painless::value::{from_json, to_json, MapKind, PV};

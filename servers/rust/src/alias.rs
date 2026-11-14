@@ -7,7 +7,7 @@ use crate::shared::{
     normalize_alias_def, parse_resolve_params, resolve_spec2, sorted_index_names,
     validate_alias_name, ResolveOpts2,
 };
-use crate::store::{Index, Store};
+use crate::model::{Index, Store};
 use crate::Req;
 
 // ------------------------------------------------------------- alias views

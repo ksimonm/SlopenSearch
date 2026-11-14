@@ -3,7 +3,11 @@
 
 use crate::fields::{preview_value, value_scalar_string, IndexCtx};
 use crate::resp::format_number;
-use crate::store::*;
+use crate::analysis::basic::{analyze, analyze_with, asciifold, auto_fuzziness, english_stem, levenshtein, simple_lower};
+use crate::errors::ApiError;
+use crate::jsonv::{to_f64, value_to_string};
+use crate::model::Index;
+use crate::settings::{find_setting, settings_value_int};
 use regex::Regex;
 use serde_json::{Map, Number, Value};
 use std::collections::BTreeMap;
