@@ -2,7 +2,7 @@
 
 Built on the standard library (`net/http`, `encoding/json`) so far; third-party modules
 are welcome where they save real work (see [CONTRIBUTING.md](../../CONTRIBUTING.md)).
-Everything is in `package main`. State is durable by default (stored in `./data`);
+The server is `package main` plus leaf libraries under `internal/` (see [Layout](#layout)). State is durable by default (stored in `./data`);
 `SLOP_IN_MEMORY=true` keeps it in memory only (see [Persistence](#persistence)).
 
 ## Loop
@@ -28,31 +28,51 @@ reference with `make ref-up` and `curl localhost:9290/...`.
 
 ## Layout
 
+The code is moving towards a layered layout. `internal/` holds libraries with no
+server state; they never import `package main` and inner packages never import outer
+ones. Build with `go build .` in `servers/go` as before.
+
+| Package | Contents | Depends on |
+|---|---|---|
+| `internal/ojson` | ordered JSON objects (`Object`, `KV`), `Verbatim`, `Marshal` | - |
+| `internal/jsonv` | decoded JSON value helpers: `ToFloat`, `Float` (Java-style doubles), `FormatNumber`, `EncodeString`, `DeepCopy`, `SortedKeys`, `Unmarshal` | - |
+| `internal/wildcard` | `*` pattern matching | - |
+| `internal/settings` | index settings lookup (`Find`, `Int`) | jsonv |
+| `internal/apierr` | the API error type (`Error`, `Response` for pre-rendered bodies) | - |
+| `internal/model` | domain state: `Index` (metadata, mappings, settings, documents) | - |
+| `internal/jregex` | backtracking `java.util.regex` subset (lookaround, possessive, `\p{..}`) | - |
+| `internal/painless` | Painless: lexer, parser, type checks, interpreter, values with Java semantics, class library, `java.time`, script contexts and compile cache | - |
+| `internal/expressions` | Lucene expressions; doc values, fields and params are passed in (`Env`, `Doc`) | painless |
+| `internal/mustache` | mustache templates (mustache.java semantics) | painless |
+| `internal/snowball` | generated Snowball stemmers and their runtime | - |
+| `internal/lucene` | Lucene analysis algorithm ports: stemmers, normalizers, case mapping, ASCII folding, UAX#29 tokenizer, Thai break iterator, generated tables | - |
+| `internal/analysis` | tokenizers, token/char filters, synonyms, built-in and language analyzers, analysis chains from index settings (`analysis.Index`) | apierr, jregex, jsonv, lucene, settings, snowball |
+| `internal/respfmt` | response rendering: pretty JSON, `filter_path`, `human`, `error_trace`, YAML | jsonv, ojson, wildcard |
+
+`package main` still holds the server (state, handlers, routing) and the subsystems not
+moved yet. The old names stay available there as aliases (`apiError`, `Index`,
+`orderedJSON`, `rawFloat`, ...), and small adapter files connect it to the libraries:
+`pl_api.go` (script errors, doc lookup, `_execute`), `expressions_api.go`,
+`mustache_api.go`, `analyze_api.go` (`_analyze`), `analysisIndex` in `model.go`.
+
 | File | Area |
 |---|---|
-| `server.go` | HTTP entry point, routing, ordered JSON rendering |
-| `model.go` | indices, documents, node/cluster constants |
+| `server.go`, `httpconn.go`, `httplayer.go` | HTTP entry point, routing, error rendering |
+| `model.go` | server state, node/cluster constants, settings and mapping helpers |
 | `meta.go` | index pattern resolution, cluster/meta routes |
 | `admin.go` | index create/delete/get, settings |
-| `maps.go`, `fields.go` | mappings, index-time field extraction |
+| `maps.go`, `fields.go`, `mapping_*.go` | mappings, index-time field extraction, dates |
 | `alias.go`, `templates.go`, `datastreams.go`, `rollover.go` | aliases, index templates, data streams, rollover |
 | `resize.go`, `reindex.go`, `resolve_index.go`, `maintenance.go` | clone/shrink/split, `_reindex`, `_resolve/index`, refresh/flush/forcemerge |
 | `documents_v2.go`, `bulk_v2.go`, `byquery.go`, `termvectors.go` | document CRUD, `_bulk`, by-query APIs, term vectors |
-| `search.go`, `eval.go`, `eval_extra.go`, `highlight.go`, `explain.go`, `validate.go` | search API, query evaluation, highlighting, `_explain`, `_validate` |
+| `search.go`, `eval.go`, `eval_extra.go`, `highlight.go`, `lang_highlight.go`, `explain.go`, `validate.go` | search API, query evaluation, highlighting, `_explain`, `_validate` |
 | `scroll.go`, `pit.go`, `msearch.go`, `search_templates.go`, `rank_eval.go` | scroll, point in time, `_msearch`, search templates, `_rank_eval` |
 | `search_pipelines.go`, `search_shards.go`, `shard_routing.go`, `field_caps.go` | search pipelines, `_search_shards`, routing, `_field_caps` |
-| `aggs.go`, `aggs_bucket.go`, `aggs_metric.go`, `aggs_significant.go`, `aggs_extra.go`, `suggest.go` | aggregations, suggesters |
-| `ingest.go`, `pipeline.go`, `ingest_processors.go`, `ingest_extra.go` | ingest pipelines and processors |
+| `aggs*.go`, `pipeline.go`, `suggest*.go`, `knn*.go` | aggregations, pipeline aggs, suggesters, k-NN |
+| `ingest.go`, `ingest_processors.go`, `ingest_extra.go` | ingest pipelines and processors |
 | `persist.go`, `persist_sync_*.go` | durable state: snapshot + synced journal (`SLOP_DATA_DIR`, `SLOP_IN_MEMORY`) |
-| `cat.go`, `nodes.go`, `resp.go` | `_cat`, `_nodes`/`_cluster`, response formats (`filter_path`, YAML, ...) |
-| `pl_lex.go`, `pl_parse.go`, `pl_check.go`, `pl_interp.go` | Painless: lexer, parser, static type checks, interpreter |
-| `pl_value.go`, `pl_lib.go`, `pl_time.go`, `pl_regex.go` | Painless runtime values (Java semantics), class library, `java.time`, regex limit |
-| `pl_api.go`, `script_ctx.go`, `script_meta.go` | script contexts, `_scripts/painless/_execute`, script errors, wiring into search/aggs/update/ingest |
-| `pl_expr.go`, `mustache.go` | Lucene expressions, mustache templates |
-| `painless.go`, `scripts.go`, `search_templates.go` | script queries, stored scripts, `script_fields`, search templates |
-| `analysis.go`, `analysis_chain.go`, `analyze_api.go` | analyzers, analysis chains (index/global/inline components, settings validation), the `_analyze` API with `explain` |
-| `tokenizers.go`, `filters.go`, `filters_pattern.go`, `synonyms.go`, `charfilter.go`, `asciifold_table.go` | tokenizers, token filters, synonym filters, char filters with Lucene offset correction |
-| `jregex.go` | backtracking `java.util.regex` subset (lookaround, possessive, `\p{..}`) for pattern components |
+| `cat.go`, `nodes.go`, `tasks*.go` | `_cat`, `_nodes`/`_cluster`, tasks |
+| `script_ctx.go`, `scripts.go`, `painless.go` | script contexts, stored scripts, script queries and `script_fields` |
 
 ## Persistence
 
