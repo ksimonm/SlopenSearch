@@ -153,7 +153,11 @@ fn indices_fingerprint(store: &Store, names: &[String]) -> Option<u64> {
     for n in names {
         parts.push((n.as_str(), fingerprint(store.indices.get(n)?)));
     }
-    Some(hash_of(&parts))
+    let cluster = (
+        serde_json::to_string(&store.cluster_persistent).unwrap_or_default(),
+        serde_json::to_string(&store.cluster_transient).unwrap_or_default(),
+    );
+    Some(hash_of(&(parts, cluster)))
 }
 
 /// Whether a request depends on more than the index content and itself:
