@@ -5223,7 +5223,19 @@ pub fn handle_search(store: &mut Store, req: &Req, name: &str) -> Response {
             }
         }
     }
-    let result = run_search(store, name, &names, &body, req);
+    let cache_key = crate::visibility::cache_key(store, req, &names, &body);
+    let result = match cache_key.as_ref().and_then(|k| crate::visibility::cache_get(store, &names, k)) {
+        Some(v) => Ok(v),
+        None => {
+            let view = crate::visibility::enter(store, &names);
+            let r = run_search(store, name, &names, &body, req);
+            crate::visibility::leave(store, view);
+            if let (Some(k), Ok(v)) = (cache_key, &r) {
+                crate::visibility::cache_put(store, &names, k, v);
+            }
+            r
+        }
+    };
     if let Some(snap) = derived_snap {
         for (n, derived, doc_values) in snap {
             if let Some(idx) = store.indices.get_mut(&n) {

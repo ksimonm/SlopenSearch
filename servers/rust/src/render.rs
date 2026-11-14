@@ -570,7 +570,10 @@ pub fn handle_search_template(store: &mut Store, req: &Req, name: &str) -> Respo
         Ok(n) => n,
         Err(e) => return err_response(e),
     };
-    match crate::search::run_search(store, name, &names, &rendered_body, req) {
+    let view = crate::visibility::enter(store, &names);
+    let result = crate::search::run_search(store, name, &names, &rendered_body, req);
+    crate::visibility::leave(store, view);
+    match result {
         Ok(v) => {
             let mut v = finish_search_result(v, req, explain);
             if body.get("profile").and_then(|p| p.as_bool()).unwrap_or(false) {
@@ -803,7 +806,10 @@ pub fn handle_msearch(store: &mut Store, req: &Req, path: &str, template: bool) 
             }
         };
         let spec = if path.is_empty() { "_all".to_string() } else { path.to_string() };
-        match crate::search::run_search(store, &spec, &names, &body, req) {
+        let view = crate::visibility::enter(store, &names);
+        let result = crate::search::run_search(store, &spec, &names, &body, req);
+        crate::visibility::leave(store, view);
+        match result {
             Ok(v) => {
                 let mut v = finish_search_result(v, req, false);
                 if let Some(o) = v.as_object_mut() {

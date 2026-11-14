@@ -322,6 +322,7 @@ pub fn create_index_internal(
         versions: std::collections::HashMap::new(),
         seq_nos: std::collections::HashMap::new(),
         raw_sources: std::collections::HashMap::new(),
+        searcher: Default::default(),
     };
     store.indices.insert(name.to_string(), idx);
     if let Some(i) = store.indices.get_mut(name) {

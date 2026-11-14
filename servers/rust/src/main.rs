@@ -47,6 +47,7 @@ mod shared;
 mod store;
 mod suggest;
 mod templates;
+mod visibility;
 
 use axum::body::Bytes;
 use axum::extract::State;
