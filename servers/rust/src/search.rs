@@ -2110,6 +2110,17 @@ fn ih_build_group(
     id: &str,
 ) -> Value {
     let sorts = ih_sort_fields(spec.get("sort"));
+    let scored = hits.iter().any(|h| h.3.contains_key("_score"));
+    let score_of = |h: &(usize, Value, Vec<Value>, Map<String, Value>)| {
+        h.3.get("_score").and_then(|s| s.as_f64()).unwrap_or(0.0)
+    };
+    let mut max_score: Option<f64> = None;
+    if scored && sorts.is_empty() {
+        hits.sort_by(|a, b| {
+            score_of(b).partial_cmp(&score_of(a)).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0))
+        });
+        max_score = hits.first().map(score_of);
+    }
     if !sorts.is_empty() {
         hits.sort_by(|a, b| {
             for i in 0..sorts.len() {
@@ -2130,6 +2141,9 @@ fn ih_build_group(
     let mut inner = Vec::new();
     for (offset, child, svals, mut extra) in hits.into_iter().skip(from).take(size) {
         let mut e = Map::new();
+        if let Some(v) = extra.remove("_index") {
+            e.insert("_index".to_string(), v);
+        }
         if let Some(v) = extra.remove("_id") {
             e.insert("_id".to_string(), v);
         } else {
@@ -2154,10 +2168,15 @@ fn ih_build_group(
             };
             e.insert("_nested".to_string(), meta);
         }
-        e.insert(
-            "_source".to_string(),
-            ih_source(&child, path, source_spec),
-        );
+        if let Some(sc) = extra.remove("_score") {
+            e.insert("_score".to_string(), if sorts.is_empty() { sc } else { Value::Null });
+        }
+        if source_spec != Some(&Value::Bool(false)) {
+            e.insert(
+                "_source".to_string(),
+                ih_source(&child, path, source_spec),
+            );
+        }
         if !svals.is_empty() {
             e.insert("sort".to_string(), Value::Array(svals));
         }
@@ -2171,6 +2190,9 @@ fn ih_build_group(
     }
     let mut hits_obj = Map::new();
     hits_obj.insert("total".to_string(), json!({"value": total, "relation": "eq"}));
+    if scored {
+        hits_obj.insert("max_score".to_string(), max_score.map(|m| json!(m)).unwrap_or(Value::Null));
+    }
     hits_obj.insert("hits".to_string(), Value::Array(inner));
     let mut group = Map::new();
     group.insert("hits".to_string(), Value::Object(hits_obj));
@@ -2251,10 +2273,12 @@ fn build_query_inner_hits(
                 let cc = ih_scoped_ctx(idx, id, doc, path, &child);
                 let mut extra = Map::new();
                 if let Some(inner) = inner {
-                    let (ok, _) = cc.eval(inner)?;
+                    let (ok, sc) = cc.eval(inner)?;
                     if !ok {
                         continue;
                     }
+                    extra.insert("_index".to_string(), json!(idx.name));
+                    extra.insert("_score".to_string(), json!(crate::knn::f32r(sc)));
                     let sub = build_query_inner_hits(
                         idx,
                         id,
