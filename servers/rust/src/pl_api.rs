@@ -44,6 +44,12 @@ fn contexts() -> &'static HashMap<&'static str, CheckCtx> {
             "decayDateLinear:double(String,String,String,double,def)",
             "randomScore:double(int)",
             "randomScore:double(int,String)",
+            "l2Squared:double(def,def)",
+            "l1Norm:double(def,def)",
+            "lInfNorm:double(def,def)",
+            "innerProduct:double(def,def)",
+            "cosineSimilarity:double(def,def)",
+            "hamming:double(def,def)",
         ]);
         let ctx = |vars: &[(&'static str, &'static str)], ret: &'static str| CheckCtx {
             vars: vars.to_vec(),
@@ -425,6 +431,14 @@ fn doc_values_for(idx: &Index, id: &str, vals: &Map<String, Value>, field: &str,
             ms.sort();
             dv("Dates", ms.into_iter().map(|m| PV::Zdt(Rc::new(Zdt::from_millis(m)))).collect())
         }
+        "knn_vector" => {
+            let vec: Vec<PV> = raw.iter().filter_map(json_f64).map(|f| PV::Float(f as f32)).collect();
+            if vec.is_empty() {
+                return dv("KnnVector", Vec::new());
+            }
+            let arr = PV::Array(Rc::new(PArray { elem: "float".into(), a: RefCell::new(vec) }));
+            dv("KnnVector", vec![arr])
+        }
         "geo_point" => {
             let out = raw
                 .iter()
@@ -517,6 +531,9 @@ pub fn score_bindings(id: String) -> HashMap<String, NativeFn> {
             Ok(PV::Double((0.5 * dist(&a).powi(2) / scaling).exp()))
         }),
     );
+    for name in ["l2Squared", "l1Norm", "lInfNorm", "innerProduct", "cosineSimilarity", "hamming"] {
+        m.insert(name.into(), Rc::new(move |_, a, off| vector_function(name, &a, off)));
+    }
     m.insert(
         "randomScore".into(),
         Rc::new(move |_, a, _| {
@@ -530,6 +547,54 @@ pub fn score_bindings(id: String) -> HashMap<String, NativeFn> {
         }),
     );
     m
+}
+
+/// The k-NN plugin's painless vector functions (KNNScoringUtil) over a query
+/// vector and a knn_vector doc value.
+fn vector_function(name: &str, a: &[PV], off: usize) -> R<PV> {
+    let query: Vec<f64> = match &a[0] {
+        PV::List(l) => l.borrow().iter().map(f64_of).collect(),
+        PV::Array(arr) => arr.a.borrow().iter().map(f64_of).collect(),
+        PV::Null => return Err(npe(off)),
+        other => return Err(cce(off, &format!("Cannot cast {} to java.util.List", class_name(other)))),
+    };
+    let doc: Vec<f64> = match &a[1] {
+        PV::DocValues(d) if d.kind == "KnnVector" => match d.vals.first() {
+            Some(PV::Array(arr)) => arr.a.borrow().iter().map(f64_of).collect(),
+            _ => {
+                return Err(RtErr::new(
+                    "illegal_state_exception",
+                    "KNN vector does not have a value for this document",
+                    off,
+                ))
+            }
+        },
+        other => {
+            return Err(iae(
+                off,
+                &format!("Incompatible type {} for KNN vector function", class_name(other)),
+            ))
+        }
+    };
+    if query.len() != doc.len() {
+        return Err(iae(
+            off,
+            &format!(
+                "The query vector has a different number of dimensions [{}] than the document vectors [{}].",
+                query.len(),
+                doc.len()
+            ),
+        ));
+    }
+    let space = match name {
+        "l2Squared" => "l2",
+        "l1Norm" => "l1",
+        "lInfNorm" => "linf",
+        "innerProduct" => "innerproduct",
+        "cosineSimilarity" => "cosinesimil",
+        _ => "hamming",
+    };
+    Ok(PV::Double(crate::knn::raw(space, &query, &doc) as f32 as f64))
 }
 
 /// Runs f on a scoped thread with a large stack, so that deeply nested

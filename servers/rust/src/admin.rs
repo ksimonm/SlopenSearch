@@ -865,6 +865,11 @@ fn merge_mapping_checked(
                         "normalizer" => Some("default"),
                         "null_value" => Some("null"),
                         "index_options" => Some("positions"),
+                        "space_type" | "mode" | "compression_level" | "data_type" | "method"
+                            if old_type == "knn_vector" =>
+                        {
+                            Some("undefined")
+                        }
                         _ => None,
                     };
                     if let Some(dv) = default_val {

@@ -393,6 +393,9 @@ pub fn validate_query(idx: &Index, q: &Map<String, Value>) -> Result<(), ApiErro
                 if let Some((field, val)) = query_leaf_field(body) {
                     let def = mapping_field_def(idx, &field).cloned().unwrap_or_default();
                     let ftype = def.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    if ftype == "knn_vector" {
+                        return Err(crate::knn_query::exact_search_err(idx, &field));
+                    }
                     if def.get("index").and_then(|v| v.as_bool()) == Some(false) {
                         let dv = def.get("doc_values").and_then(|v| v.as_bool());
                         let reason = if dv == Some(false) {
