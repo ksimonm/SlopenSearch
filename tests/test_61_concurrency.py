@@ -1036,6 +1036,8 @@ def test_stored_script_replaced_while_in_use(client, pool, idx):
             assert r.status_code == 200, r.text
             return r.json()["aggregations"]["s"]["value"]
 
+        # Fill the request cache before the writer starts, so the cached value is known.
+        assert reader(client) == 90.0
         _, seen = _readers_until(pool, writer, reader)
         assert all(v in (90.0, 135.0) for s in seen for v in s)
         assert all(s[-1] == 90.0 for s in seen)
