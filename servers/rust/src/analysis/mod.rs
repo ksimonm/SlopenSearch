@@ -432,7 +432,7 @@ impl Chain {
     /// Whether the stream after `upto` filters carries a KeywordAttribute
     /// (it shows up in `explain` output).
     pub fn has_keyword_attr(&self, upto: usize) -> bool {
-        self.filters.iter().take(upto).any(|f| f.inner.uses_keyword_attr())
+        self.tokenizer.inner.uses_keyword_attr() || self.filters.iter().take(upto).any(|f| f.inner.uses_keyword_attr())
     }
 }
 

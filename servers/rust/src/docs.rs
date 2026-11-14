@@ -698,6 +698,7 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
             }
         }
     }
+    crate::visibility::before_write(idx, &doc_id);
     if let Err(e) = crate::fields::compute_doc_values(idx, &doc_id, &mut body) {
         return err_response(e);
     }
@@ -1660,6 +1661,7 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
                 }
             }
             let idx = store.indices.get_mut(&target).unwrap();
+            crate::visibility::before_write(idx, id);
             if let Err(e) = crate::fields::compute_doc_values(idx, id, &mut cur) {
                 return err_response(e);
             }
@@ -2067,6 +2069,14 @@ pub fn parse_q_param(q: &str) -> Value {
 }
 
 pub fn handle_count(store: &mut Store, req: &Req, name: &str) -> Response {
+    let names: Vec<String> = store.indices.keys().cloned().collect();
+    let view = crate::visibility::enter(store, &names);
+    let r = handle_count_visible(store, req, name);
+    crate::visibility::leave(store, view);
+    r
+}
+
+fn handle_count_visible(store: &mut Store, req: &Req, name: &str) -> Response {
     if req.method != "POST" && req.method != "GET" {
         return crate::errors::method_not_allowed(req, &["POST", "GET"]);
     }
@@ -2795,6 +2805,7 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
                 idx.index_total += 1;
                 idx.delete_total += 1;
             } else if changed {
+                crate::visibility::before_write(idx, &doc_id);
                 if let Err(e) = crate::fields::compute_doc_values(idx, &doc_id, &mut new_doc) {
                     has_errors = true;
                     items.push(bulk_err_api("update", &idx.name, &doc_id, &e));
@@ -3050,6 +3061,7 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
             doc_id = store.next_id();
         }
         let idx = store.indices.get_mut(&target).unwrap();
+        crate::visibility::before_write(idx, &doc_id);
         if let Err(e) = crate::fields::compute_doc_values(idx, &doc_id, &mut source) {
             has_errors = true;
             items.push(bulk_err_api(&op, &idx.name, &doc_id, &e));
@@ -3982,7 +3994,16 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
         Ok(b) => b,
         Err(e) => return err_response(e),
     };
-    let mut ids = match byq_matched(store, &target, req, &body, false) {
+    // The query runs on the last refreshed versions; documents changed since
+    // then are version conflicts.
+    let view = crate::visibility::enter(store, std::slice::from_ref(&target));
+    let matched = byq_matched(store, &target, req, &body, false);
+    let snap_seq: std::collections::HashMap<String, i64> = match (&matched, store.indices.get(&target)) {
+        (Ok(ids), Some(idx)) => ids.iter().filter_map(|id| idx.seq_nos.get(id).map(|s| (id.clone(), *s))).collect(),
+        _ => std::collections::HashMap::new(),
+    };
+    crate::visibility::leave(store, view);
+    let mut ids = match matched {
         Ok(v) => v,
         Err(e) => return err_response(e),
     };
@@ -3990,6 +4011,9 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
         ids.truncate(max);
     }
     let total = ids.len() as i64;
+    let proceed = req.param("conflicts") == Some("proceed")
+        || body.get("conflicts").and_then(|v| v.as_str()) == Some("proceed");
+    let mut conflicts = 0i64;
     let script_raw = body.get("script").cloned();
     let pipeline_name = match crate::ingest::effective_ingest_pipeline(store, &target, req.param("pipeline").unwrap_or("")) {
         Ok(p) => p,
@@ -4005,6 +4029,22 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
             Some(d) => d,
             None => continue,
         };
+        let cur_seq = store.indices.get(&target).and_then(|i| i.seq_nos.get(id)).copied();
+        if let (Some(want), Some(have)) = (snap_seq.get(id), cur_seq) {
+            if *want != have {
+                conflicts += 1;
+                if proceed {
+                    continue;
+                }
+                let uuid = store.indices.get(&target).map(|i| i.uuid.clone()).unwrap_or_default();
+                failure_status = 409;
+                failures.push(json!({"index": target, "id": id, "cause": {
+                    "type": "version_conflict_engine_exception",
+                    "reason": format!("[{}]: version conflict, required seqNo [{}], primary term [1]. current document has seqNo [{}] and primary term [1]", id, want, have),
+                    "index_uuid": uuid, "shard": "0", "index": target}, "status": 409}));
+                break;
+            }
+        }
         let old_ver = store.indices.get(&target).and_then(|i| i.versions.get(id)).copied().unwrap_or(1);
         let mut cur = old.clone();
         let mut op = String::new();
@@ -4065,6 +4105,7 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
             }
         }
         let idx = store.indices.get_mut(&target).unwrap();
+        crate::visibility::before_write(idx, id);
         if let Err(e) = crate::fields::compute_doc_values(idx, id, &mut newdoc) {
             failure_status = e.status;
             failures.push(json!({"id": id, "index": target,
@@ -4091,6 +4132,7 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
     let batches = if total > 0 { 1 } else { 0 };
     let mut out = byq_report(total, updated, deleted, noops, batches, &failures);
     out.as_object_mut().unwrap().insert("updated".to_string(), json!(updated));
+    out.as_object_mut().unwrap().insert("version_conflicts".to_string(), json!(conflicts));
     if let Some(n) = req.param("slices").and_then(|v| v.parse::<usize>().ok()).filter(|n| *n > 0) {
         let mut arr = Vec::new();
         for i in 0..n {

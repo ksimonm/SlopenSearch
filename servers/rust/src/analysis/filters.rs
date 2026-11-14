@@ -316,7 +316,9 @@ pub fn build(typ: &str, p: &Map<String, Value>, ctx: &Ctx, chain: &Chain) -> ARe
         "russian_stem" | "czech_stem" | "french_stem" | "german_stem" | "dutch_stem" | "brazilian_stem" | "arabic_stem"
         | "persian_stem" | "greek_stem" | "hindi_stem" | "bengali_stem" | "sorani_stem" | "latvian_stem"
         | "indonesian_stem" | "galician_stem" | "portuguese_stem" | "spanish_stem" => {
-            Filter::Stem(stem::stemmer_for(typ.trim_end_matches("_stem"))?)
+            // german_stem is Lucene's GermanStemFilter, not the German Snowball stemmer.
+            let lang = if typ == "german_stem" { typ } else { typ.trim_end_matches("_stem") };
+            Filter::Stem(stem::stemmer_for(lang)?)
         }
         "ngram" | "nGram" | "edge_ngram" | "edgeNGram" => {
             let edge = typ.starts_with('e');

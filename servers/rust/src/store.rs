@@ -39,6 +39,8 @@ pub struct Index {
     pub versions: HashMap<String, i64>,
     pub seq_nos: HashMap<String, i64>,
     pub raw_sources: HashMap<String, Vec<u8>>,
+    /// Last refreshed versions of updated documents, request cache.
+    pub searcher: crate::visibility::SearcherState,
 }
 
 impl Index {
@@ -71,6 +73,7 @@ impl Index {
             versions: HashMap::new(),
             seq_nos: HashMap::new(),
             raw_sources: HashMap::new(),
+            searcher: Default::default(),
         }
     }
 

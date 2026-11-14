@@ -206,11 +206,32 @@ fn is_text_type(t: &str) -> bool {
     )
 }
 
+/// Turns query text into highlight terms: (text, query options, exact).
+type TermAnalyzer<'a> = &'a dyn Fn(&str, Option<&Map<String, Value>>, bool) -> Vec<String>;
+
+fn legacy_terms(text: &str, _opts: Option<&Map<String, Value>>, _exact: bool) -> Vec<String> {
+    analyze(text)
+}
+
+/// The terms of a query_string query: field prefixes and operators dropped.
+fn query_string_text(q: &str) -> String {
+    let mut out = Vec::new();
+    for w in q.split_whitespace() {
+        if matches!(w, "AND" | "OR" | "NOT" | "&&" | "||") {
+            continue;
+        }
+        let w = w.rsplit(':').next().unwrap_or(w);
+        out.push(w.replace(['(', ')', '"', '+', '-'], " "));
+    }
+    out.join(" ")
+}
+
 fn collect_terms(
     q: &Map<String, Value>,
     target: Option<&str>,
     terms: &mut Vec<String>,
     touched: &mut bool,
+    an: TermAnalyzer,
 ) {
     for (clause, raw) in q {
         let clause = clause.as_str();
@@ -225,8 +246,8 @@ fn collect_terms(
                             continue;
                         }
                         if target.map(|t| t == f).unwrap_or(true) {
-                            let (text, _) = crate::eval::query_text(val);
-                            terms.extend(analyze(&text));
+                            let (text, o) = crate::eval::query_text(val);
+                            terms.extend(an(&text, o, false));
                         }
                         if target == Some(f.as_str()) {
                             *touched = true;
@@ -245,13 +266,13 @@ fn collect_terms(
                                 Value::Array(arr) => {
                                     for v in arr {
                                         if let Some(s) = value_to_string(v) {
-                                            terms.extend(analyze(&s));
+                                            terms.extend(an(&s, None, true));
                                         }
                                     }
                                 }
                                 _ => {
-                                    if let Some(s) = value_to_string(val) {
-                                        terms.extend(analyze(&s));
+                                    if let Some(s) = crate::hl_analyzed::exact_value(val) {
+                                        terms.extend(an(&s, None, true));
                                     }
                                 }
                             }
@@ -278,7 +299,7 @@ fn collect_terms(
                     if applies {
                         if let Some(qv) = m.get("query") {
                             let (text, _) = crate::eval::query_text(qv);
-                            terms.extend(analyze(&text));
+                            terms.extend(an(&text, Some(m), false));
                         }
                         if target.is_some() {
                             *touched = true;
@@ -301,7 +322,7 @@ fn collect_terms(
                     };
                     if applies {
                         if let Some(qv) = m.get("query").and_then(|v| v.as_str()) {
-                            terms.extend(analyze(qv));
+                            terms.extend(an(&query_string_text(qv), Some(m), false));
                         }
                         if target.is_some() {
                             *touched = true;
@@ -314,7 +335,7 @@ fn collect_terms(
                     for key in ["must", "should", "filter"] {
                         for item in crate::eval::as_query_list(bm.get(key)) {
                             if let Some(qm) = item.as_object() {
-                                collect_terms(qm, target, terms, touched);
+                                collect_terms(qm, target, terms, touched, an);
                             }
                         }
                     }
@@ -323,14 +344,14 @@ fn collect_terms(
             "constant_score" => {
                 if let Some(m) = raw.as_object() {
                     if let Some(qv) = m.get("filter").and_then(|v| v.as_object()) {
-                        collect_terms(qv, target, terms, touched);
+                        collect_terms(qv, target, terms, touched, an);
                     }
                 }
             }
             "function_score" => {
                 if let Some(m) = raw.as_object() {
                     if let Some(qv) = m.get("query").and_then(|v| v.as_object()) {
-                        collect_terms(qv, target, terms, touched);
+                        collect_terms(qv, target, terms, touched, an);
                     }
                 }
             }
@@ -338,7 +359,7 @@ fn collect_terms(
                 if let Some(m) = raw.as_object() {
                     for item in crate::eval::as_query_list(m.get("queries")) {
                         if let Some(qm) = item.as_object() {
-                            collect_terms(qm, target, terms, touched);
+                            collect_terms(qm, target, terms, touched, an);
                         }
                     }
                 }
@@ -347,7 +368,7 @@ fn collect_terms(
                 if let Some(m) = raw.as_object() {
                     for key in ["positive", "negative"] {
                         if let Some(qm) = m.get(key).and_then(|v| v.as_object()) {
-                            collect_terms(qm, target, terms, touched);
+                            collect_terms(qm, target, terms, touched, an);
                         }
                     }
                 }
@@ -355,7 +376,7 @@ fn collect_terms(
             "nested" => {
                 if let Some(m) = raw.as_object() {
                     if let Some(qm) = m.get("query").and_then(|v| v.as_object()) {
-                        collect_terms(qm, target, terms, touched);
+                        collect_terms(qm, target, terms, touched, an);
                     }
                 }
             }
@@ -475,20 +496,74 @@ fn make_fragment(text: &str, start: usize, end: usize, terms: &[String], c: &Cfg
     mark_text(&text[start..end], terms, &pre, &post, c.encoder_html, cutoff)
 }
 
-fn build_fragments(text: &str, terms: &[String], c: &Cfg) -> Vec<String> {
-    let ws = words(text);
-    let matches = matching_words(&ws, terms);
+/// Marks the given byte spans of `text[start..end]`; with `cutoff`, only
+/// spans starting before that many characters into the fragment.
+fn mark_spans(text: &str, start: usize, end: usize, spans: &[(usize, usize)], c: &Cfg, cutoff: Option<usize>) -> String {
+    let (pre, post) = tags(c);
+    let enc = |s: &str| if c.encoder_html { escape_html(s) } else { s.to_string() };
+    let mut out = String::new();
+    let mut pos = start;
+    for &(s, e) in spans {
+        if s < pos || e > end {
+            continue;
+        }
+        if let Some(cut) = cutoff {
+            if text[start..s].chars().count() >= cut {
+                continue;
+            }
+        }
+        out.push_str(&enc(&text[pos..s]));
+        out.push_str(&pre);
+        out.push_str(&enc(&text[s..e]));
+        out.push_str(&post);
+        pos = e;
+    }
+    out.push_str(&enc(&text[pos..end]));
+    out
+}
+
+/// The words of `text` with the words a span overlaps replaced by the spans,
+/// and the indices of the span words.
+fn span_words(text: &str, spans: &[(usize, usize)]) -> (Vec<Word>, Vec<usize>) {
+    let mut ws: Vec<(Word, bool)> = words(text)
+        .into_iter()
+        .filter(|w| !spans.iter().any(|&(s, e)| s < w.end && e > w.start))
+        .map(|w| (w, false))
+        .collect();
+    for &(s, e) in spans {
+        ws.push((Word { start: s, end: e, text: text[s..e].to_string() }, true));
+    }
+    ws.sort_by_key(|(w, _)| w.start);
+    let matches = ws.iter().enumerate().filter(|(_, (_, m))| *m).map(|(i, _)| i).collect();
+    (ws.into_iter().map(|(w, _)| w).collect(), matches)
+}
+
+fn build_fragments(text: &str, terms: &[String], c: &Cfg, spans: Option<&[(usize, usize)]>) -> Vec<String> {
+    let (ws, matches) = match spans {
+        Some(sp) => span_words(text, sp),
+        None => {
+            let ws = words(text);
+            let m = matching_words(&ws, terms);
+            (ws, m)
+        }
+    };
     if matches.is_empty() {
         return vec![];
     }
+    let is_match: std::collections::HashSet<usize> = matches.iter().copied().collect();
+    let mark = |s: usize, e: usize, cutoff: Option<usize>| -> String {
+        match spans {
+            Some(sp) => mark_spans(text, s, e.min(text.len()), sp, c, cutoff),
+            None => make_fragment(text, s, e, terms, c, cutoff),
+        }
+    };
     let size = c.fragment_size.unwrap_or(100);
     let nfrags = c.nfrags.unwrap_or(5);
-    let (pre, post) = tags(c);
     if nfrags == 0 {
-        return vec![mark_text(text, terms, &pre, &post, c.encoder_html, None)];
+        return vec![mark(0, text.len(), None)];
     }
     if c.fragment_size.is_none() && text.len() <= size {
-        return vec![mark_text(text, terms, &pre, &post, c.encoder_html, None)];
+        return vec![mark(0, text.len(), None)];
     }
 
     let mut frags: Vec<(usize, usize, usize, bool)> = Vec::new();
@@ -530,10 +605,8 @@ fn build_fragments(text: &str, terms: &[String], c: &Cfg) -> Vec<String> {
                 end = ws[j].end;
                 j += 1;
             }
-            let termset: std::collections::HashSet<String> =
-                terms.iter().map(|t| simple_lower(t)).collect();
             let mut extended = false;
-            while j < ws.len() && termset.contains(&simple_lower(&ws[j].text)) {
+            while j < ws.len() && is_match.contains(&j) {
                 end = ws[j].end;
                 j += 1;
                 extended = true;
@@ -626,7 +699,7 @@ fn build_fragments(text: &str, terms: &[String], c: &Cfg) -> Vec<String> {
             } else {
                 None
             };
-            make_fragment(text, s, e, terms, c, cutoff)
+            mark(s, e, cutoff)
         })
         .collect()
 }
@@ -719,26 +792,39 @@ pub fn render(
                 Some(t) => t,
                 None => continue,
             };
+            let fas = if ftype == "text" {
+                crate::hl_analyzed::FieldAnalyzers::new(idx, &target)
+            } else {
+                None
+            };
+            let analyzed = |t: &str, o: Option<&Map<String, Value>>, exact: bool| -> Vec<String> {
+                match &fas {
+                    Some(fa) => fa.query_terms(idx, t, o, exact),
+                    None => legacy_terms(t, o, exact),
+                }
+            };
+            let an: TermAnalyzer = &analyzed;
             let mut terms: Vec<String> = Vec::new();
             let mut touched = false;
             if let Some(hq) = &cfg.highlight_query {
                 if let Some(qm) = hq.as_object() {
-                    collect_terms(qm, Some(&name), &mut terms, &mut touched);
+                    collect_terms(qm, Some(&name), &mut terms, &mut touched, an);
                 }
             } else {
-                collect_terms(query, Some(&name), &mut terms, &mut touched);
+                collect_terms(query, Some(&name), &mut terms, &mut touched, an);
             }
             if !touched {
                 if cfg.require_field_match != Some(false) {
                     terms.clear();
                 } else if terms.is_empty() {
-                    collect_terms(query, None, &mut terms, &mut touched);
+                    collect_terms(query, None, &mut terms, &mut touched, an);
                 }
             } else if terms.is_empty() && cfg.require_field_match == Some(false) {
-                collect_terms(query, None, &mut terms, &mut touched);
+                collect_terms(query, None, &mut terms, &mut touched, an);
             }
 
-            let frags = build_fragments(&text, &terms, &cfg);
+            let spans = fas.as_ref().map(|fa| fa.spans(&text, &terms));
+            let frags = build_fragments(&text, &terms, &cfg, spans.as_deref());
             if !frags.is_empty() {
                 out.insert(name, json!(frags));
             } else if let Some(n) = cfg.no_match_size {

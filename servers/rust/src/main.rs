@@ -16,6 +16,7 @@ mod hashes;
 mod hdr;
 mod highlight;
 mod human;
+mod hl_analyzed;
 mod ingest;
 mod ingest_script;
 mod lang;
@@ -50,6 +51,7 @@ mod store;
 mod suggest;
 mod tasks_async;
 mod templates;
+mod visibility;
 
 use axum::body::Bytes;
 use axum::extract::State;
