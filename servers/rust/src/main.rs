@@ -15,11 +15,13 @@ mod fields;
 mod hashes;
 mod hdr;
 mod highlight;
+mod human;
 mod ingest;
 mod ingest_script;
 mod lang;
 mod maintenance;
 mod meta;
+mod net_io;
 mod nodes;
 mod painless;
 mod persist;
@@ -46,6 +48,7 @@ mod search;
 mod shared;
 mod store;
 mod suggest;
+mod tasks_async;
 mod templates;
 
 use axum::body::Bytes;
@@ -339,7 +342,18 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
     let method = request.method().clone();
     let uri = request.uri().clone();
     let headers = request.headers().clone();
-    // http.max_content_length: OpenSearch answers 413 with an empty body
+    // http.max_content_length: OpenSearch answers 413 with an empty body, as
+    // soon as the announced length is known to be too large
+    let announced = headers
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok());
+    if announced.is_some_and(|n| n > MAX_CONTENT_LENGTH as u64) {
+        let mut resp = StatusCode::PAYLOAD_TOO_LARGE.into_response();
+        resp.headers_mut().insert("content-length", 0.into());
+        resp.headers_mut().insert("connection", "close".parse().unwrap());
+        return resp;
+    }
     let body = match axum::body::to_bytes(request.into_body(), MAX_CONTENT_LENGTH).await {
         Ok(b) => b,
         Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
@@ -421,6 +435,9 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
     // wait on the store lock: run them on the blocking pool so the async runtime keeps
     // accepting and answering connections.
     let (mut resp, req) = match tokio::task::spawn_blocking(move || {
+        if let Some(resp) = tasks_async::route(&store, &req) {
+            return (resp, req);
+        }
         let resp = {
             let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
             // Requests that may compile or run scripts get a large stack: the
@@ -457,6 +474,11 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
             .insert("content-type", ctype.parse().unwrap());
     }
     let ordered = resp.headers_mut().remove("x-lite-ordered").is_some();
+    // offset of a raw `_source` written as the last top-level field
+    let raw_source_at: Option<usize> = resp
+        .headers_mut()
+        .remove("x-raw-source-at")
+        .and_then(|v| v.to_str().ok().and_then(|s| s.parse().ok()));
     let fp = req.param("filter_path").unwrap_or("").to_string();
     let pretty = req.has_param("pretty") && req.param("pretty") != Some("false");
     let error_trace = req.bool_param("error_trace");
@@ -475,8 +497,13 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
         }
         if !ordered || reencoded {
             if pretty {
-                if let Ok(v) = serde_json::from_slice::<Value>(&body) {
-                    body = pretty_json(&v).into_bytes();
+                match raw_source_at.filter(|_| !reencoded) {
+                    Some(at) => body = resp::pretty_with_raw_source(&body, at),
+                    None => {
+                        if let Ok(v) = serde_json::from_slice::<Value>(&body) {
+                            body = pretty_json(&v).into_bytes();
+                        }
+                    }
                 }
             } else {
                 while body.last() == Some(&b'\n') {
@@ -487,24 +514,16 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
         if status >= 400 && error_trace {
             if let Ok(mut v) = serde_json::from_slice::<Value>(&body) {
                 if let Some(err_obj) = v.get_mut("error").and_then(|e| e.as_object_mut()) {
-                    let stk = serde_json::json!([
-                        format!(
-                            "java.lang.IllegalArgumentException: {}",
-                            err_obj
-                                .get("reason")
-                                .and_then(|r| r.as_str())
-                                .unwrap_or("")
-                        ),
-                        "\tat org.opensearch.action.support.master.TransportMasterNodeAction$AsyncSingleAction.doExecute(TransportMasterNodeAction.java:210)"
-                    ]);
-                    err_obj.insert("stack_trace".to_string(), stk.clone());
+                    let stk = Value::String(errors::stack_trace(err_obj));
                     if let Some(rc) = err_obj.get_mut("root_cause").and_then(|r| r.as_array_mut()) {
                         for c in rc.iter_mut() {
                             if let Some(cm) = c.as_object_mut() {
-                                cm.insert("stack_trace".to_string(), stk.clone());
+                                let st = Value::String(errors::stack_trace(cm));
+                                cm.insert("stack_trace".to_string(), st);
                             }
                         }
                     }
+                    err_obj.insert("stack_trace".to_string(), stk);
                 }
                 body = serde_json::to_vec(&v).unwrap_or_default();
             }
@@ -551,7 +570,36 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
     resp
 }
 
+/// True when the path has a `%` not followed by two hex digits.
+fn has_bad_escape(path: &str) -> bool {
+    let b = path.as_bytes();
+    (0..b.len()).any(|i| {
+        b[i] == b'%'
+            && !(i + 2 < b.len() && b[i + 1].is_ascii_hexdigit() && b[i + 2].is_ascii_hexdigit())
+    })
+}
+
 pub fn dispatch(store: &mut Store, req: &Req) -> axum::response::Response {
+    if req.method != "OPTIONS" && has_bad_escape(&req.path) {
+        // the URI cannot be decoded: RestController reports the methods of the route
+        let probe = Req {
+            method: "OPTIONS".to_string(),
+            path: req.path.clone(),
+            query: vec![],
+            headers: HeaderMap::new(),
+            body: vec![],
+        };
+        let r = dispatch(store, &probe);
+        if let Some(allow) = r.headers().get("allow").and_then(|v| v.to_str().ok()) {
+            return json_response(
+                405,
+                serde_json::json!({
+                    "error": format!("Unexpected HTTP method, allowed: [{}]", allow.replace(',', ", ")),
+                    "status": 405,
+                }),
+            );
+        }
+    }
     let path = req.path.trim_matches('/').to_string();
     let segs: Vec<String> = if path.is_empty() {
         vec![]
@@ -752,7 +800,7 @@ pub fn dispatch(store: &mut Store, req: &Req) -> axum::response::Response {
                 }
                 "GET" | "HEAD" => docs::handle_get_doc(store, req, index, &segs[2]),
                 "DELETE" => docs::handle_delete_doc(store, req, index, &segs[2]),
-                _ => no_handler(&req.method, &req.path),
+                _ => errors::method_not_allowed(req, &["HEAD", "PUT", "GET", "POST", "DELETE"]),
             },
             "_source" => {
                 if req.method != "GET" && req.method != "HEAD" {
@@ -833,7 +881,7 @@ async fn main() {
     let store: Shared = Arc::new(Mutex::new(persist::open()));
     let app = Router::new().fallback(any(handle)).with_state(store);
     let listener = match tokio::net::TcpListener::bind(&addr).await {
-        Ok(l) => l,
+        Ok(l) => net_io::OsListener(l),
         Err(e) => {
             eprintln!("slopensearch (rust): cannot listen on {}: {}", addr, e);
             std::process::exit(1);

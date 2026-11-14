@@ -817,7 +817,9 @@ pub(crate) fn synthetic_tasks() -> Vec<Map<String, Value>> {
         "description".into(),
         json!("cluster:monitor/tasks/lists[n]"),
     );
-    vec![parent, child]
+    let mut out = vec![parent, child];
+    out.extend(crate::tasks_async::running_tasks());
+    out
 }
 
 pub(crate) fn task_action_matches(task: &Map<String, Value>, actions: &str) -> bool {
@@ -831,7 +833,7 @@ pub(crate) fn task_action_matches(task: &Map<String, Value>, actions: &str) -> b
 fn task_json(task: &Map<String, Value>, detailed: bool) -> Map<String, Value> {
     let mut out = Map::new();
     for (k, v) in task {
-        if k == "description" && !detailed {
+        if (k == "description" || k == "status" || k == "resource_stats") && !detailed {
             continue;
         }
         out.insert(k.clone(), v.clone());
@@ -857,7 +859,7 @@ pub fn handle_tasks(_store: &mut Store, req: &Req, rest: &[String]) -> Response 
             let key = format!(
                 "{}:{}",
                 t.get("node").and_then(|v| v.as_str()).unwrap_or(""),
-                t.get("id").and_then(|v| v.as_str()).unwrap_or("")
+                t.get("id").map(|v| v.as_str().map(|s| s.to_string()).unwrap_or_else(|| v.to_string())).unwrap_or_default()
             );
             tasks_out.insert(
                 key,
@@ -944,7 +946,7 @@ pub fn handle_tasks(_store: &mut Store, req: &Req, rest: &[String]) -> Response 
                     let key = format!(
                         "{}:{}",
                         t.get("node").and_then(|v| v.as_str()).unwrap_or(""),
-                        t.get("id").and_then(|v| v.as_str()).unwrap_or("")
+                        t.get("id").map(|v| v.as_str().map(|s| s.to_string()).unwrap_or_else(|| v.to_string())).unwrap_or_default()
                     );
                     parents.insert(key, Value::Object(task_json(t, detailed)));
                 }
@@ -962,7 +964,7 @@ pub fn handle_tasks(_store: &mut Store, req: &Req, rest: &[String]) -> Response 
                 let key = format!(
                     "{}:{}",
                     t.get("node").and_then(|v| v.as_str()).unwrap_or(""),
-                    t.get("id").and_then(|v| v.as_str()).unwrap_or("")
+                    t.get("id").map(|v| v.as_str().map(|s| s.to_string()).unwrap_or_else(|| v.to_string())).unwrap_or_default()
                 );
                 tasks_out.insert(key, Value::Object(task_json(t, detailed)));
             }

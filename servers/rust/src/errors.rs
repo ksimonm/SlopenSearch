@@ -198,10 +198,16 @@ pub fn method_not_allowed(req: &crate::Req, allowed: &[&str]) -> Response {
     } else {
         allowed.join(",")
     };
+    if req.method == "OPTIONS" {
+        // RestController answers OPTIONS with the allowed methods and no body
+        let mut resp = text_response(200, "text/plain; charset=UTF-8", String::new());
+        resp.headers_mut().insert(header::ALLOW, allow.parse().unwrap());
+        return resp;
+    }
     let v = json!({
         "error": format!(
             "Incorrect HTTP method for uri [{}] and method [{}], allowed: [{}]",
-            req.path, req.method, allow
+            req.path, req.method, allow.replace(',', ", ")
         ),
         "status": 405,
     });
@@ -286,4 +292,68 @@ pub fn strict_bool(v: &str) -> Result<bool, ApiError> {
             400,
         )),
     }
+}
+
+/// The `stack_trace` written with error_trace=true: Throwable.toString of the
+/// exception followed by a frame.
+pub fn stack_trace(err: &Map<String, Value>) -> String {
+    let typ = err.get("type").and_then(|v| v.as_str()).unwrap_or("exception");
+    let reason = err.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+    let class: String = typ
+        .split('_')
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect();
+    let head = match typ {
+        "illegal_argument_exception" | "illegal_state_exception" | "number_format_exception"
+        | "null_pointer_exception" | "array_index_out_of_bounds_exception"
+        | "unsupported_operation_exception" | "class_cast_exception" => {
+            format!("java.lang.{}: {}", class, reason)
+        }
+        _ => {
+            let mut prefix = String::new();
+            if let Some(ix) = err.get("index").and_then(|v| v.as_str()) {
+                prefix.push_str(&format!("[{}]", ix));
+                if let Some(sh) = err.get("shard") {
+                    let sh = sh.as_str().map(|s| s.to_string()).unwrap_or_else(|| sh.to_string());
+                    prefix.push_str(&format!("[{}]", sh));
+                }
+                prefix.push(' ');
+            }
+            format!("{}{}[{}]", prefix, class, reason)
+        }
+    };
+    format!(
+        "{}\n\tat org.opensearch.rest.RestController.dispatchRequest(RestController.java:367)",
+        head
+    )
+}
+
+/// Jackson's error for a body that is not valid UTF-8, wrapped the way a
+/// document parse failure is reported.
+pub fn invalid_utf8_error(body: &[u8], e: &std::str::Utf8Error) -> ApiError {
+    let at = e.valid_up_to();
+    let lead = body[at];
+    let (what, byte, offset) = if (0xC2..=0xF4).contains(&lead) {
+        let k = at + e.error_len().unwrap_or(1).max(1);
+        match body.get(k) {
+            Some(b) => ("middle", *b, k + 1),
+            None => ("start", lead, at + 1),
+        }
+    } else {
+        ("start", lead, at + 1)
+    };
+    let reason = format!(
+        "Invalid UTF-8 {} byte 0x{:x}\n at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); byte offset: #{}]",
+        what, byte, offset
+    );
+    ApiError::new("mapper_parsing_exception", "failed to parse", 400).caused_by(
+        ApiError::new("json_parse_exception", &reason, 400)
+            .caused_by(ApiError::new("stream_read_exception", &reason, 400)),
+    )
 }
