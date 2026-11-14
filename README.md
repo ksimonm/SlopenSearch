@@ -24,7 +24,7 @@ OpenSearch 3.9.0, pinning down status codes, error types, response shapes and qu
 
 ## Status
 
-Share of the suite passing (2026-11-12, `make go-score` / `make rust-score`):
+Share of the suite passing (2026-11-14, `make go-score` / `make rust-score`):
 
 | Area | Go | Rust |
 |---|---:|---:|
@@ -35,20 +35,21 @@ Share of the suite passing (2026-11-12, `make go-score` / `make rust-score`):
 | Search API (sort, paging, highlight, scroll, PIT) | 100% | 100% |
 | Mappings and field types | 100% | 100% |
 | Aggregations | 100% | 100% |
-| Text analysis, languages | 100% | 97–99% |
+| Text analysis, languages | 100% | 100% |
 | Ingest pipelines | 100% | 100% |
 | Scripting (Painless, search templates) | 100% | 100% |
-| Suggesters | 46% | 42% |
-| Concurrency and load | 96% | 96% |
-| HTTP layer, async tasks | 89% | 57% |
-| Vector search (k-NN) | 48% | 33% |
-| **Total** | **96.8%** | **95.2%** |
+| Suggesters | 100% | 100% |
+| Concurrency and load | 100% | 100% |
+| HTTP layer, async tasks | 100% | 95% |
+| Vector search (k-NN) | 99.5% | 99.5% |
+| Persistence (opt-in `test_95`) | 100% | 100% |
+| **Total** | **99.99%** | **99.85%** |
 
-Both servers pass the original suite (everything up to `test_90`) in full or nearly so:
-Go all of it, Rust all but 18 tests in text analysis and languages. The open work is in
-the newest test files: the phrase and completion suggesters (`test_50`), `knn_score` and
-the Painless vector functions (`test_72`), long-running async tasks and, for Rust,
-compression and the task API (`test_62`), and a shard request cache (`test_61`).
+Go misses one test (a literal `NaN` in a k-NN vector, which needs lenient JSON parsing);
+Rust misses the same one plus HTTP compression (gzip/deflate/snappy, `test_62`), for which
+it has no compression library yet. A few tests in `test_61_concurrency` depend on timing
+and can fail now and then. The multi-node and cross-DC suites (`test_96`, `test_97`) are
+not implemented: both servers are single-node.
 Both servers store their state on disk by default (`SLOP_DATA_DIR`, default `./data`; in Docker a named volume per server) and survive restarts and crashes; `SLOP_IN_MEMORY=true` keeps everything in memory instead (see [servers/go/README.md](servers/go/README.md#persistence) and [servers/rust/README.md](servers/rust/README.md)).
 
 ## Quick start

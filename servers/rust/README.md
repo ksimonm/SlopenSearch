@@ -89,11 +89,9 @@ relative to the repository root here, adjust it to your build.)
 
 ## Status
 
-95.2% of the suite passes (see the table in the [main README](../../README.md#status)).
-All of the original suite passes except 18 tests in text analysis (`test_51`) and
-languages (`test_80`); the open work is in the newer files: suggesters (`test_50`),
-the HTTP layer and async tasks (`test_62`), k-NN (`test_72`) and two concurrency tests
-(`test_61`). `make rust-test ARGS=tests/test_62_tasks_http.py` is a good place
+99.85% of the suite passes (see the table in the [main README](../../README.md#status)).
+The open work is HTTP compression in `test_62_tasks_http` (no compression library yet) and
+one `test_72_knn` test; `make rust-test ARGS=tests/test_62_tasks_http.py` is the place
 to start. The build still has many warnings; cleaning them up is welcome.
 
 ## Rules

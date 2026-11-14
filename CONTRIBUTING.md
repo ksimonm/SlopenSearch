@@ -26,10 +26,8 @@ Rules:
 - Go: standard library only, `gofmt` clean. Rust: keep `cargo build` free of new warnings
   in the code you touch.
 
-Good areas to pick up: the newest test files are the open work in both servers —
-suggesters (`test_50`), the HTTP layer and async tasks (`test_62`) and vector search
-(`test_72`). Where one server is ahead on a file, it is a ready-made reference for the
-other.
+Good areas to pick up: HTTP compression in the Rust server (`test_62`), the literal `NaN`
+vector case (`test_72`), and the multi-node and cross-DC suites (`test_96`, `test_97`).
 
 ## Working with an AI coding agent
 
@@ -40,8 +38,8 @@ else. Start the agent in the repository root, pick a server and a test file, and
 
 | Server | Open test files |
 |---|---|
-| Go | `test_50_suggester`, `test_61_concurrency`, `test_62_tasks_http`, `test_72_knn` |
-| Rust | `test_50_suggester`, `test_51_analysis`, `test_61_concurrency`, `test_62_tasks_http`, `test_72_knn`, `test_80_languages` |
+| Go | `test_72_knn` (1 test), `test_96_multinode`, `test_97_cross_dc` |
+| Rust | `test_62_tasks_http`, `test_72_knn` (1 test), `test_96_multinode`, `test_97_cross_dc` |
 
 `make <server>-score` shows the current numbers.
 
