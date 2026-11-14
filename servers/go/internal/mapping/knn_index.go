@@ -1,10 +1,10 @@
-package main
+package mapping
 
 import (
 	"strings"
 
 	"slopensearch/internal/apierr"
-	"slopensearch/internal/mapping"
+
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/settings"
@@ -14,11 +14,11 @@ import (
 // knn_vector values at index time
 // ---------------------------------------------------------------------------
 
-// knnPutMappingCheck validates knn_vector fields of a put-mapping request and
+// KnnPutMappingCheck validates knn_vector fields of a put-mapping request and
 // rejects updates of their fixed parameters.
-func knnPutMappingCheck(idx *model.Index, existing, incoming map[string]any) *apierr.Error {
-	if mapping.IndexKnnEnabled(idx) {
-		if err := knnIndexMappings(incoming); err != nil {
+func KnnPutMappingCheck(idx *model.Index, existing, incoming map[string]any) *apierr.Error {
+	if IndexKnnEnabled(idx) {
+		if err := KnnIndexMappings(incoming); err != nil {
 			return err
 		}
 	}
@@ -26,7 +26,7 @@ func knnPutMappingCheck(idx *model.Index, existing, incoming map[string]any) *ap
 }
 
 func knnMergeConflicts(existing, incoming map[string]any) *apierr.Error {
-	for _, name := range mapping.SortedAnyKeys(incoming) {
+	for _, name := range SortedAnyKeys(incoming) {
 		nd, ok := incoming[name].(map[string]any)
 		if !ok {
 			continue
@@ -73,9 +73,9 @@ func knnMergeConflicts(existing, incoming map[string]any) *apierr.Error {
 var knnFieldKeyOrder = []string{"type", "dimension", "data_type", "mode", "compression_level", "method",
 	"model_id", "space_type", "doc_values"}
 
-// knnOrderMappings returns a rendering copy of a mapping in which
+// KnnOrderMappings returns a rendering copy of a mapping in which
 // knn_vector fields list their parameters in OpenSearch's order.
-func knnOrderMappings(v any) any {
+func KnnOrderMappings(v any) any {
 	m, ok := v.(map[string]any)
 	if !ok {
 		return v
@@ -100,7 +100,7 @@ func knnOrderMappings(v any) any {
 	}
 	cp := make(map[string]any, len(sub))
 	for n, d := range sub {
-		cp[n] = knnOrderMappings(d)
+		cp[n] = KnnOrderMappings(d)
 	}
 	out["properties"] = cp
 	return out
@@ -122,7 +122,7 @@ func orderKeys(m map[string]any, first []string, conv func(string, any) any) ojs
 			add(k)
 		}
 	}
-	for _, k := range mapping.SortedAnyKeys(m) {
+	for _, k := range SortedAnyKeys(m) {
 		if !seen[k] {
 			add(k)
 		}

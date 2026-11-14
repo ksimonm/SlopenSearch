@@ -1,4 +1,4 @@
-package main
+package search
 
 import (
 	"encoding/base64"
@@ -12,7 +12,6 @@ import (
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
-	"slopensearch/internal/search"
 )
 
 // ---------------------------------------------------------------------------
@@ -178,12 +177,12 @@ func knnXContentErr(raw []byte, off int, msg string, cause ojson.Object) *apierr
 	}
 	body := ojson.Object{{"error", append(ojson.Object{{"root_cause", []any{root}}}, top...)}, {"status", 400}}
 	return &apierr.Error{Type: "x_content_parse_exception", Status: 400, Reason: reason,
-		Shard: &search.ShardFailure{Raw: body, Status: 400}}
+		Shard: &ShardFailure{Raw: body, Status: 400}}
 }
 
-// knnParseCheck validates every knn clause of a search body the way the
+// KnnParseCheck validates every knn clause of a search body the way the
 // query parser does, before any shard is involved.
-func knnParseCheck(raw []byte) *apierr.Error {
+func KnnParseCheck(raw []byte) *apierr.Error {
 	if len(raw) == 0 {
 		return nil
 	}
@@ -221,7 +220,7 @@ func knnParseClause(raw []byte, kp int) *apierr.Error {
 		reason := fmt.Sprintf("[knn] query doesn't support multiple fields, found [%s] and [%s]", entries[0].key, entries[1].key)
 		obj := ojson.Object{{"type", "parsing_exception"}, {"reason", reason}, {"line", line}, {"col", col}}
 		body := ojson.Object{{"error", append(ojson.Object{{"root_cause", []any{obj}}}, obj...)}, {"status", 400}}
-		return &apierr.Error{Type: "parsing_exception", Status: 400, Reason: reason, Shard: &search.ShardFailure{Raw: body, Status: 400}}
+		return &apierr.Error{Type: "parsing_exception", Status: 400, Reason: reason, Shard: &ShardFailure{Raw: body, Status: 400}}
 	}
 	fe := entries[0]
 	if raw[fe.valPos] != '{' {
@@ -250,7 +249,7 @@ func knnParseClause(raw []byte, kp int) *apierr.Error {
 							{"caused_by", inner}}
 						body := ojson.Object{{"error", append(ojson.Object{{"root_cause", []any{inner}}}, top...)}, {"status", 400}}
 						return &apierr.Error{Type: "x_content_parse_exception", Status: 400, Reason: reason,
-							Shard: &search.ShardFailure{Raw: body, Status: 400}}
+							Shard: &ShardFailure{Raw: body, Status: 400}}
 					}
 				}
 			}
@@ -305,15 +304,15 @@ func knnParseVector(raw []byte, e jsonEntry) *apierr.Error {
 	}
 }
 
-func knnIsVectorField(idx *model.Index, field string) bool {
+func KnnIsVectorField(idx *model.Index, field string) bool {
 	def, _ := mapping.FieldDef(idx, field)
 	t, _ := def["type"].(string)
 	return t == "knn_vector"
 }
 
-// knnFieldOutput renders a vector for the fields option (the float array) or
+// KnnFieldOutput renders a vector for the fields option (the float array) or
 // for docvalue_fields (the stored little-endian bytes, base64 encoded).
-func knnFieldOutput(idx *model.Index, id, field string, def map[string]any, fields bool) ([]any, bool, *apierr.Error) {
+func KnnFieldOutput(idx *model.Index, id, field string, def map[string]any, fields bool) ([]any, bool, *apierr.Error) {
 	vals := idx.DocValues[id][field]
 	if len(vals) == 0 {
 		return nil, false, nil
@@ -343,8 +342,8 @@ func knnFieldOutput(idx *model.Index, id, field string, def map[string]any, fiel
 	return []any{base64.StdEncoding.EncodeToString(b)}, true, nil
 }
 
-// knnTermCheck rejects term queries on knn_vector fields.
-func knnTermCheck(idx *model.Index, raw any) *apierr.Error {
+// KnnTermCheck rejects term queries on knn_vector fields.
+func KnnTermCheck(idx *model.Index, raw any) *apierr.Error {
 	bm, ok := raw.(map[string]any)
 	if !ok {
 		return nil
@@ -357,14 +356,14 @@ func knnTermCheck(idx *model.Index, raw any) *apierr.Error {
 		reason := "KNN vector do not support exact searching, use KNN queries instead: [" + field + "]"
 		obj := ojson.Object{{"type", "query_shard_exception"}, {"reason", reason},
 			{"index", idx.Name}, {"index_uuid", idx.UUID}}
-		f := &search.ShardFailure{Status: 400, Index: idx.Name, Root: obj, Shard: obj, Top: obj}
+		f := &ShardFailure{Status: 400, Index: idx.Name, Root: obj, Shard: obj, Top: obj}
 		return &apierr.Error{Type: "query_shard_exception", Status: 400, Reason: reason, Shard: f}
 	}
 	return nil
 }
 
-// validateKnnQuery runs the shard-level checks of a knn query.
-func validateKnnQuery(idx *model.Index, raw any) *apierr.Error {
+// ValidateKnnQuery runs the shard-level checks of a knn query.
+func ValidateKnnQuery(idx *model.Index, raw any) *apierr.Error {
 	bm, ok := raw.(map[string]any)
 	if !ok || len(bm) != 1 {
 		return nil
@@ -377,19 +376,19 @@ func validateKnnQuery(idx *model.Index, raw any) *apierr.Error {
 		if !ok {
 			return nil
 		}
-		vec, ok := search.FloatList(p["vector"])
+		vec, ok := FloatList(p["vector"])
 		if !ok || len(vec) == 0 {
 			return nil
 		}
-		def, nested := search.KnnFieldDef(idx, field)
+		def, nested := KnnFieldDef(idx, field)
 		if t, _ := def["type"].(string); t != "knn_vector" {
 			if ig, _ := p["ignore_unmapped"].(bool); ig && def == nil {
 				return nil
 			}
-			return search.KnnShardFail(idx, fmt.Sprintf("Field '%s' is not knn_vector type.", field))
+			return KnnShardFail(idx, fmt.Sprintf("Field '%s' is not knn_vector type.", field))
 		}
 		if !mapping.IndexKnnEnabled(idx) {
-			return search.KnnShardFail(idx, fmt.Sprintf("Field '%s' is not built for ANN search.", field))
+			return KnnShardFail(idx, fmt.Sprintf("Field '%s' is not built for ANN search.", field))
 		}
 		fi := mapping.KnnInfo(def)
 		n := len(vec)
@@ -397,25 +396,25 @@ func validateKnnQuery(idx *model.Index, raw any) *apierr.Error {
 			n *= 8
 		}
 		if n != fi.Dim {
-			return search.KnnShardFail(idx, fmt.Sprintf("Query vector has invalid dimension: %d. Dimension should be: %d", n, fi.Dim))
+			return KnnShardFail(idx, fmt.Sprintf("Query vector has invalid dimension: %d. Dimension should be: %d", n, fi.Dim))
 		}
 		if fi.DataType == "byte" || fi.DataType == "binary" {
 			for _, f := range vec {
 				if f != math.Trunc(f) {
-					return search.KnnShardFail(idx, fmt.Sprintf("[data_type] field was set as [%s] in index mapping. But, KNN vector values are floats instead of byte integers", fi.DataType))
+					return KnnShardFail(idx, fmt.Sprintf("[data_type] field was set as [%s] in index mapping. But, KNN vector values are floats instead of byte integers", fi.DataType))
 				}
 			}
 			for _, f := range vec {
 				if f < -128 || f > 127 {
-					return search.KnnShardFail(idx, fmt.Sprintf("[data_type] field was set as [%s] in index mapping. But, KNN vector values are not within in the byte range [-128, 127]", fi.DataType))
+					return KnnShardFail(idx, fmt.Sprintf("[data_type] field was set as [%s] in index mapping. But, KNN vector values are not within in the byte range [-128, 127]", fi.DataType))
 				}
 			}
 		}
 		if md, ok := jsonv.ToFloat(p["max_distance"]); ok && md < 0 && fi.Space != "innerproduct" {
-			return search.KnnShardFail(idx, "[knn] requires distance to be non-negative for space type: "+strings.ToUpper(fi.Space))
+			return KnnShardFail(idx, "[knn] requires distance to be non-negative for space type: "+strings.ToUpper(fi.Space))
 		}
 		if en, _ := p["expand_nested_docs"].(bool); en && !nested {
-			return search.KnnShardFail(idx, "Invalid value provided for the [expand_nested_docs] field. [expand_nested_docs] is only supported with a nested field.")
+			return KnnShardFail(idx, "Invalid value provided for the [expand_nested_docs] field. [expand_nested_docs] is only supported with a nested field.")
 		}
 		if fi.Space == "cosinesimil" {
 			zero := true
@@ -425,7 +424,7 @@ func validateKnnQuery(idx *model.Index, raw any) *apierr.Error {
 				}
 			}
 			if zero {
-				return search.KnnShardFail(idx, "Cannot normalize a zero-length vector")
+				return KnnShardFail(idx, "Cannot normalize a zero-length vector")
 			}
 		}
 	}

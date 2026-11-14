@@ -1,11 +1,10 @@
-package main
+package search
 
 import (
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/painless"
-	"slopensearch/internal/search"
 )
 
 // ---------------------------------------------------------------------------
@@ -27,12 +26,12 @@ func init() {
 
 // ---- unsupported operations on vector fields ----
 
-// knnUnsupportedSort reports a sort on a knn_vector field.
-func knnUnsupportedSort(idx *model.Index, field string) *apierr.Error {
+// KnnUnsupportedSort reports a sort on a knn_vector field.
+func KnnUnsupportedSort(idx *model.Index, field string) *apierr.Error {
 	def, _ := mapping.FieldDef(idx, field)
 	if t, _ := def["type"].(string); t != "knn_vector" {
 		return nil
 	}
 	e := &apierr.Error{Type: "unsupported_operation_exception", Status: 500, Reason: "knn vector field doesn't support this operation"}
-	return search.PlainShardError(idx, e)
+	return PlainShardError(idx, e)
 }

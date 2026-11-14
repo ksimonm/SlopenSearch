@@ -30,7 +30,7 @@ func (s *Server) getMappingAPI(w http.ResponseWriter, r *http.Request, spec, fie
 			if mappings == nil {
 				mappings = map[string]any{}
 			}
-			out[idx.Name] = map[string]any{"mappings": knnOrderMappings(mappings)}
+			out[idx.Name] = map[string]any{"mappings": mapping.KnnOrderMappings(mappings)}
 		} else {
 			out[idx.Name] = map[string]any{"mappings": mapping.FieldMappings(idx, fields, includeDefaults)}
 		}
@@ -119,7 +119,7 @@ func (s *Server) putMappingAPI(w http.ResponseWriter, r *http.Request, spec stri
 		}
 		existingProps := mapping.EnsureProperties(idx.Mappings)
 		if props, ok := body["properties"].(map[string]any); ok {
-			if err := knnPutMappingCheck(idx, existingProps, props); err != nil {
+			if err := mapping.KnnPutMappingCheck(idx, existingProps, props); err != nil {
 				writeError(w, err)
 				return
 			}

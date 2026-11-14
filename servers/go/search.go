@@ -70,7 +70,7 @@ func docValuesOutput(idx *model.Index, id, field string, spec fieldSpec, fallbac
 		return nil, false, nil
 	}
 	if t, _ := def["type"].(string); t == "knn_vector" {
-		return knnFieldOutput(idx, id, field, def, fallbackSource)
+		return search.KnnFieldOutput(idx, id, field, def, fallbackSource)
 	}
 	ftype := ""
 	hasDV := true
@@ -412,7 +412,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				mapping.EnsureFieldTypes(vidx)
 			}()
 		}
-		if kerr := knnParseCheck(bodyRaw); kerr != nil {
+		if kerr := search.KnnParseCheck(bodyRaw); kerr != nil {
 			writeError(w, kerr)
 			return
 		}
@@ -726,7 +726,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			}
 			anyMapped := false
 			for _, idx := range indices {
-				if kerr := knnUnsupportedSort(idx, sp.Field); kerr != nil {
+				if kerr := search.KnnUnsupportedSort(idx, sp.Field); kerr != nil {
 					writeError(w, kerr)
 					return
 				}
@@ -1226,7 +1226,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				entry["_explanation"] = map[string]any{"value": search.ScoreJSON(h.Score),
 					"description": "script score function, computed with script:\"" + scriptToString(ss["script"]) + "\"",
 					"details":     []any{}}
-			} else if kexp := knnExplain(h.Idx, query, h.Id, h.Score); kexp != nil {
+			} else if kexp := search.KnnExplain(h.Idx, query, h.Id, h.Score); kexp != nil {
 				entry["_explanation"] = kexp
 			} else {
 				field, term := explainLabel(query)
@@ -1315,7 +1315,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 						if !found {
 							continue
 						}
-						if existing, done := out[name]; done && !knnIsVectorField(h.Idx, name) {
+						if existing, done := out[name]; done && !search.KnnIsVectorField(h.Idx, name) {
 							if list, ok := existing.([]any); ok {
 								out[name] = append(list, vals...)
 								continue
@@ -1916,14 +1916,14 @@ func validateQuery(idx *model.Index, query map[string]any) *apierr.Error {
 		}
 		switch clause {
 		case "term":
-			if err := knnTermCheck(idx, raw); err != nil {
+			if err := search.KnnTermCheck(idx, raw); err != nil {
 				return err
 			}
 			if err := validateTermQuery(idx, raw); err != nil {
 				return err
 			}
 		case "knn":
-			if err := validateKnnQuery(idx, raw); err != nil {
+			if err := search.ValidateKnnQuery(idx, raw); err != nil {
 				return err
 			}
 		case "terms":
