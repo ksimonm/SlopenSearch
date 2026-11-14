@@ -250,6 +250,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if r.Header.Get(badEscapeHeader) != "" {
+		s.writeBadEscape(cw, r)
+		finish()
+		return
+	}
 	normalizeQuery(r)
 	if r.ContentLength > 0 && checkContentType(cw, r) {
 		finish()
@@ -1894,7 +1899,12 @@ func main() {
 		IdleTimeout:       2 * time.Minute,
 	}
 	fmt.Println("slopensearch (go) listening on " + addr)
-	if err := srv.ListenAndServe(); err != nil {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := srv.Serve(escListener{ln}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
