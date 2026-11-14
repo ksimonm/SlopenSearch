@@ -1480,7 +1480,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			delete(entry, "_id")
 		}
 		hitCtx := newQueryCtxForDoc(h.idx, h.id, h.doc)
-		if hlCfg != nil {
+		if hlCfg != nil && mappingSourceEnabled(h.idx) {
 			if hlErr := hlCfg.validate(h.idx); hlErr != nil {
 				writeError(w, hlErr)
 				return
