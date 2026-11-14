@@ -193,6 +193,19 @@ func knnParseClause(raw []byte, kp int) *apiError {
 	if raw[jsonSkipWS(raw, kp)] != '{' {
 		return nil
 	}
+	// only objects shaped like a knn query ({field: {vector/k/...}}); a
+	// "knn" key elsewhere (a field or aggregation name) is left alone
+	for _, fe := range entries {
+		looksKnn := false
+		for _, e := range jsonObjectEntries(raw, fe.valPos) {
+			if knnQueryParams[e.key] {
+				looksKnn = true
+			}
+		}
+		if !looksKnn {
+			return nil
+		}
+	}
 	if len(entries) == 0 {
 		return errBad("[knn] field 'vector' requires to be non-null and non-empty")
 	}
