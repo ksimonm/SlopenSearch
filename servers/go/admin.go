@@ -293,15 +293,25 @@ var defaultSettingsFlat = map[string]any{
 
 func settingsSetNested(root map[string]any, path []string, v any) {
 	m := root
+	prefix := ""
 	for _, p := range path[:len(path)-1] {
-		next, ok := m[p].(map[string]any)
-		if !ok {
-			next = map[string]any{}
-			m[p] = next
+		key := prefix + p
+		existing, has := m[key]
+		if has {
+			if next, ok := existing.(map[string]any); ok {
+				m, prefix = next, ""
+				continue
+			}
+			// a value is already stored where a map is expected: fall
+			// back to dot notation, like Settings.getAsStructuredMap
+			prefix = key + "."
+			continue
 		}
-		m = next
+		next := map[string]any{}
+		m[key] = next
+		m, prefix = next, ""
 	}
-	m[path[len(path)-1]] = v
+	m[prefix+path[len(path)-1]] = v
 }
 
 func settingsToNested(flat map[string]any) map[string]any {
@@ -1216,7 +1226,7 @@ func (s *Server) putSettingsAPI(w http.ResponseWriter, r *http.Request, spec str
 					Reason: "unknown setting [" + k + "] please check that any required plugins are installed, or check the breaking changes documentation for removed settings"})
 				return
 			}
-			if k == "index.number_of_shards" {
+			if k == "index.number_of_shards" || k == "index.knn" {
 				nonDynamic = append(nonDynamic, k)
 				continue
 			}
