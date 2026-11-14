@@ -21,6 +21,7 @@ mod ingest_script;
 mod lang;
 mod maintenance;
 mod meta;
+mod net_io;
 mod nodes;
 mod painless;
 mod painless_exec;
@@ -340,7 +341,18 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
     let method = request.method().clone();
     let uri = request.uri().clone();
     let headers = request.headers().clone();
-    // http.max_content_length: OpenSearch answers 413 with an empty body
+    // http.max_content_length: OpenSearch answers 413 with an empty body, as
+    // soon as the announced length is known to be too large
+    let announced = headers
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok());
+    if announced.is_some_and(|n| n > MAX_CONTENT_LENGTH as u64) {
+        let mut resp = StatusCode::PAYLOAD_TOO_LARGE.into_response();
+        resp.headers_mut().insert("content-length", 0.into());
+        resp.headers_mut().insert("connection", "close".parse().unwrap());
+        return resp;
+    }
     let body = match axum::body::to_bytes(request.into_body(), MAX_CONTENT_LENGTH).await {
         Ok(b) => b,
         Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
@@ -866,7 +878,7 @@ async fn main() {
     let store: Shared = Arc::new(Mutex::new(Store::new()));
     let app = Router::new().fallback(any(handle)).with_state(store);
     let listener = match tokio::net::TcpListener::bind(&addr).await {
-        Ok(l) => l,
+        Ok(l) => net_io::OsListener(l),
         Err(e) => {
             eprintln!("slopensearch (rust): cannot listen on {}: {}", addr, e);
             std::process::exit(1);
