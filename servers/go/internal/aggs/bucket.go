@@ -1,4 +1,4 @@
-package main
+package aggs
 
 import (
 	"fmt"
@@ -438,7 +438,7 @@ func dateRangeAgg(name, field string, spec map[string]any, docs []map[string]any
 				}
 				v = missing
 			}
-			ms, ok := dateMillisFor(idx, resolved, ft, v)
+			ms, ok := DateMillisFor(idx, resolved, ft, v)
 			if !ok {
 				continue
 			}
@@ -714,7 +714,7 @@ func filtersAgg(name string, spec map[string]any, docs []map[string]any, idx *mo
 			filter, _ := t[key].(map[string]any)
 			bdocs := []map[string]any{}
 			for _, d := range docs {
-				ok, _, err := evalQuery(idx, filter, d)
+				ok, _, err := search.EvalQuery(idx, filter, d)
 				if err != nil {
 					return nil, err
 				}
@@ -752,7 +752,7 @@ func filtersAgg(name string, spec map[string]any, docs []map[string]any, idx *mo
 			filter, _ := rawFilter.(map[string]any)
 			bdocs := []map[string]any{}
 			for _, d := range docs {
-				ok, _, err := evalQuery(idx, filter, d)
+				ok, _, err := search.EvalQuery(idx, filter, d)
 				if err != nil {
 					return nil, err
 				}
@@ -772,7 +772,7 @@ func filtersAgg(name string, spec map[string]any, docs []map[string]any, idx *mo
 				matched := false
 				for i, rawFilter := range t {
 					filter, _ := rawFilter.(map[string]any)
-					ok, _, _ := evalQuery(idx, filter, d)
+					ok, _, _ := search.EvalQuery(idx, filter, d)
 					if ok {
 						matched = true
 						_ = i
@@ -800,7 +800,7 @@ func unmatchedDocs(docs []map[string]any, filters map[string]any, idx *model.Ind
 		matched := false
 		for _, raw := range filters {
 			filter, _ := raw.(map[string]any)
-			ok, _, _ := evalQuery(idx, filter, d)
+			ok, _, _ := search.EvalQuery(idx, filter, d)
 			if ok {
 				matched = true
 				break
@@ -841,7 +841,7 @@ func multiTermsAgg(name string, spec map[string]any, docs []map[string]any, idx 
 		mi, hm := m["missing"]
 		infos = append(infos, fieldInfo{name: f, resolved: resolved, ft: ft, missing: mi, hasMiss: hm})
 	}
-	size := intField(spec, "size", 10)
+	size := search.IntField(spec, "size", 10)
 	type mtBucket struct {
 		key   []any
 		kas   string
@@ -1211,7 +1211,7 @@ func compositeAgg(name string, spec map[string]any, docs []map[string]any, idx *
 		}
 		combos = filtered
 	}
-	size := intField(spec, "size", 10)
+	size := search.IntField(spec, "size", 10)
 	if size < 0 {
 		size = 0
 	}
@@ -1316,7 +1316,7 @@ func compositeValues(src *compositeSource, doc map[string]any, idx *model.Index,
 		k := math.Floor((f-float64(src.offsetMs))/src.interval)*src.interval + float64(src.offsetMs)
 		return []any{k}, true
 	case "date_histogram":
-		ms, ok := dateMillisFor(idx, resolved, src.ft, v)
+		ms, ok := DateMillisFor(idx, resolved, src.ft, v)
 		if !ok {
 			if src.missingBucket {
 				return []any{nil}, true
@@ -1437,7 +1437,8 @@ func compositeAfter(vals, after []any, srcs []*compositeSource) bool {
 	return false
 }
 
-func geohashEncode(lat, lon float64, precision int) string {
+// GeohashEncode encodes a point as a geohash of the given precision.
+func GeohashEncode(lat, lon float64, precision int) string {
 	const base32 = "0123456789bcdefghjkmnpqrstuvwxyz"
 	latLo, latHi := -90.0, 90.0
 	lonLo, lonHi := -180.0, 180.0
@@ -1496,7 +1497,7 @@ func geotileKey(lat, lon float64, precision int) string {
 
 func geoHashGridAgg(name string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool, tile bool) (any, *apierr.Error) {
 	field, _ := jsonv.ToString(spec["field"])
-	precision := intField(spec, "precision", 5)
+	precision := search.IntField(spec, "precision", 5)
 	maxP := 12
 	minP := 1
 	aggName := "geohash aggregation"
@@ -1529,7 +1530,7 @@ func geoHashGridAgg(name string, spec map[string]any, docs []map[string]any, idx
 			if precision == 0 {
 				continue
 			}
-			key = geohashEncode(lat, lon, precision)
+			key = GeohashEncode(lat, lon, precision)
 		}
 		counts[key]++
 		group[key] = append(group[key], d)
@@ -1544,7 +1545,7 @@ func geoHashGridAgg(name string, spec map[string]any, docs []map[string]any, idx
 		}
 		return keys[i] > keys[j]
 	})
-	size := intField(spec, "size", 10)
+	size := search.IntField(spec, "size", 10)
 	if size > 0 && len(keys) > size {
 		keys = keys[:size]
 	}
@@ -1687,7 +1688,7 @@ func adjacencyMatrixAgg(name string, spec map[string]any, docs []map[string]any,
 	for _, k := range keys {
 		q, _ := raw[k].(map[string]any)
 		for _, d := range docs {
-			ok, _, err := evalQuery(idx, q, d)
+			ok, _, err := search.EvalQuery(idx, q, d)
 			if err != nil {
 				return nil, err
 			}
@@ -1745,7 +1746,7 @@ func samplerAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pa
 		return nil, &apierr.Error{Type: "aggregation_execution_exception", Status: 500,
 			Reason: "Sampler aggregation must be used with child aggregations."}
 	}
-	shardSize := intField(spec, "shard_size", 100)
+	shardSize := search.IntField(spec, "shard_size", 100)
 	if shardSize <= 0 {
 		shardSize = 100
 	}
@@ -1764,7 +1765,7 @@ func samplerAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pa
 		selected = sorted
 	} else {
 		field, _ := jsonv.ToString(spec["field"])
-		maxPer := intField(spec, "max_docs_per_value", 1)
+		maxPer := search.IntField(spec, "max_docs_per_value", 1)
 		if maxPer <= 0 {
 			maxPer = 1
 		}
@@ -1889,7 +1890,7 @@ func autoBucketStart(ms int64, iv autoInterval, loc *time.Location, origin int64
 }
 
 func autoDateHistogramAgg(field string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
-	target := intField(spec, "buckets", 10)
+	target := search.IntField(spec, "buckets", 10)
 	if target <= 0 {
 		target = 10
 	}
@@ -1907,7 +1908,7 @@ func autoDateHistogramAgg(field string, spec map[string]any, docs []map[string]a
 		if !ok {
 			continue
 		}
-		if ms, ok := dateMillisFor(idx, resolved, ft, v); ok {
+		if ms, ok := DateMillisFor(idx, resolved, ft, v); ok {
 			vals = append(vals, ms)
 		}
 	}
@@ -1948,7 +1949,7 @@ func autoDateHistogramAgg(field string, spec map[string]any, docs []map[string]a
 		if !ok {
 			continue
 		}
-		ms, ok := dateMillisFor(idx, resolved, ft, v)
+		ms, ok := DateMillisFor(idx, resolved, ft, v)
 		if !ok {
 			continue
 		}
@@ -1984,7 +1985,7 @@ func autoDateHistogramAgg(field string, spec map[string]any, docs []map[string]a
 }
 
 func variableWidthHistogramAgg(field string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
-	target := intField(spec, "buckets", 10)
+	target := search.IntField(spec, "buckets", 10)
 	if target <= 0 {
 		target = 10
 	}

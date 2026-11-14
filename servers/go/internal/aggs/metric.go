@@ -1,4 +1,4 @@
-package main
+package aggs
 
 import (
 	"encoding/json"
@@ -15,6 +15,7 @@ import (
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
+	"slopensearch/internal/search"
 )
 
 func metricParamError(name, key string) *apierr.Error {
@@ -270,7 +271,7 @@ func metricValueObject(value float64, hasValue bool, spec map[string]any, idx *m
 		if format == "" {
 			format = "strict_date_optional_time"
 		}
-		if s, ok := formatDocValue(idx, resolveField(field, ""), ft, int64(value), format).(string); ok {
+		if s, ok := search.FormatDocValue(idx, resolveField(field, ""), ft, int64(value), format).(string); ok {
 			out = append(out, ojson.KV{"value_as_string", s})
 		}
 	} else if format != "" {
@@ -380,10 +381,10 @@ func statsAgg(spec map[string]any, docs []map[string]any, idx *model.Index, path
 			fmtFor = "strict_date_optional_time"
 		}
 		out = append(out,
-			ojson.KV{"min_as_string", formatDocValue(idx, resolveField(field, pathPrefix), ft, int64(minV), fmtFor)},
-			ojson.KV{"max_as_string", formatDocValue(idx, resolveField(field, pathPrefix), ft, int64(maxV), fmtFor)},
-			ojson.KV{"avg_as_string", formatDocValue(idx, resolveField(field, pathPrefix), ft, int64(avg), fmtFor)},
-			ojson.KV{"sum_as_string", formatDocValue(idx, resolveField(field, pathPrefix), ft, int64(sum), fmtFor)})
+			ojson.KV{"min_as_string", search.FormatDocValue(idx, resolveField(field, pathPrefix), ft, int64(minV), fmtFor)},
+			ojson.KV{"max_as_string", search.FormatDocValue(idx, resolveField(field, pathPrefix), ft, int64(maxV), fmtFor)},
+			ojson.KV{"avg_as_string", search.FormatDocValue(idx, resolveField(field, pathPrefix), ft, int64(avg), fmtFor)},
+			ojson.KV{"sum_as_string", search.FormatDocValue(idx, resolveField(field, pathPrefix), ft, int64(sum), fmtFor)})
 	} else if format != "" {
 		out = append(out,
 			ojson.KV{"min_as_string", fmtMetricNumber(minV, format)},
@@ -496,7 +497,7 @@ func cardinalityAgg(spec map[string]any, docs []map[string]any, idx *model.Index
 			}
 			continue
 		}
-		vals := docStrings(v)
+		vals := search.DocStrings(v)
 		if len(vals) == 0 {
 			if hasMissing {
 				seen[fmt.Sprintf("%v", missing)] = true
@@ -851,7 +852,7 @@ func percentilesAgg(spec map[string]any, docs []map[string]any, idx *model.Index
 							fmtFor = "strict_date_optional_time"
 						}
 						v = jsonv.Float(q)
-						if s, ok := formatDocValue(idx, resolved, ft, int64(q), fmtFor).(string); ok {
+						if s, ok := search.FormatDocValue(idx, resolved, ft, int64(q), fmtFor).(string); ok {
 							values = append(values, ojson.KV{percentileKey(p), v}, ojson.KV{percentileKey(p) + "_as_string", s})
 						}
 					} else {

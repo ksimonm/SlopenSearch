@@ -1,4 +1,6 @@
-package main
+// Package aggs computes aggregations over the hits of a search: bucket,
+// metric and pipeline aggregations, including scripted ones.
+package aggs
 
 import (
 	"encoding/json"
@@ -80,29 +82,30 @@ func numericValues(docs []map[string]any, field, pathPrefix string) []float64 {
 	return out
 }
 
-type aggHit struct {
-	idx   *model.Index
-	id    string
-	doc   map[string]any
-	score float64
-	terms []string
+// Hit is a matched document as seen by aggregations.
+type Hit struct {
+	Idx   *model.Index
+	ID    string
+	Doc   map[string]any
+	Score float64
+	Terms []string
 }
 
 // injectAggDocValues replaces source values with indexed doc values so that
 // aggregations see the same normalized values as OpenSearch. Text fields are
 // only usable when fielddata is enabled, in which case analyzed terms are used.
-func injectAggDocValues(h aggHit, doc map[string]any) {
-	dv := h.idx.DocValues[h.id]
+func injectAggDocValues(h Hit, doc map[string]any) {
+	dv := h.Idx.DocValues[h.ID]
 	if dv == nil {
 		return
 	}
 	for field, vals := range dv {
-		def, ok := mapping.FieldDef(h.idx, field)
+		def, ok := mapping.FieldDef(h.Idx, field)
 		if !ok {
 			continue
 		}
 		ft, _ := def["type"].(string)
-		if textLikeTypes[ft] {
+		if search.TextLikeTypes[ft] {
 			fd, _ := def["fielddata"].(bool)
 			if !fd {
 				continue
@@ -111,7 +114,7 @@ func injectAggDocValues(h aggHit, doc map[string]any) {
 			toks := []any{}
 			for _, v := range vals {
 				s, _ := jsonv.ScalarString(v)
-				for _, t := range analysis.Tokens(mapping.AnalysisIndex(h.idx), analyzer, s) {
+				for _, t := range analysis.Tokens(mapping.AnalysisIndex(h.Idx), analyzer, s) {
 					toks = append(toks, t.Term)
 				}
 			}
@@ -136,27 +139,27 @@ func injectAggDocValues(h aggHit, doc map[string]any) {
 	}
 }
 
-func aggDocs(hits []aggHit) []map[string]any {
+func aggDocs(hits []Hit) []map[string]any {
 	out := make([]map[string]any, 0, len(hits))
 	for _, h := range hits {
-		d := search.DeepCopySource(h.doc).(map[string]any)
+		d := search.DeepCopySource(h.Doc).(map[string]any)
 		// only root documents read their indexed values; nested elements
 		// (and documents already prepared by an outer aggregation) keep theirs
-		if _, nested := h.doc["__slop_nested_ctx"]; !nested {
-			if _, prepared := h.doc["__slop_id"]; !prepared {
-				injectAliasValues(h.idx.Mappings, "", d)
+		if _, nested := h.Doc["__slop_nested_ctx"]; !nested {
+			if _, prepared := h.Doc["__slop_id"]; !prepared {
+				injectAliasValues(h.Idx.Mappings, "", d)
 				injectAggDocValues(h, d)
 			}
 		}
-		if h.id != "" {
-			d["__slop_id"] = h.id
-			d["__slop_score"] = h.score
+		if h.ID != "" {
+			d["__slop_id"] = h.ID
+			d["__slop_score"] = h.Score
 		}
-		if len(h.terms) > 0 {
-			d["__slop_query_terms"] = h.terms
+		if len(h.Terms) > 0 {
+			d["__slop_query_terms"] = h.Terms
 		}
-		if derived, ok := h.idx.Mappings["derived"].(map[string]any); ok && len(derived) > 0 && h.id != "" {
-			if dv := h.idx.DocValues[h.id]; dv != nil {
+		if derived, ok := h.Idx.Mappings["derived"].(map[string]any); ok && len(derived) > 0 && h.ID != "" {
+			if dv := h.Idx.DocValues[h.ID]; dv != nil {
 				for name := range derived {
 					vals, ok := dv[name]
 					if !ok || len(vals) == 0 {
@@ -180,11 +183,13 @@ func aggDocs(hits []aggHit) []map[string]any {
 	return out
 }
 
-func evalAggs(aggs map[string]any, hits []aggHit, idx *model.Index, pathPrefix string, typed bool) (map[string]any, *apierr.Error) {
+// Evaluate computes the aggregations of a request (spec is the
+// "aggregations" object) over hits; typed renders typed_keys names.
+func Evaluate(aggs map[string]any, hits []Hit, idx *model.Index, pathPrefix string, typed bool) (map[string]any, *apierr.Error) {
 	return evalAggsMode(aggs, hits, idx, pathPrefix, typed, true)
 }
 
-func evalAggsMode(aggs map[string]any, hits []aggHit, idx *model.Index, pathPrefix string, typed bool, allowParent bool) (map[string]any, *apierr.Error) {
+func evalAggsMode(aggs map[string]any, hits []Hit, idx *model.Index, pathPrefix string, typed bool, allowParent bool) (map[string]any, *apierr.Error) {
 	docs := aggDocs(hits)
 	out := map[string]any{}
 	for name, raw := range aggs {
@@ -257,7 +262,7 @@ func evalAggsMode(aggs map[string]any, hits []aggHit, idx *model.Index, pathPref
 func typedAggPrefix(def map[string]any, idx *model.Index, pathPrefix string) string {
 	if t, ok := def["terms"].(map[string]any); ok {
 		field, _ := jsonv.ToString(t["field"])
-		switch fieldType(idx, resolveField(field, pathPrefix)) {
+		switch search.FieldType(idx, resolveField(field, pathPrefix)) {
 		case "byte", "short", "integer", "long", "unsigned_long", "date", "date_nanos", "boolean":
 			return "lterms"
 		case "float", "double", "half_float", "scaled_float":
@@ -267,7 +272,7 @@ func typedAggPrefix(def map[string]any, idx *model.Index, pathPrefix string) str
 	}
 	if t, ok := def["rare_terms"].(map[string]any); ok {
 		field, _ := jsonv.ToString(t["field"])
-		switch fieldType(idx, resolveField(field, pathPrefix)) {
+		switch search.FieldType(idx, resolveField(field, pathPrefix)) {
 		case "byte", "short", "integer", "long", "unsigned_long", "date", "date_nanos", "boolean":
 			return "lrareterms"
 		case "float", "double", "half_float", "scaled_float":
@@ -671,7 +676,7 @@ func termKeyFor(v any, ft, valueType, format string, idx *model.Index, field str
 		}
 		return int64(0), "false", true, "b:0", true
 	case "date", "date_nanos":
-		ms, ok := dateMillisFor(idx, field, ft, v)
+		ms, ok := DateMillisFor(idx, field, ft, v)
 		if !ok {
 			return nil, "", false, "", false
 		}
@@ -750,12 +755,12 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *mode
 	}
 	if def, ok := mapping.FieldDef(idx, resolved); ok {
 		if dv, ok := def["doc_values"].(bool); ok && !dv {
-			if err := checkDocValuesLoadable(idx, resolved); err != nil {
+			if err := search.CheckDocValuesLoadable(idx, resolved); err != nil {
 				return nil, err
 			}
 		}
 	}
-	size := intField(spec, "size", 10)
+	size := search.IntField(spec, "size", 10)
 	if size <= 0 {
 		return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason: "Failed to parse aggregation [" + name + "]",
@@ -905,7 +910,7 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *mode
 			addVal(v, d, false)
 		}
 	}
-	minDocCount := intField(spec, "min_doc_count", 1)
+	minDocCount := search.IntField(spec, "min_doc_count", 1)
 	if minDocCount == 0 {
 		for _, docVals := range idx.DocValues {
 			raw, ok := docVals[resolved]
@@ -1177,8 +1182,8 @@ func termsFilters(inc any, hasInc bool, exc any, hasExc bool, ft string, idx *mo
 	var partFilter func(any) bool
 	if hasInc {
 		if obj, ok := inc.(map[string]any); ok {
-			part := intField(obj, "partition", -1)
-			num := intField(obj, "num_partitions", -1)
+			part := search.IntField(obj, "partition", -1)
+			num := search.IntField(obj, "num_partitions", -1)
 			if part < 0 {
 				return nil, nil, nil, nil, nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "Missing [partition] parameter for partition-based include"}
@@ -1552,7 +1557,7 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 	}
 	format, _ := jsonv.ToString(spec["format"])
 	keyed, _ := spec["keyed"].(bool)
-	minDocCount := intField(spec, "min_doc_count", 0)
+	minDocCount := search.IntField(spec, "min_doc_count", 0)
 	hasKeyString := true
 	switch ft {
 	case "byte", "short", "integer", "long", "unsigned_long", "float", "double", "half_float", "scaled_float":
@@ -1590,7 +1595,7 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 			}
 			v = missingMs
 		}
-		ms, ok := dateMillisFor(idx, resolved, ft, v)
+		ms, ok := DateMillisFor(idx, resolved, ft, v)
 		if !ok {
 			continue
 		}
@@ -1848,7 +1853,8 @@ func parseDateHistBound(v any, ft string, idx *model.Index, field, format string
 	return 0, false
 }
 
-func dateMillisFor(idx *model.Index, field, ft string, v any) (int64, bool) {
+// DateMillisFor converts a value of a date field to epoch millis.
+func DateMillisFor(idx *model.Index, field, ft string, v any) (int64, bool) {
 	switch t := v.(type) {
 	case int64:
 		return t, true
@@ -1893,7 +1899,7 @@ func histogramAgg(name, field string, spec map[string]any, docs []map[string]any
 	offset, _ := jsonv.ToFloat(spec["offset"])
 	missing, hasMissing := spec["missing"]
 	keyed, _ := spec["keyed"].(bool)
-	minDocCount := intField(spec, "min_doc_count", 0)
+	minDocCount := search.IntField(spec, "min_doc_count", 0)
 	counts := map[float64]int{}
 	group := map[float64][]map[string]any{}
 	for _, d := range docs {
@@ -2099,7 +2105,7 @@ func filterAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pat
 	}
 	filtered := []map[string]any{}
 	for _, d := range docs {
-		ok, _, err := evalQuery(idx, spec, d)
+		ok, _, err := search.EvalQuery(idx, spec, d)
 		if err != nil {
 			return nil, err
 		}
@@ -2109,7 +2115,7 @@ func filterAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pat
 	}
 	out := map[string]any{"doc_count": len(filtered)}
 	if sub != nil {
-		subRes, err := evalAggs(sub, docsToHits(filtered, idx), idx, pathPrefix, typed)
+		subRes, err := Evaluate(sub, docsToHits(filtered, idx), idx, pathPrefix, typed)
 		if err != nil {
 			return nil, err
 		}
@@ -2159,7 +2165,7 @@ func rangeAgg(field string, rangesRaw any, docs []map[string]any, idx *model.Ind
 			b["to"] = to
 		}
 		if sub != nil {
-			subRes, err := evalAggs(sub, docsToHits(bucketDocs, idx), idx, pathPrefix, typed)
+			subRes, err := Evaluate(sub, docsToHits(bucketDocs, idx), idx, pathPrefix, typed)
 			if err != nil {
 				return nil, err
 			}
@@ -2207,7 +2213,7 @@ func nestedAgg(path string, docs []map[string]any, idx *model.Index, pathPrefix 
 	}
 	res := map[string]any{"doc_count": len(elements)}
 	if sub != nil {
-		subRes, err := evalAggs(sub, docsToHits(elements, idx), idx, path, typed)
+		subRes, err := Evaluate(sub, docsToHits(elements, idx), idx, path, typed)
 		if err != nil {
 			return nil, err
 		}
@@ -2321,7 +2327,7 @@ func reverseNestedAgg(name, path string, docs []map[string]any, idx *model.Index
 	res := map[string]any{"doc_count": len(selected)}
 	if sub != nil {
 		pp := path
-		subRes, err := evalAggs(sub, docsToHits(selected, idx), idx, pp, typed)
+		subRes, err := Evaluate(sub, docsToHits(selected, idx), idx, pp, typed)
 		if err != nil {
 			return nil, err
 		}
@@ -2373,13 +2379,13 @@ func maxOf(vals []float64) any {
 	return m
 }
 
-func docsToHits(docs []map[string]any, idx *model.Index) []aggHit {
-	out := make([]aggHit, 0, len(docs))
+func docsToHits(docs []map[string]any, idx *model.Index) []Hit {
+	out := make([]Hit, 0, len(docs))
 	for _, d := range docs {
 		id, _ := d["__slop_id"].(string)
 		score, _ := jsonv.ToFloat(d["__slop_score"])
 		terms, _ := d["__slop_query_terms"].([]string)
-		out = append(out, aggHit{idx: idx, id: id, doc: d, score: score, terms: terms})
+		out = append(out, Hit{Idx: idx, ID: id, Doc: d, Score: score, Terms: terms})
 	}
 	return out
 }

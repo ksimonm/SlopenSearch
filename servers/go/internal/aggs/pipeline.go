@@ -1,4 +1,4 @@
-package main
+package aggs
 
 import (
 	"fmt"
@@ -11,6 +11,7 @@ import (
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
+	"slopensearch/internal/search"
 )
 
 func aggTypeOf(def map[string]any) string {
@@ -530,7 +531,7 @@ func applySerialDiff(name string, body map[string]any, buckets []map[string]any)
 	if path == "" {
 		return &apierr.Error{Type: "parsing_exception", Status: 400, Reason: "Missing required field [buckets_path] for aggregation [" + name + "]"}
 	}
-	lag := intField(body, "lag", 1)
+	lag := search.IntField(body, "lag", 1)
 	if lag == 0 {
 		return &apierr.Error{Type: "parsing_exception", Status: 400,
 			Reason: "Lag must be a positive, non-zero integer.  Value supplied was0 in [" + name + "]: [lag]."}
@@ -1256,14 +1257,14 @@ func applyMovingFn(name string, body map[string]any, buckets []map[string]any) *
 	if _, ok := body["window"]; !ok {
 		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "Required [window]"}
 	}
-	window := intField(body, "window", 0)
+	window := search.IntField(body, "window", 0)
 	if window <= 0 {
 		inner := &apierr.Error{Type: "illegal_argument_exception", Reason: "[window] must be a positive, non-zero integer."}
 		return &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason:   "Failed to build [moving_fn] after last required field arrived",
 			CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "window must be positive", CausedBy: inner}}
 	}
-	shift := intField(body, "shift", 0)
+	shift := search.IntField(body, "shift", 0)
 	gap, err := gapPolicyOf(body)
 	if err != nil {
 		return err
@@ -1434,7 +1435,7 @@ func applyMovingAvg(name string, body map[string]any, buckets []map[string]any) 
 	if model == "" {
 		model = "simple"
 	}
-	window := intField(body, "window", 5)
+	window := search.IntField(body, "window", 5)
 	gap, err := gapPolicyOf(body)
 	if err != nil {
 		return err

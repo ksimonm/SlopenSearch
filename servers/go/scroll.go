@@ -12,7 +12,7 @@ import (
 )
 
 type scrollContext struct {
-	hits    []multiHit
+	hits    []search.MultiHit
 	pos     int
 	size    int
 	total   int
@@ -26,7 +26,7 @@ func (s *Server) newScrollID() string {
 	return fmt.Sprintf("slopensearch-scroll-%d", s.scrollCounter)
 }
 
-func (s *Server) storeScroll(hits []multiHit, pos, size, total int, restInt bool) string {
+func (s *Server) storeScroll(hits []search.MultiHit, pos, size, total int, restInt bool) string {
 	sid := s.newScrollID()
 	s.scrollMu.Lock()
 	s.scrolls[sid] = &scrollContext{hits: hits, pos: pos, size: size, total: total, restInt: restInt}
@@ -188,7 +188,7 @@ func (s *Server) handleScroll(w http.ResponseWriter, r *http.Request, rest []str
 	hits := make([]any, 0, len(page))
 	for _, h := range page {
 		hits = append(hits, map[string]any{
-			"_index": h.idx.Name, "_id": h.id, "_score": search.ScoreJSON(h.score), "_source": h.doc,
+			"_index": h.Idx.Name, "_id": h.Id, "_score": search.ScoreJSON(h.Score), "_source": h.Doc,
 		})
 	}
 	var totalOut any = map[string]any{"value": total, "relation": "eq"}

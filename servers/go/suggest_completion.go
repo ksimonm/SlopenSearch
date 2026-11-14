@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"slopensearch/internal/aggs"
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
@@ -424,7 +425,7 @@ func geohashNeighbors(hash string) []string {
 			} else if nlon < -180 {
 				nlon += 360
 			}
-			out = append(out, geohashEncode(nlat, nlon, len(hash)))
+			out = append(out, aggs.GeohashEncode(nlat, nlon, len(hash)))
 		}
 	}
 	return out
@@ -474,7 +475,7 @@ func parseGeoQueryContexts(v any, mappingPrecision int) []completionQueryCtx {
 			continue
 		}
 		minPrecision := min(precision, mappingPrecision)
-		hash := geohashEncode(lat, lon, minPrecision)
+		hash := aggs.GeohashEncode(lat, lon, minPrecision)
 		locations := []string{hash}
 		if len(neighbours) == 0 && len(hash) == mappingPrecision {
 			locations = append(locations, geohashNeighbors(hash)...)
@@ -520,7 +521,7 @@ func indexedContexts(ctxs []mapping.CompletionContextDef, e completionEntry, doc
 			}
 			for _, p := range points {
 				if lat, lon, ok := geoContextPoint(p); ok {
-					out[cd.Name] = append(out[cd.Name], geohashEncode(lat, lon, cd.Precision))
+					out[cd.Name] = append(out[cd.Name], aggs.GeohashEncode(lat, lon, cd.Precision))
 				}
 			}
 			continue

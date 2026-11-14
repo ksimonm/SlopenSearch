@@ -11,6 +11,7 @@ import (
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
+	"slopensearch/internal/search"
 	"slopensearch/internal/settings"
 )
 
@@ -178,7 +179,7 @@ func normalizeSearchQuery(v any) any {
 }
 
 func applySearchRequestProcessors(body map[string]any, pipe map[string]any, verbose bool) (*searchPipeState, []any, *apierr.Error) {
-	st := &searchPipeState{originalSize: intField(body, "size", 10)}
+	st := &searchPipeState{originalSize: search.IntField(body, "size", 10)}
 	if _, ok := body["size"]; ok {
 		st.hasOriginal = true
 	}
@@ -217,7 +218,7 @@ func applySearchRequestProcessors(body map[string]any, pipe map[string]any, verb
 					return st, results, &apierr.Error{Type: "parse_exception", Status: 400,
 						Reason: "[sample_factor] Value must be >= 1.0"}
 				}
-				sz := intField(body, "size", 10)
+				sz := search.IntField(body, "size", 10)
 				st.originalSize = sz
 				st.hasOriginal = true
 				body["size"] = int(float64(sz) * factor)

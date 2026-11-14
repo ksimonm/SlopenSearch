@@ -1,4 +1,4 @@
-package main
+package aggs
 
 import (
 	"math"
@@ -9,6 +9,7 @@ import (
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
+	"slopensearch/internal/search"
 )
 
 type sigTerm struct {
@@ -186,11 +187,11 @@ func significantAgg(name string, spec map[string]any, docs []map[string]any, idx
 	ft, _ := idx.FieldTypes[resolved]
 	valueType, _ := jsonv.ToString(spec["value_type"])
 	format, _ := jsonv.ToString(spec["format"])
-	minDoc := intField(spec, "min_doc_count", 3)
+	minDoc := search.IntField(spec, "min_doc_count", 3)
 	if minDoc < 1 {
 		minDoc = 1
 	}
-	size := intField(spec, "size", 10)
+	size := search.IntField(spec, "size", 10)
 	heuristic, _ := jsonv.ToString(spec["background_filter"])
 	_ = heuristic
 	heur := "jlh"
@@ -205,7 +206,7 @@ func significantAgg(name string, spec map[string]any, docs []map[string]any, idx
 	if bf, ok := spec["background_filter"].(map[string]any); ok {
 		background = []map[string]any{}
 		for _, d := range all {
-			match, _, err := evalQuery(idx, bf, d)
+			match, _, err := search.EvalQuery(idx, bf, d)
 			if err != nil {
 				return nil, err
 			}
@@ -281,7 +282,7 @@ func significantAgg(name string, spec map[string]any, docs []map[string]any, idx
 }
 
 func rareTermsAgg(name string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
-	maxDoc := intField(spec, "max_doc_count", 1)
+	maxDoc := search.IntField(spec, "max_doc_count", 1)
 	if maxDoc > 100 {
 		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "max_doc_count must be less than or equal to 100",
@@ -325,7 +326,7 @@ func rareTermsAgg(name string, spec map[string]any, docs []map[string]any, idx *
 		}
 		return list[i].canon < list[j].canon
 	})
-	size := intField(spec, "size", 10)
+	size := search.IntField(spec, "size", 10)
 	if size > 0 && len(list) > size {
 		list = list[:size]
 	}

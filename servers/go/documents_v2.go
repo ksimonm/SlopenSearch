@@ -476,28 +476,6 @@ func checkMixedArray(idx *model.Index, v any, path string) *apierr.Error {
 	return nil
 }
 
-func normalizeNumbers(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		for k, e := range t {
-			t[k] = normalizeNumbers(e)
-		}
-		return t
-	case []any:
-		for i, e := range t {
-			t[i] = normalizeNumbers(e)
-		}
-		return t
-	case json.Number:
-		if strings.ContainsAny(t.String(), ".eE") {
-			f, _ := t.Float64()
-			return jsonv.Float(f)
-		}
-		return t
-	}
-	return v
-}
-
 func parseOrderedValue(dec *json.Decoder) (any, error) {
 	tok, err := dec.Token()
 	if err != nil {
@@ -1188,10 +1166,10 @@ func (s *Server) handleGetDocV2(w http.ResponseWriter, r *http.Request, name, id
 			if filtered, ok2 := filterRawSource(raw, includes, excludes); ok2 {
 				resp = append(resp, ojson.KV{"_source", ojson.Verbatim(filtered)})
 			} else {
-				resp = append(resp, ojson.KV{"_source", normalizeNumbers(search.FilterSourceDoc(doc, includes, excludes))})
+				resp = append(resp, ojson.KV{"_source", search.NormalizeNumbers(search.FilterSourceDoc(doc, includes, excludes))})
 			}
 		} else {
-			resp = append(resp, ojson.KV{"_source", normalizeNumbers(search.FilterSourceDoc(doc, includes, excludes))})
+			resp = append(resp, ojson.KV{"_source", search.NormalizeNumbers(search.FilterSourceDoc(doc, includes, excludes))})
 		}
 	}
 	if fields := storedFieldsFor(idx, doc, storedSpec(storedSpecRaw, idx)); fields != nil {
@@ -1254,7 +1232,7 @@ func (s *Server) handleGetSourceV2(w http.ResponseWriter, r *http.Request, name,
 			return
 		}
 	}
-	writeJSON(w, 200, normalizeNumbers(search.FilterSourceDoc(doc, includes, excludes)))
+	writeJSON(w, 200, search.NormalizeNumbers(search.FilterSourceDoc(doc, includes, excludes)))
 }
 
 func (s *Server) handleDeleteDocV2(w http.ResponseWriter, r *http.Request, name, id string) {

@@ -112,7 +112,7 @@ func phraseFieldTerms(idx *model.Index, field string) *phTerms {
 			continue
 		}
 		seen := map[string]bool{}
-		for _, s := range docStrings(v) {
+		for _, s := range search.DocStrings(v) {
 			var toks []string
 			if typ == "keyword" {
 				if ignoreAbove >= 0 && len([]rune(s)) > ignoreAbove {

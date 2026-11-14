@@ -8,11 +8,12 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/model"
+	"slopensearch/internal/search"
 )
 
 type pitContext struct {
 	idx       *model.Index
-	hits      []multiHit
+	hits      []search.MultiHit
 	shards    int
 	keepAlive int64
 	creation  int64
@@ -43,7 +44,7 @@ func (s *Server) openPit(w http.ResponseWriter, r *http.Request, name string) {
 		writeError(w, apierr.IndexNotFound(name))
 		return
 	}
-	hits := make([]multiHit, 0, len(idx.Order))
+	hits := make([]search.MultiHit, 0, len(idx.Order))
 	for _, id := range idx.Order {
 		doc, live := idx.Docs[id]
 		if !live {
@@ -52,7 +53,7 @@ func (s *Server) openPit(w http.ResponseWriter, r *http.Request, name string) {
 		if _, pending := idx.Pending[id]; pending {
 			continue
 		}
-		hits = append(hits, multiHit{idx: idx, id: id, doc: doc, score: 1})
+		hits = append(hits, search.MultiHit{Idx: idx, Id: id, Doc: doc, Score: 1})
 	}
 	shards := idx.NumShards()
 	creation := time.Now().UnixMilli()

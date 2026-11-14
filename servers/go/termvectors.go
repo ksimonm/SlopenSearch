@@ -100,7 +100,7 @@ func tvFieldStats(idx *model.Index, field string) map[string]any {
 		}
 		docCount++
 		seen := map[string]bool{}
-		for _, s := range docStrings(v) {
+		for _, s := range search.DocStrings(v) {
 			toks := tvTokensIdx(idx, s, analyzer)
 			sumTTF += len(toks)
 			for _, t := range toks {
@@ -125,7 +125,7 @@ func tvIndexTermStats(idx *model.Index, field string) map[string]map[string]int 
 			continue
 		}
 		seen := map[string]bool{}
-		for _, s := range docStrings(v) {
+		for _, s := range search.DocStrings(v) {
 			for _, t := range tvTokensIdx(idx, s, analyzer) {
 				if out[t.term] == nil {
 					out[t.term] = map[string]int{"doc_freq": 0, "ttf": 0}
@@ -156,7 +156,7 @@ func termVectorFor(idx *model.Index, field string, doc map[string]any, analyzer 
 		tokens []tvToken
 	}
 	byTerm := map[string]*agg{}
-	for _, s := range docStrings(v) {
+	for _, s := range search.DocStrings(v) {
 		for _, t := range tvTokensIdx(idx, s, analyzer) {
 			a := byTerm[t.term]
 			if a == nil {

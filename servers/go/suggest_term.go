@@ -175,7 +175,7 @@ func termSuggester(spec, body map[string]any, indices []*model.Index, globalText
 				continue
 			}
 			seen := map[string]bool{}
-			for _, s := range docStrings(v) {
+			for _, s := range search.DocStrings(v) {
 				for _, tok := range analysis.Terms(mapping.AnalysisIndex(ix), fa, s) {
 					if !seen[tok] {
 						seen[tok] = true
