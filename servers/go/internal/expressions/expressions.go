@@ -1,4 +1,7 @@
-package main
+// Package expressions implements Lucene expressions ("lang": "expression"):
+// a JavaScript-like numeric language. Everything is a double; variables are
+// bound at link time to doc values, _score, _value or numeric params.
+package expressions
 
 import (
 	"math"
@@ -8,10 +11,6 @@ import (
 
 	"slopensearch/internal/painless"
 )
-
-// Lucene expressions ("lang": "expression"): a JavaScript-like numeric
-// language. Everything is a double; variables are bound at link time to doc
-// values, _score, _value or numeric params.
 
 type exNode interface{}
 
@@ -35,34 +34,22 @@ type exCall struct {
 	pos  int
 }
 
-type exScript struct {
+// Script is a compiled expression.
+type Script struct {
 	src  string
 	root exNode
 	vars []*exVar
 }
 
-type exErr struct {
-	link   bool
-	reason string
-	offset int
-	eof    bool
+// Error is a compile (parse_exception) or link error of an expression.
+type Error struct {
+	Link   bool // a link error (unknown variable, field, ...) rather than a syntax error
+	Reason string
+	Offset int  // offset of the error in the source
+	EOF    bool // the source ended unexpectedly
 }
 
-func (e *exErr) scriptErr(src string) *plScriptErr {
-	se := &plScriptErr{compile: !e.link, script: src, lang: "expression", causeType: "parse_exception", reason: e.reason}
-	if e.link {
-		se.linkErr = true
-	}
-	if e.eof {
-		se.inner = &painless.CompileError{Type: "no_viable_alt_exception", NilReason: true}
-	}
-	off := e.offset
-	if off > len(src) {
-		off = len(src)
-	}
-	se.stack = []string{src, strings.Repeat(" ", off) + "^---- HERE"}
-	return se
-}
+func (e *Error) Error() string { return e.Reason }
 
 type exParser struct {
 	src  string
@@ -97,15 +84,15 @@ func (p *exParser) peekOp(ops ...string) string {
 	return ""
 }
 
-func (p *exParser) errHere() *exErr {
+func (p *exParser) errHere() *Error {
 	p.skip()
 	if p.i >= len(p.src) {
-		return &exErr{reason: "unexpected end of expression", offset: len(p.src), eof: true}
+		return &Error{Reason: "unexpected end of expression", Offset: len(p.src), EOF: true}
 	}
-	return &exErr{reason: "unexpected character '" + string(p.src[p.i]) + "' on line (1) position (" + itoa(p.i) + ")", offset: p.i}
+	return &Error{Reason: "unexpected character '" + string(p.src[p.i]) + "' on line (1) position (" + strconv.Itoa(p.i) + ")", Offset: p.i}
 }
 
-func exCompile(src string) (*exScript, *exErr) {
+func parse(src string) (*Script, *Error) {
 	p := &exParser{src: src}
 	n, err := p.cond()
 	if err != nil {
@@ -115,10 +102,10 @@ func exCompile(src string) (*exScript, *exErr) {
 	if p.i < len(p.src) {
 		return nil, p.errHere()
 	}
-	return &exScript{src: src, root: n, vars: p.vars}, nil
+	return &Script{src: src, root: n, vars: p.vars}, nil
 }
 
-func (p *exParser) cond() (exNode, *exErr) {
+func (p *exParser) cond() (exNode, *Error) {
 	c, err := p.binary(0)
 	if err != nil {
 		return nil, err
@@ -147,7 +134,7 @@ var exLevels = [][]string{
 	{">>>", "<<", ">>"}, {"+", "-"}, {"*", "/", "%"},
 }
 
-func (p *exParser) binary(level int) (exNode, *exErr) {
+func (p *exParser) binary(level int) (exNode, *Error) {
 	if level >= len(exLevels) {
 		return p.unary()
 	}
@@ -169,7 +156,7 @@ func (p *exParser) binary(level int) (exNode, *exErr) {
 	}
 }
 
-func (p *exParser) unary() (exNode, *exErr) {
+func (p *exParser) unary() (exNode, *Error) {
 	if op := p.peekOp("!", "~", "-", "+"); op != "" {
 		p.i++
 		x, err := p.unary()
@@ -189,7 +176,7 @@ func isExIdentStart(c byte) bool {
 }
 func isExIdent(c byte) bool { return isExIdentStart(c) || (c >= '0' && c <= '9') }
 
-func (p *exParser) primary() (exNode, *exErr) {
+func (p *exParser) primary() (exNode, *Error) {
 	p.skip()
 	if p.i >= len(p.src) {
 		return nil, p.errHere()
@@ -233,7 +220,7 @@ func (p *exParser) primary() (exNode, *exErr) {
 		text := p.src[p.i:j]
 		v, err := strconv.ParseFloat(text, 64)
 		if err != nil {
-			return nil, &exErr{reason: "unexpected character '" + text + "'", offset: p.i}
+			return nil, &Error{Reason: "unexpected character '" + text + "'", Offset: p.i}
 		}
 		if len(text) > 1 && text[0] == '0' && !strings.ContainsAny(text, ".eE") {
 			o, _ := strconv.ParseInt(text, 8, 64)
@@ -310,14 +297,42 @@ func (p *exParser) primary() (exNode, *exErr) {
 // ---- linking ----
 
 // exBinding resolves one variable for a document.
-type exBinding func(qc *queryCtx, score float64, value any) float64
+// Doc gives access to the values of a document.
+type Doc interface {
+	Values(field string) []any
+}
 
-type exLinked struct {
-	script *exScript
+// Kind classifies a mapped field for doc['field'] variables.
+type Kind int
+
+const (
+	KindOther  Kind = iota // not usable in expressions
+	KindNumber             // numeric and boolean fields
+	KindDate               // date and date_nanos fields
+	KindGeo                // geo_point fields
+)
+
+// Env is what Link binds variables against.
+type Env struct {
+	// Fields resolves a mapped field; nil when there is no index (no doc access).
+	Fields func(field string) (kind Kind, found bool)
+	// Params holds numeric parameters (or bucket path values).
+	Params map[string]any
+	// ToFloat converts a JSON value to a number.
+	ToFloat    func(v any) (float64, bool)
+	AllowValue bool // _value is bound (aggs)
+	AllowScore bool // _score is bound
+}
+
+type exBinding func(doc Doc, score float64, value any) float64
+
+// Linked is an expression whose variables are bound.
+type Linked struct {
+	script *Script
 	binds  map[*exVar]exBinding
 }
 
-func plParseDocVar(name string) (field, member string, fieldOff int, ok bool) {
+func parseDocVar(name string) (field, member string, fieldOff int, ok bool) {
 	if !strings.HasPrefix(name, "doc[") {
 		return "", "", 0, false
 	}
@@ -334,10 +349,12 @@ func plParseDocVar(name string) (field, member string, fieldOff int, ok bool) {
 	return inner, strings.TrimPrefix(name[end+1:], "."), fieldOff, true
 }
 
-// exLink binds the variables of an expression for an index and context.
-// params holds numeric parameters (or bucket path values).
-func exLink(s *exScript, idx *Index, params map[string]any, allowValue, allowScore bool) (*exLinked, *exErr) {
-	l := &exLinked{script: s, binds: map[*exVar]exBinding{}}
+// Link binds the variables of an expression.
+func Link(s *Script, env Env) (*Linked, *Error) {
+	toFloat := env.ToFloat
+	params := env.Params
+	allowValue, allowScore := env.AllowValue, env.AllowScore
+	l := &Linked{script: s, binds: map[*exVar]exBinding{}}
 	for _, v := range s.vars {
 		name := v.name
 		switch name {
@@ -345,35 +362,34 @@ func exLink(s *exScript, idx *Index, params map[string]any, allowValue, allowSco
 			if !allowScore {
 				break
 			}
-			l.binds[v] = func(qc *queryCtx, score float64, value any) float64 { return score }
+			l.binds[v] = func(doc Doc, score float64, value any) float64 { return score }
 			continue
 		case "_value":
 			if allowValue {
-				l.binds[v] = func(qc *queryCtx, score float64, value any) float64 { f, _ := toFloat(value); return f }
+				l.binds[v] = func(doc Doc, score float64, value any) float64 { f, _ := toFloat(value); return f }
 				continue
 			}
 		}
-		if field, member, foff, ok := plParseDocVar(name); ok {
-			if idx == nil {
-				return nil, &exErr{link: true, reason: "Unknown variable [doc]", offset: v.pos}
+		if field, member, foff, ok := parseDocVar(name); ok {
+			if env.Fields == nil {
+				return nil, &Error{Link: true, Reason: "Unknown variable [doc]", Offset: v.pos}
 			}
-			def, found := mappingFieldDef(idx, field)
+			fk, found := env.Fields(field)
 			if !found {
-				return nil, &exErr{link: true, reason: "Field [" + field + "] does not exist in mappings", offset: v.pos + foff}
+				return nil, &Error{Link: true, Reason: "Field [" + field + "] does not exist in mappings", Offset: v.pos + foff}
 			}
-			ft, _ := def["type"].(string)
 			kind := ""
-			switch {
-			case ft == "date" || ft == "date_nanos":
+			switch fk {
+			case KindDate:
 				kind = "date"
-			case isNumericType(ft) || ft == "boolean":
+			case KindNumber:
 				kind = "num"
-			case ft == "geo_point":
+			case KindGeo:
 				kind = "geo"
 			default:
-				return nil, &exErr{link: true, reason: "Field [" + field + "] must be numeric, date, or geopoint", offset: v.pos + foff}
+				return nil, &Error{Link: true, Reason: "Field [" + field + "] must be numeric, date, or geopoint", Offset: v.pos + foff}
 			}
-			b, err := exDocBinding(field, kind, member, v.pos)
+			b, err := exDocBinding(field, kind, member, v.pos, toFloat)
 			if err != nil {
 				return nil, err
 			}
@@ -388,22 +404,22 @@ func exLink(s *exScript, idx *Index, params map[string]any, allowValue, allowSco
 			f, isNum := toFloat(pv)
 			if _, isBool := pv.(bool); isBool || !isNum {
 				if pv == nil {
-					return nil, &exErr{link: true, reason: "Parameter [" + base + "] must be a numeric type", offset: v.pos}
+					return nil, &Error{Link: true, Reason: "Parameter [" + base + "] must be a numeric type", Offset: v.pos}
 				}
 				if _, isStr := pv.(string); isStr || isBool {
-					return nil, &exErr{link: true, reason: "Parameter [" + base + "] must be a numeric type", offset: v.pos}
+					return nil, &Error{Link: true, Reason: "Parameter [" + base + "] must be a numeric type", Offset: v.pos}
 				}
 			}
-			l.binds[v] = func(qc *queryCtx, score float64, value any) float64 { return f }
+			l.binds[v] = func(doc Doc, score float64, value any) float64 { return f }
 			continue
 		}
-		return nil, &exErr{link: true, reason: "Unknown variable [" + base + "]", offset: v.pos}
+		return nil, &Error{Link: true, Reason: "Unknown variable [" + base + "]", Offset: v.pos}
 	}
 	return l, nil
 }
 
-func exNumericValues(qc *queryCtx, field, kind string) []float64 {
-	vals, _ := qc.values(field)
+func exNumericValues(doc Doc, field, kind string, toFloat func(any) (float64, bool)) []float64 {
+	vals := doc.Values(field)
 	out := []float64{}
 	for _, v := range vals {
 		switch t := v.(type) {
@@ -423,10 +439,10 @@ func exNumericValues(qc *queryCtx, field, kind string) []float64 {
 	return out
 }
 
-func exDocBinding(field, kind, member string, pos int) (exBinding, *exErr) {
+func exDocBinding(field, kind, member string, pos int, toFloat func(any) (float64, bool)) (exBinding, *Error) {
 	agg := func(f func([]float64) float64) exBinding {
-		return func(qc *queryCtx, score float64, value any) float64 {
-			vals := exNumericValues(qc, field, kind)
+		return func(doc Doc, score float64, value any) float64 {
+			vals := exNumericValues(doc, field, kind, toFloat)
 			if len(vals) == 0 {
 				return 0
 			}
@@ -437,8 +453,8 @@ func exDocBinding(field, kind, member string, pos int) (exBinding, *exErr) {
 	if kind == "geo" {
 		switch member {
 		case "lat", "lon":
-			return func(qc *queryCtx, score float64, value any) float64 {
-				vals, _ := qc.values(field)
+			return func(doc Doc, score float64, value any) float64 {
+				vals := doc.Values(field)
 				if len(vals) == 0 {
 					return 0
 				}
@@ -447,29 +463,29 @@ func exDocBinding(field, kind, member string, pos int) (exBinding, *exErr) {
 				return f
 			}, nil
 		case "empty":
-			return func(qc *queryCtx, score float64, value any) float64 {
-				vals, _ := qc.values(field)
+			return func(doc Doc, score float64, value any) float64 {
+				vals := doc.Values(field)
 				if len(vals) == 0 {
 					return 1
 				}
 				return 0
 			}, nil
 		}
-		return nil, &exErr{link: true, reason: "Member variable [" + member + "] does not exist for geo field [" + field + "].", offset: pos}
+		return nil, &Error{Link: true, Reason: "Member variable [" + member + "] does not exist for geo field [" + field + "].", Offset: pos}
 	}
 	switch member {
 	case "", "value":
 		return agg(first), nil
 	case "empty":
-		return func(qc *queryCtx, score float64, value any) float64 {
-			if len(exNumericValues(qc, field, kind)) == 0 {
+		return func(doc Doc, score float64, value any) float64 {
+			if len(exNumericValues(doc, field, kind, toFloat)) == 0 {
 				return 1
 			}
 			return 0
 		}, nil
 	case "length", "count()":
-		return func(qc *queryCtx, score float64, value any) float64 {
-			return float64(len(exNumericValues(qc, field, kind)))
+		return func(doc Doc, score float64, value any) float64 {
+			return float64(len(exNumericValues(doc, field, kind, toFloat)))
 		}, nil
 	case "min()":
 		return agg(first), nil
@@ -526,11 +542,12 @@ func exDocBinding(field, kind, member string, pos int) (exBinding, *exErr) {
 			}
 		}
 	}
-	return nil, &exErr{link: true, reason: "Member method [" + member + "] does not exist for numeric field [" + field + "].", offset: pos}
+	return nil, &Error{Link: true, Reason: "Member method [" + member + "] does not exist for numeric field [" + field + "].", Offset: pos}
 }
 
-// eval computes the expression for one document.
-func (l *exLinked) eval(qc *queryCtx, score float64, value any) float64 {
+// Eval computes the expression for one document (doc may be nil when no
+// doc variables are bound).
+func (l *Linked) Eval(doc Doc, score float64, value any) float64 {
 	var ev func(n exNode) float64
 	b2f := func(b bool) float64 {
 		if b {
@@ -543,7 +560,7 @@ func (l *exLinked) eval(qc *queryCtx, score float64, value any) float64 {
 		case *exNum:
 			return t.v
 		case *exVar:
-			return l.binds[t](qc, score, value)
+			return l.binds[t](doc, score, value)
 		case *exUnary:
 			x := ev(t.x)
 			switch t.op {
@@ -680,15 +697,15 @@ func exFunc(fn string, a []float64) float64 {
 }
 
 // exCheckFuncs validates function names and arities at compile time.
-func exCheckFuncs(n exNode, src string) *exErr {
+func exCheckFuncs(n exNode, src string) *Error {
 	switch t := n.(type) {
 	case *exCall:
 		ar, ok := exFuncArity[t.fn]
 		if !ok {
-			return &exErr{reason: "Invalid expression '" + src + "': Unrecognized function call (" + t.fn + ").", offset: t.pos}
+			return &Error{Reason: "Invalid expression '" + src + "': Unrecognized function call (" + t.fn + ").", Offset: t.pos}
 		}
 		if ar != len(t.args) {
-			return &exErr{reason: "Invalid expression '" + src + "': Expected (" + itoa(ar) + ") arguments for function call (" + t.fn + "), but found (" + itoa(len(t.args)) + ").", offset: t.pos}
+			return &Error{Reason: "Invalid expression '" + src + "': Expected (" + strconv.Itoa(ar) + ") arguments for function call (" + t.fn + "), but found (" + strconv.Itoa(len(t.args)) + ").", Offset: t.pos}
 		}
 		for _, a := range t.args {
 			if err := exCheckFuncs(a, src); err != nil {
@@ -712,21 +729,18 @@ func exCheckFuncs(n exNode, src string) *exErr {
 	return nil
 }
 
-// exPrepare compiles and checks an expression for a context.
-func exPrepare(src, ctxName string) (*exScript, *plScriptErr, *apiError) {
-	s, err := exCompile(src)
+func isHexByte(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+// Compile parses an expression and checks its function calls.
+func Compile(src string) (*Script, *Error) {
+	s, err := parse(src)
 	if err == nil {
 		err = exCheckFuncs(s.root, src)
 	}
 	if err != nil {
-		return nil, err.scriptErr(src), nil
+		return nil, err
 	}
-	if !expressionContexts[ctxName] {
-		return nil, nil, errBad("expression engine does not know how to handle script context [" + ctxName + "]")
-	}
-	return s, nil, nil
-}
-
-func isHexByte(c byte) bool {
-	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+	return s, nil
 }

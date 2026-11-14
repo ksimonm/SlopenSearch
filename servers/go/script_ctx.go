@@ -1,6 +1,10 @@
 package main
 
-import "slopensearch/internal/painless"
+import (
+	"slopensearch/internal/painless"
+
+	"slopensearch/internal/expressions"
+)
 
 // Glue between the scripting engines and the APIs that run scripts
 // (search, aggregations, update, ingest): script specs, stored-script
@@ -235,8 +239,8 @@ type compiledScript struct {
 	spec   *scriptSpec
 	ctx    string
 	pl     *plScript
-	ex     *exScript
-	linked map[*Index]*exLinked
+	ex     *expressions.Script
+	linked map[*Index]*expressions.Linked
 }
 
 // prepareScript parses, resolves and compiles a script for a context.
@@ -260,7 +264,7 @@ func prepareSpec(spec *scriptSpec, ctxName string) (*compiledScript, *plScriptEr
 			return nil, se, ae
 		}
 		cs.ex = ex
-		cs.linked = map[*Index]*exLinked{}
+		cs.linked = map[*Index]*expressions.Linked{}
 		return cs, nil, nil
 	}
 	if ae := checkScriptLang(spec, ctxName); ae != nil {
@@ -285,7 +289,7 @@ type runOpts struct {
 }
 
 // link binds an expression to an index (cached).
-func (cs *compiledScript) link(idx *Index, extra map[string]any) (*exLinked, *plScriptErr) {
+func (cs *compiledScript) link(idx *Index, extra map[string]any) (*expressions.Linked, *plScriptErr) {
 	if l, ok := cs.linked[idx]; ok && extra == nil {
 		return l, nil
 	}
@@ -297,9 +301,10 @@ func (cs *compiledScript) link(idx *Index, extra map[string]any) (*exLinked, *pl
 		params[k] = v
 	}
 	needsScore := cs.ctx == "score" || cs.ctx == "number_sort" || cs.ctx == "aggs"
-	l, err := exLink(cs.ex, idx, params, cs.ctx == "aggs", needsScore)
+	l, err := expressions.Link(cs.ex, expressions.Env{Fields: exprFields(idx), Params: params, ToFloat: toFloat,
+		AllowValue: cs.ctx == "aggs", AllowScore: needsScore})
 	if err != nil {
-		se := err.scriptErr(cs.spec.src)
+		se := expressionScriptErr(err, cs.spec.src)
 		se.script = cs.spec.errName()
 		return nil, se
 	}
@@ -325,7 +330,7 @@ func (cs *compiledScript) run(qc *queryCtx, o runOpts) (any, *plScriptErr) {
 		if se != nil {
 			return nil, se
 		}
-		v := l.eval(qc, o.score, o.value)
+		v := l.Eval(exprDoc{qc}, o.score, o.value)
 		switch cs.ctx {
 		case "filter", "aggregation_selector":
 			return v != 0, nil
