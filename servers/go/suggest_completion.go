@@ -469,16 +469,18 @@ func completionUnits(s string, unicode bool) []int {
 	return out
 }
 
-// fuzzyPrefixMatch reports whether some prefix of key is within maxEdits of
-// query, the first prefixLen units matching exactly.
-func fuzzyPrefixMatch(q, k []int, maxEdits, prefixLen int, transpose bool) bool {
+// fuzzyPrefixMatch returns the length of the shortest prefix of key within
+// maxEdits of query (the first prefixLen units matching exactly), or -1. Like
+// Lucene's FSTUtil.intersectPrefixPaths, matching stops at the first accepted
+// prefix.
+func fuzzyPrefixMatch(q, k []int, maxEdits, prefixLen int, transpose bool) int {
 	p := min(prefixLen, len(q))
 	if len(k) < p {
-		return false
+		return -1
 	}
 	for i := 0; i < p; i++ {
 		if q[i] != k[i] {
-			return false
+			return -1
 		}
 	}
 	a, b := q[p:], k[p:]
@@ -505,10 +507,10 @@ func fuzzyPrefixMatch(q, k []int, maxEdits, prefixLen int, transpose bool) bool 
 	}
 	for j := 0; j <= m; j++ {
 		if d[n][j] <= maxEdits {
-			return true
+			return p + j
 		}
 	}
-	return false
+	return -1
 }
 
 func commonPrefixLen(a, b []int) int {
@@ -884,14 +886,15 @@ func completionSuggest(spec, body map[string]any, indices []*Index, globalText a
 				case fuzzy != nil:
 					kunits := completionUnits(key, fuzzy.unicodeAware)
 					exact := fuzzy.maxEdits == 0 || len(qunits) <= fuzzy.prefixLength || len(qunits) < fuzzy.minLength
+					plen := len(qunits)
 					if exact {
 						if !strings.HasPrefix(key, qkey) {
 							continue
 						}
-					} else if !fuzzyPrefixMatch(qunits, kunits, fuzzy.maxEdits, fuzzy.prefixLength, fuzzy.transpose) {
+					} else if plen = fuzzyPrefixMatch(qunits, kunits, fuzzy.maxEdits, fuzzy.prefixLength, fuzzy.transpose); plen < 0 {
 						continue
 					}
-					boost = float64(commonPrefixLen(qunits, kunits))
+					boost = float64(commonPrefixLen(qunits, kunits[:plen]))
 				default:
 					if !strings.HasPrefix(key, qkey) {
 						continue
