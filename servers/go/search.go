@@ -1456,6 +1456,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				entry["_explanation"] = map[string]any{"value": scoreJSON(h.score),
 					"description": "script score function, computed with script:\"" + scriptToString(ss["script"]) + "\"",
 					"details":     []any{}}
+			} else if kexp := knnExplain(h.idx, query, h.id, h.score); kexp != nil {
+				entry["_explanation"] = kexp
 			} else {
 				field, term := explainLabel(query)
 				qc := newQueryCtxForDoc(h.idx, h.id, h.doc)
