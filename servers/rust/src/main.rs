@@ -459,6 +459,11 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
             .insert("content-type", ctype.parse().unwrap());
     }
     let ordered = resp.headers_mut().remove("x-lite-ordered").is_some();
+    // offset of a raw `_source` written as the last top-level field
+    let raw_source_at: Option<usize> = resp
+        .headers_mut()
+        .remove("x-raw-source-at")
+        .and_then(|v| v.to_str().ok().and_then(|s| s.parse().ok()));
     let fp = req.param("filter_path").unwrap_or("").to_string();
     let pretty = req.has_param("pretty") && req.param("pretty") != Some("false");
     let error_trace = req.bool_param("error_trace");
@@ -477,8 +482,13 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
         }
         if !ordered || reencoded {
             if pretty {
-                if let Ok(v) = serde_json::from_slice::<Value>(&body) {
-                    body = pretty_json(&v).into_bytes();
+                match raw_source_at.filter(|_| !reencoded) {
+                    Some(at) => body = resp::pretty_with_raw_source(&body, at),
+                    None => {
+                        if let Ok(v) = serde_json::from_slice::<Value>(&body) {
+                            body = pretty_json(&v).into_bytes();
+                        }
+                    }
                 }
             } else {
                 while body.last() == Some(&b'\n') {

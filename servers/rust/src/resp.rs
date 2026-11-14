@@ -190,13 +190,11 @@ pub fn to_yaml(v: &Value) -> String {
 fn write_yaml(buf: &mut String, v: &Value, indent: usize) {
     match v {
         Value::Object(m) => {
-            let mut keys: Vec<&String> = m.keys().collect();
-            keys.sort();
-            for k in keys {
+            for k in m.keys() {
                 for _ in 0..indent {
                     buf.push_str("  ");
                 }
-                buf.push_str(k);
+                buf.push_str(&yaml_key(k));
                 buf.push(':');
                 match &m[k] {
                     Value::Object(child) => {
@@ -230,17 +228,15 @@ fn write_yaml(buf: &mut String, v: &Value, indent: usize) {
                 }
                 buf.push_str("- ");
                 if let Value::Object(m) = e {
-                    let mut keys: Vec<&String> = m.keys().collect();
-                    keys.sort();
-                    for (i, k) in keys.iter().enumerate() {
+                    for (i, k) in m.keys().enumerate() {
                         if i > 0 {
                             for _ in 0..indent + 1 {
                                 buf.push_str("  ");
                             }
                         }
-                        buf.push_str(k);
+                        buf.push_str(&yaml_key(k));
                         buf.push_str(": ");
-                        write_yaml_scalar(buf, &m[*k]);
+                        write_yaml_scalar(buf, &m[k]);
                         buf.push('\n');
                     }
                 } else {
@@ -253,6 +249,26 @@ fn write_yaml(buf: &mut String, v: &Value, indent: usize) {
             write_yaml_scalar(buf, other);
             buf.push('\n');
         }
+    }
+}
+
+/// A mapping key, quoted when YAML would read the plain form as a non-string.
+fn yaml_key(k: &str) -> String {
+    let lower = k.to_ascii_lowercase();
+    let reserved = matches!(
+        lower.as_str(),
+        "y" | "n" | "yes" | "no" | "on" | "off" | "true" | "false" | "null" | "~" | ""
+    );
+    let numeric = k.parse::<f64>().is_ok();
+    let special = k.starts_with(|c: char| "-?:,[]{}#&*!|>'\"%@`".contains(c) || c.is_whitespace())
+        || k.ends_with(char::is_whitespace)
+        || k.contains(": ")
+        || k.contains(" #")
+        || k.chars().any(|c| c.is_control());
+    if reserved || numeric || special {
+        encode_string(k)
+    } else {
+        k.to_string()
     }
 }
 
@@ -508,5 +524,36 @@ pub fn filter_path_value(v: &Value, fp: &str) -> Value {
         let mut path = vec![];
         prune_paths(&mut out, &excludes, &mut path);
     }
+    out
+}
+
+/// Pretty-prints a response whose last top-level field, starting at `at`, is a
+/// raw `_source`: OpenSearch copies stored source bytes verbatim even when
+/// pretty printing.
+pub fn pretty_with_raw_source(body: &[u8], at: usize) -> Vec<u8> {
+    const KEY: &[u8] = b",\"_source\":";
+    if at > body.len() || at < KEY.len() || &body[at - KEY.len()..at] != KEY {
+        return match serde_json::from_slice::<Value>(body) {
+            Ok(v) => pretty_json(&v).into_bytes(),
+            Err(_) => body.to_vec(),
+        };
+    }
+    let mut head = body[..at - KEY.len()].to_vec();
+    head.push(b'}');
+    let mut raw = &body[at..];
+    while raw.last().is_some_and(|c| c.is_ascii_whitespace()) {
+        raw = &raw[..raw.len() - 1];
+    }
+    raw = raw.strip_suffix(b"}").unwrap_or(raw);
+    let v: Value = match serde_json::from_slice(&head) {
+        Ok(v) => v,
+        Err(_) => return body.to_vec(),
+    };
+    let pretty = pretty_json(&v);
+    let trimmed = pretty.trim_end().strip_suffix('}').unwrap_or(&pretty).trim_end();
+    let mut out = trimmed.as_bytes().to_vec();
+    out.extend_from_slice(b",\n  \"_source\":");
+    out.extend_from_slice(raw);
+    out.extend_from_slice(b"\n}\n");
     out
 }

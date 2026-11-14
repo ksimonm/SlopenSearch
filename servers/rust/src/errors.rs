@@ -333,3 +333,27 @@ pub fn stack_trace(err: &Map<String, Value>) -> String {
         head
     )
 }
+
+/// Jackson's error for a body that is not valid UTF-8, wrapped the way a
+/// document parse failure is reported.
+pub fn invalid_utf8_error(body: &[u8], e: &std::str::Utf8Error) -> ApiError {
+    let at = e.valid_up_to();
+    let lead = body[at];
+    let (what, byte, offset) = if (0xC2..=0xF4).contains(&lead) {
+        let k = at + e.error_len().unwrap_or(1).max(1);
+        match body.get(k) {
+            Some(b) => ("middle", *b, k + 1),
+            None => ("start", lead, at + 1),
+        }
+    } else {
+        ("start", lead, at + 1)
+    };
+    let reason = format!(
+        "Invalid UTF-8 {} byte 0x{:x}\n at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); byte offset: #{}]",
+        what, byte, offset
+    );
+    ApiError::new("mapper_parsing_exception", "failed to parse", 400).caused_by(
+        ApiError::new("json_parse_exception", &reason, 400)
+            .caused_by(ApiError::new("stream_read_exception", &reason, 400)),
+    )
+}

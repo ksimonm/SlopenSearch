@@ -213,7 +213,7 @@ pub fn create_index_internal(
         validate_normalizers(props, &canonical)?;
     }
     let name_limit = crate::store::setting_int(&canonical, "mapping.field_name_length.limit")
-        .unwrap_or(512);
+        .unwrap_or(i64::MAX);
     for meta in ["_ignored", "_data_stream_timestamp"] {
         if meta.len() > name_limit as usize {
             return Err(ApiError::bad(&format!(

@@ -69,7 +69,16 @@ fn object_depth_exceeded(v: &Value, depth: usize, limit: usize) -> bool {
     }
     match v {
         Value::Object(m) => m.values().any(|c| object_depth_exceeded(c, depth + 1, limit)),
-        Value::Array(a) => a.iter().any(|c| object_depth_exceeded(c, depth + 1, limit)),
+        Value::Array(a) => a.iter().any(|c| object_depth_exceeded(c, depth, limit)),
+        _ => false,
+    }
+}
+
+/// True when arrays nest deeper than `limit` along one path.
+fn array_depth_exceeded(v: &Value, depth: usize, limit: usize) -> bool {
+    match v {
+        Value::Object(m) => m.values().any(|c| array_depth_exceeded(c, depth, limit)),
+        Value::Array(a) => depth + 1 > limit || a.iter().any(|c| array_depth_exceeded(c, depth + 1, limit)),
         _ => false,
     }
 }
@@ -139,6 +148,9 @@ pub fn resolve_index_name(
 // ------------------------------------------------------------- write targets
 
 fn parse_index_body(req: &Req) -> Result<Map<String, Value>, ApiError> {
+    if let Err(e) = std::str::from_utf8(&req.body) {
+        return Err(crate::errors::invalid_utf8_error(&req.body, &e));
+    }
     let mut raw = String::from_utf8_lossy(&req.body).to_string();
     if raw.trim().is_empty() {
         if let Some(src) = req.param("source") {
@@ -284,7 +296,7 @@ fn bad_param(req: &Req) -> Option<Response> {
     }
     let mut invalid: Vec<&str> = Vec::new();
     for (k, _) in &req.query {
-        if !ALLOWED.contains(&k.as_str()) && !invalid.contains(&k.as_str()) {
+        if k != "format" && !ALLOWED.contains(&k.as_str()) && !invalid.contains(&k.as_str()) {
             invalid.push(k.as_str());
         }
     }
@@ -432,10 +444,18 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
         "mapping.depth.limit",
     )
     .unwrap_or(20);
-    if object_depth_exceeded(&Value::Object(body.clone()), 0, depth_limit as usize) {
+    let body_value = Value::Object(body.clone());
+    let too_deep = if object_depth_exceeded(&body_value, 0, depth_limit as usize) {
+        Some("field")
+    } else if array_depth_exceeded(&body_value, 0, depth_limit as usize) {
+        Some("nested array field")
+    } else {
+        None
+    };
+    if let Some(what) = too_deep {
         let reason = format!(
-            "The depth of the field has exceeded the allowed limit of [{}]. This limit can be set by changing the [index.mapping.depth.limit] index level setting.",
-            depth_limit
+            "The depth of the {} has exceeded the allowed limit of [{}]. This limit can be set by changing the [index.mapping.depth.limit] index level setting.",
+            what, depth_limit
         );
         let mut e = ApiError::new("mapper_parsing_exception", "failed to parse", 400)
             .caused_by(ApiError::new("parse_exception", &reason, 400));
@@ -690,7 +710,7 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
         )));
     }
     let name_limit = crate::store::setting_int(&idx.settings, "mapping.field_name_length.limit")
-        .unwrap_or(512);
+        .unwrap_or(i64::MAX);
     if let Some(name) = field_name_too_long(&Value::Object(body.clone()), name_limit as usize) {
         return err_response(ApiError::bad(&format!(
             "Field name [{}] is longer than the limit of [{}] characters",
@@ -1058,9 +1078,12 @@ pub fn handle_get_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> Res
                 idx.seq_nos.get(id).copied().unwrap_or(0)
             );
             let mut body = prefix.into_bytes();
+            let raw_at = body.len();
             body.extend_from_slice(raw);
             body.push(b'}');
-            return raw_json_response(200, body);
+            let mut resp = raw_json_response(200, body);
+            resp.headers_mut().insert("x-raw-source-at", raw_at.into());
+            return resp;
         }
     }
     if let Some(r) = idx.routing.get(id) {
