@@ -26,6 +26,7 @@ mod lang;
 mod maintenance;
 mod meta;
 mod net_io;
+mod compression;
 mod nodes;
 mod painless;
 mod persist;
@@ -346,6 +347,21 @@ fn parse_query(uri: &Uri) -> Vec<(String, String)> {
 
 
 async fn handle(State(store): State<Shared>, request: axum::extract::Request) -> axum::response::Response {
+    let head = request.method() == axum::http::Method::HEAD;
+    let accept = request
+        .headers()
+        .get("accept-encoding")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let resp = handle_plain(store, request).await;
+    if head {
+        return resp;
+    }
+    compression::encode_response(&accept, resp).await
+}
+
+async fn handle_plain(store: Shared, request: axum::extract::Request) -> axum::response::Response {
     let method = request.method().clone();
     let uri = request.uri().clone();
     let headers = request.headers().clone();
@@ -374,7 +390,7 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
         }
         return resp;
     }
-    let req = Req {
+    let mut req = Req {
         method: method.as_str().to_string(),
         path: uri.path().to_string(),
         query: parse_query(&uri),
@@ -421,6 +437,16 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
                 406,
                 &format!("Content-Type header [{}] is not supported", full),
             );
+            resp.headers_mut()
+                .insert("x-opensearch-version", "OpenSearch/3.9.0 (opensearch)".parse().unwrap());
+            return resp;
+        }
+    }
+
+    match compression::decode_request_body(&req.headers, std::mem::take(&mut req.body), MAX_CONTENT_LENGTH) {
+        Ok(b) => req.body = b,
+        Err(e) => {
+            let mut resp = errors::err_response(e);
             resp.headers_mut()
                 .insert("x-opensearch-version", "OpenSearch/3.9.0 (opensearch)".parse().unwrap());
             return resp;
