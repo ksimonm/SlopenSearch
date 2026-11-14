@@ -89,25 +89,6 @@ func WildcardMatch(pattern, s string) bool {
 	return pi == len(pattern)
 }
 
-func DeepCopySource(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(t))
-		for k, e := range t {
-			out[k] = DeepCopySource(e)
-		}
-		return out
-	case []any:
-		out := make([]any, len(t))
-		for i, e := range t {
-			out[i] = DeepCopySource(e)
-		}
-		return out
-	default:
-		return v
-	}
-}
-
 func includeSourcePath(dst, src map[string]any, segs []string) {
 	if len(segs) == 0 {
 		return
@@ -119,7 +100,7 @@ func includeSourcePath(dst, src map[string]any, segs []string) {
 			continue
 		}
 		if last {
-			dst[key] = DeepCopySource(val)
+			dst[key] = jsonv.DeepCopy(val)
 			continue
 		}
 		switch t := val.(type) {
@@ -182,7 +163,7 @@ func FilterSourceDoc(doc map[string]any, includes, excludes []string) map[string
 	out := map[string]any{}
 	if len(includes) == 0 {
 		for k, v := range doc {
-			out[k] = DeepCopySource(v)
+			out[k] = jsonv.DeepCopy(v)
 		}
 	} else {
 		for _, inc := range includes {

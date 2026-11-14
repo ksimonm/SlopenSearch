@@ -376,7 +376,7 @@ func settingsView(idx *model.Index, flat, includeDefaults bool, filter string) m
 	flatAll := materializedFlat(idx)
 	matched := map[string]any{}
 	for k, v := range flatAll {
-		if mapping.MatchAnySettingPattern(patterns, k) {
+		if settings.MatchAny(patterns, k) {
 			matched[k] = v
 		}
 	}
@@ -387,7 +387,7 @@ func settingsView(idx *model.Index, flat, includeDefaults bool, filter string) m
 			if _, isSet := flatAll[k]; isSet {
 				continue
 			}
-			if mapping.MatchAnySettingPattern(patterns, k) {
+			if settings.MatchAny(patterns, k) {
 				defaultsMatched[k] = v
 			}
 		}

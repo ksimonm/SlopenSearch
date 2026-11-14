@@ -83,7 +83,7 @@ func insertDottedProperty(root map[string]any, key string, val map[string]any) *
 // ExpandDottedProperties rewrites every properties map so dotted names become
 // nested object mappings.
 func ExpandDottedProperties(props map[string]any) *apierr.Error {
-	keys := SortedAnyKeys(props)
+	keys := jsonv.SortedKeys(props)
 	out := map[string]any{}
 	for _, key := range keys {
 		def, ok := props[key].(map[string]any)
@@ -257,7 +257,7 @@ func normalizerFound(settings map[string]any, name string) bool {
 // ValidateAnalyzers checks analyzers and normalizers referenced from a
 // mapping against the index settings.
 func ValidateAnalyzers(props map[string]any, settings map[string]any) *apierr.Error {
-	for _, name := range SortedAnyKeys(props) {
+	for _, name := range jsonv.SortedKeys(props) {
 		def, ok := props[name].(map[string]any)
 		if !ok {
 			continue

@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/settings"
@@ -25,7 +26,7 @@ func KnnPutMappingCheck(idx *model.Index, existing, incoming map[string]any) *ap
 }
 
 func knnMergeConflicts(existing, incoming map[string]any) *apierr.Error {
-	for _, name := range SortedAnyKeys(incoming) {
+	for _, name := range jsonv.SortedKeys(incoming) {
 		nd, ok := incoming[name].(map[string]any)
 		if !ok {
 			continue
@@ -121,7 +122,7 @@ func orderKeys(m map[string]any, first []string, conv func(string, any) any) ojs
 			add(k)
 		}
 	}
-	for _, k := range SortedAnyKeys(m) {
+	for _, k := range jsonv.SortedKeys(m) {
 		if !seen[k] {
 			add(k)
 		}

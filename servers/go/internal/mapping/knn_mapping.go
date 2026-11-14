@@ -24,7 +24,7 @@ func knnValidation(msg string) *apierr.Error {
 // KnnIndexMappings validates and normalizes knn_vector fields of an index
 // that has index.knn enabled.
 func KnnIndexMappings(props map[string]any) *apierr.Error {
-	for _, name := range SortedAnyKeys(props) {
+	for _, name := range jsonv.SortedKeys(props) {
 		def, ok := props[name].(map[string]any)
 		if !ok {
 			continue
@@ -45,7 +45,7 @@ func KnnIndexMappings(props map[string]any) *apierr.Error {
 }
 
 func knnValidateField(name string, def map[string]any) *apierr.Error {
-	for _, k := range SortedAnyKeys(def) {
+	for _, k := range jsonv.SortedKeys(def) {
 		if !knnFieldParams[k] {
 			return wrappedError(fmt.Sprintf("unknown parameter [%s] on mapper [%s] of type [knn_vector]", k, name), "mapper_parsing_exception")
 		}
@@ -163,7 +163,7 @@ func knnValidateField(name string, def map[string]any) *apierr.Error {
 	if space == "l1" || space == "linf" {
 		return knnValidation(fmt.Sprintf(`"%s" with "%s" configuration does not support space type: "%s".`, methodName, engine, space))
 	}
-	for _, k := range SortedAnyKeys(params) {
+	for _, k := range jsonv.SortedKeys(params) {
 		switch k {
 		case "m", "ef_construction", "ef_search":
 			if n, isNum := params[k].(json.Number); isNum && !strings.ContainsAny(n.String(), ".eE") {

@@ -1103,10 +1103,10 @@ func (s *Server) handleGetDocV2(w http.ResponseWriter, r *http.Request, name, id
 			if filtered, ok2 := filterRawSource(raw, includes, excludes); ok2 {
 				resp = append(resp, ojson.KV{"_source", ojson.Verbatim(filtered)})
 			} else {
-				resp = append(resp, ojson.KV{"_source", search.NormalizeNumbers(search.FilterSourceDoc(doc, includes, excludes))})
+				resp = append(resp, ojson.KV{"_source", jsonv.NormalizeNumbers(search.FilterSourceDoc(doc, includes, excludes))})
 			}
 		} else {
-			resp = append(resp, ojson.KV{"_source", search.NormalizeNumbers(search.FilterSourceDoc(doc, includes, excludes))})
+			resp = append(resp, ojson.KV{"_source", jsonv.NormalizeNumbers(search.FilterSourceDoc(doc, includes, excludes))})
 		}
 	}
 	if fields := storedFieldsFor(idx, doc, storedSpec(storedSpecRaw, idx)); fields != nil {
@@ -1169,7 +1169,7 @@ func (s *Server) handleGetSourceV2(w http.ResponseWriter, r *http.Request, name,
 			return
 		}
 	}
-	writeJSON(w, 200, search.NormalizeNumbers(search.FilterSourceDoc(doc, includes, excludes)))
+	writeJSON(w, 200, jsonv.NormalizeNumbers(search.FilterSourceDoc(doc, includes, excludes)))
 }
 
 func (s *Server) handleDeleteDocV2(w http.ResponseWriter, r *http.Request, name, id string) {
@@ -1636,7 +1636,7 @@ func runUpdateScriptCtx(raw any, source map[string]any, index, id string, versio
 	ctx.Put("_routing", painless.FromJSON(routing, painless.Linked))
 	ctx.Put("op", op)
 	ctx.Put("_now", nowMillis())
-	ctx.Put("_source", painless.FromJSON(search.DeepCopySource(source), painless.Linked))
+	ctx.Put("_source", painless.FromJSON(jsonv.DeepCopy(source), painless.Linked))
 	_, rerr := script.Exec(painless.Bindings{Vars: map[string]any{"params": search.ScriptParams(spec.Params), "ctx": ctx}}, spec.ErrName())
 	if rerr != nil {
 		return updateScriptResult{}, updateScriptFailure(rerr, nil)

@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
 	"slopensearch/internal/mapping"
 )
 
@@ -86,7 +87,7 @@ func (s *Server) putMappingAPI(w http.ResponseWriter, r *http.Request, spec stri
 		}
 	}
 	if src, ok := body["_source"].(map[string]any); ok {
-		for _, k := range mapping.SortedAnyKeys(src) {
+		for _, k := range jsonv.SortedKeys(src) {
 			switch k {
 			case "enabled", "includes", "excludes", "include", "exclude":
 			default:

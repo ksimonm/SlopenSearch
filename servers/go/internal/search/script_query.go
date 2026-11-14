@@ -77,7 +77,7 @@ func (c *QueryCtx) evalScriptScore(body any) (bool, float64, *apierr.Error) {
 	score := painless.F64(v)
 	if score < 0 || math.IsNaN(score) {
 		return false, 0, PlainShardError(c.Idx, apierr.BadRequest("script_score script returned an invalid score ["+
-			painless.FormatDouble(score)+"] for doc ["+Itoa(luceneDocNum(c.Idx, c.ID))+"]. Must be a non-negative score!"))
+			painless.FormatDouble(score)+"] for doc ["+itoa(luceneDocNum(c.Idx, c.ID))+"]. Must be a non-negative score!"))
 	}
 	score = float64(float32(score))
 	if b, ok := jsonv.ToFloat(bm["boost"]); ok {

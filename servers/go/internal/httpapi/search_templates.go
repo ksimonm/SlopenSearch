@@ -148,7 +148,7 @@ func (s *Server) handleSearchTemplate(w http.ResponseWriter, r *http.Request, na
 		if !searchTemplateKeys[k] {
 			col := strings.Index(string(raw), `"`+k+`"`) + 1
 			writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
-				Reason: "[1:" + search.Itoa(col) + "] [search_template] unknown field [" + k + "]"})
+				Reason: "[1:" + strconv.Itoa(col) + "] [search_template] unknown field [" + k + "]"})
 			return
 		}
 	}

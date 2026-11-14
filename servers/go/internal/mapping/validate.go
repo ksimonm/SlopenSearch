@@ -3,7 +3,6 @@ package mapping
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -49,15 +48,6 @@ var allowedMappingParams = map[string]bool{
 	"include_in_root": true, "preserve_separators": true, "preserve_position_increments": true, "contexts": true,
 	"quote_analyzer": true, "dimension": true, "method": true, "model_id": true,
 	"space_type": true, "ef_construction": true, "m": true, "encoder": true,
-}
-
-func SortedAnyKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 func intFromAny(v any) (int64, bool) {
@@ -141,7 +131,7 @@ func validateDateFormat(name, fmtStr string) *validationError {
 }
 
 func ValidateProps(props map[string]any) *validationError {
-	for _, name := range SortedAnyKeys(props) {
+	for _, name := range jsonv.SortedKeys(props) {
 		raw := props[name]
 		def, ok := raw.(map[string]any)
 		if !ok {
@@ -249,7 +239,7 @@ func ValidateProps(props map[string]any) *validationError {
 			}
 		}
 		if meta, ok := def["meta"].(map[string]any); ok {
-			for _, mk := range SortedAnyKeys(meta) {
+			for _, mk := range jsonv.SortedKeys(meta) {
 				mv := meta[mk]
 				if _, isStr := mv.(string); !isStr {
 					return mve(fmt.Sprintf("[meta] values can only be strings, but got %s for field [%s]", javaMetaRepr(mv), name), "")
@@ -270,7 +260,7 @@ func ValidateProps(props map[string]any) *validationError {
 				}
 			}
 		}
-		for _, k := range SortedAnyKeys(def) {
+		for _, k := range jsonv.SortedKeys(def) {
 			if t == "knn_vector" && knnFieldParams[k] {
 				continue
 			}
@@ -284,7 +274,7 @@ func ValidateProps(props map[string]any) *validationError {
 			}
 		}
 		if fields, ok := def["fields"].(map[string]any); ok {
-			for _, fname := range SortedAnyKeys(fields) {
+			for _, fname := range jsonv.SortedKeys(fields) {
 				if strings.Contains(fname, ".") {
 					return mve(fmt.Sprintf("Field name [%s] which is a multi field of [%s] cannot contain '.'", fname, name), "")
 				}
@@ -323,7 +313,7 @@ func countMappingType(props map[string]any, wanted string) int {
 func ValidatePropsMeta(props map[string]any) *apierr.Error {
 	var walk func(props map[string]any) *apierr.Error
 	walk = func(props map[string]any) *apierr.Error {
-		for _, name := range SortedAnyKeys(props) {
+		for _, name := range jsonv.SortedKeys(props) {
 			if name == "" || strings.Contains(name, "..") {
 				reason := "name cannot be empty string"
 				return wrappedError(reason, "illegal_argument_exception")
@@ -398,7 +388,7 @@ func aliasInvalidError(reason string) *apierr.Error {
 }
 
 func ValidateAliasMappings(props map[string]any) *apierr.Error {
-	for _, name := range SortedAnyKeys(props) {
+	for _, name := range jsonv.SortedKeys(props) {
 		def, ok := props[name].(map[string]any)
 		if !ok {
 			continue
@@ -411,7 +401,7 @@ func ValidateAliasMappings(props map[string]any) *apierr.Error {
 			return wrappedError(fmt.Sprintf("The [path] property must be specified for field [%s].", name), "mapper_parsing_exception")
 		}
 		var unsupported []string
-		for _, k := range SortedAnyKeys(def) {
+		for _, k := range jsonv.SortedKeys(def) {
 			if k == "type" || k == "path" {
 				continue
 			}
@@ -445,7 +435,7 @@ func ValidateAliasMappings(props map[string]any) *apierr.Error {
 }
 
 func ValidateCopyToTargets(props map[string]any) *apierr.Error {
-	for _, name := range SortedAnyKeys(props) {
+	for _, name := range jsonv.SortedKeys(props) {
 		def, ok := props[name].(map[string]any)
 		if !ok {
 			continue
@@ -483,7 +473,7 @@ func ValidateCopyToTargets(props map[string]any) *apierr.Error {
 }
 
 func ValidateJoinPlacement(props map[string]any, prefix string) *apierr.Error {
-	for _, name := range SortedAnyKeys(props) {
+	for _, name := range jsonv.SortedKeys(props) {
 		def, ok := props[name].(map[string]any)
 		if !ok {
 			continue
@@ -502,7 +492,7 @@ func ValidateJoinPlacement(props map[string]any, prefix string) *apierr.Error {
 			}
 		}
 		if fields, ok := def["fields"].(map[string]any); ok {
-			for _, fname := range SortedAnyKeys(fields) {
+			for _, fname := range jsonv.SortedKeys(fields) {
 				if fdef, ok := fields[fname].(map[string]any); ok {
 					if ft, _ := fdef["type"].(string); ft == "join" {
 						reason := fmt.Sprintf("join field [%s.%s] cannot be added inside an object or in a multi-field", path, fname)
@@ -517,7 +507,7 @@ func ValidateJoinPlacement(props map[string]any, prefix string) *apierr.Error {
 
 func ValidateSource(mappings map[string]any) *apierr.Error {
 	if src, ok := mappings["_source"].(map[string]any); ok {
-		for _, k := range SortedAnyKeys(src) {
+		for _, k := range jsonv.SortedKeys(src) {
 			switch k {
 			case "enabled", "includes", "excludes", "include", "exclude":
 			default:

@@ -60,7 +60,7 @@ func injectAliasValues(mappings map[string]any, prefix string, doc map[string]an
 				continue
 			}
 			if v, ok := mapping.FieldValue(doc, target); ok {
-				doc[path] = search.DeepCopySource(v)
+				doc[path] = jsonv.DeepCopy(v)
 			}
 			continue
 		}
@@ -128,7 +128,7 @@ func injectAggDocValues(h Hit, doc map[string]any) {
 func aggDocs(hits []Hit) []map[string]any {
 	out := make([]map[string]any, 0, len(hits))
 	for _, h := range hits {
-		d := search.DeepCopySource(h.Doc).(map[string]any)
+		d := jsonv.DeepCopy(h.Doc).(map[string]any)
 		// only root documents read their indexed values; nested elements
 		// (and documents already prepared by an outer aggregation) keep theirs
 		if _, nested := h.Doc["__slop_nested_ctx"]; !nested {
@@ -746,7 +746,7 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *mode
 			}
 		}
 	}
-	size := search.IntField(spec, "size", 10)
+	size := jsonv.Int(spec, "size", 10)
 	if size <= 0 {
 		return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason: "Failed to parse aggregation [" + name + "]",
@@ -896,7 +896,7 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *mode
 			addVal(v, d, false)
 		}
 	}
-	minDocCount := search.IntField(spec, "min_doc_count", 1)
+	minDocCount := jsonv.Int(spec, "min_doc_count", 1)
 	if minDocCount == 0 {
 		for _, docVals := range idx.DocValues {
 			raw, ok := docVals[resolved]
@@ -1168,8 +1168,8 @@ func termsFilters(inc any, hasInc bool, exc any, hasExc bool, ft string, idx *mo
 	var partFilter func(any) bool
 	if hasInc {
 		if obj, ok := inc.(map[string]any); ok {
-			part := search.IntField(obj, "partition", -1)
-			num := search.IntField(obj, "num_partitions", -1)
+			part := jsonv.Int(obj, "partition", -1)
+			num := jsonv.Int(obj, "num_partitions", -1)
 			if part < 0 {
 				return nil, nil, nil, nil, nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "Missing [partition] parameter for partition-based include"}
@@ -1543,7 +1543,7 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 	}
 	format, _ := jsonv.ToString(spec["format"])
 	keyed, _ := spec["keyed"].(bool)
-	minDocCount := search.IntField(spec, "min_doc_count", 0)
+	minDocCount := jsonv.Int(spec, "min_doc_count", 0)
 	hasKeyString := true
 	switch ft {
 	case "byte", "short", "integer", "long", "unsigned_long", "float", "double", "half_float", "scaled_float":
@@ -1866,7 +1866,7 @@ func histogramAgg(name, field string, spec map[string]any, docs []map[string]any
 	offset, _ := jsonv.ToFloat(spec["offset"])
 	missing, hasMissing := spec["missing"]
 	keyed, _ := spec["keyed"].(bool)
-	minDocCount := search.IntField(spec, "min_doc_count", 0)
+	minDocCount := jsonv.Int(spec, "min_doc_count", 0)
 	counts := map[float64]int{}
 	group := map[float64][]map[string]any{}
 	for _, d := range docs {
@@ -2155,7 +2155,7 @@ func walkNested(cur any, parts []string, full string, ancestors map[string]map[s
 		}
 	case map[string]any:
 		if len(parts) == 0 {
-			cp, ok := search.DeepCopySource(t).(map[string]any)
+			cp, ok := jsonv.DeepCopy(t).(map[string]any)
 			if !ok {
 				cp = t
 			}
@@ -2200,7 +2200,7 @@ func reverseNestedAgg(name, path string, docs []map[string]any, idx *model.Index
 			if !ok {
 				continue
 			}
-			cp, ok := search.DeepCopySource(rootDoc).(map[string]any)
+			cp, ok := jsonv.DeepCopy(rootDoc).(map[string]any)
 			if !ok {
 				continue
 			}
@@ -2217,7 +2217,7 @@ func reverseNestedAgg(name, path string, docs []map[string]any, idx *model.Index
 		if seen[key] {
 			continue
 		}
-		cp, ok := search.DeepCopySource(obj).(map[string]any)
+		cp, ok := jsonv.DeepCopy(obj).(map[string]any)
 		if !ok {
 			continue
 		}

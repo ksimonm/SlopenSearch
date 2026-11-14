@@ -18,7 +18,7 @@ func EvalScriptFields(hit MultiHit, specs map[string]any) (map[string]any, *apie
 			src[k] = v
 		}
 	}
-	source := painless.FromJSON(DeepCopySource(src), painless.Linked).(*painless.Map)
+	source := painless.FromJSON(jsonv.DeepCopy(src), painless.Linked).(*painless.Map)
 	for _, name := range jsonv.SortedKeys(specs) {
 		spec, _ := specs[name].(map[string]any)
 		ignore, _ := spec["ignore_failure"].(bool)

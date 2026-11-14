@@ -2669,7 +2669,7 @@ func (c *QueryCtx) evalTermsSet(body any) (bool, float64, *apierr.Error) {
 }
 
 func numericInt(v any) (int, bool) {
-	if n, ok := IntegerOf(v); ok {
+	if n, ok := jsonv.ToInt64(v); ok {
 		return int(n), true
 	}
 	if f, ok := jsonv.ToFloat(v); ok {
@@ -3928,7 +3928,7 @@ func decayDateMillis(def map[string]any, v any) (int64, bool) {
 	if s, ok := v.(string); ok {
 		return dates.ParseAny(def, s)
 	}
-	return IntegerOf(v)
+	return jsonv.ToInt64(v)
 }
 
 func (c *QueryCtx) evalFunctionScore(body any) (bool, float64, *apierr.Error) {
@@ -4122,7 +4122,7 @@ func (c *QueryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 	if rs, ok := fn["random_score"].(map[string]any); ok {
 		seed := int64(0)
 		if s, ok := rs["seed"]; ok {
-			seed, _ = IntegerOf(s)
+			seed, _ = jsonv.ToInt64(s)
 		}
 		if seed == 0 {
 			seed = 42

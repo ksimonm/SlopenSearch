@@ -40,7 +40,7 @@ func ValidateBody(v any) *apierr.Error {
 		return &apierr.Error{Type: "parsing_exception", Status: 400,
 			Reason: "Unknown key for a " + search.TokenType(v) + " in [suggest]."}
 	}
-	for _, name := range mapping.SortedAnyKeys(m) {
+	for _, name := range jsonv.SortedKeys(m) {
 		if name == "text" {
 			continue
 		}
@@ -49,7 +49,7 @@ func ValidateBody(v any) *apierr.Error {
 			continue
 		}
 		found := false
-		for _, k := range mapping.SortedAnyKeys(spec) {
+		for _, k := range jsonv.SortedKeys(spec) {
 			switch k {
 			case "text", "prefix", "regex":
 				continue
@@ -81,7 +81,7 @@ var completionSuggestOptions = map[string]bool{
 }
 
 func validateCompletionOptions(body map[string]any) *apierr.Error {
-	for _, k := range mapping.SortedAnyKeys(body) {
+	for _, k := range jsonv.SortedKeys(body) {
 		if !completionSuggestOptions[k] {
 			return &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "[completion] unknown field [" + k + "]"}
@@ -619,7 +619,7 @@ func completionSuggest(spec, body map[string]any, indices []*model.Index, global
 			if len(ctxs) == 0 {
 				return nil, suggestShardError(first, "suggester ["+field+"] doesn't expect any context")
 			}
-			for _, name := range mapping.SortedAnyKeys(cm) {
+			for _, name := range jsonv.SortedKeys(cm) {
 				var cd *mapping.CompletionContextDef
 				for i := range ctxs {
 					if ctxs[i].Name == name {

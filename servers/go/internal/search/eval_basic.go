@@ -76,7 +76,7 @@ func FormatDocValue(idx *model.Index, field, ftype string, v any, format string)
 		case uint64:
 			raw = int64(t)
 		default:
-			if n, ok := IntegerOf(v); ok {
+			if n, ok := jsonv.ToInt64(v); ok {
 				raw = n
 			} else {
 				return v
@@ -219,15 +219,6 @@ func compareSortValues(a, b any) int {
 		}
 	}
 	return compareValues(a, b)
-}
-
-func IntField(body map[string]any, key string, def int) int {
-	if v, ok := body[key]; ok {
-		if f, ok := jsonv.ToFloat(v); ok {
-			return int(f)
-		}
-	}
-	return def
 }
 
 func compareValues(a, b any) int {

@@ -441,8 +441,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			return
 		}
 	}
-	from := search.IntField(body, "from", 0)
-	size := search.IntField(body, "size", 10)
+	from := jsonv.Int(body, "from", 0)
+	size := jsonv.Int(body, "size", 10)
 	if v := r.URL.Query().Get("from"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
@@ -1837,7 +1837,7 @@ func orderSearchResponse(resp map[string]any) ojson.Object {
 			seen[k] = true
 		}
 	}
-	for _, k := range mapping.SortedAnyKeys(resp) {
+	for _, k := range jsonv.SortedKeys(resp) {
 		if !seen[k] {
 			out = append(out, ojson.KV{k, resp[k]})
 		}

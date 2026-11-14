@@ -138,7 +138,7 @@ func (c *ParseContext) checkCompletionContexts(path string, def map[string]any, 
 			}
 		case map[string]any:
 			if cm, ok := t["contexts"].(map[string]any); ok {
-				for _, name := range SortedAnyKeys(cm) {
+				for _, name := range jsonv.SortedKeys(cm) {
 					if !known[name] {
 						return completionParseError("illegal_argument_exception",
 							"Unknown context name ["+name+"], must be one of ["+CompletionContextNames(ctxs)+"]")

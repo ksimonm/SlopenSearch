@@ -215,8 +215,8 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *model.Index) (a
 		return nil, &apierr.Error{Type: "aggregation_initialization_exception", Status: 500,
 			Reason: "Aggregator [a] of type [top_hits] cannot accept sub-aggregations"}
 	}
-	from := search.IntField(spec, "from", 0)
-	size := search.IntField(spec, "size", 3)
+	from := jsonv.Int(spec, "from", 0)
+	size := jsonv.Int(spec, "size", 3)
 	if from+size > 100 {
 		reason := fmt.Sprintf("Top hits result window is too large, the top hits aggregator [a]'s from + size must be less than or equal to: [100] but was [%d]. This limit can be set by changing the [index.max_inner_result_window] index level setting.", from+size)
 		return nil, &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: reason,
@@ -295,7 +295,7 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *model.Index) (a
 			src := search.FilterSourceDoc(d, sourceIncludes, sourceExcludes)
 			delete(src, "__slop_id")
 			delete(src, "__slop_score")
-			h = append(h, ojson.KV{"_source", search.NormalizeNumbers(src)})
+			h = append(h, ojson.KV{"_source", jsonv.NormalizeNumbers(src)})
 		}
 		if v, ok := spec["version"].(bool); ok && v {
 			ver := int64(1)
@@ -325,7 +325,7 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *model.Index) (a
 			sv := []any{}
 			for _, s := range sorts {
 				v, _ := sortValue(d, s.field, idx)
-				sv = append(sv, search.NormalizeNumbers(v))
+				sv = append(sv, jsonv.NormalizeNumbers(v))
 			}
 			h = append(h, ojson.KV{"sort", sv})
 		}
@@ -333,7 +333,7 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *model.Index) (a
 		if dv, ok := spec["docvalue_fields"]; ok {
 			for _, f := range search.AnyStringList(dv) {
 				if v, ok := mapping.FieldValue(d, f); ok {
-					fields = append(fields, ojson.KV{f, []any{search.NormalizeNumbers(v)}})
+					fields = append(fields, ojson.KV{f, []any{jsonv.NormalizeNumbers(v)}})
 				}
 			}
 		}

@@ -265,7 +265,7 @@ func metaInt(meta map[string]any, key string) (int64, bool) {
 	if !ok {
 		return 0, false
 	}
-	if n, ok := search.IntegerOf(v); ok {
+	if n, ok := jsonv.ToInt64(v); ok {
 		return n, true
 	}
 	if f, ok := jsonv.ToFloat(v); ok {

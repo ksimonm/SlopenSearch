@@ -352,18 +352,18 @@ func numericEqual(a, b any) bool {
 		if ub, ok := b.(uint64); ok {
 			return ua == ub
 		}
-		if ib, ok := IntegerOf(b); ok && ib >= 0 {
+		if ib, ok := jsonv.ToInt64(b); ok && ib >= 0 {
 			return ua == uint64(ib)
 		}
 		return false
 	}
 	if ub, ok := b.(uint64); ok {
-		if ia, ok := IntegerOf(a); ok && ia >= 0 {
+		if ia, ok := jsonv.ToInt64(a); ok && ia >= 0 {
 			return ub == uint64(ia)
 		}
 	}
-	if ia, ok := IntegerOf(a); ok {
-		if ib, ok := IntegerOf(b); ok {
+	if ia, ok := jsonv.ToInt64(a); ok {
+		if ib, ok := jsonv.ToInt64(b); ok {
 			return ia == ib
 		}
 	}
@@ -372,31 +372,12 @@ func numericEqual(a, b any) bool {
 	return aok && bok && af == bf
 }
 
-func IntegerOf(v any) (int64, bool) {
-	switch t := v.(type) {
-	case int64:
-		return t, true
-	case int:
-		return int64(t), true
-	case uint64:
-		if t <= 1<<63-1 {
-			return int64(t), true
-		}
-		return 0, false
-	case json.Number:
-		if n, err := t.Int64(); err == nil {
-			return n, true
-		}
-	}
-	return 0, false
-}
-
 func numericLess(a, b any) int {
 	if ua, ok := a.(uint64); ok {
 		var ub uint64
 		if v, ok := b.(uint64); ok {
 			ub = v
-		} else if ib, ok := IntegerOf(b); ok && ib >= 0 {
+		} else if ib, ok := jsonv.ToInt64(b); ok && ib >= 0 {
 			ub = uint64(ib)
 		} else {
 			bf, _ := jsonv.ToFloat(b)
@@ -416,7 +397,7 @@ func numericLess(a, b any) int {
 		return 0
 	}
 	if ub, ok := b.(uint64); ok {
-		if ia, ok := IntegerOf(a); ok {
+		if ia, ok := jsonv.ToInt64(a); ok {
 			if ia < 0 {
 				return -1
 			}
@@ -429,8 +410,8 @@ func numericLess(a, b any) int {
 			return 0
 		}
 	}
-	if ia, ok := IntegerOf(a); ok {
-		if ib, ok := IntegerOf(b); ok {
+	if ia, ok := jsonv.ToInt64(a); ok {
+		if ib, ok := jsonv.ToInt64(b); ok {
 			switch {
 			case ia < ib:
 				return -1
