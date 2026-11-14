@@ -249,7 +249,7 @@ func parseWordnetLine(line string) (string, string, bool) {
 	return id, b.String(), true
 }
 
-// longestSynonymMatch returns the matched entry and input length at token i.
+// longestMatch returns the matched entry and input length at token i.
 func (m *synonymMap) longestMatch(toks []Token, i int) (*synonymEntry, int) {
 	for l := m.maxLen; l >= 1; l-- {
 		if i+l > len(toks) {

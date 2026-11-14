@@ -606,9 +606,9 @@ func (s *Server) catIndices(r *http.Request, spec, endpoint string) ([]catCol, [
 		expand = parsed
 		expand["closed"] = parsed["closed"]
 	}
-	o := resolveOpts2{expand: expand}
+	o := specOpts{expand: expand}
 	o.ignoreUnavailable = paramBool(r, "ignore_unavailable")
-	indices, apiErr := s.resolveSpec2(spec, o)
+	indices, apiErr := s.resolveSpec(spec, o)
 	if apiErr != nil {
 		return nil, nil, apiErr
 	}

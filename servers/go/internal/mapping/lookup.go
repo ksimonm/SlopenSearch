@@ -70,7 +70,7 @@ func FieldDef(idx *model.Index, field string) (map[string]any, bool) {
 	return nil, false
 }
 
-func MatchAnalyzerExists(idx *model.Index, name string) bool {
+func AnalyzerExists(idx *model.Index, name string) bool {
 	if analysis.BuiltinAnalyzer(name) {
 		return true
 	}

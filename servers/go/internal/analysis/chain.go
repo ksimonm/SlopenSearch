@@ -329,7 +329,7 @@ func (sc Scope) resolveCharFilter(c Component) (chainCharFilter, *apierr.Error) 
 	return chainCharFilter{}, notFound(sc, "char_filter", c.name)
 }
 
-// validateFilter applies a filter once so configuration errors surface when
+// validateChainFilter applies a filter once so configuration errors surface when
 // the chain is built.
 func validateChainFilter(idx *Index, f chainFilter) *apierr.Error {
 	dummy := []Token{{Term: "x", Start: 0, End: 1, Type: "word"}}

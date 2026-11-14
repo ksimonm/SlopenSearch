@@ -7,9 +7,9 @@ import "reflect"
 // document through such a search, so writing it back fails with a version
 // conflict, exactly as OpenSearch's if_seq_no check does.
 
-// NoteStaleOverwrite is called for writes that leave the previously
+// noteStaleOverwrite is called for writes that leave the previously
 // refreshed version of the document visible to searches.
-func (idx *Index) NoteStaleOverwrite(id string) {
+func (idx *Index) noteStaleOverwrite(id string) {
 	if !idx.RefreshDisabled() {
 		return
 	}

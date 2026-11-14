@@ -29,19 +29,19 @@ func KnnExplain(idx *model.Index, query map[string]any, id string, score float64
 		if !hasK {
 			return nil
 		}
-		def, _ := KnnFieldDef(idx, field)
+		def, _ := knnFieldDef(idx, field)
 		fi := mapping.KnnInfo(def)
 		if fi.Engine == "lucene" {
 			return ojson.Object{{"value", ScoreJSON(score)},
 				{"description", fmt.Sprintf("within top %d docs", int(k))}, {"details", []any{}}}
 		}
-		qv, _ := FloatList(p["vector"])
+		qv, _ := floatList(p["vector"])
 		qc := &QueryCtx{Idx: idx, ID: id, Doc: idx.Docs[id]}
-		dv, _ := qc.DocVector(field)
+		dv, _ := qc.docVector(field)
 		raw := 0.0
 		formula := "`1 / (1 + rawScore)`"
 		if len(dv) == len(qv) {
-			raw, _ = KnnDistanceScore(fi.Space, qv, dv)
+			raw, _ = knnDistanceScore(fi.Space, qv, dv)
 		}
 		switch fi.Space {
 		case "innerproduct":

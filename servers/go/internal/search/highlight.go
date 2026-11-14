@@ -195,14 +195,14 @@ func (cfg *highlightConfig) Validate(idx *model.Index) *apierr.Error {
 			if f.boundary == "sentence" && f.fragmentSize < 18 {
 				return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
 					RootCause: &apierr.Error{Type: "illegal_argument_exception",
-						Reason: "fragCharSize(" + Itoa(f.fragmentSize) + ") is too small. It must be 18 or higher."}}
+						Reason: "fragCharSize(" + itoa(f.fragmentSize) + ") is too small. It must be 18 or higher."}}
 			}
 		}
 	}
 	return nil
 }
 
-func Itoa(n int) string {
+func itoa(n int) string {
 	if n == 0 {
 		return "0"
 	}

@@ -335,7 +335,7 @@ func ScoreBindings(qc *QueryCtx) map[string]func(args []any, off int) (any, *pai
 					key = painless.ToString(painless.FromJSON(vals[0], painless.Hash))
 				}
 			}
-			h.Write([]byte(Itoa(int(painless.I64(a[0]))) + "\x00" + key))
+			h.Write([]byte(itoa(int(painless.I64(a[0]))) + "\x00" + key))
 			return float64(h.Sum32()&0x00FFFFFF) / float64(1<<24), nil
 		},
 	} {

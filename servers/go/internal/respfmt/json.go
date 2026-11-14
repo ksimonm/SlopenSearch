@@ -15,8 +15,8 @@ import (
 
 // ---------------------------------------------------------------- pretty JSON
 
-// Pretty renders v as indented JSON (pretty=true).
-func Pretty(v any) []byte {
+// prettyJSON renders v as indented JSON (pretty=true).
+func prettyJSON(v any) []byte {
 	var buf bytes.Buffer
 	WritePretty(&buf, v, 0)
 	buf.WriteByte('\n')

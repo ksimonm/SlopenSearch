@@ -83,7 +83,7 @@ func insertDottedProperty(root map[string]any, key string, val map[string]any) *
 // ExpandDottedProperties rewrites every properties map so dotted names become
 // nested object mappings.
 func ExpandDottedProperties(props map[string]any) *apierr.Error {
-	keys := SortedAnyKeys(props)
+	keys := jsonv.SortedKeys(props)
 	out := map[string]any{}
 	for _, key := range keys {
 		def, ok := props[key].(map[string]any)
@@ -225,8 +225,8 @@ func mergeDottedDocs(a, b map[string]any) map[string]any {
 // Mapping validation that needs index settings
 // ---------------------------------------------------------------------------
 
-// builtinAnalyzer reports whether name is an analyzer that OpenSearch ships
-// with, so a mapping may reference it without declaring it in settings.
+// settingsHasAnalyzer reports whether the index settings define an analysis
+// component of kind key ("analyzer", "normalizer", ...) called name.
 func settingsHasAnalyzer(indexSettings map[string]any, key, name string) bool {
 	if _, ok := settings.Find(indexSettings, "analysis."+key+"."+name); ok {
 		return true
@@ -257,7 +257,7 @@ func normalizerFound(settings map[string]any, name string) bool {
 // ValidateAnalyzers checks analyzers and normalizers referenced from a
 // mapping against the index settings.
 func ValidateAnalyzers(props map[string]any, settings map[string]any) *apierr.Error {
-	for _, name := range SortedAnyKeys(props) {
+	for _, name := range jsonv.SortedKeys(props) {
 		def, ok := props[name].(map[string]any)
 		if !ok {
 			continue
@@ -318,7 +318,7 @@ var builtinMetadataFields = []string{
 	"_ignored", "_id", "_index", "_routing", "_source", "_data_stream_timestamp",
 }
 
-func ValidateBuiltinFieldNameLength(indexSettings map[string]any) *apierr.Error {
+func CheckFieldNameLimit(indexSettings map[string]any) *apierr.Error {
 	limit, ok := settings.Int(indexSettings, "mapping.field_name_length.limit")
 	if !ok {
 		return nil

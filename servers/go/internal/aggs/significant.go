@@ -187,11 +187,11 @@ func significantAgg(name string, spec map[string]any, docs []map[string]any, idx
 	ft, _ := idx.FieldTypes[resolved]
 	valueType, _ := jsonv.ToString(spec["value_type"])
 	format, _ := jsonv.ToString(spec["format"])
-	minDoc := search.IntField(spec, "min_doc_count", 3)
+	minDoc := jsonv.Int(spec, "min_doc_count", 3)
 	if minDoc < 1 {
 		minDoc = 1
 	}
-	size := search.IntField(spec, "size", 10)
+	size := jsonv.Int(spec, "size", 10)
 	heuristic, _ := jsonv.ToString(spec["background_filter"])
 	_ = heuristic
 	heur := "jlh"
@@ -282,7 +282,7 @@ func significantAgg(name string, spec map[string]any, docs []map[string]any, idx
 }
 
 func rareTermsAgg(name string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
-	maxDoc := search.IntField(spec, "max_doc_count", 1)
+	maxDoc := jsonv.Int(spec, "max_doc_count", 1)
 	if maxDoc > 100 {
 		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "max_doc_count must be less than or equal to 100",
@@ -326,7 +326,7 @@ func rareTermsAgg(name string, spec map[string]any, docs []map[string]any, idx *
 		}
 		return list[i].canon < list[j].canon
 	})
-	size := search.IntField(spec, "size", 10)
+	size := jsonv.Int(spec, "size", 10)
 	if size > 0 && len(list) > size {
 		list = list[:size]
 	}

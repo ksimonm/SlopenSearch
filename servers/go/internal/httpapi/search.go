@@ -299,13 +299,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	o := s.parseResolveParams(r, resolveOpts2{closedError: true})
+	o := s.parseResolveParams(r, specOpts{closedError: true})
 	var indices []*model.Index
 	if pitCtx != nil {
 		indices = []*model.Index{pitCtx.idx}
 	} else {
 		var apiErr2 *apierr.Error
-		indices, apiErr2 = s.resolveSpec2(name, o)
+		indices, apiErr2 = s.resolveSpec(name, o)
 		if apiErr2 != nil {
 			writeError(w, apiErr2)
 			return
@@ -412,7 +412,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				mapping.EnsureFieldTypes(vidx)
 			}()
 		}
-		if kerr := search.KnnParseCheck(bodyRaw); kerr != nil {
+		if kerr := search.CheckKnnClauses(bodyRaw); kerr != nil {
 			writeError(w, kerr)
 			return
 		}
@@ -441,8 +441,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			return
 		}
 	}
-	from := search.IntField(body, "from", 0)
-	size := search.IntField(body, "size", 10)
+	from := jsonv.Int(body, "from", 0)
+	size := jsonv.Int(body, "size", 10)
 	if v := r.URL.Query().Get("from"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
@@ -536,7 +536,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			obj, _ := ent.(map[string]any)
 			for pat, val := range obj {
 				f, _ := jsonv.ToFloat(val)
-				boosted, berr := s.resolveSpec2(pat, o)
+				boosted, berr := s.resolveSpec(pat, o)
 				if berr != nil {
 					writeError(w, berr)
 					return
@@ -726,7 +726,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			}
 			anyMapped := false
 			for _, idx := range indices {
-				if kerr := search.KnnUnsupportedSort(idx, sp.Field); kerr != nil {
+				if kerr := search.CheckKnnSort(idx, sp.Field); kerr != nil {
 					writeError(w, kerr)
 					return
 				}
@@ -812,7 +812,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	if after, ok := body["search_after"].([]any); ok && len(after) > 0 && len(searchSortSpecs) > 0 {
 		kept := matched[:0]
 		for _, h := range matched {
-			if search.HitAfterSearchAfter(h, searchSortSpecs, after) {
+			if search.IsAfter(h, searchSortSpecs, after) {
 				kept = append(kept, h)
 			}
 		}
@@ -828,119 +828,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		})
 	}
 	if sortedByField {
-		for _, sp := range searchSortSpecs {
-			if sp.Field == "_score" || sp.Field == "_doc" || sp.Field == "_id" || sp.Field == "_index" || sp.Field == "_script" || sp.Field == "_shard_doc" {
-				continue
-			}
-			for _, idx := range indices {
-				if sp.Field == "_geo_distance" {
-					def, ok := mapping.FieldDef(idx, sp.GeoField)
-					t, _ := def["type"].(string)
-					if (!ok || t != "geo_point") && !sp.GeoIgnore {
-						reason := "failed to find mapper for [" + sp.GeoField + "] for geo distance based sort"
-						writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
-							Reason: reason, Phase: "query",
-							RootCause: &apierr.Error{Type: "query_shard_exception", Reason: reason}})
-						return
-					}
-					continue
-				}
-				if sp.NestedPath != "" {
-					def, ok := mapping.FieldDef(idx, sp.NestedPath)
-					t, _ := def["type"].(string)
-					if !ok || t != "nested" {
-						reason := "[nested] failed to find nested object under path [" + sp.NestedPath + "]"
-						writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
-							Reason: reason, Phase: "query",
-							RootCause: &apierr.Error{Type: "query_shard_exception", Reason: reason}})
-						return
-					}
-				}
-				if sp.Mode == "avg" || sp.Mode == "sum" || sp.Mode == "median" {
-					if def, ok := mapping.FieldDef(idx, sp.Field); ok {
-						t, _ := def["type"].(string)
-						if !mapping.IsNumericType(t) && t != "date" {
-							reason := "we only support AVG, MEDIAN and SUM on number based fields"
-							writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
-								Reason: reason, Phase: "query",
-								RootCause: &apierr.Error{Type: "query_shard_exception", Reason: reason}})
-							return
-						}
-					}
-				}
-				if def, ok := mapping.FieldDef(idx, sp.Field); ok {
-					t, _ := def["type"].(string)
-					fd, _ := def["fielddata"].(bool)
-					if (t == "text" || t == "match_only_text") && !fd {
-						reason := "Text fields are not optimised for operations that require per-document field data like aggregations and sorting, so these operations are disabled by default. Please use a keyword field instead. Alternatively, set fielddata=true on [" + sp.Field + "] in order to load field data by uninverting the inverted index. Note that this can use significant memory."
-						writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
-							Reason: "all shards failed", Phase: "query",
-							RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason},
-							CausedBy:  &apierr.Error{Type: "illegal_argument_exception", Reason: reason}})
-						return
-					}
-					if t == "geo_shape" {
-						reason := "can't sort on geo_shape field without using specific sorting feature, like geo_distance"
-						writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
-							Reason: "all shards failed", Phase: "query",
-							RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason},
-							CausedBy:  &apierr.Error{Type: "illegal_argument_exception", Reason: reason}})
-						return
-					}
-					if t == "rank_feature" || t == "rank_features" {
-						reason := "[rank_feature] fields do not support sorting, scripting or aggregating"
-						writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
-							Reason: "all shards failed", Phase: "query",
-							RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason},
-							CausedBy:  &apierr.Error{Type: "illegal_argument_exception", Reason: reason}})
-						return
-					}
-				}
-				if err := search.CheckDocValuesLoadable(idx, sp.Field); err != nil {
-					writeError(w, err)
-					return
-				}
-			}
+		if err := search.SortHits(matched, searchSortSpecs, indices); err != nil {
+			writeError(w, err)
+			return
 		}
-		for i := range searchSortSpecs {
-			sp := &searchSortSpecs[i]
-			if sp.Field != "_script" {
-				continue
-			}
-			ctxName := "number_sort"
-			if sp.ScriptType == "string" {
-				ctxName = "string_sort"
-			}
-			cs, se, ae := search.PrepareScript(sp.ScriptRaw, ctxName)
-			if se != nil || ae != nil {
-				writeError(w, search.ScriptErrForShard(indices[0], se, ae, false))
-				return
-			}
-			sp.ScriptVals = map[string]any{}
-			for _, h := range matched {
-				v, rerr := cs.Run(search.NewQueryCtxForDoc(h.Idx, h.Id, h.Doc), search.RunOpts{Score: h.Score})
-				if rerr != nil {
-					writeError(w, search.ScriptShardError(h.Idx, rerr))
-					return
-				}
-				if ctxName == "number_sort" {
-					v = painless.F64(v)
-				}
-				sp.ScriptVals[h.Idx.Name+"\x00"+h.Id] = v
-			}
-		}
-		sort.SliceStable(matched, func(i, j int) bool {
-			for _, sp := range searchSortSpecs {
-				c := search.CompareSortSpec(matched[i], matched[j], sp)
-				if c != 0 {
-					if sp.Desc {
-						return c > 0
-					}
-					return c < 0
-				}
-			}
-			return false
-		})
 	}
 	trackScores, _ := body["track_scores"].(bool)
 	collapseFields := map[string]map[string]any{}
@@ -968,7 +859,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		scrollID = sid
 	}
 
-	srcIncludes, srcExcludes, omitSource, bodyHasSource := search.SourceFilterFromBody(body)
+	srcIncludes, srcExcludes, omitSource, bodyHasSource := search.ParseSourceFilter(body)
 	qIncludes, qExcludes, qOmit, qHas := sourceFilterFromQuery(r.URL.Query())
 	if qHas || qOmit {
 		srcIncludes, srcExcludes, omitSource = qIncludes, qExcludes, qOmit
@@ -1192,7 +1083,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				hitOmit = true
 			}
 		}
-		src := search.FilterSourceDoc(h.Doc, hitIncludes, hitExcludes)
+		src := search.FilterSource(h.Doc, hitIncludes, hitExcludes)
 		var scoreVal any = h.Score
 		if omitScores {
 			scoreVal = nil
@@ -1315,7 +1206,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 						if !found {
 							continue
 						}
-						if existing, done := out[name]; done && !search.KnnIsVectorField(h.Idx, name) {
+						if existing, done := out[name]; done && !search.IsKnnVectorField(h.Idx, name) {
 							if list, ok := existing.([]any); ok {
 								out[name] = append(list, vals...)
 								continue
@@ -1385,7 +1276,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				entry["fields"] = got
 			}
 		}
-		if slots := search.PercolateSlotsForHit(hitCtx, query); len(slots) > 0 {
+		if slots := search.PercolateSlots(hitCtx, query); len(slots) > 0 {
 			if existing, ok := entry["fields"].(map[string]any); ok {
 				existing["_percolator_document_slot"] = slots
 			} else {
@@ -1837,7 +1728,7 @@ func orderSearchResponse(resp map[string]any) ojson.Object {
 			seen[k] = true
 		}
 	}
-	for _, k := range mapping.SortedAnyKeys(resp) {
+	for _, k := range jsonv.SortedKeys(resp) {
 		if !seen[k] {
 			out = append(out, ojson.KV{k, resp[k]})
 		}

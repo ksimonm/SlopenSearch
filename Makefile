@@ -20,7 +20,7 @@ PYTEST := pytest -n $(JOBS) --dist loadfile --tb=$(TB)
 .DEFAULT_GOAL := help
 .PHONY: help go-up rust-up ref-up go-test rust-test ref-test go-score rust-score ref-score \
         ref-show ref-record \
-        go-dev rust-dev test go-logs rust-logs down
+        go-dev rust-dev go-unit test go-logs rust-logs down
 
 help: ## list targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -63,6 +63,9 @@ go-dev: ## run the Go server natively on :9291 (needs Go)
 
 rust-dev: ## run the Rust server natively on :9292 (needs Rust)
 	cd servers/rust && PORT=9292 cargo run --release
+
+go-unit: ## run the Go unit tests natively (needs Go)
+	cd servers/go && go test ./...
 
 test: ## run tests against any server: make test PORT=9291 [HOST=host.docker.internal] ARGS=...
 	$(RUN_TESTS) env OS_HOST=$(or $(HOST),host.docker.internal) OS_PORT=$(PORT) $(PYTEST) $(ARGS)

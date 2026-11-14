@@ -300,9 +300,6 @@ func ParseNanosAny(def map[string]any, s string) (int64, string, bool) {
 	return 0, "", false
 }
 
-// Pattern matches ISO-like dates as detected in dynamic mappings.
-var Pattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$`)
-
 // ParseMillis parses a number or a common ISO date string into epoch millis.
 func ParseMillis(v any) (float64, bool) {
 	if f, ok := jsonv.ToFloat(v); ok {

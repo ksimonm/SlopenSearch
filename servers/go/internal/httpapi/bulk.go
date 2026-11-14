@@ -17,22 +17,23 @@ import (
 )
 
 type bulkAction struct {
-	line      int
-	op        string
-	meta      map[string]any
-	indexName string
-	id        string
-	idGiven   bool
-	source    map[string]any
-	sourceErr *apierr.Error
+	line       int
+	op         string
+	meta       map[string]any
+	indexName  string
+	id         string
+	idGiven    bool
+	source     map[string]any
+	sourceErr  *apierr.Error
+	updateBody map[string]any
+	updateErr  *apierr.Error
+
 	// nonStdSource: the source line when it fails on a Jackson non-standard
 	// token; the item error depends on the target index and pipeline.
 	nonStdSource []byte
-	updateBody   map[string]any
-	updateErr    *apierr.Error
 }
 
-func (s *Server) handleBulkV2(w http.ResponseWriter, r *http.Request, pathIndex string) {
+func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, pathIndex string) {
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeError(w, apierr.BadRequest("failed to read bulk body"))
@@ -261,7 +262,7 @@ func (s *Server) bulkResolve(name string, requireAlias bool) (*model.Index, *api
 		}
 		return idx, nil
 	}
-	return s.resolveWriteTargetV2(name)
+	return s.resolveOrCreateWriteTarget(name)
 }
 
 func metaString(meta map[string]any, key string) string {
@@ -282,7 +283,7 @@ func metaInt(meta map[string]any, key string) (int64, bool) {
 	if !ok {
 		return 0, false
 	}
-	if n, ok := search.IntegerOf(v); ok {
+	if n, ok := jsonv.ToInt64(v); ok {
 		return n, true
 	}
 	if f, ok := jsonv.ToFloat(v); ok {
@@ -701,7 +702,7 @@ func bulkGetObject(idx *model.Index, id string, src map[string]any, seq int64, m
 	}
 	out := ojson.Object{{"_seq_no", seq}, {"_primary_term", int64(1)}, {"found", true}}
 	if idx.SourceEnabled() {
-		out = append(out, ojson.KV{"_source", search.FilterSourceDoc(src, includes, excludes)})
+		out = append(out, ojson.KV{"_source", search.FilterSource(src, includes, excludes)})
 	}
 	return out, true
 }
