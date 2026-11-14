@@ -111,6 +111,8 @@ func (s *Server) openPersistence(dir string) error {
 		return err
 	}
 	s.persist = p
+	p.pipelines = encodeNamedMaps(s.ingestPipelines)
+	p.scripts = encodeNamedMaps(s.scripts)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p.mu.Lock()
@@ -648,21 +650,18 @@ func (p *persister) appendFrame(body []byte) error {
 }
 
 // compactLocked writes the whole state as the next snapshot generation and
-// starts a new journal. Caller holds s.mu and p.mu.
+// starts a new journal. Caller holds s.mu and p.mu and has just encoded
+// p.pipelines and p.scripts.
 func (p *persister) compactLocked(s *Server) error {
-	p.global, p.pipelines, p.scripts = nil, nil, nil
-	p.indices = map[string]*idxPersistState{}
+	// pipelines and scripts as last encoded by the caller (their locks are not
+	// taken here, s.mu is held)
 	var buf pbuf
-	s.ingestMu.RLock()
 	buf.byte(recPipelines)
-	p.pipelines = encodeNamedMaps(s.ingestPipelines)
 	buf.bytes(p.pipelines)
-	s.ingestMu.RUnlock()
-	s.scriptsMu.RLock()
 	buf.byte(recScripts)
-	p.scripts = encodeNamedMaps(s.scripts)
 	buf.bytes(p.scripts)
-	s.scriptsMu.RUnlock()
+	p.global = nil
+	p.indices = map[string]*idxPersistState{}
 	p.diffLocked(s, &buf)
 
 	next := p.gen + 1

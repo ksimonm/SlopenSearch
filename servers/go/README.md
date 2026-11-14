@@ -1,7 +1,8 @@
 # SlopenSearch — Go implementation
 
 Standard library only (`net/http`, `encoding/json`), no third-party modules.
-Everything is in `package main`; the server keeps all data in memory.
+Everything is in `package main`; the server keeps all data in memory unless a data
+directory is configured (see [Persistence](#persistence)).
 
 ## Loop
 
@@ -41,6 +42,7 @@ reference with `make ref-up` and `curl localhost:9290/...`.
 | `search_pipelines.go`, `search_shards.go`, `shard_routing.go`, `field_caps.go` | search pipelines, `_search_shards`, routing, `_field_caps` |
 | `aggs.go`, `aggs_bucket.go`, `aggs_metric.go`, `aggs_significant.go`, `aggs_extra.go`, `suggest.go` | aggregations, suggesters |
 | `ingest.go`, `pipeline.go`, `ingest_processors.go`, `ingest_extra.go` | ingest pipelines and processors |
+| `persist.go` | opt-in durable state: snapshot + fsynced journal (`SLOP_DATA_DIR`) |
 | `cat.go`, `nodes.go`, `resp.go` | `_cat`, `_nodes`/`_cluster`, response formats (`filter_path`, YAML, ...) |
 | `pl_lex.go`, `pl_parse.go`, `pl_check.go`, `pl_interp.go` | Painless: lexer, parser, static type checks, interpreter |
 | `pl_value.go`, `pl_lib.go`, `pl_time.go`, `pl_regex.go` | Painless runtime values (Java semantics), class library, `java.time`, regex limit |
@@ -50,6 +52,38 @@ reference with `make ref-up` and `curl localhost:9290/...`.
 | `analysis.go`, `analysis_chain.go`, `analyze_api.go` | analyzers, analysis chains (index/global/inline components, settings validation), the `_analyze` API with `explain` |
 | `tokenizers.go`, `filters.go`, `filters_pattern.go`, `synonyms.go`, `charfilter.go`, `asciifold_table.go` | tokenizers, token filters, synonym filters, char filters with Lucene offset correction |
 | `jregex.go` | backtracking `java.util.regex` subset (lookaround, possessive, `\p{..}`) for pattern components |
+
+## Persistence
+
+Off by default. Set `SLOP_DATA_DIR` to a directory and the server stores its state
+there and reloads it on start:
+
+```bash
+SLOP_DATA_DIR=/tmp/slop-data PORT=9291 ./slopensearch
+```
+
+Durable: indices (settings incl. dynamic updates, mappings, aliases, open/closed state,
+UUID), documents with `_version`, `_seq_no`, `_primary_term` and routing, index/component/
+legacy templates, ingest and search pipelines, stored scripts, data streams and persistent
+cluster settings. Not durable, as in OpenSearch: transient cluster settings, scroll and
+PIT contexts, task results. Documents that were acknowledged but not refreshed are
+searchable after a restart (recovery refreshes).
+
+Every request that may change state is followed by a diff of the in-memory state against
+what was already stored; the difference is appended to `journal-<gen>` as one CRC-checked
+frame and fsynced before the response is sent, so acknowledged writes survive `kill -9`.
+On start (and when the journal outgrows the snapshot) the full state is written to
+`snapshot` (temp file, fsync, rename) and a new journal generation begins. One process
+per directory (`flock` on `<dir>/lock`). Code: `persist.go`.
+
+Running the restart suite natively:
+
+```bash
+cd servers/go && go build -o /tmp/slop-9291 . && cd ../..
+export OS_RESTART_CMD="SLOP_DATA_DIR=/tmp/slop-data PORT=9291 servers/restart.sh --signal KILL 9291 /tmp/slop-9291"
+sh -c "$OS_RESTART_CMD"   # first start
+OS_PORT=9291 .venv/bin/pytest tests/test_95_persistence.py
+```
 
 ## Rules
 
