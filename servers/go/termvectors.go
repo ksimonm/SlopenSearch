@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/model"
 )
 
 type tvToken struct {
@@ -19,7 +20,7 @@ type tvToken struct {
 
 // tvTokensIdx analyzes with the index's own analyzers when the field uses
 // one, falling back to the built-in term vector tokenizer.
-func tvTokensIdx(idx *Index, text, analyzer string) []tvToken {
+func tvTokensIdx(idx *model.Index, text, analyzer string) []tvToken {
 	if toks, ok := analysis.IndexAnalyzerTokens(analysisIndex(idx), analyzer, text); ok {
 		out := make([]tvToken, 0, len(toks))
 		for _, t := range toks {
@@ -66,7 +67,7 @@ func tvTokens(text, analyzer string) []tvToken {
 	return out
 }
 
-func fieldAnalyzer(idx *Index, field string, override string) string {
+func fieldAnalyzer(idx *model.Index, field string, override string) string {
 	if override != "" {
 		return override
 	}
@@ -83,7 +84,7 @@ func fieldAnalyzer(idx *Index, field string, override string) string {
 	return "standard"
 }
 
-func tvFieldStats(idx *Index, field string) map[string]any {
+func tvFieldStats(idx *model.Index, field string) map[string]any {
 	docCount, sumDocFreq, sumTTF := 0, 0, 0
 	analyzer := fieldAnalyzer(idx, field, "")
 	for _, id := range idx.Order {
@@ -109,7 +110,7 @@ func tvFieldStats(idx *Index, field string) map[string]any {
 	return map[string]any{"sum_doc_freq": sumDocFreq, "doc_count": docCount, "sum_ttf": sumTTF}
 }
 
-func tvIndexTermStats(idx *Index, field string) map[string]map[string]int {
+func tvIndexTermStats(idx *model.Index, field string) map[string]map[string]int {
 	out := map[string]map[string]int{}
 	analyzer := fieldAnalyzer(idx, field, "")
 	for _, id := range idx.Order {
@@ -138,7 +139,7 @@ func tvIndexTermStats(idx *Index, field string) map[string]map[string]int {
 	return out
 }
 
-func termVectorFor(idx *Index, field string, doc map[string]any, analyzer string, termStats, fieldStats, positions, offsets bool, filter map[string]any) map[string]any {
+func termVectorFor(idx *model.Index, field string, doc map[string]any, analyzer string, termStats, fieldStats, positions, offsets bool, filter map[string]any) map[string]any {
 	v, ok := fieldValue(doc, field)
 	if !ok {
 		return nil
@@ -251,7 +252,7 @@ func tvBoolParam(r *http.Request, body map[string]any, key string, def bool) boo
 	return def
 }
 
-func tvFields(r *http.Request, body map[string]any, idx *Index, doc map[string]any) []string {
+func tvFields(r *http.Request, body map[string]any, idx *model.Index, doc map[string]any) []string {
 	var fields []string
 	if v, ok := body["fields"]; ok {
 		switch t := v.(type) {
@@ -281,7 +282,7 @@ func tvFields(r *http.Request, body map[string]any, idx *Index, doc map[string]a
 	return fields
 }
 
-func (s *Server) termVectorResponse(r *http.Request, idx *Index, id string, doc map[string]any, artificial bool) map[string]any {
+func (s *Server) termVectorResponse(r *http.Request, idx *model.Index, id string, doc map[string]any, artificial bool) map[string]any {
 	body, _ := readJSON(r)
 	if body == nil {
 		body = map[string]any{}
@@ -349,7 +350,7 @@ func (s *Server) handleTermVectors(w http.ResponseWriter, r *http.Request, name,
 	writeJSON(w, 200, out)
 }
 
-func (s *Server) termVectorResponseWithBody(r *http.Request, idx *Index, id string, doc map[string]any, artificial bool, body map[string]any) map[string]any {
+func (s *Server) termVectorResponseWithBody(r *http.Request, idx *model.Index, id string, doc map[string]any, artificial bool, body map[string]any) map[string]any {
 	termStats := tvBoolParam(r, body, "term_statistics", false)
 	fieldStats := tvBoolParam(r, body, "field_statistics", true)
 	positions := tvBoolParam(r, body, "positions", true)

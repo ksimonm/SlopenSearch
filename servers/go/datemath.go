@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/apierr"
 )
 
 type dateResolution int
@@ -316,16 +318,16 @@ func parseRangeLocation(tz string) (*time.Location, error) {
 	return time.LoadLocation(tz)
 }
 
-func rangeDateParseError(value, queryFormat string, def map[string]any) *apiError {
+func rangeDateParseError(value, queryFormat string, def map[string]any) *apierr.Error {
 	format := queryFormat
 	if format == "" {
 		format = dateFormatOf(def)
 	}
-	return &apiError{Type: "parse_exception", Status: 400,
+	return &apierr.Error{Type: "parse_exception", Status: 400,
 		Reason: fmt.Sprintf("failed to parse date field [%s] with format [%s]", value, format)}
 }
 
-func parseRangeDateBound(def map[string]any, v any, tz, queryFormat string, roundUp bool) (any, *apiError) {
+func parseRangeDateBound(def map[string]any, v any, tz, queryFormat string, roundUp bool) (any, *apierr.Error) {
 	if m, ok := v.(map[string]any); ok {
 		if mv, ok := m["value"]; ok {
 			v = mv

@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/ojson"
 )
 
 // Go's HTTP server rejects a request line whose path holds an invalid
@@ -197,5 +199,5 @@ func (s *Server) writeBadEscape(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.Header().Set("Allow", strings.Join(list, ","))
-	writeJSON(w, 405, orderedJSON{{"error", "Unexpected HTTP method, allowed: [" + strings.Join(list, ", ") + "]"}, {"status", 405}})
+	writeJSON(w, 405, ojson.Object{{"error", "Unexpected HTTP method, allowed: [" + strings.Join(list, ", ") + "]"}, {"status", 405}})
 }

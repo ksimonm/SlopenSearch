@@ -7,6 +7,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/settings"
 )
 
 func (s *Server) handleSearchPipelineRoute(w http.ResponseWriter, r *http.Request, segs []string) bool {
@@ -17,7 +22,7 @@ func (s *Server) handleSearchPipelineRoute(w http.ResponseWriter, r *http.Reques
 	switch r.Method {
 	case http.MethodPut:
 		if id == "" {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "pipeline id is missing"})
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "pipeline id is missing"})
 			return true
 		}
 		body, apiErr := readJSON(r)
@@ -63,7 +68,7 @@ func (s *Server) handleSearchPipelineRoute(w http.ResponseWriter, r *http.Reques
 		delete(s.searchPipelines, id)
 		s.mu.Unlock()
 		if !ok {
-			writeError(w, &apiError{Type: "resource_not_found_exception", Status: 404,
+			writeError(w, &apierr.Error{Type: "resource_not_found_exception", Status: 404,
 				Reason: "pipeline [" + id + "] is missing"})
 			return true
 		}
@@ -74,20 +79,20 @@ func (s *Server) handleSearchPipelineRoute(w http.ResponseWriter, r *http.Reques
 	return true
 }
 
-func validateSearchPipeline(body map[string]any) *apiError {
-	check := func(key string, allowed map[string]bool) *apiError {
+func validateSearchPipeline(body map[string]any) *apierr.Error {
+	check := func(key string, allowed map[string]bool) *apierr.Error {
 		list, _ := body[key].([]any)
 		for _, raw := range list {
 			proc, _ := raw.(map[string]any)
 			for typ, cfg := range proc {
 				if !allowed[typ] {
-					return &apiError{Type: "illegal_argument_exception", Status: 400,
+					return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 						Reason: "Invalid processor type " + typ}
 				}
 				if typ == "filter_query" {
 					m, _ := cfg.(map[string]any)
 					if _, ok := m["query"]; !ok {
-						return &apiError{Type: "illegal_argument_exception", Status: 400,
+						return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 							Reason: "Did not specify the query property in processor of type filter_query"}
 					}
 				}
@@ -104,7 +109,7 @@ func validateSearchPipeline(body map[string]any) *apiError {
 	})
 }
 
-func (s *Server) resolveSearchPipeline(r *http.Request, body map[string]any, indices []*Index) (map[string]any, *apiError) {
+func (s *Server) resolveSearchPipeline(r *http.Request, body map[string]any, indices []*model.Index) (map[string]any, *apierr.Error) {
 	var spec any
 	if qp := r.URL.Query().Get("search_pipeline"); qp != "" {
 		spec = qp
@@ -112,7 +117,7 @@ func (s *Server) resolveSearchPipeline(r *http.Request, body map[string]any, ind
 		spec = v
 	}
 	if spec == nil && len(indices) > 0 {
-		if v, ok := findSetting(indices[0].Settings, "search.default_pipeline"); ok {
+		if v, ok := settings.Find(indices[0].Settings, "search.default_pipeline"); ok {
 			spec = settingsValueString(v)
 		}
 	}
@@ -128,7 +133,7 @@ func (s *Server) resolveSearchPipeline(r *http.Request, body map[string]any, ind
 		}
 		p, ok := s.searchPipelines[t]
 		if !ok {
-			return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+			return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "Pipeline " + t + " is not defined"}
 		}
 		return p, nil
@@ -172,7 +177,7 @@ func normalizeSearchQuery(v any) any {
 	return v
 }
 
-func applySearchRequestProcessors(body map[string]any, pipe map[string]any, verbose bool) (*searchPipeState, []any, *apiError) {
+func applySearchRequestProcessors(body map[string]any, pipe map[string]any, verbose bool) (*searchPipeState, []any, *apierr.Error) {
 	st := &searchPipeState{originalSize: intField(body, "size", 10)}
 	if _, ok := body["size"]; ok {
 		st.hasOriginal = true
@@ -203,13 +208,13 @@ func applySearchRequestProcessors(body map[string]any, pipe map[string]any, verb
 				}
 				out["query"] = body["query"]
 			case "oversample":
-				factor, ok := toFloat(c["sample_factor"])
+				factor, ok := jsonv.ToFloat(c["sample_factor"])
 				if !ok {
-					return st, results, &apiError{Type: "parse_exception", Status: 400,
+					return st, results, &apierr.Error{Type: "parse_exception", Status: 400,
 						Reason: "[sample_factor] required property is missing"}
 				}
 				if factor < 1 {
-					return st, results, &apiError{Type: "parse_exception", Status: 400,
+					return st, results, &apierr.Error{Type: "parse_exception", Status: 400,
 						Reason: "[sample_factor] Value must be >= 1.0"}
 				}
 				sz := intField(body, "size", 10)
@@ -231,7 +236,7 @@ func applySearchRequestProcessors(body map[string]any, pipe map[string]any, verb
 
 var searchScriptAssignRE = regexp.MustCompile(`ctx\._source(?:\.([A-Za-z_][A-Za-z0-9_.]*)|\[['"]([^'"]+)['"]\])\s*=\s*([^;]+)`)
 
-func applySearchScript(body map[string]any, src string) *apiError {
+func applySearchScript(body map[string]any, src string) *apierr.Error {
 	for _, m := range searchScriptAssignRE.FindAllStringSubmatch(src, -1) {
 		key := m[1]
 		if key == "" {
@@ -253,7 +258,7 @@ func applySearchScript(body map[string]any, src string) *apiError {
 	return nil
 }
 
-func applySearchResponseProcessors(resp map[string]any, pipe map[string]any, st *searchPipeState) *apiError {
+func applySearchResponseProcessors(resp map[string]any, pipe map[string]any, st *searchPipeState) *apierr.Error {
 	hitsObj, _ := resp["hits"].(map[string]any)
 	hits, _ := hitsObj["hits"].([]any)
 	for _, h := range hits {
@@ -284,7 +289,7 @@ func applySearchResponseProcessors(resp map[string]any, pipe map[string]any, st 
 							continue
 						}
 						id, _ := hm["_id"].(string)
-						return &apiError{Type: "illegal_argument_exception", Status: 400,
+						return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 							Reason: "Document with id " + id + " is missing field " + field}
 					}
 					src[target] = v
@@ -292,12 +297,12 @@ func applySearchResponseProcessors(resp map[string]any, pipe map[string]any, st 
 				}
 			case "truncate_hits":
 				target := 0
-				if v, ok := toFloat(c["target_size"]); ok {
+				if v, ok := jsonv.ToFloat(c["target_size"]); ok {
 					target = int(v)
 				} else if st != nil && st.hasOriginal {
 					target = st.originalSize
 				} else {
-					return &apiError{Type: "illegal_state_exception", Status: 500,
+					return &apierr.Error{Type: "illegal_state_exception", Status: 500,
 						Reason: "Must specify target_size unless an earlier processor set original_size"}
 				}
 				if target < len(hits) {

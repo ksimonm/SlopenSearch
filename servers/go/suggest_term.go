@@ -6,7 +6,10 @@ import (
 	"strings"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
 )
 
@@ -34,19 +37,19 @@ func osaDistance(a, b []rune) int {
 	return d[len(a)][len(b)]
 }
 
-func suggestShardError(idx *Index, reason string) *apiError {
-	leaf := orderedJSON{{"type", "illegal_argument_exception"}, {"reason", reason}}
-	top := orderedJSON{{"type", "illegal_argument_exception"}, {"reason", reason}, {"caused_by", leaf}}
+func suggestShardError(idx *model.Index, reason string) *apierr.Error {
+	leaf := ojson.Object{{"type", "illegal_argument_exception"}, {"reason", reason}}
+	top := ojson.Object{{"type", "illegal_argument_exception"}, {"reason", reason}, {"caused_by", leaf}}
 	name := ""
 	if idx != nil {
 		name = idx.Name
 	}
 	f := &shardFailure{status: 400, index: name, root: leaf, shard: leaf, top: top}
-	return &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed", Shard: f}
+	return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed", Shard: f}
 }
 
-func suggestIllegal(reason string) *apiError {
-	return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: reason}
+func suggestIllegal(reason string) *apierr.Error {
+	return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: reason}
 }
 
 var termSuggestOptions = map[string]bool{
@@ -62,18 +65,18 @@ type termCand struct {
 	freq  int
 }
 
-func termSuggester(spec, body map[string]any, indices []*Index, globalText any) ([]any, *apiError) {
+func termSuggester(spec, body map[string]any, indices []*model.Index, globalText any) ([]any, *apierr.Error) {
 	for k := range body {
 		if !termSuggestOptions[k] {
-			return nil, &apiError{Type: "parsing_exception", Status: 400, Reason: "suggester[term] doesn't support field [" + k + "]"}
+			return nil, &apierr.Error{Type: "parsing_exception", Status: 400, Reason: "suggester[term] doesn't support field [" + k + "]"}
 		}
 	}
 	field, ok := toString(body["field"])
 	if !ok || field == "" {
-		return nil, &apiError{Type: "parse_exception", Status: 400, Reason: "the required field option [field] is missing"}
+		return nil, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "the required field option [field] is missing"}
 	}
 	num := func(k string, def float64) float64 {
-		if n, ok := toFloat(body[k]); ok {
+		if n, ok := jsonv.ToFloat(body[k]); ok {
 			return n
 		}
 		return def
@@ -122,7 +125,7 @@ func termSuggester(spec, body map[string]any, indices []*Index, globalText any) 
 	minWordLen := int(num("min_word_length", 4))
 	minDocFreq := num("min_doc_freq", 0)
 
-	var idx *Index
+	var idx *model.Index
 	if len(indices) > 0 {
 		idx = indices[0]
 	}
@@ -218,9 +221,9 @@ func termSuggester(spec, body map[string]any, indices []*Index, globalText any) 
 		}
 		opts := make([]any, 0, len(options))
 		for _, c := range options {
-			opts = append(opts, orderedJSON{{"text", c.text}, {"score", painless.JSONFloat32(float32(c.score))}, {"freq", c.freq}})
+			opts = append(opts, ojson.Object{{"text", c.text}, {"score", painless.JSONFloat32(float32(c.score))}, {"freq", c.freq}})
 		}
-		entries = append(entries, orderedJSON{{"text", tok.Term}, {"offset", tok.Start}, {"length", tok.End - tok.Start}, {"options", opts}})
+		entries = append(entries, ojson.Object{{"text", tok.Term}, {"offset", tok.Start}, {"length", tok.End - tok.Start}, {"options", opts}})
 	}
 	return entries, nil
 }

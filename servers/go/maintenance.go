@@ -4,6 +4,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/model"
 )
 
 // ----------------------------------------------------------- refresh/flush
@@ -106,7 +109,7 @@ func emptyMetric(name string) map[string]any {
 	return map[string]any{}
 }
 
-func (s *Server) indexMetrics(idx *Index, requested map[string]bool) map[string]any {
+func (s *Server) indexMetrics(idx *model.Index, requested map[string]bool) map[string]any {
 	all := requested == nil
 	out := map[string]any{}
 	for _, name := range statsMetricNames {
@@ -156,7 +159,7 @@ func (s *Server) handleStatsAPI(w http.ResponseWriter, r *http.Request, spec, me
 				}
 			}
 			if !known {
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "request [" + r.URL.Path + "] contains unrecognized metric: [" + m + "]"})
 				return
 			}
@@ -170,7 +173,7 @@ func (s *Server) handleStatsAPI(w http.ResponseWriter, r *http.Request, spec, me
 	switch level {
 	case "cluster", "indices", "shards":
 	default:
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "level parameter must be one of [cluster] or [indices] or [shards] but was [" + level + "]"})
 		return
 	}

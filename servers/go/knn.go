@@ -9,6 +9,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
 )
 
 // ---------------------------------------------------------------------------
@@ -22,14 +26,14 @@ var knnFieldParams = map[string]bool{
 	"mode": true, "compression_level": true, "doc_values": true, "model_id": true,
 }
 
-func knnValidation(msg string) *apiError {
+func knnValidation(msg string) *apierr.Error {
 	r := "Validation Failed: 1: " + msg + ";"
 	return wrappedMappingError(r, "validation_exception")
 }
 
 // knnIndexMappings validates and normalizes knn_vector fields of an index
 // that has index.knn enabled.
-func knnIndexMappings(props map[string]any) *apiError {
+func knnIndexMappings(props map[string]any) *apierr.Error {
 	for _, name := range sortedAnyKeys(props) {
 		def, ok := props[name].(map[string]any)
 		if !ok {
@@ -50,7 +54,7 @@ func knnIndexMappings(props map[string]any) *apiError {
 	return nil
 }
 
-func knnValidateField(name string, def map[string]any) *apiError {
+func knnValidateField(name string, def map[string]any) *apierr.Error {
 	for _, k := range sortedAnyKeys(def) {
 		if !knnFieldParams[k] {
 			return wrappedMappingError(fmt.Sprintf("unknown parameter [%s] on mapper [%s] of type [knn_vector]", k, name), "mapper_parsing_exception")
@@ -71,7 +75,7 @@ func knnValidateField(name string, def map[string]any) *apiError {
 		}
 		dim = n
 	default:
-		if f, ok := toFloat(d); ok {
+		if f, ok := jsonv.ToFloat(d); ok {
 			dim = int64(f)
 		}
 	}
@@ -216,7 +220,7 @@ type knnFieldInfo struct {
 	nested                  bool
 }
 
-func knnFieldDef(idx *Index, path string) (map[string]any, bool) {
+func knnFieldDef(idx *model.Index, path string) (map[string]any, bool) {
 	props, _ := idx.Mappings["properties"].(map[string]any)
 	parts := strings.Split(path, ".")
 	nested := false
@@ -238,7 +242,7 @@ func knnFieldDef(idx *Index, path string) (map[string]any, bool) {
 
 func knnInfo(def map[string]any) knnFieldInfo {
 	fi := knnFieldInfo{space: "l2", engine: "faiss", dataType: "float"}
-	if f, ok := toFloat(def["dimension"]); ok {
+	if f, ok := jsonv.ToFloat(def["dimension"]); ok {
 		fi.dim = int(f)
 	}
 	if dt, ok := def["data_type"].(string); ok {
@@ -318,7 +322,7 @@ func knnDistanceScore(space string, q, d []float64) (float64, float64) {
 
 type knnCacheEntry struct {
 	body   map[string]any
-	idx    *Index
+	idx    *model.Index
 	scores map[string]float64
 }
 
@@ -335,7 +339,7 @@ func floatList(v any) ([]float64, bool) {
 	}
 	out := make([]float64, 0, len(arr))
 	for _, e := range arr {
-		f, ok := toFloat(e)
+		f, ok := jsonv.ToFloat(e)
 		if !ok {
 			return nil, false
 		}
@@ -356,7 +360,7 @@ func (c *queryCtx) docVector(field string) ([]float64, bool) {
 	}
 	var dv []float64
 	for _, e := range vals {
-		f, ok := toFloat(e)
+		f, ok := jsonv.ToFloat(e)
 		if !ok {
 			return nil, false
 		}
@@ -365,11 +369,11 @@ func (c *queryCtx) docVector(field string) ([]float64, bool) {
 	return dv, true
 }
 
-func knnParseErr(reason string) *apiError {
-	return &apiError{Type: "parsing_exception", Reason: reason, Status: 400}
+func knnParseErr(reason string) *apierr.Error {
+	return &apierr.Error{Type: "parsing_exception", Reason: reason, Status: 400}
 }
 
-func (c *queryCtx) evalKnnField(field string, p map[string]any) (bool, float64, *apiError) {
+func (c *queryCtx) evalKnnField(field string, p map[string]any) (bool, float64, *apierr.Error) {
 	vec, ok := floatList(p["vector"])
 	if !ok {
 		return false, 0, knnParseErr("[knn] failed to parse field [vector]")
@@ -384,10 +388,10 @@ func (c *queryCtx) evalKnnField(field string, p map[string]any) (bool, float64, 
 		}
 	}
 	if set != 1 {
-		return false, 0, errBad("[knn] requires exactly one of k, distance or score to be set")
+		return false, 0, apierr.BadRequest("[knn] requires exactly one of k, distance or score to be set")
 	}
 	boost := 1.0
-	if b, ok := toFloat(p["boost"]); ok {
+	if b, ok := jsonv.ToFloat(p["boost"]); ok {
 		boost = b
 	}
 	def, _ := knnFieldDef(c.idx, field)
@@ -402,10 +406,10 @@ func (c *queryCtx) evalKnnField(field string, p map[string]any) (bool, float64, 
 	}
 	filter, _ := p["filter"].(map[string]any)
 	if hasK {
-		kf, _ := toFloat(p["k"])
+		kf, _ := jsonv.ToFloat(p["k"])
 		k := int(kf)
 		if k <= 0 || k > 10000 {
-			return false, 0, errBad("[knn] requires k to be in the range (0, 10000]")
+			return false, 0, apierr.BadRequest("[knn] requires k to be in the range (0, 10000]")
 		}
 		if c.nestedRoot != nil {
 			return c.knnNestedTopK(p, k, filter, score, boost)
@@ -431,13 +435,13 @@ func (c *queryCtx) evalKnnField(field string, p map[string]any) (bool, float64, 
 		return false, 0, nil
 	}
 	if hasMin {
-		ms, _ := toFloat(p["min_score"])
+		ms, _ := jsonv.ToFloat(p["min_score"])
 		if ms <= 0 {
-			return false, 0, errBad("[knn] requires minScore to be greater than 0")
+			return false, 0, apierr.BadRequest("[knn] requires minScore to be greater than 0")
 		}
 		return s >= ms, s * boost, nil
 	}
-	md, _ := toFloat(p["max_distance"])
+	md, _ := jsonv.ToFloat(p["max_distance"])
 	if filter == nil && fi.engine == "faiss" {
 		// faiss range search excludes the boundary; exact (filtered) search keeps it
 		return d < md, s * boost, nil
@@ -446,7 +450,7 @@ func (c *queryCtx) evalKnnField(field string, p map[string]any) (bool, float64, 
 }
 
 func (c *queryCtx) knnTopK(p map[string]any, field string, k int, filter map[string]any,
-	score func(*queryCtx) (bool, float64, float64)) (map[string]float64, *apiError) {
+	score func(*queryCtx) (bool, float64, float64)) (map[string]float64, *apierr.Error) {
 	key := reflect.ValueOf(p).Pointer()
 	knnCacheMu.Lock()
 	for _, e := range knnCache[key] {

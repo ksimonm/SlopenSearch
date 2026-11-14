@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+
+	"slopensearch/internal/apierr"
 )
 
 func fieldCapsCollect(props map[string]any, prefix string, out map[string]map[string]any) {
@@ -93,7 +95,7 @@ func (s *Server) handleFieldCapsImpl(w http.ResponseWriter, r *http.Request, ind
 	}
 	requested := fieldCapsFields(r)
 	if len(requested) == 0 {
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "specified fields can't be null or empty"})
 		return
 	}

@@ -5,6 +5,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/model"
 )
 
 var knownMappingBodyKeys = map[string]bool{
@@ -43,7 +46,7 @@ func (s *Server) getMappingAPI(w http.ResponseWriter, r *http.Request, spec, fie
 	writeJSON(w, 200, out)
 }
 
-func fieldMappings(idx *Index, spec string, includeDefaults bool) map[string]any {
+func fieldMappings(idx *model.Index, spec string, includeDefaults bool) map[string]any {
 	leaves := []fieldLeaf{}
 	if props, ok := idx.Mappings["properties"].(map[string]any); ok {
 		collectLeaves(props, "", &leaves)
@@ -146,7 +149,7 @@ func (s *Server) putMappingAPI(w http.ResponseWriter, r *http.Request, spec stri
 	}
 	for k := range body {
 		if !knownMappingBodyKeys[k] {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "Types cannot be provided in put mapping requests"})
 			return
 		}
@@ -162,13 +165,13 @@ func (s *Server) putMappingAPI(w http.ResponseWriter, r *http.Request, spec stri
 	if props, ok := body["properties"].(map[string]any); ok {
 		if err := expandDottedProperties(props); err != nil {
 			reason := err.Reason
-			writeError(w, &apiError{Type: "mapper_parsing_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 				Reason:   "Failed to parse mapping [_doc]: " + reason,
-				CausedBy: &apiError{Type: "illegal_argument_exception", Reason: reason}})
+				CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: reason}})
 			return
 		}
 		if err := validateProps(props); err != nil {
-			writeError(w, &apiError{Type: "mapper_parsing_exception", Status: 400, Reason: err.Reason})
+			writeError(w, &apierr.Error{Type: "mapper_parsing_exception", Status: 400, Reason: err.Reason})
 			return
 		}
 		normalizeKnnVectors(props)
@@ -182,7 +185,7 @@ func (s *Server) putMappingAPI(w http.ResponseWriter, r *http.Request, spec stri
 			switch k {
 			case "enabled", "includes", "excludes", "include", "exclude":
 			default:
-				writeError(w, &apiError{Type: "mapper_parsing_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 					Reason: fmt.Sprintf("unknown parameter [%s] on mapper [_source] of type [null]", k)})
 				return
 			}
@@ -203,7 +206,7 @@ func (s *Server) putMappingAPI(w http.ResponseWriter, r *http.Request, spec stri
 				}
 				newReq, _ := reqRaw.(bool)
 				if oldReq != newReq {
-					writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+					writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 						Reason: "Mapper for [_routing] conflicts with existing mapper:\n\tCannot update parameter [required] from [" + strconv.FormatBool(oldReq) + "] to [" + strconv.FormatBool(newReq) + "]"})
 					return
 				}
@@ -237,7 +240,7 @@ func (s *Server) putMappingAPI(w http.ResponseWriter, r *http.Request, spec stri
 				}
 				newBool, _ := newEnabled.(bool)
 				if oldEnabled != newBool {
-					writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+					writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 						Reason: "Mapper for [_source] conflicts with existing mapper:\n\tCannot update parameter [enabled] from [" + strconv.FormatBool(oldEnabled) + "] to [" + strconv.FormatBool(newBool) + "]"})
 					return
 				}
@@ -266,7 +269,7 @@ func (s *Server) putMappingAPI(w http.ResponseWriter, r *http.Request, spec stri
 
 // mergeMappingChecked merges new mapping properties into existing ones,
 // returning OpenSearch-compatible conflict errors.
-func mergeMappingChecked(existing, incoming map[string]any) *apiError {
+func mergeMappingChecked(existing, incoming map[string]any) *apierr.Error {
 	for name, rawNew := range incoming {
 		newDef, ok := rawNew.(map[string]any)
 		if !ok {
@@ -321,28 +324,28 @@ func mapperParamDefault(typ, param string) (any, bool) {
 	return nil, false
 }
 
-func mergeFieldDef(name string, oldDef, newDef map[string]any) *apiError {
+func mergeFieldDef(name string, oldDef, newDef map[string]any) *apierr.Error {
 	oldType, _ := oldDef["type"].(string)
 	newType, _ := newDef["type"].(string)
 	if oldType == "alias" && newType != "alias" {
-		return errBad("Cannot merge a field alias mapping [" + name + "] with a mapping that is not for a field alias.")
+		return apierr.BadRequest("Cannot merge a field alias mapping [" + name + "] with a mapping that is not for a field alias.")
 	}
 	if newType == "alias" && oldType != "alias" {
-		return errBad("Cannot merge a field mapping [" + name + "] with a mapping that is not for a field alias.")
+		return apierr.BadRequest("Cannot merge a field mapping [" + name + "] with a mapping that is not for a field alias.")
 	}
 	oldObj, oldNested := fieldObjectShape(oldDef)
 	newObj, newNested := fieldObjectShape(newDef)
 	if oldObj && newObj {
 		if oldNested != newNested {
 			if oldNested {
-				return errBad("cannot change object mapping from nested to non-nested")
+				return apierr.BadRequest("cannot change object mapping from nested to non-nested")
 			}
-			return errBad("cannot change object mapping from non-nested to nested")
+			return apierr.BadRequest("cannot change object mapping from non-nested to nested")
 		}
 		if oe, hasOld := oldDef["enabled"].(bool); hasOld {
 			ne, hasNew := newDef["enabled"].(bool)
 			if hasNew && oe != ne {
-				return &apiError{Type: "mapper_exception", Status: 500,
+				return &apierr.Error{Type: "mapper_exception", Status: 500,
 					Reason: "the [enabled] parameter can't be updated for the object mapping [" + name + "]"}
 			}
 		}
@@ -354,10 +357,10 @@ func mergeFieldDef(name string, oldDef, newDef map[string]any) *apiError {
 			}
 		}
 	} else if oldObj != newObj {
-		return errBad("can't merge a non object mapping [" + name + "] with an object mapping")
+		return apierr.BadRequest("can't merge a non object mapping [" + name + "] with an object mapping")
 	}
 	if newType != "" && oldType != "" && newType != oldType {
-		return errBad("mapper [" + name + "] cannot be changed from type [" + oldType + "] to [" + newType + "]")
+		return apierr.BadRequest("mapper [" + name + "] cannot be changed from type [" + oldType + "] to [" + newType + "]")
 	}
 	effType := oldType
 	if effType == "" {
@@ -384,7 +387,7 @@ func mergeFieldDef(name string, oldDef, newDef map[string]any) *apiError {
 			newVal = def
 		}
 		if settingsValueString(oldVal) != settingsValueString(newVal) {
-			return &apiError{Type: "illegal_argument_exception", Status: 400,
+			return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "Mapper for [" + name + "] conflicts with existing mapper:\n\tCannot update parameter [" + param + "] from [" + settingsValueString(oldVal) + "] to [" + settingsValueString(newVal) + "]"}
 		}
 	}

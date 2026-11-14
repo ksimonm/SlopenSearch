@@ -1,9 +1,12 @@
 package main
 
 import (
-	"slopensearch/internal/painless"
-
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/expressions"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/ojson"
+	"slopensearch/internal/painless"
 )
 
 // Glue between the scripting engines and the APIs that run scripts
@@ -28,7 +31,7 @@ func (s *scriptSpec) errName() string {
 
 // parseScriptSpec reads a script given as a string or an object and
 // resolves stored scripts.
-func parseScriptSpec(raw any) (*scriptSpec, *apiError) {
+func parseScriptSpec(raw any) (*scriptSpec, *apierr.Error) {
 	switch t := raw.(type) {
 	case string:
 		return &scriptSpec{src: t, lang: "painless", params: map[string]any{}}, nil
@@ -43,14 +46,14 @@ func parseScriptSpec(raw any) (*scriptSpec, *apiError) {
 		}
 		id, hasID := t["id"].(string)
 		if hasSrc && hasID {
-			return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+			return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason:   "[script] failed to parse field [source]",
-				CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "must only use one of [source, id] when specifying a script"}}
+				CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "must only use one of [source, id] when specifying a script"}}
 		}
 		lang, hasLang := t["lang"].(string)
 		if hasID {
 			if hasLang {
-				return nil, errBad("illegally specified <lang> for a stored script")
+				return nil, apierr.BadRequest("illegally specified <lang> for a stored script")
 			}
 			spec.id = id
 			sc, err := storedScript(id)
@@ -74,15 +77,15 @@ func parseScriptSpec(raw any) (*scriptSpec, *apiError) {
 	return nil, errParsing("unexpected token, expected a script")
 }
 
-func storedScript(id string) (map[string]any, *apiError) {
+func storedScript(id string) (map[string]any, *apierr.Error) {
 	if globalServer == nil {
-		return nil, &apiError{Type: "resource_not_found_exception", Status: 404, Reason: "unable to find script [" + id + "] in cluster state"}
+		return nil, &apierr.Error{Type: "resource_not_found_exception", Status: 404, Reason: "unable to find script [" + id + "] in cluster state"}
 	}
 	globalServer.scriptsMu.RLock()
 	sc, ok := globalServer.scripts[id]
 	globalServer.scriptsMu.RUnlock()
 	if !ok {
-		return nil, &apiError{Type: "resource_not_found_exception", Status: 404,
+		return nil, &apierr.Error{Type: "resource_not_found_exception", Status: 404,
 			Reason: "unable to find script [" + id + "] in cluster state"}
 	}
 	return sc, nil
@@ -94,19 +97,19 @@ var expressionContexts = map[string]bool{
 }
 
 // checkScriptLang rejects languages that cannot run in a context.
-func checkScriptLang(spec *scriptSpec, ctxName string) *apiError {
+func checkScriptLang(spec *scriptSpec, ctxName string) *apierr.Error {
 	switch spec.lang {
 	case "painless":
 		return nil
 	case "expression":
 		if !expressionContexts[ctxName] {
-			return errBad("expression engine does not know how to handle script context [" + ctxName + "]")
+			return apierr.BadRequest("expression engine does not know how to handle script context [" + ctxName + "]")
 		}
 		return nil
 	case "mustache":
-		return errBad("mustache engine does not know how to handle context [" + ctxName + "]")
+		return apierr.BadRequest("mustache engine does not know how to handle context [" + ctxName + "]")
 	}
-	return errBad("script_lang not supported [" + spec.lang + "]")
+	return apierr.BadRequest("script_lang not supported [" + spec.lang + "]")
 }
 
 // compilePainless compiles a painless spec for a context.
@@ -126,12 +129,12 @@ func scriptParams(p map[string]any) *painless.Map {
 
 // shardFailure is a pre-rendered search_phase_execution_exception.
 type shardFailure struct {
-	raw    orderedJSON // complete response body, when set
+	raw    ojson.Object // complete response body, when set
 	status int
 	index  string
-	root   orderedJSON
-	shard  orderedJSON
-	top    orderedJSON
+	root   ojson.Object
+	shard  ojson.Object
+	top    ojson.Object
 	phase  string
 }
 
@@ -139,7 +142,7 @@ type shardFailure struct {
 func (f *shardFailure) StatusCode() int   { return f.status }
 func (f *shardFailure) ResponseBody() any { return f.body() }
 
-func (f *shardFailure) body() orderedJSON {
+func (f *shardFailure) body() ojson.Object {
 	if f.raw != nil {
 		return f.raw
 	}
@@ -147,13 +150,13 @@ func (f *shardFailure) body() orderedJSON {
 	if phase == "" {
 		phase = "query"
 	}
-	errObj := orderedJSON{
+	errObj := ojson.Object{
 		{"root_cause", []any{f.root}},
 		{"type", "search_phase_execution_exception"},
 		{"reason", "all shards failed"},
 		{"phase", phase},
 		{"grouped", true},
-		{"failed_shards", []any{orderedJSON{
+		{"failed_shards", []any{ojson.Object{
 			{"shard", 0},
 			{"index", f.index},
 			{"node", nodeID},
@@ -161,30 +164,30 @@ func (f *shardFailure) body() orderedJSON {
 		}}},
 		{"caused_by", f.top},
 	}
-	return orderedJSON{{"error", errObj}, {"status", f.status}}
+	return ojson.Object{{"error", errObj}, {"status", f.status}}
 }
 
 // scriptShardError wraps a script exception raised while executing a query
 // phase script.
-func scriptShardError(idx *Index, se *plScriptErr) *apiError {
+func scriptShardError(idx *model.Index, se *plScriptErr) *apierr.Error {
 	f := &shardFailure{status: 400, index: idx.Name, root: se.object(false), shard: se.object(true), top: se.object(true)}
-	return &apiError{Type: "script_exception", Status: 400, Reason: "script error", Shard: f}
+	return &apierr.Error{Type: "script_exception", Status: 400, Reason: "script error", Shard: f}
 }
 
 // scriptQueryCompileError wraps a compile error of a query script, which
 // fails while the shard creates the query.
-func scriptQueryCompileError(idx *Index, se *plScriptErr) *apiError {
+func scriptQueryCompileError(idx *model.Index, se *plScriptErr) *apierr.Error {
 	if !se.compile {
 		return scriptShardError(idx, se)
 	}
-	shard := orderedJSON{{"type", "query_shard_exception"}, {"reason", "failed to create query: compile error"},
+	shard := ojson.Object{{"type", "query_shard_exception"}, {"reason", "failed to create query: compile error"},
 		{"index", idx.Name}, {"index_uuid", idx.UUID}, {"caused_by", se.object(true)}}
 	f := &shardFailure{status: 400, index: idx.Name, root: se.object(false), shard: shard, top: se.object(true)}
-	return &apiError{Type: "script_exception", Status: 400, Reason: "script error", Shard: f}
+	return &apierr.Error{Type: "script_exception", Status: 400, Reason: "script error", Shard: f}
 }
 
 // plainShardError reports a non-script exception raised on the shard.
-func plainShardError(idx *Index, e *apiError) *apiError {
+func plainShardError(idx *model.Index, e *apierr.Error) *apierr.Error {
 	if e.Shard != nil {
 		return e
 	}
@@ -192,18 +195,18 @@ func plainShardError(idx *Index, e *apiError) *apiError {
 	if status == 0 {
 		status = 400
 	}
-	obj := orderedJSON{{"type", e.Type}, {"reason", e.Reason}}
-	top := orderedJSON{{"type", e.Type}, {"reason", e.Reason}, {"caused_by", orderedJSON{{"type", e.Type}, {"reason", e.Reason}}}}
+	obj := ojson.Object{{"type", e.Type}, {"reason", e.Reason}}
+	top := ojson.Object{{"type", e.Type}, {"reason", e.Reason}, {"caused_by", ojson.Object{{"type", e.Type}, {"reason", e.Reason}}}}
 	if status == 404 {
 		top = obj
 	}
 	f := &shardFailure{status: status, index: idx.Name, root: obj, shard: obj, top: top}
-	return &apiError{Type: e.Type, Status: status, Reason: e.Reason, Shard: f}
+	return &apierr.Error{Type: e.Type, Status: status, Reason: e.Reason, Shard: f}
 }
 
 // scriptErrForShard turns any script setup or execution error into a shard
 // failure.
-func scriptErrForShard(idx *Index, se *plScriptErr, ae *apiError, query bool) *apiError {
+func scriptErrForShard(idx *model.Index, se *plScriptErr, ae *apierr.Error, query bool) *apierr.Error {
 	if se != nil {
 		if query {
 			return scriptQueryCompileError(idx, se)
@@ -244,11 +247,11 @@ type compiledScript struct {
 	ctx    string
 	pl     *plScript
 	ex     *expressions.Script
-	linked map[*Index]*expressions.Linked
+	linked map[*model.Index]*expressions.Linked
 }
 
 // prepareScript parses, resolves and compiles a script for a context.
-func prepareScript(raw any, ctxName string) (*compiledScript, *plScriptErr, *apiError) {
+func prepareScript(raw any, ctxName string) (*compiledScript, *plScriptErr, *apierr.Error) {
 	spec, ae := parseScriptSpec(raw)
 	if ae != nil {
 		return nil, nil, ae
@@ -256,7 +259,7 @@ func prepareScript(raw any, ctxName string) (*compiledScript, *plScriptErr, *api
 	return prepareSpec(spec, ctxName)
 }
 
-func prepareSpec(spec *scriptSpec, ctxName string) (*compiledScript, *plScriptErr, *apiError) {
+func prepareSpec(spec *scriptSpec, ctxName string) (*compiledScript, *plScriptErr, *apierr.Error) {
 	cs := &compiledScript{spec: spec, ctx: ctxName}
 	switch spec.lang {
 	case "expression":
@@ -268,7 +271,7 @@ func prepareSpec(spec *scriptSpec, ctxName string) (*compiledScript, *plScriptEr
 			return nil, se, ae
 		}
 		cs.ex = ex
-		cs.linked = map[*Index]*expressions.Linked{}
+		cs.linked = map[*model.Index]*expressions.Linked{}
 		return cs, nil, nil
 	}
 	if ae := checkScriptLang(spec, ctxName); ae != nil {
@@ -293,7 +296,7 @@ type runOpts struct {
 }
 
 // link binds an expression to an index (cached).
-func (cs *compiledScript) link(idx *Index, extra map[string]any) (*expressions.Linked, *plScriptErr) {
+func (cs *compiledScript) link(idx *model.Index, extra map[string]any) (*expressions.Linked, *plScriptErr) {
 	if l, ok := cs.linked[idx]; ok && extra == nil {
 		return l, nil
 	}
@@ -305,7 +308,7 @@ func (cs *compiledScript) link(idx *Index, extra map[string]any) (*expressions.L
 		params[k] = v
 	}
 	needsScore := cs.ctx == "score" || cs.ctx == "number_sort" || cs.ctx == "aggs"
-	l, err := expressions.Link(cs.ex, expressions.Env{Fields: exprFields(idx), Params: params, ToFloat: toFloat,
+	l, err := expressions.Link(cs.ex, expressions.Env{Fields: exprFields(idx), Params: params, ToFloat: jsonv.ToFloat,
 		AllowValue: cs.ctx == "aggs", AllowScore: needsScore})
 	if err != nil {
 		se := expressionScriptErr(err, cs.spec.src)
@@ -322,7 +325,7 @@ func (cs *compiledScript) link(idx *Index, extra map[string]any) (*expressions.L
 // without document access).
 func (cs *compiledScript) run(qc *queryCtx, o runOpts) (any, *plScriptErr) {
 	if cs.ex != nil {
-		var idx *Index
+		var idx *model.Index
 		if qc != nil {
 			idx = qc.idx
 		}
@@ -381,10 +384,10 @@ func scriptToString(raw any) string {
 
 // aggScriptRun runs an aggregation script for one document; with a field
 // it is a value script evaluated once per field value (_value).
-func aggScriptRun(cs *compiledScript, idx *Index, doc map[string]any, fieldVals []any, useField bool) ([]any, *apiError) {
+func aggScriptRun(cs *compiledScript, idx *model.Index, doc map[string]any, fieldVals []any, useField bool) ([]any, *apierr.Error) {
 	id, _ := doc["__slop_id"].(string)
 	qc := newQueryCtxForDoc(idx, id, doc)
-	score, _ := toFloat(doc["__slop_score"])
+	score, _ := jsonv.ToFloat(doc["__slop_score"])
 	out := []any{}
 	if useField {
 		for _, v := range fieldVals {
@@ -410,7 +413,7 @@ func aggScriptRun(cs *compiledScript, idx *Index, doc map[string]any, fieldVals 
 }
 
 // prepareAggScript compiles the script of an aggregation for the aggs context.
-func prepareAggScript(idx *Index, raw any) (*compiledScript, *apiError) {
+func prepareAggScript(idx *model.Index, raw any) (*compiledScript, *apierr.Error) {
 	cs, se, ae := prepareScript(raw, "aggs")
 	if se != nil || ae != nil {
 		return nil, scriptErrForShard(idx, se, ae, false)
@@ -420,7 +423,7 @@ func prepareAggScript(idx *Index, raw any) (*compiledScript, *apiError) {
 
 // evalTermScript evaluates a terms-like script (composite sources) for one
 // document and returns its first value as a term.
-func evalTermScript(doc map[string]any, idx *Index, raw any) (any, bool) {
+func evalTermScript(doc map[string]any, idx *model.Index, raw any) (any, bool) {
 	cs, err := prepareAggScript(idx, raw)
 	if err != nil {
 		return nil, false
@@ -434,17 +437,17 @@ func evalTermScript(doc map[string]any, idx *Index, raw any) (any, bool) {
 
 // pipelineScriptError reports a failing pipeline aggregation script, which
 // runs on the coordinating node during the reduce (fetch) phase.
-func pipelineScriptError(se *plScriptErr) *apiError {
-	body := orderedJSON{{"error", orderedJSON{
+func pipelineScriptError(se *plScriptErr) *apierr.Error {
+	body := ojson.Object{{"error", ojson.Object{
 		{"root_cause", []any{}}, {"type", "search_phase_execution_exception"}, {"reason", ""},
 		{"phase", "fetch"}, {"grouped", true}, {"failed_shards", []any{}}, {"caused_by", se.object(true)},
 	}}, {"status", 400}}
-	return &apiError{Type: "search_phase_execution_exception", Status: 400, Shard: &shardFailure{raw: body, status: 400}}
+	return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Shard: &shardFailure{raw: body, status: 400}}
 }
 
 // runPipelineScript evaluates a bucket_script / bucket_selector script with
 // the bucket path values as params.
-func runPipelineScript(raw any, ctxName string, vals map[string]any) (any, *apiError) {
+func runPipelineScript(raw any, ctxName string, vals map[string]any) (any, *apierr.Error) {
 	cs, se, ae := prepareScript(raw, ctxName)
 	if ae != nil {
 		return nil, ae
@@ -461,19 +464,19 @@ func runPipelineScript(raw any, ctxName string, vals map[string]any) (any, *apiE
 
 // scriptedMetric runs the init/map/combine/reduce scripts of a
 // scripted_metric aggregation over the given documents (one shard).
-func scriptedMetric(name string, spec map[string]any, docs []map[string]any, idx *Index) (any, *apiError) {
+func scriptedMetric(name string, spec map[string]any, docs []map[string]any, idx *model.Index) (any, *apierr.Error) {
 	if _, ok := spec["map_script"]; !ok {
-		return nil, errBad("Required [map_script]")
+		return nil, apierr.BadRequest("Required [map_script]")
 	}
 	for _, req := range []struct{ key, label string }{{"combine_script", "combineScript"}, {"reduce_script", "reduceScript"}} {
 		if _, ok := spec[req.key]; !ok {
-			return nil, plainShardError(idx, errBad("["+req.label+"] must not be null: ["+name+"]"))
+			return nil, plainShardError(idx, apierr.BadRequest("["+req.label+"] must not be null: ["+name+"]"))
 		}
 	}
 	aggParams, _ := spec["params"].(map[string]any)
 	params := scriptParams(aggParams)
 	state := painless.NewMap(painless.Hash)
-	prep := func(key, ctxName string) (*compiledScript, *apiError) {
+	prep := func(key, ctxName string) (*compiledScript, *apierr.Error) {
 		cs, se, ae := prepareScript(spec[key], ctxName)
 		if se != nil || ae != nil {
 			return nil, scriptErrForShard(idx, se, ae, false)
@@ -496,7 +499,7 @@ func scriptedMetric(name string, spec map[string]any, docs []map[string]any, idx
 	}
 	for _, d := range docs {
 		id, _ := d["__slop_id"].(string)
-		score, _ := toFloat(d["__slop_score"])
+		score, _ := jsonv.ToFloat(d["__slop_score"])
 		if _, se := mapCS.run(newQueryCtxForDoc(idx, id, d), runOpts{plParams: params, vars: vars, score: score}); se != nil {
 			return nil, scriptShardError(idx, se)
 		}
@@ -517,13 +520,13 @@ func scriptedMetric(name string, spec map[string]any, docs []map[string]any, idx
 	if se != nil {
 		return nil, pipelineScriptError(se)
 	}
-	return orderedJSON{{"value", painless.ToJSON(res)}}, nil
+	return ojson.Object{{"value", painless.ToJSON(res)}}, nil
 }
 
 // scriptValueDocs evaluates the script of a numeric bucket aggregation
 // without a field and exposes its values as a synthetic field of copied
 // documents.
-func scriptValueDocs(spec map[string]any, docs []map[string]any, idx *Index, field string) ([]map[string]any, string, *apiError) {
+func scriptValueDocs(spec map[string]any, docs []map[string]any, idx *model.Index, field string) ([]map[string]any, string, *apierr.Error) {
 	raw, ok := spec["script"]
 	if !ok || field != "" {
 		return docs, field, nil

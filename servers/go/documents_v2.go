@@ -14,20 +14,15 @@ import (
 	"strconv"
 	"strings"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
+	"slopensearch/internal/settings"
 )
 
-// The ordered JSON types live in internal/ojson; these aliases keep the
-// short names used throughout the server.
-type (
-	orderedKV    = ojson.KV
-	orderedJSON  = ojson.Object
-	verbatimJSON = ojson.Verbatim
-)
-
-func ensureDocState(idx *Index) {
+func ensureDocState(idx *model.Index) {
 	if idx.Versions == nil {
 		idx.Versions = map[string]int64{}
 	}
@@ -48,7 +43,7 @@ func ensureDocState(idx *Index) {
 	}
 }
 
-func (s *Server) resolveWriteTargetV2(name string) (*Index, *apiError) {
+func (s *Server) resolveWriteTargetV2(name string) (*model.Index, *apierr.Error) {
 	idx, err := s.resolveWriteTarget(name)
 	if err == nil {
 		return idx, nil
@@ -62,7 +57,7 @@ func (s *Server) resolveWriteTargetV2(name string) (*Index, *apiError) {
 	return s.createIndexInternal(name, map[string]any{}, false)
 }
 
-func unknownParams(r *http.Request, allowed map[string]bool) *apiError {
+func unknownParams(r *http.Request, allowed map[string]bool) *apierr.Error {
 	var bad []string
 	for k := range r.URL.Query() {
 		if !allowed[k] {
@@ -72,11 +67,11 @@ func unknownParams(r *http.Request, allowed map[string]bool) *apiError {
 	if len(bad) == 0 {
 		return nil
 	}
-	return &apiError{Type: "illegal_argument_exception", Status: 400,
+	return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 		Reason: unrecognizedParamsReason(r.URL.Path, bad, allowed)}
 }
 
-func refreshValue(r *http.Request) (string, *apiError) {
+func refreshValue(r *http.Request) (string, *apierr.Error) {
 	if _, ok := r.URL.Query()["refresh"]; !ok {
 		return "", nil
 	}
@@ -87,24 +82,24 @@ func refreshValue(r *http.Request) (string, *apiError) {
 	case "true", "false", "wait_for":
 		return v, nil
 	default:
-		return "", &apiError{Type: "illegal_argument_exception", Status: 400,
+		return "", &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "Unknown value for refresh: [" + v + "]."}
 	}
 }
 
-func readDocBody(r *http.Request) (map[string]any, []byte, *apiError) {
+func readDocBody(r *http.Request) (map[string]any, []byte, *apierr.Error) {
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		return nil, nil, errBad("failed to read body")
+		return nil, nil, apierr.BadRequest("failed to read body")
 	}
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
-		return nil, raw, &apiError{Type: "parse_exception", Status: 400, Reason: "request body is required"}
+		return nil, raw, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "request body is required"}
 	}
 	if trimmed[0] != '{' {
-		return nil, raw, &apiError{Type: "mapper_parsing_exception", Status: 400,
+		return nil, raw, &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 			Reason:   "Failed to parse request body",
-			CausedBy: &apiError{Type: "not_x_content_exception", Reason: "Compressor detection can only be called on some xcontent bytes or compressed xcontent bytes"}}
+			CausedBy: &apierr.Error{Type: "not_x_content_exception", Reason: "Compressor detection can only be called on some xcontent bytes or compressed xcontent bytes"}}
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
@@ -114,15 +109,15 @@ func readDocBody(r *http.Request) (map[string]any, []byte, *apiError) {
 		if strings.Contains(err.Error(), "unexpected EOF") || strings.Contains(err.Error(), "unexpected end") {
 			ct = "unexpected_end_of_input_exception"
 		}
-		return nil, raw, &apiError{Type: "mapper_parsing_exception", Status: 400,
+		return nil, raw, &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 			Reason:   "Failed to parse request body",
-			CausedBy: &apiError{Type: ct, Reason: err.Error()}}
+			CausedBy: &apierr.Error{Type: ct, Reason: err.Error()}}
 	}
 	var extra any
 	if err := dec.Decode(&extra); err != io.EOF {
-		return nil, raw, &apiError{Type: "mapper_parsing_exception", Status: 400,
+		return nil, raw, &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 			Reason:   "Failed to parse request body",
-			CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "trailing data"}}
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "trailing data"}}
 	}
 	if e := invalidUTF8Error(raw); e != nil {
 		return nil, raw, e
@@ -130,14 +125,14 @@ func readDocBody(r *http.Request) (map[string]any, []byte, *apiError) {
 	return out, raw, nil
 }
 
-func nextSeq(idx *Index) int64 {
+func nextSeq(idx *model.Index) int64 {
 	ensureDocState(idx)
 	n := idx.NextSeq
 	idx.NextSeq++
 	return n
 }
 
-func currentVersion(idx *Index, id string) int64 {
+func currentVersion(idx *model.Index, id string) int64 {
 	ensureDocState(idx)
 	if v, ok := idx.Versions[id]; ok {
 		return v
@@ -148,7 +143,7 @@ func currentVersion(idx *Index, id string) int64 {
 	return 0
 }
 
-func mappingRoutingRequired(idx *Index) bool {
+func mappingRoutingRequired(idx *model.Index) bool {
 	m, _ := idx.Mappings["_routing"].(map[string]any)
 	if m == nil {
 		return false
@@ -157,7 +152,7 @@ func mappingRoutingRequired(idx *Index) bool {
 	return b
 }
 
-func mappingSourceEnabled(idx *Index) bool {
+func mappingSourceEnabled(idx *model.Index) bool {
 	m, _ := idx.Mappings["_source"].(map[string]any)
 	if m == nil {
 		return true
@@ -168,8 +163,8 @@ func mappingSourceEnabled(idx *Index) bool {
 	return true
 }
 
-func routingMissing(idx *Index, id string) *apiError {
-	return &apiError{Type: "routing_missing_exception", Status: 400,
+func routingMissing(idx *model.Index, id string) *apierr.Error {
+	return &apierr.Error{Type: "routing_missing_exception", Status: 400,
 		Reason: "routing is required for [" + idx.Name + "]/[" + id + "]"}
 }
 
@@ -182,7 +177,7 @@ func shardOf(v string, n int) int {
 	return int(h.Sum32() % uint32(n))
 }
 
-func routingMatches(idx *Index, id, routing string) bool {
+func routingMatches(idx *model.Index, id, routing string) bool {
 	if numShards(idx) <= 1 {
 		return true
 	}
@@ -201,7 +196,7 @@ func requestRouting(r *http.Request) string {
 	return r.URL.Query().Get("routing")
 }
 
-func parseVersionParams(r *http.Request) (int64, string, bool, *apiError) {
+func parseVersionParams(r *http.Request) (int64, string, bool, *apierr.Error) {
 	q := r.URL.Query()
 	vt := q.Get("version_type")
 	if _, ok := q["version"]; !ok {
@@ -209,7 +204,7 @@ func parseVersionParams(r *http.Request) (int64, string, bool, *apiError) {
 	}
 	v, err := strconv.ParseInt(q.Get("version"), 10, 64)
 	if err != nil {
-		return 0, vt, true, &apiError{Type: "action_request_validation_exception", Status: 400,
+		return 0, vt, true, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: illegal version value [" + q.Get("version") + "];"}
 	}
 	if vt == "" {
@@ -218,12 +213,12 @@ func parseVersionParams(r *http.Request) (int64, string, bool, *apiError) {
 	return v, vt, true, nil
 }
 
-func versionConflict(idx *Index, id, reason string) *apiError {
-	return &apiError{Type: "version_conflict_engine_exception", Status: 409, Reason: reason,
+func versionConflict(idx *model.Index, id, reason string) *apierr.Error {
+	return &apierr.Error{Type: "version_conflict_engine_exception", Status: 409, Reason: reason,
 		Fields: map[string]any{"index": idx.Name, "shard": "0"}}
 }
 
-func plannedVersion(idx *Index, id string, r *http.Request) (int64, *apiError) {
+func plannedVersion(idx *model.Index, id string, r *http.Request) (int64, *apierr.Error) {
 	old := currentVersion(idx, id)
 	_, exists := idx.Docs[id]
 	v, vt, has, err := parseVersionParams(r)
@@ -232,21 +227,21 @@ func plannedVersion(idx *Index, id string, r *http.Request) (int64, *apiError) {
 	}
 	if !has {
 		if vt == "external" || vt == "external_gte" {
-			return 0, &apiError{Type: "action_request_validation_exception", Status: 400,
+			return 0, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: illegal version value [null];"}
 		}
 		if vt != "" && vt != "internal" {
-			return 0, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "No version type match [" + vt + "]"}
+			return 0, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "No version type match [" + vt + "]"}
 		}
 		return old + 1, nil
 	}
 	switch vt {
 	case "internal":
-		return 0, &apiError{Type: "action_request_validation_exception", Status: 400,
+		return 0, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: internal versioning can not be used for optimistic concurrency control. Please use `if_seq_no` and `if_primary_term` instead;"}
 	case "external":
 		if v < 0 {
-			return 0, &apiError{Type: "action_request_validation_exception", Status: 400,
+			return 0, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: illegal version value [" + strconv.FormatInt(v, 10) + "];"}
 		}
 		if exists && old >= v {
@@ -259,11 +254,11 @@ func plannedVersion(idx *Index, id string, r *http.Request) (int64, *apiError) {
 		}
 		return v, nil
 	default:
-		return 0, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "No version type match [" + vt + "]"}
+		return 0, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "No version type match [" + vt + "]"}
 	}
 }
 
-func checkIfSeq(r *http.Request, idx *Index, id string) *apiError {
+func checkIfSeq(r *http.Request, idx *model.Index, id string) *apierr.Error {
 	q := r.URL.Query()
 	seqRaw, hasSeq := q["if_seq_no"]
 	termRaw, hasTerm := q["if_primary_term"]
@@ -271,11 +266,11 @@ func checkIfSeq(r *http.Request, idx *Index, id string) *apiError {
 		return nil
 	}
 	if hasSeq && !hasTerm {
-		return &apiError{Type: "action_request_validation_exception", Status: 400,
+		return &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: ifSeqNo is set, but primary term is [0];"}
 	}
 	if !hasSeq && hasTerm {
-		return &apiError{Type: "action_request_validation_exception", Status: 400,
+		return &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: ifPrimaryTerm is set, but seq no is [-2];"}
 	}
 	seq, _ := strconv.ParseInt(seqRaw[0], 10, 64)
@@ -294,14 +289,14 @@ func checkIfSeq(r *http.Request, idx *Index, id string) *apiError {
 	return nil
 }
 
-func waitForActiveShards(r *http.Request, idx *Index) *apiError {
+func waitForActiveShards(r *http.Request, idx *model.Index) *apierr.Error {
 	v := r.URL.Query().Get("wait_for_active_shards")
 	if v == "" || v == "1" || v == "all" {
 		return nil
 	}
 	n, err := strconv.Atoi(v)
 	if err == nil && n > numShards(idx) {
-		return &apiError{Type: "unavailable_shards_exception", Status: 503,
+		return &apierr.Error{Type: "unavailable_shards_exception", Status: 503,
 			Reason: fmt.Sprintf("Timeout waiting for [%d] shards to become active, only [%d] are active", n, numShards(idx))}
 	}
 	return nil
@@ -336,7 +331,7 @@ var updateDocParams = map[string]bool{
 	"filter_path": true,
 }
 
-func storedFieldSet(idx *Index) map[string]bool {
+func storedFieldSet(idx *model.Index) map[string]bool {
 	out := map[string]bool{}
 	props, _ := idx.Mappings["properties"].(map[string]any)
 	var walk func(prefix string, m map[string]any)
@@ -362,7 +357,7 @@ func storedFieldSet(idx *Index) map[string]bool {
 	return out
 }
 
-func storedSpec(raw string, idx *Index) []string {
+func storedSpec(raw string, idx *model.Index) []string {
 	if raw == "" {
 		return nil
 	}
@@ -383,7 +378,7 @@ func storedSpec(raw string, idx *Index) []string {
 	return out
 }
 
-func storedFieldsFor(idx *Index, doc map[string]any, spec []string) map[string]any {
+func storedFieldsFor(idx *model.Index, doc map[string]any, spec []string) map[string]any {
 	if len(spec) == 0 {
 		return nil
 	}
@@ -458,13 +453,13 @@ func sourceSpecFromValue(v any) ([]string, []string, bool) {
 	return nil, nil, false
 }
 
-func checkObjectDepth(v any, depth, limit int) *apiError {
+func checkObjectDepth(v any, depth, limit int) *apierr.Error {
 	if depth > limit {
 		reason := "The depth of the field has exceeded the allowed limit of [" + strconv.Itoa(limit) + "]. This limit can be set by changing the [index.mapping.depth.limit] index level setting."
-		return &apiError{Type: "mapper_parsing_exception", Status: 400,
+		return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 			Reason:    "failed to parse",
-			RootCause: &apiError{Type: "parse_exception", Reason: reason},
-			CausedBy:  &apiError{Type: "parse_exception", Reason: reason}}
+			RootCause: &apierr.Error{Type: "parse_exception", Reason: reason},
+			CausedBy:  &apierr.Error{Type: "parse_exception", Reason: reason}}
 	}
 	switch t := v.(type) {
 	case map[string]any:
@@ -485,7 +480,7 @@ func checkObjectDepth(v any, depth, limit int) *apiError {
 
 // checkArrayDepth enforces index.mapping.depth.limit on arrays nested in
 // arrays (DocumentParser's field array depth).
-func checkArrayDepth(v any, depth, limit int) *apiError {
+func checkArrayDepth(v any, depth, limit int) *apierr.Error {
 	switch t := v.(type) {
 	case map[string]any:
 		for _, e := range t {
@@ -496,10 +491,10 @@ func checkArrayDepth(v any, depth, limit int) *apiError {
 	case []any:
 		if depth+1 > limit {
 			reason := "The depth of the nested array field has exceeded the allowed limit of [" + strconv.Itoa(limit) + "]. This limit can be set by changing the [index.mapping.depth.limit] index level setting."
-			return &apiError{Type: "mapper_parsing_exception", Status: 400,
+			return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 				Reason:    "failed to parse",
-				RootCause: &apiError{Type: "parse_exception", Reason: reason},
-				CausedBy:  &apiError{Type: "parse_exception", Reason: reason}}
+				RootCause: &apierr.Error{Type: "parse_exception", Reason: reason},
+				CausedBy:  &apierr.Error{Type: "parse_exception", Reason: reason}}
 		}
 		for _, e := range t {
 			if err := checkArrayDepth(e, depth+1, limit); err != nil {
@@ -510,7 +505,7 @@ func checkArrayDepth(v any, depth, limit int) *apiError {
 	return nil
 }
 
-func checkMixedArray(idx *Index, v any, path string) *apiError {
+func checkMixedArray(idx *model.Index, v any, path string) *apierr.Error {
 	if enabled, ok := idx.Mappings["enabled"].(bool); ok && !enabled {
 		return nil
 	}
@@ -545,15 +540,12 @@ func checkMixedArray(idx *Index, v any, path string) *apiError {
 			}
 		}
 		if hasObj && hasScalar {
-			return &apiError{Type: "illegal_argument_exception", Status: 400,
+			return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "can't merge a non object mapping [" + path + "] with an object mapping"}
 		}
 	}
 	return nil
 }
-
-// rawFloat is a double rendered like Java (internal/jsonv).
-type rawFloat = jsonv.Float
 
 func normalizeNumbers(v any) any {
 	switch t := v.(type) {
@@ -570,7 +562,7 @@ func normalizeNumbers(v any) any {
 	case json.Number:
 		if strings.ContainsAny(t.String(), ".eE") {
 			f, _ := t.Float64()
-			return rawFloat(f)
+			return jsonv.Float(f)
 		}
 		return t
 	}
@@ -586,7 +578,7 @@ func parseOrderedValue(dec *json.Decoder) (any, error) {
 	case json.Delim:
 		switch t {
 		case '{':
-			out := orderedJSON{}
+			out := ojson.Object{}
 			for dec.More() {
 				kt, err := dec.Token()
 				if err != nil {
@@ -597,7 +589,7 @@ func parseOrderedValue(dec *json.Decoder) (any, error) {
 				if err != nil {
 					return nil, err
 				}
-				out = append(out, orderedKV{key, v})
+				out = append(out, ojson.KV{key, v})
 			}
 			if _, err := dec.Token(); err != nil {
 				return nil, err
@@ -620,7 +612,7 @@ func parseOrderedValue(dec *json.Decoder) (any, error) {
 	case json.Number:
 		if strings.ContainsAny(t.String(), ".eE") {
 			f, _ := t.Float64()
-			return rawFloat(f), nil
+			return jsonv.Float(f), nil
 		}
 		return t, nil
 	case string, bool, nil:
@@ -641,11 +633,11 @@ func filterRawSource(raw []byte, includes, excludes []string) ([]byte, bool) {
 	if err != nil {
 		return nil, false
 	}
-	obj, ok := v.(orderedJSON)
+	obj, ok := v.(ojson.Object)
 	if !ok {
 		return nil, false
 	}
-	var out orderedJSON
+	var out ojson.Object
 	if len(includes) == 0 {
 		out = obj
 	} else {
@@ -679,7 +671,7 @@ func filterRawSource(raw []byte, includes, excludes []string) ([]byte, bool) {
 	return b, true
 }
 
-func mappingShapeConflict(props map[string]any, doc map[string]any) *apiError {
+func mappingShapeConflict(props map[string]any, doc map[string]any) *apierr.Error {
 	for k, v := range doc {
 		def, ok := props[k].(map[string]any)
 		if !ok {
@@ -703,7 +695,7 @@ func mappingShapeConflict(props map[string]any, doc map[string]any) *apiError {
 			}
 		case nil:
 		default:
-			return &apiError{Type: "mapper_parsing_exception", Status: 400,
+			return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 				Reason: "object mapping for [" + k + "] tried to parse field [" + k + "] as object, but found a concrete value"}
 		}
 	}
@@ -820,7 +812,7 @@ func percolatorFieldRefs(q map[string]any, out *[]string) {
 	}
 }
 
-func percolatorFields(idx *Index) []string {
+func percolatorFields(idx *model.Index) []string {
 	props, _ := idx.Mappings["properties"].(map[string]any)
 	var out []string
 	for name, raw := range props {
@@ -835,17 +827,17 @@ func percolatorFields(idx *Index) []string {
 	return out
 }
 
-func percolatorParseError(reason string, fields map[string]any, caused *apiError) *apiError {
-	cause := &apiError{Type: "parsing_exception", Status: 400, Reason: reason, Fields: fields}
+func percolatorParseError(reason string, fields map[string]any, caused *apierr.Error) *apierr.Error {
+	cause := &apierr.Error{Type: "parsing_exception", Status: 400, Reason: reason, Fields: fields}
 	if caused != nil {
 		cause = caused
 	}
-	root := &apiError{Type: cause.Type, Status: cause.Status, Reason: cause.Reason, Fields: cause.Fields}
-	return &apiError{Type: "mapper_parsing_exception", Status: 400, Reason: "failed to parse",
+	root := &apierr.Error{Type: cause.Type, Status: cause.Status, Reason: cause.Reason, Fields: cause.Fields}
+	return &apierr.Error{Type: "mapper_parsing_exception", Status: 400, Reason: "failed to parse",
 		RootCause: root, CausedBy: cause, Fields: cause.Fields}
 }
 
-func validatePercolatorDocs(idx *Index, body map[string]any, raw []byte) *apiError {
+func validatePercolatorDocs(idx *model.Index, body map[string]any, raw []byte) *apierr.Error {
 	fields := percolatorFields(idx)
 	for _, field := range fields {
 		rawQ, ok := body[field]
@@ -865,8 +857,8 @@ func validatePercolatorDocs(idx *Index, body map[string]any, raw []byte) *apiErr
 			if verr.Clause != "" {
 				annotateQueryClause(verr, raw)
 			}
-			root := &apiError{Type: verr.Type, Status: verr.Status, Reason: verr.Reason, Fields: verr.Fields}
-			return &apiError{Type: "mapper_parsing_exception", Status: 400, Reason: "failed to parse",
+			root := &apierr.Error{Type: verr.Type, Status: verr.Status, Reason: verr.Reason, Fields: verr.Fields}
+			return &apierr.Error{Type: "mapper_parsing_exception", Status: 400, Reason: "failed to parse",
 				RootCause: root, CausedBy: verr, Fields: verr.Fields}
 		}
 		var refs []string
@@ -877,9 +869,9 @@ func validatePercolatorDocs(idx *Index, body map[string]any, raw []byte) *apiErr
 			}
 			if _, mapped := mappingFieldDef(idx, f); !mapped {
 				reason := "No field mapping can be found for the field with name [" + f + "]"
-				cause := &apiError{Type: "query_shard_exception", Status: 400, Reason: reason,
+				cause := &apierr.Error{Type: "query_shard_exception", Status: 400, Reason: reason,
 					Fields: map[string]any{"index": idx.Name, "index_uuid": idx.UUID}}
-				return &apiError{Type: "mapper_parsing_exception", Status: 400, Reason: "failed to parse",
+				return &apierr.Error{Type: "mapper_parsing_exception", Status: 400, Reason: "failed to parse",
 					RootCause: cause, CausedBy: cause, Fields: cause.Fields}
 			}
 		}
@@ -887,12 +879,12 @@ func validatePercolatorDocs(idx *Index, body map[string]any, raw []byte) *apiErr
 	return nil
 }
 
-func joinDocError(reason string) *apiError {
-	return &apiError{Type: "mapper_parsing_exception", Reason: "failed to parse", Status: 400,
-		CausedBy: &apiError{Type: "illegal_argument_exception", Reason: reason}}
+func joinDocError(reason string) *apierr.Error {
+	return &apierr.Error{Type: "mapper_parsing_exception", Reason: "failed to parse", Status: 400,
+		CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 }
 
-func validateJoinDoc(idx *Index, body map[string]any, routing string) *apiError {
+func validateJoinDoc(idx *model.Index, body map[string]any, routing string) *apierr.Error {
 	field, relations, hasJoin := findJoinField(idx)
 	if !hasJoin {
 		return nil
@@ -945,7 +937,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 		opType = op
 	}
 	if opType != "create" && opType != "index" {
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: fmt.Sprintf("opType must be 'create' or 'index', found: [%s]", opType)})
 		return
 	}
@@ -954,7 +946,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 		return
 	}
 	if len(id) > 512 {
-		writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: fmt.Sprintf("Validation Failed: 1: id is too long, must be no longer than 512 bytes but was: %d;", len(id))})
 		return
 	}
@@ -976,7 +968,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 		return
 	}
 	if idx.DataStream != "" && opType != "create" && id != "" {
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "only write ops with an op_type of create are allowed in data streams"})
 		return
 	}
@@ -990,7 +982,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 	}
 	if mappingRoutingRequired(idx) && routing == "" {
 		if autoID {
-			writeError(w, &apiError{Type: "null_pointer_exception", Status: 500, Reason: "id must not be null"})
+			writeError(w, &apierr.Error{Type: "null_pointer_exception", Status: 500, Reason: "id must not be null"})
 			return
 		}
 		writeError(w, routingMissing(idx, id))
@@ -998,7 +990,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 	}
 	if p := r.URL.Query().Get("pipeline"); p != "" && p != "_none" {
 		if _, ok := s.ingestPipelines[p]; !ok {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "pipeline with id [" + p + "] does not exist"})
 			return
 		}
@@ -1069,10 +1061,10 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 	if params["pipeline"] != nil {
 		rawBody = nil
 	} else {
-		if _, ok := findSetting(idx.Settings, "default_pipeline"); ok {
+		if _, ok := settings.Find(idx.Settings, "default_pipeline"); ok {
 			rawBody = nil
 		}
-		if _, ok := findSetting(idx.Settings, "final_pipeline"); ok {
+		if _, ok := settings.Find(idx.Settings, "final_pipeline"); ok {
 			rawBody = nil
 		}
 	}
@@ -1135,16 +1127,16 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 		status = 200
 		result = "updated"
 	}
-	resp := orderedJSON{
+	resp := ojson.Object{
 		{"_index", idx.Name}, {"_id", id}, {"_version", ver}, {"result", result},
 	}
 	if rv == "true" {
-		resp = append(resp, orderedKV{"forced_refresh", true})
+		resp = append(resp, ojson.KV{"forced_refresh", true})
 	}
-	resp = append(resp, orderedKV{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
-		orderedKV{"_seq_no", seq}, orderedKV{"_primary_term", int64(1)})
+	resp = append(resp, ojson.KV{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
+		ojson.KV{"_seq_no", seq}, ojson.KV{"_primary_term", int64(1)})
 	if routing != "" {
-		resp = append(resp, orderedKV{"_routing", routing})
+		resp = append(resp, ojson.KV{"_routing", routing})
 	}
 	if status == 201 {
 		loc := "/" + idx.Name + "/_doc/" + javaURLEncode(id)
@@ -1244,7 +1236,7 @@ func (s *Server) handleGetDocV2(w http.ResponseWriter, r *http.Request, name, id
 			omit = true
 		}
 	}
-	resp := orderedJSON{
+	resp := ojson.Object{
 		{"_index", idx.Name}, {"_id", id}, {"_version", ver}, {"_seq_no", seq},
 		{"_primary_term", term},
 	}
@@ -1253,31 +1245,31 @@ func (s *Server) handleGetDocV2(w http.ResponseWriter, r *http.Request, name, id
 		for _, f := range ign {
 			vals = append(vals, f)
 		}
-		resp = append(resp, orderedKV{"_ignored", vals})
+		resp = append(resp, ojson.KV{"_ignored", vals})
 	}
-	resp = append(resp, orderedKV{"found", true})
+	resp = append(resp, ojson.KV{"found", true})
 	if !omit {
 		if len(includes) == 0 && len(excludes) == 0 {
 			if raw, ok := idx.RawDocs[id]; ok && len(raw) > 0 {
-				resp = append(resp, orderedKV{"_source", verbatimJSON(raw)})
+				resp = append(resp, ojson.KV{"_source", ojson.Verbatim(raw)})
 			} else {
-				resp = append(resp, orderedKV{"_source", doc})
+				resp = append(resp, ojson.KV{"_source", doc})
 			}
 		} else if raw, ok := idx.RawDocs[id]; ok {
 			if filtered, ok2 := filterRawSource(raw, includes, excludes); ok2 {
-				resp = append(resp, orderedKV{"_source", verbatimJSON(filtered)})
+				resp = append(resp, ojson.KV{"_source", ojson.Verbatim(filtered)})
 			} else {
-				resp = append(resp, orderedKV{"_source", normalizeNumbers(filterSourceDoc(doc, includes, excludes))})
+				resp = append(resp, ojson.KV{"_source", normalizeNumbers(filterSourceDoc(doc, includes, excludes))})
 			}
 		} else {
-			resp = append(resp, orderedKV{"_source", normalizeNumbers(filterSourceDoc(doc, includes, excludes))})
+			resp = append(resp, ojson.KV{"_source", normalizeNumbers(filterSourceDoc(doc, includes, excludes))})
 		}
 	}
 	if fields := storedFieldsFor(idx, doc, storedSpec(storedSpecRaw, idx)); fields != nil {
-		resp = append(resp, orderedKV{"fields", fields})
+		resp = append(resp, ojson.KV{"fields", fields})
 	}
 	if rr, ok := idx.Routing[id]; ok && rr != "" {
-		resp = append(resp, orderedKV{"_routing", rr})
+		resp = append(resp, ojson.KV{"_routing", rr})
 	}
 	writeJSON(w, 200, resp)
 }
@@ -1309,12 +1301,12 @@ func (s *Server) handleGetSourceV2(w http.ResponseWriter, r *http.Request, name,
 	}
 	doc, ok := idx.Docs[id]
 	if !ok || !routingMatches(idx, id, routing) {
-		writeError(w, &apiError{Type: "resource_not_found_exception", Status: 404,
+		writeError(w, &apierr.Error{Type: "resource_not_found_exception", Status: 404,
 			Reason: "Document not found [" + idx.Name + "]/[" + id + "]"})
 		return
 	}
 	if !mappingSourceEnabled(idx) {
-		writeError(w, &apiError{Type: "resource_not_found_exception", Status: 404,
+		writeError(w, &apierr.Error{Type: "resource_not_found_exception", Status: 404,
 			Reason: "Source not found [" + idx.Name + "]/[" + id + "]"})
 		return
 	}
@@ -1325,11 +1317,11 @@ func (s *Server) handleGetSourceV2(w http.ResponseWriter, r *http.Request, name,
 	}
 	if raw, ok := idx.RawDocs[id]; ok && len(raw) > 0 {
 		if len(includes) == 0 && len(excludes) == 0 {
-			writeJSON(w, 200, verbatimJSON(raw))
+			writeJSON(w, 200, ojson.Verbatim(raw))
 			return
 		}
 		if filtered, ok2 := filterRawSource(raw, includes, excludes); ok2 {
-			writeJSON(w, 200, verbatimJSON(filtered))
+			writeJSON(w, 200, ojson.Verbatim(filtered))
 			return
 		}
 	}
@@ -1385,7 +1377,7 @@ func (s *Server) handleDeleteDocV2(w http.ResponseWriter, r *http.Request, name,
 	idx.PrimaryTerms[id] = 1
 	if !exists {
 		idx.Versions[id] = ver
-		resp := orderedJSON{
+		resp := ojson.Object{
 			{"_index", idx.Name}, {"_id", id}, {"_version", ver}, {"result", "not_found"},
 			{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
 			{"_seq_no", seq}, {"_primary_term", int64(1)},
@@ -1399,14 +1391,14 @@ func (s *Server) handleDeleteDocV2(w http.ResponseWriter, r *http.Request, name,
 	removeDocValues(idx, id)
 	idx.DeleteTotal++
 	idx.Versions[id] = ver
-	resp := orderedJSON{
+	resp := ojson.Object{
 		{"_index", idx.Name}, {"_id", id}, {"_version", ver}, {"result", "deleted"},
 	}
 	if rv == "true" {
-		resp = append(resp, orderedKV{"forced_refresh", true})
+		resp = append(resp, ojson.KV{"forced_refresh", true})
 	}
-	resp = append(resp, orderedKV{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
-		orderedKV{"_seq_no", seq}, orderedKV{"_primary_term", int64(1)})
+	resp = append(resp, ojson.KV{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
+		ojson.KV{"_seq_no", seq}, ojson.KV{"_primary_term", int64(1)})
 	writeJSON(w, 200, resp)
 }
 
@@ -1430,7 +1422,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		return
 	}
 	if _, ok := r.URL.Query()["version"]; ok {
-		writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: version is not allowed in update requests;"})
 		return
 	}
@@ -1466,7 +1458,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		"doc_as_upsert": true, "detect_noop": true, "_source": true, "retry_on_conflict": true}
 	for k := range body {
 		if !allowed[k] {
-			writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "[UpdateRequest] unknown field [" + k + "]"})
 			return
 		}
@@ -1481,12 +1473,12 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		detectNoop = b
 	}
 	if !hasDoc && !hasScript {
-		writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: script or doc is missing;"})
 		return
 	}
 	if hasDoc && hasScript {
-		writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: can't provide both script and doc;"})
 		return
 	}
@@ -1500,18 +1492,18 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		exists = false
 	}
 	if exists && !mappingSourceEnabled(idx) {
-		writeError(w, &apiError{Type: "document_source_missing_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "document_source_missing_exception", Status: 400,
 			Reason: "[" + id + "]: document source missing", Fields: map[string]any{"index": idx.Name, "shard": "0"}})
 		return
 	}
 	if !exists {
 		if !hasUpsert && !docAsUpsert {
 			if hasScript && scriptedUpsert {
-				writeError(w, &apiError{Type: "document_missing_exception", Status: 404,
+				writeError(w, &apierr.Error{Type: "document_missing_exception", Status: 404,
 					Reason: "[" + id + "]: document missing", Fields: map[string]any{"index": idx.Name, "shard": "0"}})
 				return
 			}
-			writeError(w, &apiError{Type: "document_missing_exception", Status: 404,
+			writeError(w, &apierr.Error{Type: "document_missing_exception", Status: 404,
 				Reason: "[" + id + "]: document missing", Fields: map[string]any{"index": idx.Name, "shard": "0"}})
 			return
 		}
@@ -1533,7 +1525,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 			src = res.source
 		}
 		if op == "none" || op == "noop" {
-			resp := orderedJSON{
+			resp := ojson.Object{
 				{"_index", idx.Name}, {"_id", id}, {"_version", int64(-1)}, {"result", "noop"},
 				{"_shards", map[string]any{"total": 0, "successful": 0, "failed": 0}},
 				{"get", map[string]any{"found": false}},
@@ -1584,16 +1576,16 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		} else {
 			idx.Pending[id] = src
 		}
-		resp := orderedJSON{
+		resp := ojson.Object{
 			{"_index", idx.Name}, {"_id", id}, {"_version", int64(1)}, {"result", "created"},
 		}
 		if rv == "true" {
-			resp = append(resp, orderedKV{"forced_refresh", true})
+			resp = append(resp, ojson.KV{"forced_refresh", true})
 		}
-		resp = append(resp, orderedKV{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
-			orderedKV{"_seq_no", seq}, orderedKV{"_primary_term", int64(1)})
+		resp = append(resp, ojson.KV{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
+			ojson.KV{"_seq_no", seq}, ojson.KV{"_primary_term", int64(1)})
 		if getSpecified(r, body) {
-			resp = append(resp, orderedKV{"get", updateGetObject(idx, id, src, seq, r, body)})
+			resp = append(resp, ojson.KV{"get", updateGetObject(idx, id, src, seq, r, body)})
 		}
 		writeJSON(w, 201, resp)
 		return
@@ -1620,7 +1612,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		idx.DeleteTotal++
 		idx.Versions[id] = ver
 		idx.SeqNos[id] = seq
-		resp := orderedJSON{
+		resp := ojson.Object{
 			{"_index", idx.Name}, {"_id", id}, {"_version", ver}, {"result", "deleted"},
 			{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
 			{"_seq_no", seq}, {"_primary_term", int64(1)},
@@ -1638,13 +1630,13 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		return
 	}
 	if op == "none" || op == "noop" || (detectNoop && reflect.DeepEqual(old, newDoc)) {
-		resp := orderedJSON{
+		resp := ojson.Object{
 			{"_index", idx.Name}, {"_id", id}, {"_version", idx.Versions[id]}, {"result", "noop"},
 			{"_shards", map[string]any{"total": 0, "successful": 0, "failed": 0}},
 			{"_seq_no", idx.SeqNos[id]}, {"_primary_term", int64(1)},
 		}
 		if getSpecified(r, body) {
-			resp = append(resp, orderedKV{"get", updateGetObject(idx, id, old, idx.SeqNos[id], r, body)})
+			resp = append(resp, ojson.KV{"get", updateGetObject(idx, id, old, idx.SeqNos[id], r, body)})
 		}
 		writeJSON(w, 200, resp)
 		return
@@ -1683,16 +1675,16 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 	} else {
 		markPending(idx, id, newDoc, true)
 	}
-	resp := orderedJSON{
+	resp := ojson.Object{
 		{"_index", idx.Name}, {"_id", id}, {"_version", ver}, {"result", "updated"},
 	}
 	if rv == "true" {
-		resp = append(resp, orderedKV{"forced_refresh", true})
+		resp = append(resp, ojson.KV{"forced_refresh", true})
 	}
-	resp = append(resp, orderedKV{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
-		orderedKV{"_seq_no", seq}, orderedKV{"_primary_term", int64(1)})
+	resp = append(resp, ojson.KV{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
+		ojson.KV{"_seq_no", seq}, ojson.KV{"_primary_term", int64(1)})
 	if getSpecified(r, body) {
-		resp = append(resp, orderedKV{"get", updateGetObject(idx, id, newDoc, seq, r, body)})
+		resp = append(resp, ojson.KV{"get", updateGetObject(idx, id, newDoc, seq, r, body)})
 	}
 	writeJSON(w, 200, resp)
 }
@@ -1711,20 +1703,20 @@ func getSpecified(r *http.Request, body map[string]any) bool {
 	return q.Get("_source_includes") != "" || q.Get("_source_excludes") != ""
 }
 
-func updateGetObject(idx *Index, id string, src map[string]any, seq int64, r *http.Request, body map[string]any) orderedJSON {
+func updateGetObject(idx *model.Index, id string, src map[string]any, seq int64, r *http.Request, body map[string]any) ojson.Object {
 	includes, excludes, _, _ := sourceFilterFromQuery(r.URL.Query())
 	if v, ok := body["_source"]; ok {
 		inc, exc, omit := sourceSpecFromValue(v)
 		if omit {
-			return orderedJSON{{"_seq_no", seq}, {"_primary_term", int64(1)}, {"found", true}}
+			return ojson.Object{{"_seq_no", seq}, {"_primary_term", int64(1)}, {"found", true}}
 		}
 		if inc != nil || exc != nil {
 			includes, excludes = inc, exc
 		}
 	}
-	out := orderedJSON{{"_seq_no", seq}, {"_primary_term", int64(1)}, {"found", true}}
+	out := ojson.Object{{"_seq_no", seq}, {"_primary_term", int64(1)}, {"found", true}}
 	if mappingSourceEnabled(idx) {
-		out = append(out, orderedKV{"_source", filterSourceDoc(src, includes, excludes)})
+		out = append(out, ojson.KV{"_source", filterSourceDoc(src, includes, excludes)})
 	}
 	return out
 }
@@ -1739,25 +1731,25 @@ type updateScriptResult struct {
 
 // updateScriptFailure wraps a script problem the way the update API reports
 // it: "failed to execute script" caused by the script exception.
-func updateScriptFailure(se *plScriptErr, cause *apiError) *apiError {
-	var causeObj orderedJSON
+func updateScriptFailure(se *plScriptErr, cause *apierr.Error) *apierr.Error {
+	var causeObj ojson.Object
 	if se != nil {
 		causeObj = se.object(true)
 	} else {
-		causeObj = orderedJSON{{"type", cause.Type}, {"reason", cause.Reason}}
+		causeObj = ojson.Object{{"type", cause.Type}, {"reason", cause.Reason}}
 		if cause.CausedBy != nil {
-			causeObj = append(causeObj, orderedKV{"caused_by", orderedJSON{{"type", cause.CausedBy.Type}, {"reason", cause.CausedBy.Reason}}})
+			causeObj = append(causeObj, ojson.KV{"caused_by", ojson.Object{{"type", cause.CausedBy.Type}, {"reason", cause.CausedBy.Reason}}})
 		}
 	}
-	body := orderedJSON{{"error", orderedJSON{
-		{"root_cause", []any{orderedJSON{{"type", "illegal_argument_exception"}, {"reason", "failed to execute script"}}}},
+	body := ojson.Object{{"error", ojson.Object{
+		{"root_cause", []any{ojson.Object{{"type", "illegal_argument_exception"}, {"reason", "failed to execute script"}}}},
 		{"type", "illegal_argument_exception"}, {"reason", "failed to execute script"},
 		{"caused_by", causeObj},
 	}}, {"status", 400}}
-	e := &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "failed to execute script",
+	e := &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "failed to execute script",
 		Shard: &shardFailure{raw: body, status: 400}}
 	if se != nil {
-		e.CausedBy = &apiError{Type: "script_exception", Reason: map[bool]string{true: "compile error", false: "runtime error"}[se.compile]}
+		e.CausedBy = &apierr.Error{Type: "script_exception", Reason: map[bool]string{true: "compile error", false: "runtime error"}[se.compile]}
 		e.Extra = se
 	} else {
 		e.CausedBy = cause
@@ -1767,11 +1759,11 @@ func updateScriptFailure(se *plScriptErr, cause *apiError) *apiError {
 
 // runUpdateScript runs an update-context script (update, update_by_query,
 // reindex) against a copy of ctx and reports the resulting operation.
-func runUpdateScript(raw any, source map[string]any, index, id string, version int64) (updateScriptResult, *apiError) {
+func runUpdateScript(raw any, source map[string]any, index, id string, version int64) (updateScriptResult, *apierr.Error) {
 	return runUpdateScriptCtx(raw, source, index, id, version, "index", nil)
 }
 
-func runUpdateScriptCtx(raw any, source map[string]any, index, id string, version int64, op string, routing any) (updateScriptResult, *apiError) {
+func runUpdateScriptCtx(raw any, source map[string]any, index, id string, version int64, op string, routing any) (updateScriptResult, *apierr.Error) {
 	spec, ae := parseScriptSpec(raw)
 	if ae != nil {
 		return updateScriptResult{}, updateScriptFailure(nil, ae)
@@ -1887,7 +1879,7 @@ func (s *Server) handleMget(w http.ResponseWriter, r *http.Request, pathIndex st
 	}
 	for k := range body {
 		if k != "docs" && k != "ids" {
-			writeError(w, &apiError{Type: "parsing_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "parsing_exception", Status: 400,
 				Reason: "unknown key [" + k + "] for a START_ARRAY, expected [docs] or [ids]"})
 			return
 		}
@@ -1896,25 +1888,25 @@ func (s *Server) handleMget(w http.ResponseWriter, r *http.Request, pathIndex st
 	if raw, ok := body["docs"]; ok {
 		arr, _ := raw.([]any)
 		if len(arr) == 0 {
-			writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: no documents to get;"})
 			return
 		}
 		for i, e := range arr {
 			m, ok := e.(map[string]any)
 			if !ok {
-				writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 					Reason: fmt.Sprintf("Validation Failed: 1: id is missing for doc %d;", i)})
 				return
 			}
 			if _, ok := m["_id"]; !ok {
-				writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 					Reason: fmt.Sprintf("Validation Failed: 1: id is missing for doc %d;", i)})
 				return
 			}
 			if pathIndex == "" {
 				if _, ok := m["_index"]; !ok {
-					writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+					writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 						Reason: fmt.Sprintf("Validation Failed: 1: index is missing for doc %d;", i)})
 					return
 				}
@@ -1925,11 +1917,11 @@ func (s *Server) handleMget(w http.ResponseWriter, r *http.Request, pathIndex st
 		arr, _ := raw.([]any)
 		if len(arr) == 0 || pathIndex == "" {
 			if pathIndex == "" {
-				writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 					Reason: "Validation Failed: 1: index is missing for doc 0;"})
 				return
 			}
-			writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: no documents to get;"})
 			return
 		}
@@ -1938,7 +1930,7 @@ func (s *Server) handleMget(w http.ResponseWriter, r *http.Request, pathIndex st
 			entries = append(entries, map[string]any{"_id": id})
 		}
 	} else {
-		writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: no documents to get;"})
 		return
 	}
@@ -2027,7 +2019,7 @@ func (s *Server) handleMget(w http.ResponseWriter, r *http.Request, pathIndex st
 	writeJSON(w, 200, map[string]any{"docs": docs})
 }
 
-func errorObject(e *apiError) map[string]any {
+func errorObject(e *apierr.Error) map[string]any {
 	rc := e
 	if e.RootCause != nil {
 		rc = e.RootCause
@@ -2048,7 +2040,7 @@ func errorObject(e *apiError) map[string]any {
 // markPending records an unrefreshed write. A document that searches could
 // already see stays visible: a refresh only changes which version they read,
 // it never makes an existing document disappear.
-func markPending(idx *Index, id string, doc map[string]any, existed bool) {
+func markPending(idx *model.Index, id string, doc map[string]any, existed bool) {
 	if _, pending := idx.Pending[id]; existed && !pending {
 		noteStaleOverwrite(idx, id)
 		return

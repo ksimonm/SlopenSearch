@@ -37,6 +37,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"slopensearch/internal/model"
 )
 
 const (
@@ -72,7 +74,7 @@ type idxSummary struct {
 }
 
 type idxPersistState struct {
-	ptr   *Index
+	ptr   *model.Index
 	meta  []byte
 	sum   idxSummary
 	docs  map[string]docFP
@@ -376,7 +378,7 @@ func mapPtr(m map[string]any) uintptr {
 	return reflect.ValueOf(m).Pointer()
 }
 
-func summarize(idx *Index) idxSummary {
+func summarize(idx *model.Index) idxSummary {
 	return idxSummary{
 		nextSeq: idx.NextSeq, indexTotal: idx.IndexTotal, deleteTotal: idx.DeleteTotal,
 		deletes: idx.Deletes, nDocs: len(idx.Docs), nOrder: len(idx.Order), nSeq: len(idx.SeqNos),
@@ -384,7 +386,7 @@ func summarize(idx *Index) idxSummary {
 	}
 }
 
-func encodeDocPut(buf *pbuf, idx *Index, name, id string) {
+func encodeDocPut(buf *pbuf, idx *model.Index, name, id string) {
 	buf.byte(recDocPut)
 	buf.str(name)
 	buf.str(id)
@@ -453,7 +455,7 @@ func decodeGlobal(s *Server, data []byte) error {
 	return r.err
 }
 
-func encodeIndexMeta(idx *Index) []byte {
+func encodeIndexMeta(idx *model.Index) []byte {
 	var b pbuf
 	b.str(idx.UUID)
 	b.varint(idx.CreationDate)
@@ -474,7 +476,7 @@ func encodeIndexMeta(idx *Index) []byte {
 	return b.b
 }
 
-func decodeIndexMeta(idx *Index, data []byte) error {
+func decodeIndexMeta(idx *model.Index, data []byte) error {
 	r := &preader{b: data}
 	idx.UUID = r.str()
 	idx.CreationDate = r.varint()
@@ -547,8 +549,8 @@ func decodeNamedMaps(data []byte) map[string]map[string]any {
 	return out
 }
 
-func newEmptyIndex(name string) *Index {
-	idx := &Index{
+func newEmptyIndex(name string) *model.Index {
+	idx := &model.Index{
 		Name:       name,
 		Mappings:   map[string]any{},
 		Settings:   map[string]any{},
@@ -563,7 +565,7 @@ func newEmptyIndex(name string) *Index {
 // apply replays one frame of records into s.
 func applyFrame(s *Server, data []byte) error {
 	r := &preader{b: data}
-	get := func(name string) *Index {
+	get := func(name string) *model.Index {
 		idx := s.indices[name]
 		if idx == nil {
 			idx = newEmptyIndex(name)

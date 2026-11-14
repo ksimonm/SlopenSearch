@@ -5,10 +5,13 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/model"
 )
 
 type pitContext struct {
-	idx       *Index
+	idx       *model.Index
 	hits      []multiHit
 	shards    int
 	keepAlive int64
@@ -19,18 +22,18 @@ type pitContext struct {
 func (s *Server) openPit(w http.ResponseWriter, r *http.Request, name string) {
 	keep := r.URL.Query().Get("keep_alive")
 	if keep == "" {
-		writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: keep alive not specified;"})
 		return
 	}
 	d, ok := parseKeepAlive(keep)
 	if !ok {
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "failed to parse [" + keep + "]"})
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "failed to parse [" + keep + "]"})
 		return
 	}
 	if d > 24*time.Hour {
 		reason := fmt.Sprintf("Keep alive for request (%s) is too large. It must be less than (1d). [point_in_time.max_keep_alive]", keep)
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: reason})
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: reason})
 		return
 	}
 	s.mu.RLock()
@@ -108,13 +111,13 @@ func (s *Server) handlePitRoute(w http.ResponseWriter, r *http.Request, rest []s
 			}
 		}
 		if len(ids) == 0 {
-			writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: no pit ids specified;"})
 			return
 		}
 		for _, id := range ids {
 			if !strings.HasPrefix(id, "slopensearch-pit-") {
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "invalid id: [" + id + "]"})
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "invalid id: [" + id + "]"})
 				return
 			}
 		}

@@ -1,15 +1,19 @@
 package main
 
-import "slopensearch/internal/mustache"
+import (
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/mustache"
+	"slopensearch/internal/ojson"
+)
 
 // mustacheScriptError is the script_exception of a failed template.
-func mustacheScriptError(src string, e *mustache.Error) *apiError {
-	body := orderedJSON{{"error", orderedJSON{
-		{"root_cause", []any{orderedJSON{{"type", "script_exception"}, {"reason", e.Reason}, {"script_stack", []any{}}, {"script", src}, {"lang", "mustache"}}}},
+func mustacheScriptError(src string, e *mustache.Error) *apierr.Error {
+	body := ojson.Object{{"error", ojson.Object{
+		{"root_cause", []any{ojson.Object{{"type", "script_exception"}, {"reason", e.Reason}, {"script_stack", []any{}}, {"script", src}, {"lang", "mustache"}}}},
 		{"type", "script_exception"}, {"reason", e.Reason}, {"script_stack", []any{}}, {"script", src}, {"lang", "mustache"},
-		{"caused_by", orderedJSON{{"type", "mustache_exception"}, {"reason", e.Reason}}},
+		{"caused_by", ojson.Object{{"type", "mustache_exception"}, {"reason", e.Reason}}},
 	}}, {"status", 400}}
-	return &apiError{Type: "script_exception", Status: 400, Reason: e.Reason, Fields: map[string]any{"lang": "mustache"},
-		CausedBy: &apiError{Type: "mustache_exception", Reason: e.Reason},
+	return &apierr.Error{Type: "script_exception", Status: 400, Reason: e.Reason, Fields: map[string]any{"lang": "mustache"},
+		CausedBy: &apierr.Error{Type: "mustache_exception", Reason: e.Reason},
 		Shard:    &shardFailure{raw: body, status: 400}}
 }

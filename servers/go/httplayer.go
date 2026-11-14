@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/apierr"
 )
 
 // normalizeQuery re-parses the raw query string the way OpenSearch does:
@@ -49,7 +51,7 @@ func normalizeQuery(r *http.Request) {
 
 // strictBoolParam validates a boolean query parameter that must be exactly
 // "true" or "false" (empty means true).
-func strictBoolParam(r *http.Request, name string) *apiError {
+func strictBoolParam(r *http.Request, name string) *apierr.Error {
 	v, ok := r.URL.Query()[name]
 	if !ok || len(v) == 0 {
 		return nil
@@ -58,7 +60,7 @@ func strictBoolParam(r *http.Request, name string) *apiError {
 	case "", "true", "false":
 		return nil
 	}
-	return &apiError{Type: "illegal_argument_exception", Status: 400,
+	return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 		Reason: "Failed to parse value [" + v[0] + "] as only [true] or [false] are allowed."}
 }
 
@@ -69,9 +71,9 @@ func checkContentType(w http.ResponseWriter, r *http.Request) bool {
 	base := strings.ToLower(strings.TrimSpace(strings.Split(ct, ";")[0]))
 	if ct != "" && !strings.Contains(base, "/") {
 		inner := "invalid Content-Type header [" + ct + "]"
-		writeError(w, &apiError{Type: "content_type_header_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "content_type_header_exception", Status: 400,
 			Reason:   "java.lang.IllegalArgumentException: " + inner,
-			CausedBy: &apiError{Type: "illegal_argument_exception", Reason: inner}})
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: inner}})
 		return true
 	}
 	switch base {
@@ -87,27 +89,27 @@ func checkContentType(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // decodeRequestBody undoes a gzip or deflate Content-Encoding.
-func decodeRequestBody(r *http.Request) *apiError {
+func decodeRequestBody(r *http.Request) *apierr.Error {
 	enc := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding")))
 	if enc == "" || enc == "identity" {
 		return nil
 	}
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		return errBad("failed to read body")
+		return apierr.BadRequest("failed to read body")
 	}
 	var rd io.Reader
 	switch enc {
 	case "gzip", "x-gzip":
 		zr, err := gzip.NewReader(bytes.NewReader(raw))
 		if err != nil {
-			return errBad("failed to decompress request body")
+			return apierr.BadRequest("failed to decompress request body")
 		}
 		rd = zr
 	case "deflate":
 		zr, err := zlib.NewReader(bytes.NewReader(raw))
 		if err != nil {
-			return errBad("failed to decompress request body")
+			return apierr.BadRequest("failed to decompress request body")
 		}
 		rd = zr
 	default:
@@ -116,7 +118,7 @@ func decodeRequestBody(r *http.Request) *apiError {
 	}
 	plain, err := io.ReadAll(io.LimitReader(rd, maxContentLength+1))
 	if err != nil {
-		return errBad("failed to decompress request body")
+		return apierr.BadRequest("failed to decompress request body")
 	}
 	r.Body = io.NopCloser(bytes.NewReader(plain))
 	r.Header.Del("Content-Encoding")

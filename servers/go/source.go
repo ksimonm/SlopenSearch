@@ -3,6 +3,8 @@ package main
 import (
 	"net/url"
 	"strings"
+
+	"slopensearch/internal/model"
 )
 
 func splitSourceList(raw string) []string {
@@ -65,7 +67,7 @@ func sourceFilterFromBody(body map[string]any) (includes, excludes []string, omi
 
 // mappingSourceSpec returns the index-level _source filter and whether source
 // storage is enabled.
-func mappingSourceSpec(idx *Index) (includes, excludes []string, enabled bool) {
+func mappingSourceSpec(idx *model.Index) (includes, excludes []string, enabled bool) {
 	enabled = true
 	raw, ok := idx.Mappings["_source"]
 	if !ok {

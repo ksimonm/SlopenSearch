@@ -11,7 +11,10 @@ import (
 	"unicode"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/settings"
 	"slopensearch/internal/wildcard"
 )
 
@@ -19,22 +22,22 @@ import (
 
 var invalidNameChars = " ,\",*,\\,<,|,,,>,/,?"
 
-func validateIndexName(name string) *apiError {
+func validateIndexName(name string) *apierr.Error {
 	return validateName(name, false)
 }
 
-func validateAliasName(name string) *apiError {
+func validateAliasName(name string) *apierr.Error {
 	return validateName(name, true)
 }
 
-func validateName(name string, alias bool) *apiError {
+func validateName(name string, alias bool) *apierr.Error {
 	kind, kindCaps := "index", "index"
 	sep := ", "
 	if alias {
 		kind, kindCaps, sep = "alias", "alias", ": "
 	}
-	fail := func(reason string) *apiError {
-		e := &apiError{Type: "invalid_" + kind + "_name_exception",
+	fail := func(reason string) *apierr.Error {
+		e := &apierr.Error{Type: "invalid_" + kind + "_name_exception",
 			Reason: "Invalid " + kindCaps + " name [" + name + "]" + sep + reason,
 			Status: 400}
 		if !alias {
@@ -77,7 +80,7 @@ func validateName(name string, alias bool) *apiError {
 	return nil
 }
 
-func errIndexNotFoundNamed(name string) *apiError {
+func errIndexNotFoundNamed(name string) *apierr.Error {
 	e := errNotFound(name)
 	e.Fields = map[string]any{"index": name, "index_uuid": "_na_",
 		"resource.type": "index_or_alias", "resource.id": name}
@@ -123,41 +126,41 @@ func isKnownIndexSetting(key string) bool {
 
 var timeSettingPattern = `^-?[0-9]+(ms|s|m|h|d)?$`
 
-func validateSettingValue(key string, raw any, creating bool) (string, *apiError) {
+func validateSettingValue(key string, raw any, creating bool) (string, *apierr.Error) {
 	rest := strings.TrimPrefix(key, "index.")
 	val := settingsValueString(raw)
 	switch {
 	case rest == "number_of_shards":
 		n, ok := settingsValueInt(raw)
 		if !ok {
-			e := errBad("Failed to parse value [" + val + "] for setting [index.number_of_shards]")
-			e.CausedBy = &apiError{Type: "number_format_exception", Reason: "For input string: \"" + val + "\""}
+			e := apierr.BadRequest("Failed to parse value [" + val + "] for setting [index.number_of_shards]")
+			e.CausedBy = &apierr.Error{Type: "number_format_exception", Reason: "For input string: \"" + val + "\""}
 			return "", e
 		}
 		if n < 1 {
-			return "", errBad("Failed to parse value [" + val + "] for setting [index.number_of_shards] must be >= 1")
+			return "", apierr.BadRequest("Failed to parse value [" + val + "] for setting [index.number_of_shards] must be >= 1")
 		}
 		if n > 1024 {
-			return "", errBad("Failed to parse value [" + val + "] for setting [index.number_of_shards] must be <= 1024")
+			return "", apierr.BadRequest("Failed to parse value [" + val + "] for setting [index.number_of_shards] must be <= 1024")
 		}
 		return strconv.Itoa(n), nil
 	case rest == "number_of_replicas":
 		n, ok := settingsValueInt(raw)
 		if !ok {
-			e := errBad("Failed to parse value [" + val + "] for setting [index.number_of_replicas]")
-			e.CausedBy = &apiError{Type: "number_format_exception", Reason: "For input string: \"" + val + "\""}
+			e := apierr.BadRequest("Failed to parse value [" + val + "] for setting [index.number_of_replicas]")
+			e.CausedBy = &apierr.Error{Type: "number_format_exception", Reason: "For input string: \"" + val + "\""}
 			return "", e
 		}
 		if n < 0 {
-			return "", errBad("Failed to parse value [" + val + "] for setting [index.number_of_replicas] must be >= 0")
+			return "", apierr.BadRequest("Failed to parse value [" + val + "] for setting [index.number_of_replicas] must be >= 0")
 		}
 		if n > 1023 {
-			return "", errBad("Failed to parse value [" + val + "] for setting [index.number_of_replicas] must be <= 1023")
+			return "", apierr.BadRequest("Failed to parse value [" + val + "] for setting [index.number_of_replicas] must be <= 1023")
 		}
 		return strconv.Itoa(n), nil
 	case rest == "refresh_interval":
 		if !regexpMatchString(timeSettingPattern, val) {
-			return "", errBad("failed to parse setting [index.refresh_interval] with value [" + val + "] as a time value: unit is missing or unrecognized")
+			return "", apierr.BadRequest("failed to parse setting [index.refresh_interval] with value [" + val + "] as a time value: unit is missing or unrecognized")
 		}
 		return val, nil
 	case rest == "max_result_window" || rest == "max_inner_result_window" ||
@@ -165,10 +168,10 @@ func validateSettingValue(key string, raw any, creating bool) (string, *apiError
 		rest == "max_shingle_diff" || rest == "max_refresh_listeners":
 		n, ok := settingsValueInt(raw)
 		if !ok {
-			return "", errBad("Failed to parse value [" + val + "] for setting [" + key + "]")
+			return "", apierr.BadRequest("Failed to parse value [" + val + "] for setting [" + key + "]")
 		}
 		if (rest == "max_result_window" || rest == "max_inner_result_window") && n < 1 {
-			return "", errBad("Failed to parse value [" + val + "] for setting [" + key + "] must be >= 1")
+			return "", apierr.BadRequest("Failed to parse value [" + val + "] for setting [" + key + "] must be >= 1")
 		}
 		return strconv.Itoa(n), nil
 	case rest == "hidden" || strings.HasPrefix(rest, "blocks."):
@@ -178,7 +181,7 @@ func validateSettingValue(key string, raw any, creating bool) (string, *apiError
 		if val == "true" || val == "false" {
 			return val, nil
 		}
-		return "", errBad("Failed to parse value [" + val + "] for setting [" + key + "]")
+		return "", apierr.BadRequest("Failed to parse value [" + val + "] for setting [" + key + "]")
 	}
 	return val, nil
 }
@@ -327,7 +330,7 @@ func settingsToNested(flat map[string]any) map[string]any {
 	return root
 }
 
-func materializedFlat(idx *Index) map[string]any {
+func materializedFlat(idx *model.Index) map[string]any {
 	out := map[string]any{}
 	for k, v := range idx.Settings {
 		out[k] = stringifyScalar(v)
@@ -381,7 +384,7 @@ func parseSettingsFilter(filter string) []string {
 
 // settingsView renders one index's settings for GET responses. Returns nil
 // when an explicit filter matched nothing.
-func settingsView(idx *Index, flat, includeDefaults bool, filter string) map[string]any {
+func settingsView(idx *model.Index, flat, includeDefaults bool, filter string) map[string]any {
 	patterns := parseSettingsFilter(filter)
 	flatAll := materializedFlat(idx)
 	matched := map[string]any{}
@@ -436,7 +439,7 @@ type resolveOpts2 struct {
 
 func defaultExpand() map[string]bool { return map[string]bool{"open": true} }
 
-func parseExpandWildcards(v string, def map[string]bool) (map[string]bool, *apiError) {
+func parseExpandWildcards(v string, def map[string]bool) (map[string]bool, *apierr.Error) {
 	if v == "" {
 		return def, nil
 	}
@@ -453,13 +456,13 @@ func parseExpandWildcards(v string, def map[string]bool) (map[string]bool, *apiE
 			return map[string]bool{"open": true, "closed": true, "hidden": true}, nil
 		case "":
 		default:
-			return nil, errBad("No valid expand wildcard value [" + p + "]")
+			return nil, apierr.BadRequest("No valid expand wildcard value [" + p + "]")
 		}
 	}
 	return out, nil
 }
 
-func acceptClass(idx *Index, expand map[string]bool) bool {
+func acceptClass(idx *model.Index, expand map[string]bool) bool {
 	if idx.Closed {
 		if !expand["closed"] {
 			return false
@@ -473,14 +476,14 @@ func acceptClass(idx *Index, expand map[string]bool) bool {
 	return true
 }
 
-func errIndexClosed(idx *Index) *apiError {
-	return &apiError{Type: "index_closed_exception", Reason: "closed", Status: 400,
+func errIndexClosed(idx *model.Index) *apierr.Error {
+	return &apierr.Error{Type: "index_closed_exception", Reason: "closed", Status: 400,
 		Fields: map[string]any{"index": idx.Name, "index_uuid": idx.UUID}}
 }
 
 // resolveSpec2 resolves an index expression (comma list, wildcards, exclusions,
 // aliases) according to OpenSearch semantics.
-func (s *Server) resolveSpec2(spec string, o resolveOpts2) ([]*Index, *apiError) {
+func (s *Server) resolveSpec2(spec string, o resolveOpts2) ([]*model.Index, *apierr.Error) {
 	if spec == "" {
 		spec = "*"
 	}
@@ -492,16 +495,16 @@ func (s *Server) resolveSpec2(spec string, o resolveOpts2) ([]*Index, *apiError)
 	if o.allowNoIndices != nil {
 		allowNo = *o.allowNoIndices
 	}
-	seen := map[string]*Index{}
+	seen := map[string]*model.Index{}
 	var order []string
-	add := func(idx *Index) {
+	add := func(idx *model.Index) {
 		if _, ok := seen[idx.Name]; !ok {
 			seen[idx.Name] = idx
 			order = append(order, idx.Name)
 		}
 	}
-	var remove func(idx *Index)
-	remove = func(idx *Index) {
+	var remove func(idx *model.Index)
+	remove = func(idx *model.Index) {
 		delete(seen, idx.Name)
 	}
 	for _, tok := range strings.Split(spec, ",") {
@@ -514,8 +517,8 @@ func (s *Server) resolveSpec2(spec string, o resolveOpts2) ([]*Index, *apiError)
 			exclude = true
 			token = token[1:]
 		}
-		var matched []*Index
-		var apiErr2 *apiError
+		var matched []*model.Index
+		var apiErr2 *apierr.Error
 		if token == "_all" || token == "*" {
 			for _, name := range sortedIndexNames(s) {
 				idx := s.indices[name]
@@ -560,7 +563,7 @@ func (s *Server) resolveSpec2(spec string, o resolveOpts2) ([]*Index, *apiError)
 					}
 				}
 				if aliasHit && o.rejectAlias {
-					return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+					return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 						Reason: "The provided expression [" + token + "] matches an alias, specify the corresponding concrete indices instead."}
 				}
 				if !aliasHit {
@@ -602,7 +605,7 @@ func (s *Server) resolveSpec2(spec string, o resolveOpts2) ([]*Index, *apiError)
 		}
 	}
 	sort.Strings(order)
-	out := make([]*Index, 0, len(order))
+	out := make([]*model.Index, 0, len(order))
 	for _, name := range order {
 		if idx, ok := seen[name]; ok {
 			out = append(out, idx)
@@ -639,7 +642,7 @@ func (s *Server) createIndex(w http.ResponseWriter, r *http.Request, name string
 	var body map[string]any
 	if len(strings.TrimSpace(string(bodyBytes))) > 0 {
 		if err := jsonv.Unmarshal(bodyBytes, &body); err != nil {
-			writeError(w, &apiError{Type: "not_x_content_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "not_x_content_exception", Status: 400,
 				Reason: "Compressor detection can only be called on some xcontent bytes or compressed xcontent bytes"})
 			return
 		}
@@ -658,14 +661,14 @@ func (s *Server) createIndex(w http.ResponseWriter, r *http.Request, name string
 // createIndexInternal builds and registers a new index (s.mu must be held).
 // When isBacking is true, template composition is skipped (the backing body
 // was built from the data stream template already).
-func (s *Server) createIndexInternal(name string, body map[string]any, isBacking bool) (*Index, *apiError) {
+func (s *Server) createIndexInternal(name string, body map[string]any, isBacking bool) (*model.Index, *apierr.Error) {
 	if _, exists := s.indices[name]; exists {
-		return nil, &apiError{Type: "resource_already_exists_exception", Status: 400,
+		return nil, &apierr.Error{Type: "resource_already_exists_exception", Status: 400,
 			Reason: "index [" + name + "]", Fields: map[string]any{"index": name}}
 	}
 	for _, idx := range s.indices {
 		if _, ok := idx.Aliases[name]; ok {
-			return nil, &apiError{Type: "invalid_index_name_exception", Status: 400,
+			return nil, &apierr.Error{Type: "invalid_index_name_exception", Status: 400,
 				Reason: "Invalid index name [" + name + "], already exists as alias",
 				Fields: map[string]any{"index": name, "index_uuid": "_na_"}}
 		}
@@ -674,7 +677,7 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 		switch k {
 		case "settings", "mappings", "aliases":
 		default:
-			return nil, &apiError{Type: "parse_exception", Status: 400,
+			return nil, &apierr.Error{Type: "parse_exception", Status: 400,
 				Reason: "unknown key [" + k + "] for create index"}
 		}
 	}
@@ -682,7 +685,7 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 	if !isBacking {
 		composed = s.composeForIndex(name)
 		if composed.dsDef != nil {
-			return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+			return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "cannot create index with name [" + name + "], because it matches with template [" + composed.template + "] that creates data streams only, use create data stream api instead"}
 		}
 	}
@@ -700,7 +703,7 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 			continue
 		}
 		if !isKnownIndexSetting(k) {
-			return nil, &apiError{Type: "settings_exception", Status: 400,
+			return nil, &apierr.Error{Type: "settings_exception", Status: 400,
 				Reason: "unknown setting [" + k + "] please check that any required plugins are installed, or check the breaking changes documentation for removed settings"}
 		}
 		val, err := validateSettingValue(k, v, true)
@@ -732,7 +735,7 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 				continue
 			}
 			if _, isMap := v.(map[string]any); isMap && k == "_doc" {
-				return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+				return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "The mapping definition cannot be nested under a type"}
 			}
 		}
@@ -746,9 +749,9 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 	}
 	if err := expandDottedMapping(mergedMappings); err != nil {
 		reason := err.Reason
-		return nil, &apiError{Type: "mapper_parsing_exception", Status: 400,
+		return nil, &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 			Reason:   "Failed to parse mapping [_doc]: " + reason,
-			CausedBy: &apiError{Type: "illegal_argument_exception", Reason: reason}}
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 	}
 	if err := analysis.ValidateSettings(canonical); err != nil {
 		return nil, err
@@ -773,29 +776,29 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 		return nil, err
 	}
 	fieldLimit := 1000
-	if v, ok := settingInt(canonical, "mapping.total_fields.limit"); ok {
+	if v, ok := settings.Int(canonical, "mapping.total_fields.limit"); ok {
 		fieldLimit = v
 	}
 	if countMappedFields(mergedMappings) > fieldLimit {
 		return nil, totalFieldsError(fieldLimit)
 	}
 	nestedLimit := 50
-	if v, ok := settingInt(canonical, "mapping.nested_fields.limit"); ok {
+	if v, ok := settings.Int(canonical, "mapping.nested_fields.limit"); ok {
 		nestedLimit = v
 	}
 	if countNestedFields(mergedMappings) > nestedLimit {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: fmt.Sprintf("Limit of nested fields [%d] has been exceeded", nestedLimit)}
 	}
 
 	aliasesRaw, _ := body["aliases"].(map[string]any)
 	aliases := map[string]map[string]any{}
-	addAlias := func(aliasName string, defRaw any) *apiError {
+	addAlias := func(aliasName string, defRaw any) *apierr.Error {
 		if err := validateAliasName(aliasName); err != nil {
 			return err
 		}
 		if _, clash := s.indices[aliasName]; clash {
-			return &apiError{Type: "invalid_alias_name_exception", Status: 400,
+			return &apierr.Error{Type: "invalid_alias_name_exception", Status: 400,
 				Reason: "Invalid alias name [" + aliasName + "], an index exists with the same name as the alias"}
 		}
 		def, _ := defRaw.(map[string]any)
@@ -804,10 +807,10 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 		}
 		if filt, ok := def["filter"]; ok && filt != nil {
 			if fq, ok := filt.(map[string]any); ok {
-				if err := validateQuery(&Index{FieldTypes: map[string]string{}}, fq); err != nil {
-					return &apiError{Type: "illegal_argument_exception", Status: 400,
+				if err := validateQuery(&model.Index{FieldTypes: map[string]string{}}, fq); err != nil {
+					return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 						Reason:   "failed to parse filter for alias [" + aliasName + "]",
-						CausedBy: &apiError{Type: "parsing_exception", Reason: err.Reason}}
+						CausedBy: &apierr.Error{Type: "parsing_exception", Reason: err.Reason}}
 				}
 			}
 		}
@@ -827,7 +830,7 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 		}
 	}
 
-	idx := &Index{
+	idx := &model.Index{
 		Name:         name,
 		UUID:         randomUUID(),
 		CreationDate: nowMillis(),
@@ -878,19 +881,19 @@ func parseDynamicSetting(v any) (string, bool) {
 	return "", false
 }
 
-func dynamicConvertError(path string, v any) *apiError {
+func dynamicConvertError(path string, v any) *apierr.Error {
 	reason := "Could not convert [" + path + ".dynamic] to boolean"
-	return &apiError{Type: "mapper_parsing_exception", Status: 400,
+	return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 		Reason: "Failed to parse mapping [_doc]: " + reason,
-		CausedBy: &apiError{Type: "illegal_argument_exception", Reason: reason,
-			CausedBy: &apiError{Type: "illegal_argument_exception",
+		CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: reason,
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 				Reason: "Failed to parse value [" + previewValue(v) + "] as only [true] or [false] are allowed."}}}
 }
 
 // normalizeDynamicMapping converts the accepted "dynamic" spellings to the
 // canonical strings OpenSearch renders back in the mapping, and rejects any
 // other value.
-func normalizeDynamicMapping(mappings map[string]any) *apiError {
+func normalizeDynamicMapping(mappings map[string]any) *apierr.Error {
 	if v, ok := mappings["dynamic"]; ok {
 		s, valid := parseDynamicSetting(v)
 		if !valid {
@@ -906,7 +909,7 @@ func normalizeDynamicMapping(mappings map[string]any) *apiError {
 	return nil
 }
 
-func normalizeDynamicProps(props map[string]any, prefix string) *apiError {
+func normalizeDynamicProps(props map[string]any, prefix string) *apierr.Error {
 	for name, raw := range props {
 		def, ok := raw.(map[string]any)
 		if !ok {
@@ -961,19 +964,19 @@ func countMappedFields(mappings map[string]any) int {
 	return walk(props)
 }
 
-func totalFieldsLimit(idx *Index) int {
-	if v, ok := settingInt(idx.Settings, "mapping.total_fields.limit"); ok {
+func totalFieldsLimit(idx *model.Index) int {
+	if v, ok := settings.Int(idx.Settings, "mapping.total_fields.limit"); ok {
 		return v
 	}
 	return 1000
 }
 
-func totalFieldsError(limit int) *apiError {
-	return &apiError{Type: "illegal_argument_exception", Status: 400,
+func totalFieldsError(limit int) *apierr.Error {
+	return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 		Reason: fmt.Sprintf("Limit of total fields [%d] has been exceeded", limit)}
 }
 
-func checkTotalFields(idx *Index) *apiError {
+func checkTotalFields(idx *model.Index) *apierr.Error {
 	limit := totalFieldsLimit(idx)
 	if countMappedFields(idx.Mappings) > limit {
 		return totalFieldsError(limit)
@@ -1003,19 +1006,19 @@ func countNestedFields(mappings map[string]any) int {
 	return walk(props)
 }
 
-func checkNestedFields(idx *Index) *apiError {
+func checkNestedFields(idx *model.Index) *apierr.Error {
 	limit := 50
-	if v, ok := settingInt(idx.Settings, "mapping.nested_fields.limit"); ok {
+	if v, ok := settings.Int(idx.Settings, "mapping.nested_fields.limit"); ok {
 		limit = v
 	}
 	if countNestedFields(idx.Mappings) > limit {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: fmt.Sprintf("Limit of nested fields [%d] has been exceeded", limit)}
 	}
 	return nil
 }
 
-func validateMappingFull(mappings map[string]any) *apiError {
+func validateMappingFull(mappings map[string]any) *apierr.Error {
 	normalizeDerivedMappings(mappings)
 	if err := normalizeDynamicMapping(mappings); err != nil {
 		return err
@@ -1031,9 +1034,9 @@ func validateMappingFull(mappings map[string]any) *apiError {
 		return err
 	}
 	if err := validateProps(props); err != nil {
-		return &apiError{Type: "mapper_parsing_exception", Status: 400,
+		return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 			Reason:   "Failed to parse mapping [_doc]: " + err.Reason,
-			CausedBy: &apiError{Type: err.Cause, Reason: err.Reason}}
+			CausedBy: &apierr.Error{Type: err.Cause, Reason: err.Reason}}
 	}
 	if err := validateAliasMappings(props); err != nil {
 		return err
@@ -1115,7 +1118,7 @@ func (s *Server) deleteIndices(w http.ResponseWriter, r *http.Request, spec stri
 		if idx.DataStream != "" {
 			if ds := s.resolveDataStream(idx.DataStream); ds != nil && len(ds.BackingIndices) > 0 &&
 				ds.BackingIndices[len(ds.BackingIndices)-1] == idx.Name {
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "index [" + idx.Name + "] is the write index for data stream [" + idx.DataStream + "] and cannot be deleted"})
 				return
 			}
@@ -1136,11 +1139,11 @@ func (s *Server) deleteIndices(w http.ResponseWriter, r *http.Request, spec stri
 	writeJSON(w, 200, map[string]any{"acknowledged": true})
 }
 
-func indexBlockError(idx *Index, block string, code int, status int) *apiError {
+func indexBlockError(idx *model.Index, block string, code int, status int) *apierr.Error {
 	if !blockOn(idx, block) {
 		return nil
 	}
-	return &apiError{Type: "cluster_block_exception", Status: status,
+	return &apierr.Error{Type: "cluster_block_exception", Status: status,
 		Reason: fmt.Sprintf("index [%s] blocked by: [FORBIDDEN/%d/index %s (api)];", idx.Name, code, strings.ReplaceAll(block, "_", "-"))}
 }
 
@@ -1172,7 +1175,7 @@ func (s *Server) getSettingsAPI(w http.ResponseWriter, r *http.Request, spec, fi
 	writeJSON(w, 200, out)
 }
 
-func metaReadBlock(idx *Index) *apiError {
+func metaReadBlock(idx *model.Index) *apierr.Error {
 	return indexBlockError(idx, "metadata", 9, 403)
 }
 
@@ -1184,7 +1187,7 @@ func (s *Server) putSettingsAPI(w http.ResponseWriter, r *http.Request, spec str
 	}
 	updates := canonicalBodySettings(body)
 	if len(updates) == 0 {
-		writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: no settings to update;"})
 		return
 	}
@@ -1226,7 +1229,7 @@ func (s *Server) putSettingsAPI(w http.ResponseWriter, r *http.Request, spec str
 				continue
 			}
 			if !isKnownIndexSetting(k) && !strings.HasPrefix(k, "index.analysis.") {
-				writeError(w, &apiError{Type: "settings_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "settings_exception", Status: 400,
 					Reason: "unknown setting [" + k + "] please check that any required plugins are installed, or check the breaking changes documentation for removed settings"})
 				return
 			}
@@ -1247,16 +1250,16 @@ func (s *Server) putSettingsAPI(w http.ResponseWriter, r *http.Request, spec str
 		sort.Strings(closedOnly)
 		if len(nonDynamic) > 0 {
 			if idx.Closed {
-				writeError(w, &apiError{Type: "settings_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "settings_exception", Status: 400,
 					Reason: "Validation Failed: 1: setting [" + nonDynamic[0] + "], not updateable;"})
 			} else {
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "Can't update non dynamic settings [[" + strings.Join(nonDynamic, ", ") + "]] for open indices [[" + idx.Name + "/" + idx.UUID + "]]"})
 			}
 			return
 		}
 		if len(closedOnly) > 0 && !idx.Closed {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "Can't update non dynamic settings [[" + strings.Join(closedOnly, ", ") + "]] for open indices [[" + idx.Name + "/" + idx.UUID + "]]"})
 			return
 		}
@@ -1297,7 +1300,7 @@ func (s *Server) putSettingsAPI(w http.ResponseWriter, r *http.Request, spec str
 	writeJSON(w, 200, map[string]any{"acknowledged": true})
 }
 
-func settingPresent(idx *Index, key string) bool {
+func settingPresent(idx *model.Index, key string) bool {
 	_, ok := idx.Settings[key]
 	return ok
 }
@@ -1309,7 +1312,7 @@ var validBlockNames = map[string]bool{
 
 func (s *Server) putBlockAPI(w http.ResponseWriter, r *http.Request, indexSpec, block string) {
 	if !validBlockNames[block] {
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "No block found with name " + block})
 		return
 	}

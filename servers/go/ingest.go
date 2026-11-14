@@ -9,6 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/model"
+	"slopensearch/internal/settings"
 	"slopensearch/internal/wildcard"
 )
 
@@ -186,7 +189,7 @@ func (e *ingestEnv) renderValue(v any) any {
 	return v
 }
 
-func setNested(root map[string]any, path string, value any) *apiError {
+func setNested(root map[string]any, path string, value any) *apierr.Error {
 	parts := strings.Split(path, ".")
 	cur := root
 	for i, p := range parts {
@@ -203,7 +206,7 @@ func setNested(root map[string]any, path string, value any) *apiError {
 		}
 		m, ok := next.(map[string]any)
 		if !ok {
-			return &apiError{Type: "illegal_argument_exception", Status: 400,
+			return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: fmt.Sprintf("cannot set [%s] with parent object of type [%s] as part of path [%s]", parts[i+1], javaTypeName(next), path)}
 		}
 		cur = m
@@ -228,7 +231,7 @@ func setAnyNested(cur any, parts []string, value any) any {
 	return m
 }
 
-func (e *ingestEnv) setField(path string, value any, override bool) *apiError {
+func (e *ingestEnv) setField(path string, value any, override bool) *apierr.Error {
 	path = e.render(path)
 	if strings.HasPrefix(path, "_ingest._value") {
 		rest := strings.TrimPrefix(path, "_ingest._value")
@@ -306,7 +309,7 @@ func javaTypeName(v any) string {
 	return "java.lang.Object"
 }
 
-func apiErrorObject(e *apiError) map[string]any {
+func apiErrorObject(e *apierr.Error) map[string]any {
 	rcType, rcReason := e.Type, e.Reason
 	if e.RootCause != nil {
 		rcType, rcReason = e.RootCause.Type, e.RootCause.Reason
@@ -325,7 +328,7 @@ func apiErrorObject(e *apiError) map[string]any {
 	return m
 }
 
-func apiCauseObject(e *apiError) map[string]any {
+func apiCauseObject(e *apierr.Error) map[string]any {
 	m := map[string]any{"type": e.Type, "reason": e.Reason}
 	for k, v := range e.Fields {
 		m[k] = v
@@ -411,7 +414,7 @@ func (s *Server) handleIngestRoute(w http.ResponseWriter, r *http.Request, segs 
 		delete(s.ingestPipelines, nameExpr)
 		s.ingestMu.Unlock()
 		if !ok {
-			writeError(w, &apiError{Type: "resource_not_found_exception", Status: 404,
+			writeError(w, &apierr.Error{Type: "resource_not_found_exception", Status: 404,
 				Reason: "pipeline [" + nameExpr + "] is missing"})
 			return true
 		}
@@ -453,21 +456,21 @@ func (s *Server) resolvePipelineNames(expr string) []string {
 
 var pipelineAllowedKeys = map[string]bool{"description": true, "version": true, "processors": true, "on_failure": true}
 
-func validatePipelineBody(name string, body map[string]any) (map[string]any, *apiError) {
+func validatePipelineBody(name string, body map[string]any) (map[string]any, *apierr.Error) {
 	for k := range body {
 		if k == "_meta" || !pipelineAllowedKeys[k] {
-			return nil, &apiError{Type: "parse_exception", Status: 400,
+			return nil, &apierr.Error{Type: "parse_exception", Status: 400,
 				Reason: "pipeline [" + name + "] doesn't support one or more provided configuration parameters [" + k + "]"}
 		}
 	}
 	raw, ok := body["processors"]
 	if !ok {
-		return nil, &apiError{Type: "parse_exception", Status: 400,
+		return nil, &apierr.Error{Type: "parse_exception", Status: 400,
 			Reason: "[processors] required property is missing", Fields: map[string]any{"property_name": "processors"}}
 	}
 	list, ok := raw.([]any)
 	if !ok {
-		return nil, &apiError{Type: "parse_exception", Status: 400, Reason: "[processors] required property is missing",
+		return nil, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "[processors] required property is missing",
 			Fields: map[string]any{"property_name": "processors"}}
 	}
 	if _, err := validateProcessors(list, name); err != nil {
@@ -476,7 +479,7 @@ func validatePipelineBody(name string, body map[string]any) (map[string]any, *ap
 	if of, ok := body["on_failure"]; ok {
 		ofl, ok := of.([]any)
 		if !ok || len(ofl) == 0 {
-			return nil, &apiError{Type: "parse_exception", Status: 400, Reason: "[on_failure] processors list cannot be empty"}
+			return nil, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "[on_failure] processors list cannot be empty"}
 		}
 		if _, err := validateProcessors(ofl, name); err != nil {
 			return nil, err
@@ -495,12 +498,12 @@ func validatePipelineBody(name string, body map[string]any) (map[string]any, *ap
 	return norm, nil
 }
 
-func validateProcessors(list []any, name string) ([]string, *apiError) {
+func validateProcessors(list []any, name string) ([]string, *apierr.Error) {
 	types := []string{}
 	for _, raw := range list {
 		def, ok := raw.(map[string]any)
 		if !ok {
-			return nil, &apiError{Type: "parse_exception", Status: 400, Reason: "processor must be an object"}
+			return nil, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "processor must be an object"}
 		}
 		typ, cfg, err := processorConfig(def)
 		if err != nil {
@@ -513,7 +516,7 @@ func validateProcessors(list []any, name string) ([]string, *apiError) {
 		if of, ok := procControl(def, cfg, "on_failure"); ok {
 			ofl, ok := of.([]any)
 			if !ok || len(ofl) == 0 {
-				return nil, &apiError{Type: "parse_exception", Status: 400, Reason: "[on_failure] processors list cannot be empty"}
+				return nil, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "[on_failure] processors list cannot be empty"}
 			}
 			if _, err := validateProcessors(ofl, name); err != nil {
 				return nil, err
@@ -523,7 +526,7 @@ func validateProcessors(list []any, name string) ([]string, *apiError) {
 	return types, nil
 }
 
-func processorConfig(def map[string]any) (string, map[string]any, *apiError) {
+func processorConfig(def map[string]any) (string, map[string]any, *apierr.Error) {
 	control := map[string]bool{"description": true, "tag": true, "if": true, "on_failure": true, "ignore_failure": true}
 	typ := ""
 	var cfg map[string]any
@@ -532,7 +535,7 @@ func processorConfig(def map[string]any) (string, map[string]any, *apiError) {
 			continue
 		}
 		if typ != "" {
-			return "", nil, &apiError{Type: "parse_exception", Status: 400, Reason: "processor must specify exactly one processor type"}
+			return "", nil, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "processor must specify exactly one processor type"}
 		}
 		typ = k
 		cfg, _ = v.(map[string]any)
@@ -541,10 +544,10 @@ func processorConfig(def map[string]any) (string, map[string]any, *apiError) {
 		}
 	}
 	if typ == "" {
-		return "", nil, &apiError{Type: "parse_exception", Status: 400, Reason: "processor must specify a processor type"}
+		return "", nil, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "processor must specify a processor type"}
 	}
 	if !knownProcessorTypes[typ] {
-		return "", nil, &apiError{Type: "parse_exception", Status: 400,
+		return "", nil, &apierr.Error{Type: "parse_exception", Status: 400,
 			Reason: "No processor type exists with name [" + typ + "]", Fields: map[string]any{"processor_type": typ}}
 	}
 	return typ, cfg, nil
@@ -597,14 +600,14 @@ var processorAllowed = map[string]map[string]bool{
 	"user_agent":        {"field": true, "target_field": true, "properties": true, "ignore_missing": true},
 }
 
-func validateProcessorConfig(typ string, cfg map[string]any) *apiError {
+func validateProcessorConfig(typ string, cfg map[string]any) *apierr.Error {
 	allowed := processorAllowed[typ]
 	for k := range cfg {
 		if k == "description" || k == "tag" || k == "if" || k == "on_failure" || k == "ignore_failure" {
 			continue
 		}
 		if !allowed[k] {
-			return &apiError{Type: "parse_exception", Status: 400,
+			return &apierr.Error{Type: "parse_exception", Status: 400,
 				Reason: "processor [" + typ + "] doesn't support one or more provided configuration parameters [" + k + "]",
 				Fields: map[string]any{"processor_type": typ}}
 		}
@@ -622,7 +625,7 @@ func validateProcessorConfig(typ string, cfg map[string]any) *apiError {
 	}
 	for _, key := range required[typ] {
 		if _, ok := cfg[key]; !ok {
-			return &apiError{Type: "parse_exception", Status: 400,
+			return &apierr.Error{Type: "parse_exception", Status: 400,
 				Reason: "[" + key + "] required property is missing",
 				Fields: map[string]any{"processor_type": typ, "property_name": key}}
 		}
@@ -631,18 +634,18 @@ func validateProcessorConfig(typ string, cfg map[string]any) *apiError {
 		fp, hasFP := cfg["field_pattern"]
 		ep, hasEP := cfg["exclude_field_pattern"]
 		if hasFP == hasEP {
-			return &apiError{Type: "parse_exception", Status: 400,
+			return &apierr.Error{Type: "parse_exception", Status: 400,
 				Reason: "[field_pattern] either field_pattern or exclude_field_pattern must be set"}
 		}
-		check := func(v any) *apiError {
+		check := func(v any) *apierr.Error {
 			if s, ok := v.(string); ok && strings.HasPrefix(s, "_") {
-				return &apiError{Type: "parse_exception", Status: 400,
+				return &apierr.Error{Type: "parse_exception", Status: 400,
 					Reason: "[field_pattern] Validation Failed: 1: field_pattern [" + s + "] must not start with '_';"}
 			}
 			if list, ok := v.([]any); ok {
 				for _, e := range list {
 					if s, ok := e.(string); ok && strings.HasPrefix(s, "_") {
-						return &apiError{Type: "parse_exception", Status: 400,
+						return &apierr.Error{Type: "parse_exception", Status: 400,
 							Reason: "[field_pattern] Validation Failed: 1: field_pattern [" + s + "] must not start with '_';"}
 					}
 				}
@@ -662,7 +665,7 @@ func validateProcessorConfig(typ string, cfg map[string]any) *apiError {
 	}
 	if typ == "sort" {
 		if o, ok := cfg["order"].(string); ok && o != "asc" && o != "desc" {
-			return &apiError{Type: "parse_exception", Status: 400,
+			return &apierr.Error{Type: "parse_exception", Status: 400,
 				Reason: "[order] Sort direction [" + o + "] not recognized. Valid values are: [asc, desc]"}
 		}
 	}
@@ -671,7 +674,7 @@ func validateProcessorConfig(typ string, cfg map[string]any) *apiError {
 		switch t {
 		case "integer", "long", "float", "double", "boolean", "string", "auto", "ip":
 		default:
-			return &apiError{Type: "parse_exception", Status: 400,
+			return &apierr.Error{Type: "parse_exception", Status: 400,
 				Reason: "[type] type [" + t + "] not supported, cannot convert field.",
 				Fields: map[string]any{"property_name": "type"}}
 		}
@@ -683,13 +686,13 @@ func validateProcessorConfig(typ string, cfg map[string]any) *apiError {
 			if strings.Contains(err.Error(), "missing closing ]") {
 				reason = "[pattern] Invalid regex pattern. Unclosed character class"
 			}
-			return &apiError{Type: "parse_exception", Status: 400, Reason: reason,
+			return &apierr.Error{Type: "parse_exception", Status: 400, Reason: reason,
 				Fields: map[string]any{"processor_type": "gsub"}}
 		}
 	}
 	if typ == "grok" {
 		if list, ok := cfg["patterns"].([]any); ok && len(list) == 0 {
-			return &apiError{Type: "parse_exception", Status: 400,
+			return &apierr.Error{Type: "parse_exception", Status: 400,
 				Reason: "[patterns] List of patterns must not be empty",
 				Fields: map[string]any{"processor_type": "grok"}}
 		}
@@ -698,14 +701,14 @@ func validateProcessorConfig(typ string, cfg map[string]any) *apiError {
 		_, add := cfg["add_to_root"].(bool)
 		if add {
 			if _, ok := cfg["target_field"]; ok {
-				return &apiError{Type: "parse_exception", Status: 400,
+				return &apierr.Error{Type: "parse_exception", Status: 400,
 					Reason: "[target_field] Cannot set a target field while also setting `add_to_root` to true"}
 			}
 		}
 	}
 	if typ == "csv" {
 		if s, ok := cfg["separator"].(string); ok && len([]rune(s)) != 1 {
-			return &apiError{Type: "parse_exception", Status: 400,
+			return &apierr.Error{Type: "parse_exception", Status: 400,
 				Reason: "[separator] separator has to be single character like , or ;"}
 		}
 	}
@@ -730,13 +733,13 @@ func validateProcessorConfig(typ string, cfg map[string]any) *apiError {
 	if typ == "fingerprint" {
 		if _, hasF := cfg["fields"]; hasF {
 			if ex, hasE := cfg["exclude_fields"]; hasE && len(envList(ex)) > 0 {
-				return &apiError{Type: "parse_exception", Status: 400, Reason: "[fields] either fields or exclude_fields can be set"}
+				return &apierr.Error{Type: "parse_exception", Status: 400, Reason: "[fields] either fields or exclude_fields can be set"}
 			}
 		}
 		if m, ok := cfg["hash_method"].(string); ok {
 			up := strings.ToUpper(m)
 			if up != "MD5@2.16.0" && up != "SHA-1@2.16.0" && up != "SHA-256@2.16.0" && up != "SHA3-256@2.16.0" {
-				return &apiError{Type: "parse_exception", Status: 400,
+				return &apierr.Error{Type: "parse_exception", Status: 400,
 					Reason: "[hash_method] hash method must be MD5@2.16.0, SHA-1@2.16.0, SHA-256@2.16.0 or SHA3-256@2.16.0"}
 			}
 		}
@@ -744,7 +747,7 @@ func validateProcessorConfig(typ string, cfg map[string]any) *apiError {
 	if cond, ok := cfg["if"].(string); ok {
 		trimmed := strings.TrimSpace(cond)
 		if trimmed == "" || strings.HasSuffix(trimmed, "=") && !strings.HasSuffix(trimmed, "==") && !strings.HasSuffix(trimmed, "!=") && !strings.HasSuffix(trimmed, ">=") && !strings.HasSuffix(trimmed, "<=") {
-			return &apiError{Type: "script_exception", Status: 400, Reason: "compile error",
+			return &apierr.Error{Type: "script_exception", Status: 400, Reason: "compile error",
 				Fields: map[string]any{"processor_type": typ}}
 		}
 	}
@@ -754,13 +757,13 @@ func validateProcessorConfig(typ string, cfg map[string]any) *apiError {
 				return err
 			}
 		} else if lang, ok := cfg["lang"].(string); ok && lang == "mustache" {
-			return &apiError{Type: "illegal_argument_exception", Status: 400,
+			return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "mustache engine does not know how to handle context [ingest]", ForceTop: true}
 		}
 	}
 	if typ == "dot_expander" {
 		if f, ok := cfg["field"].(string); ok && (!strings.Contains(f, ".") || strings.Contains(f, "*")) {
-			return &apiError{Type: "parse_exception", Status: 400, Reason: "[field] field does not contain a dot"}
+			return &apierr.Error{Type: "parse_exception", Status: 400, Reason: "[field] field does not contain a dot"}
 		}
 	}
 	if typ == "user_agent" {
@@ -770,7 +773,7 @@ func validateProcessorConfig(typ string, cfg map[string]any) *apiError {
 				switch p {
 				case "NAME", "MAJOR", "MINOR", "PATCH", "BUILD", "OS", "OS_NAME", "OS_MAJOR", "OS_MINOR", "OS_FULL", "DEVICE", "VERSION", "ORIGINAL":
 				default:
-					return &apiError{Type: "parse_exception", Status: 400,
+					return &apierr.Error{Type: "parse_exception", Status: 400,
 						Reason: "[properties] illegal property value [" + ingestString(raw) + "]. valid values are [NAME, MAJOR, MINOR, PATCH, BUILD, OS, OS_NAME, OS_MAJOR, OS_MINOR, OS_FULL, DEVICE, VERSION, ORIGINAL]"}
 				}
 			}
@@ -792,7 +795,7 @@ func (s *Server) simulatePipeline(w http.ResponseWriter, r *http.Request, stored
 		p, ok := s.ingestPipelines[stored]
 		s.ingestMu.RUnlock()
 		if !ok {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "pipeline [" + stored + "] does not exist"})
 			return
 		}
@@ -800,17 +803,17 @@ func (s *Server) simulatePipeline(w http.ResponseWriter, r *http.Request, stored
 	} else {
 		raw, ok := body["pipeline"]
 		if !ok {
-			writeError(w, &apiError{Type: "parse_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "parse_exception", Status: 400,
 				Reason: "[pipeline] required property is missing", Fields: map[string]any{"property_name": "pipeline"}})
 			return
 		}
 		pm, ok := raw.(map[string]any)
 		if !ok {
-			writeError(w, &apiError{Type: "parse_exception", Status: 400, Reason: "[pipeline] required property is missing",
+			writeError(w, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "[pipeline] required property is missing",
 				Fields: map[string]any{"property_name": "pipeline"}})
 			return
 		}
-		var err *apiError
+		var err *apierr.Error
 		pipeline, err = validatePipelineBody("_simulate", pm)
 		if err != nil {
 			writeError(w, err)
@@ -820,18 +823,18 @@ func (s *Server) simulatePipeline(w http.ResponseWriter, r *http.Request, stored
 	}
 	rawDocs, ok := body["docs"]
 	if !ok {
-		writeError(w, &apiError{Type: "parse_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "parse_exception", Status: 400,
 			Reason: "[docs] required property is missing", Fields: map[string]any{"property_name": "docs"}})
 		return
 	}
 	docs, ok := rawDocs.([]any)
 	if !ok {
-		writeError(w, &apiError{Type: "parse_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "parse_exception", Status: 400,
 			Reason: "[docs] required property is missing", Fields: map[string]any{"property_name": "docs"}})
 		return
 	}
 	if len(docs) == 0 {
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "must specify at least one document in [docs]"})
 		return
 	}
@@ -840,12 +843,12 @@ func (s *Server) simulatePipeline(w http.ResponseWriter, r *http.Request, stored
 	for _, raw := range docs {
 		dm, ok := raw.(map[string]any)
 		if !ok {
-			writeError(w, &apiError{Type: "parse_exception", Status: 400, Reason: "[docs] required property is missing"})
+			writeError(w, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "[docs] required property is missing"})
 			return
 		}
 		srcRaw, ok := dm["_source"]
 		if !ok {
-			writeError(w, &apiError{Type: "parse_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "parse_exception", Status: 400,
 				Reason: "[_source] required property is missing", Fields: map[string]any{"property_name": "_source"}})
 			return
 		}
@@ -903,7 +906,7 @@ func (s *Server) simulatePipeline(w http.ResponseWriter, r *http.Request, stored
 	writeJSON(w, 200, map[string]any{"docs": out})
 }
 
-func (s *Server) runIngestProcessors(pipeline map[string]any, env *ingestEnv) (*apiError, bool) {
+func (s *Server) runIngestProcessors(pipeline map[string]any, env *ingestEnv) (*apierr.Error, bool) {
 	list, _ := pipeline["processors"].([]any)
 	for _, raw := range list {
 		def, _ := raw.(map[string]any)
@@ -985,7 +988,7 @@ func procControl(def, cfg map[string]any, key string) (any, bool) {
 	return v, ok
 }
 
-func (s *Server) runPipelineFailureHandlers(handlers []any, env *ingestEnv, cause *apiError) *apiError {
+func (s *Server) runPipelineFailureHandlers(handlers []any, env *ingestEnv, cause *apierr.Error) *apierr.Error {
 	env.onFailure = map[string]any{
 		"on_failure_message":        failureMessage(cause),
 		"on_failure_processor_type": env.processor,
@@ -1009,7 +1012,7 @@ func (s *Server) runPipelineFailureHandlers(handlers []any, env *ingestEnv, caus
 	return nil
 }
 
-func (s *Server) handleProcessorFailure(def map[string]any, typ string, cfg map[string]any, env *ingestEnv, perr *apiError) (*apiError, bool) {
+func (s *Server) handleProcessorFailure(def map[string]any, typ string, cfg map[string]any, env *ingestEnv, perr *apierr.Error) (*apierr.Error, bool) {
 	ignVal, _ := procControl(def, cfg, "ignore_failure")
 	if ign, _ := ignVal.(bool); ign {
 		if env.verbose {
@@ -1069,10 +1072,10 @@ func (s *Server) handleProcessorFailure(def map[string]any, typ string, cfg map[
 	return nil, false
 }
 
-func (s *Server) applyPipelines(idx *Index, doc map[string]any, params map[string]any) (map[string]any, *apiError) {
+func (s *Server) applyPipelines(idx *model.Index, doc map[string]any, params map[string]any) (map[string]any, *apierr.Error) {
 	pipeline, _ := params["pipeline"].(string)
 	if pipeline == "" {
-		if v, ok := findSetting(idx.Settings, "default_pipeline"); ok {
+		if v, ok := settings.Find(idx.Settings, "default_pipeline"); ok {
 			pipeline = settingsValueString(v)
 		}
 	}
@@ -1081,14 +1084,14 @@ func (s *Server) applyPipelines(idx *Index, doc map[string]any, params map[strin
 		p, ok := s.ingestPipelines[pipeline]
 		s.ingestMu.RUnlock()
 		if !ok {
-			return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+			return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "pipeline with id [" + pipeline + "] does not exist"}
 		}
 		env := &ingestEnv{s: s, source: doc, meta: map[string]any{"_index": idx.Name}, pipeline: pipeline, timestamp: ingestTimestamp()}
 		if err, dropped := s.runIngestProcessors(p, env); err != nil {
 			return nil, err
 		} else if dropped {
-			return nil, &apiError{Type: "drop_processor_exception", Status: 200, Reason: "dropped"}
+			return nil, &apierr.Error{Type: "drop_processor_exception", Status: 200, Reason: "dropped"}
 		}
 		for _, k := range []string{"_index", "_id", "_routing", "_version"} {
 			if v, ok := env.meta[k]; ok {
@@ -1097,14 +1100,14 @@ func (s *Server) applyPipelines(idx *Index, doc map[string]any, params map[strin
 		}
 		doc = env.source
 	}
-	if v, ok := findSetting(idx.Settings, "final_pipeline"); ok {
+	if v, ok := settings.Find(idx.Settings, "final_pipeline"); ok {
 		fp := settingsValueString(v)
 		if fp != "" && fp != "_none" {
 			s.ingestMu.RLock()
 			p, ok := s.ingestPipelines[fp]
 			s.ingestMu.RUnlock()
 			if !ok {
-				return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+				return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "pipeline with id [" + fp + "] does not exist"}
 			}
 			env := &ingestEnv{s: s, source: doc, meta: map[string]any{"_index": idx.Name}, pipeline: fp, timestamp: ingestTimestamp()}
@@ -1112,7 +1115,7 @@ func (s *Server) applyPipelines(idx *Index, doc map[string]any, params map[strin
 				return nil, err
 			}
 			if ni, _ := env.meta["_index"].(string); ni != "" && ni != idx.Name {
-				return nil, &apiError{Type: "illegal_state_exception", Status: 500,
+				return nil, &apierr.Error{Type: "illegal_state_exception", Status: 500,
 					Reason: "FINAL pipeline [" + fp + "] can't change the target index"}
 			}
 			doc = env.source
@@ -1122,7 +1125,7 @@ func (s *Server) applyPipelines(idx *Index, doc map[string]any, params map[strin
 }
 
 // failureMessage is the message of the root cause of a processor failure.
-func failureMessage(e *apiError) string {
+func failureMessage(e *apierr.Error) string {
 	if e.Type == "script_exception" && e.CausedBy != nil {
 		return e.CausedBy.Reason
 	}

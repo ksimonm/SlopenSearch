@@ -1,8 +1,11 @@
 package main
 
-import ()
+import (
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/model"
+)
 
-func evalSuggest(suggest map[string]any, indices []*Index, typed bool, searchBody map[string]any) (map[string]any, *apiError) {
+func evalSuggest(suggest map[string]any, indices []*model.Index, typed bool, searchBody map[string]any) (map[string]any, *apierr.Error) {
 	out := map[string]any{}
 	globalText := suggest["text"]
 	for name, raw := range suggest {

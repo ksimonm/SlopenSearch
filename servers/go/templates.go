@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/model"
 	"slopensearch/internal/wildcard"
 )
 
@@ -93,15 +95,15 @@ var knownIndexTemplateFields = map[string]bool{
 	"priority": true, "version": true, "_meta": true, "data_stream": true,
 }
 
-func validatePatternList(patterns []any) *apiError {
+func validatePatternList(patterns []any) *apierr.Error {
 	for _, p := range patterns {
 		ps, ok := p.(string)
 		if !ok || ps == "" {
-			return &apiError{Type: "invalid_index_template_exception", Status: 400,
+			return &apierr.Error{Type: "invalid_index_template_exception", Status: 400,
 				Reason: "index_pattern [" + settingsValueString(p) + "] must not be empty"}
 		}
 		if strings.HasPrefix(ps, "_") || strings.HasPrefix(ps, "-") || strings.HasPrefix(ps, "+") {
-			return &apiError{Type: "invalid_index_template_exception", Status: 400,
+			return &apierr.Error{Type: "invalid_index_template_exception", Status: 400,
 				Reason: "index_pattern [" + ps + "] must not start with '_', '-', or '+'. Found your index pattern [" + ps + "]"}
 		}
 	}
@@ -195,13 +197,13 @@ func (s *Server) handleComposableTemplate(w http.ResponseWriter, r *http.Request
 		writeJSON(w, 200, map[string]any{"acknowledged": true})
 	case http.MethodDelete:
 		if _, ok := s.composableTemplates[name]; !ok {
-			writeError(w, &apiError{Type: "index_template_missing_exception", Status: 404,
+			writeError(w, &apierr.Error{Type: "index_template_missing_exception", Status: 404,
 				Reason: "index_template [" + name + "] missing"})
 			return
 		}
 		for _, ds := range s.dataStreams {
 			if ds.Template == name {
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "index templates [" + name + "] cannot be removed as they are in use by a data streams [" + ds.Name + "]"})
 				return
 			}
@@ -217,7 +219,7 @@ func (s *Server) handleComposableTemplate(w http.ResponseWriter, r *http.Request
 			}
 		}
 		if len(out) == 0 {
-			writeError(w, &apiError{Type: "resource_not_found_exception", Status: 404,
+			writeError(w, &apierr.Error{Type: "resource_not_found_exception", Status: 404,
 				Reason: "index template matching [" + name + "] not found"})
 			return
 		}
@@ -227,20 +229,20 @@ func (s *Server) handleComposableTemplate(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func (s *Server) validateAndStoreIndexTemplate(name string, body map[string]any, createOnly bool) *apiError {
+func (s *Server) validateAndStoreIndexTemplate(name string, body map[string]any, createOnly bool) *apierr.Error {
 	if name != strings.ToLower(name) {
-		return &apiError{Type: "invalid_index_template_exception", Status: 400,
+		return &apierr.Error{Type: "invalid_index_template_exception", Status: 400,
 			Reason: "index_template [" + name + "] invalid, cause [Validation Failed: 1: name must be lower cased;]"}
 	}
 	for k := range body {
 		if !knownIndexTemplateFields[k] {
-			return &apiError{Type: "x_content_parse_exception", Status: 400,
+			return &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "unknown field [" + k + "]"}
 		}
 	}
 	patterns := normalizePatterns(body["index_patterns"])
 	if len(patterns) == 0 {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "Required [index_patterns]"}
 	}
 	if err := validatePatternList(patterns); err != nil {
@@ -249,7 +251,7 @@ func (s *Server) validateAndStoreIndexTemplate(name string, body map[string]any,
 	if p, has := body["priority"]; has && p != nil {
 		n, ok := settingsValueInt(p)
 		if !ok || n < 0 {
-			return &apiError{Type: "action_request_validation_exception", Status: 400,
+			return &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: index template priority must be >= 0;"}
 		}
 	}
@@ -262,7 +264,7 @@ func (s *Server) validateAndStoreIndexTemplate(name string, body map[string]any,
 			}
 		}
 		if len(missing) > 0 {
-			return &apiError{Type: "invalid_index_template_exception", Status: 400,
+			return &apierr.Error{Type: "invalid_index_template_exception", Status: 400,
 				Reason: "index template [" + name + "] specifies component templates [" + strings.Join(missing, ", ") + "] that do not exist"}
 		}
 	}
@@ -271,11 +273,11 @@ func (s *Server) validateAndStoreIndexTemplate(name string, body map[string]any,
 			canon := templateSettingsCanonical(st)
 			for k, v := range canon {
 				if !isKnownIndexSetting(k) {
-					return &apiError{Type: "settings_exception", Status: 400,
+					return &apierr.Error{Type: "settings_exception", Status: 400,
 						Reason: "unknown setting [" + k + "] please check that any required plugins are installed, or check the breaking changes documentation for removed settings"}
 				}
 				if _, err := validateSettingValue(k, v, true); err != nil {
-					return &apiError{Type: "invalid_index_template_exception", Status: 400,
+					return &apierr.Error{Type: "invalid_index_template_exception", Status: 400,
 						Reason: err.Reason}
 				}
 			}
@@ -283,7 +285,7 @@ func (s *Server) validateAndStoreIndexTemplate(name string, body map[string]any,
 	}
 	if createOnly {
 		if _, exists := s.composableTemplates[name]; exists {
-			return &apiError{Type: "illegal_argument_exception", Status: 400,
+			return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "index template [" + name + "] already exists"}
 		}
 	}
@@ -303,7 +305,7 @@ func (s *Server) validateAndStoreIndexTemplate(name string, body map[string]any,
 			for _, p2 := range normalizePatterns(other["index_patterns"]) {
 				p2s, _ := p2.(string)
 				if patternsOverlap(p1s, p2s) {
-					return &apiError{Type: "illegal_argument_exception", Status: 400,
+					return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 						Reason: "index template [" + name + "] has index patterns [" + p1s + "] matching patterns [" + p2s + "] from existing templates [" + otherName + "] that have the same priority [" + strconv.Itoa(prio) + "], multiple templates can be configured with different priority values or use it is recommended to use a greater priority"}
 				}
 			}
@@ -376,7 +378,7 @@ func (s *Server) handleComponentTemplate(w http.ResponseWriter, r *http.Request,
 		writeJSON(w, 200, map[string]any{"acknowledged": true})
 	case http.MethodDelete:
 		if _, ok := s.componentTemplates[name]; !ok {
-			writeError(w, &apiError{Type: "index_template_missing_exception", Status: 404,
+			writeError(w, &apierr.Error{Type: "index_template_missing_exception", Status: 404,
 				Reason: "component template [" + name + "] missing"})
 			return
 		}
@@ -384,7 +386,7 @@ func (s *Server) handleComponentTemplate(w http.ResponseWriter, r *http.Request,
 			if comps, ok := tpl["composed_of"].([]any); ok {
 				for _, c := range comps {
 					if cs, _ := c.(string); cs == name {
-						writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+						writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 							Reason: "component templates [" + name + "] cannot be removed as they are still in use by index templates [" + otherName + "]"})
 						return
 					}
@@ -402,7 +404,7 @@ func (s *Server) handleComponentTemplate(w http.ResponseWriter, r *http.Request,
 			}
 		}
 		if len(out) == 0 {
-			writeError(w, &apiError{Type: "resource_not_found_exception", Status: 404,
+			writeError(w, &apierr.Error{Type: "resource_not_found_exception", Status: 404,
 				Reason: "component template matching [" + name + "] not found"})
 			return
 		}
@@ -468,13 +470,13 @@ func (s *Server) handleLegacyTemplate(w http.ResponseWriter, r *http.Request, re
 		}
 		patterns := normalizePatterns(body["index_patterns"])
 		if len(patterns) == 0 {
-			writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: index patterns are missing;"})
 			return
 		}
 		if paramBool(r, "create") {
 			if _, exists := s.legacyTemplates[name]; exists {
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "index_template [" + name + "] already exists"})
 				return
 			}
@@ -484,7 +486,7 @@ func (s *Server) handleLegacyTemplate(w http.ResponseWriter, r *http.Request, re
 		writeJSON(w, 200, map[string]any{"acknowledged": true})
 	case http.MethodDelete:
 		if _, ok := s.legacyTemplates[name]; !ok {
-			writeError(w, &apiError{Type: "index_template_missing_exception", Status: 404,
+			writeError(w, &apierr.Error{Type: "index_template_missing_exception", Status: 404,
 				Reason: "index_template [" + name + "] missing"})
 			return
 		}
@@ -752,7 +754,7 @@ func (s *Server) simulateTemplate(w http.ResponseWriter, r *http.Request, name s
 	} else if name != "" {
 		tpl, ok := s.composableTemplates[name]
 		if !ok {
-			writeError(w, &apiError{Type: "resource_not_found_exception", Status: 404,
+			writeError(w, &apierr.Error{Type: "resource_not_found_exception", Status: 404,
 				Reason: "index template matching [" + name + "] not found"})
 			return
 		}
@@ -875,4 +877,4 @@ func (s *Server) handleIndexTemplateSimulate(w http.ResponseWriter, r *http.Requ
 }
 
 // applyTemplatesToNewIndex is retained for compatibility.
-func applyTemplatesToNewIndex(s *Server, idx *Index) {}
+func applyTemplatesToNewIndex(s *Server, idx *model.Index) {}

@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/model"
 	"slopensearch/internal/wildcard"
 )
 
@@ -61,9 +63,9 @@ func backingIndexName(dsName string, generation int64) string {
 
 // createDataStream creates a data stream and its first backing index.
 // Called with s.mu held.
-func (s *Server) createDataStream(name, tplName string, tpl map[string]any) (*dataStreamInfo, *apiError) {
+func (s *Server) createDataStream(name, tplName string, tpl map[string]any) (*dataStreamInfo, *apierr.Error) {
 	if name != strings.ToLower(name) {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "data_stream [" + name + "] must be lowercase"}
 	}
 	tsField := timestampFieldOf(tpl)
@@ -84,7 +86,7 @@ func (s *Server) createDataStream(name, tplName string, tpl map[string]any) (*da
 
 // createBackingIndex builds the next backing index for a data stream.
 // Called with s.mu held.
-func (s *Server) createBackingIndex(info *dataStreamInfo, tpl map[string]any) (*Index, *apiError) {
+func (s *Server) createBackingIndex(info *dataStreamInfo, tpl map[string]any) (*model.Index, *apierr.Error) {
 	composed := s.composeForIndex(info.Name)
 	body := map[string]any{}
 	settings := map[string]any{}
@@ -123,7 +125,7 @@ func (s *Server) createBackingIndex(info *dataStreamInfo, tpl map[string]any) (*
 
 // maybeAutoCreateDataStream creates a data stream on first document if a
 // matching data stream template exists. Called with s.mu held.
-func (s *Server) maybeAutoCreateDataStream(name string) (*Index, *apiError) {
+func (s *Server) maybeAutoCreateDataStream(name string) (*model.Index, *apierr.Error) {
 	if ds := s.resolveDataStream(name); ds != nil {
 		idx := s.indices[ds.BackingIndices[len(ds.BackingIndices)-1]]
 		if idx != nil {
@@ -152,8 +154,8 @@ func (s *Server) resolveDataStream(name string) *dataStreamInfo {
 	return nil
 }
 
-func (s *Server) dataStreamIndices(ds *dataStreamInfo) []*Index {
-	out := []*Index{}
+func (s *Server) dataStreamIndices(ds *dataStreamInfo) []*model.Index {
+	out := []*model.Index{}
 	for _, name := range ds.BackingIndices {
 		if idx, ok := s.indices[name]; ok {
 			out = append(out, idx)
@@ -187,13 +189,13 @@ func (s *Server) handleDataStream(w http.ResponseWriter, r *http.Request, spec s
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if ds := s.resolveDataStream(spec); ds != nil {
-			writeError(w, &apiError{Type: "resource_already_exists_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "resource_already_exists_exception", Status: 400,
 				Reason: "data_stream [" + spec + "] already exists"})
 			return
 		}
 		tplName, tpl := s.findDataStreamTemplate(spec)
 		if tpl == nil {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "no matching index template found for data stream [" + spec + "]"})
 			return
 		}
@@ -233,7 +235,7 @@ func (s *Server) handleDataStream(w http.ResponseWriter, r *http.Request, spec s
 			missing = n
 		}
 		if missing != "" {
-			writeError(w, &apiError{Type: "index_not_found_exception", Status: 404,
+			writeError(w, &apierr.Error{Type: "index_not_found_exception", Status: 404,
 				Reason: "no such index [" + missing + "]",
 				Fields: map[string]any{"index": missing, "index_uuid": "_na_"}})
 			return
@@ -270,7 +272,7 @@ func (s *Server) handleDataStream(w http.ResponseWriter, r *http.Request, spec s
 				}
 				continue
 			}
-			writeError(w, &apiError{Type: "index_not_found_exception", Status: 404,
+			writeError(w, &apierr.Error{Type: "index_not_found_exception", Status: 404,
 				Reason: "no such index [" + n + "]"})
 			return
 		}
@@ -343,28 +345,28 @@ func (s *Server) handleDataStreamStats(w http.ResponseWriter, r *http.Request, s
 }
 
 // validateDataStreamDoc enforces timestamp requirements for DS writes.
-func (s *Server) validateDataStreamDoc(idx *Index, ds *dataStreamInfo, body map[string]any) *apiError {
+func (s *Server) validateDataStreamDoc(idx *model.Index, ds *dataStreamInfo, body map[string]any) *apierr.Error {
 	if ds == nil {
 		return nil
 	}
 	v, ok := body[ds.TimestampField]
 	if !ok {
-		return &apiError{Type: "mapper_parsing_exception", Status: 400,
+		return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 			Reason: "failed to parse",
-			CausedBy: &apiError{Type: "mapper_parsing_exception",
+			CausedBy: &apierr.Error{Type: "mapper_parsing_exception",
 				Reason: "documents must contain a single-valued timestamp field '" + ds.TimestampField + "' of date type"}}
 	}
 	if _, isSlice := v.([]any); isSlice {
-		return &apiError{Type: "mapper_parsing_exception", Status: 400,
+		return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 			Reason: "failed to parse",
-			CausedBy: &apiError{Type: "mapper_parsing_exception",
+			CausedBy: &apierr.Error{Type: "mapper_parsing_exception",
 				Reason: "documents must contain a single-valued timestamp field '" + ds.TimestampField + "' of date type"}}
 	}
 	if str, ok := v.(string); ok {
 		if _, ok := parseDate(str); !ok {
-			return &apiError{Type: "mapper_parsing_exception", Status: 400,
+			return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 				Reason: "failed to parse",
-				CausedBy: &apiError{Type: "mapper_parsing_exception",
+				CausedBy: &apierr.Error{Type: "mapper_parsing_exception",
 					Reason: "documents must contain a single-valued timestamp field '" + ds.TimestampField + "' of date type"}}
 		}
 	}

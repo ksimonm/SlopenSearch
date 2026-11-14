@@ -13,7 +13,7 @@ import (
 
 // noteStaleOverwrite is called for writes that leave the previously
 // refreshed version of the document visible to searches.
-func noteStaleOverwrite(idx *Index, id string) {
+func noteStaleOverwrite(idx *model.Index, id string) {
 	if !refreshDisabled(idx) {
 		return
 	}
@@ -28,7 +28,7 @@ func noteStaleOverwrite(idx *Index, id string) {
 
 // searchSeesStale reports whether searches still see an older version of
 // the document than the current one (no refresh since its last write).
-func searchSeesStale(idx *Index, id string) bool {
+func searchSeesStale(idx *model.Index, id string) bool {
 	m, ok := idx.Stale[id]
 	if !ok {
 		return false

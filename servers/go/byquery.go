@@ -7,6 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
 )
 
@@ -20,8 +23,8 @@ var byQueryParams = map[string]bool{
 	"pipeline": true,
 }
 
-func byQueryReport() orderedJSON {
-	return orderedJSON{
+func byQueryReport() ojson.Object {
+	return ojson.Object{
 		{"took", int64(0)}, {"timed_out", false}, {"total", int64(0)},
 		{"deleted", int64(0)}, {"batches", int64(0)}, {"version_conflicts", int64(0)},
 		{"noops", int64(0)}, {"retries", map[string]any{"bulk": 0, "search": 0}},
@@ -53,7 +56,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 	}
 	conflicts := r.URL.Query().Get("conflicts")
 	if conflicts != "" && conflicts != "proceed" && conflicts != "abort" {
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: fmt.Sprintf("conflicts may only be \"proceed\" or \"abort\" but was [%s]", conflicts)})
 		return
 	}
@@ -83,7 +86,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 	}
 	if !hasQuery {
 		if isDelete {
-			writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: query is missing;"})
 			return
 		}
@@ -96,7 +99,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 	}
 	maxDocs := int64(-1)
 	if v, ok := body["max_docs"]; ok {
-		if n, ok := toFloat(v); ok {
+		if n, ok := jsonv.ToFloat(v); ok {
 			maxDocs = int64(n)
 		}
 	}
@@ -193,7 +196,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 					return
 				}
 				if serr.CausedBy != nil {
-					writeError(w, &apiError{Type: serr.CausedBy.Type, Status: 400, Reason: serr.CausedBy.Reason})
+					writeError(w, &apierr.Error{Type: serr.CausedBy.Type, Status: 400, Reason: serr.CausedBy.Reason})
 					return
 				}
 				failures = append(failures, byQueryFailure(idx.Name, id, serr))
@@ -284,25 +287,25 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 	}
 	report[11].V = failures
 	if !isDelete {
-		report = append(report, orderedKV{"updated", updated})
+		report = append(report, ojson.KV{"updated", updated})
 	}
 	report[0].V = time.Since(start).Milliseconds()
 	if sliceCount > 0 {
 		arr := make([]any, sliceCount)
 		for i, st := range slices {
-			obj := orderedJSON{{"slice_id", i}, {"total", st.total}}
+			obj := ojson.Object{{"slice_id", i}, {"total", st.total}}
 			if isDelete {
-				obj = append(obj, orderedKV{"deleted", st.deleted})
+				obj = append(obj, ojson.KV{"deleted", st.deleted})
 			} else {
-				obj = append(obj, orderedKV{"updated", st.updated})
+				obj = append(obj, ojson.KV{"updated", st.updated})
 			}
-			obj = append(obj, orderedKV{"noops", st.noops})
+			obj = append(obj, ojson.KV{"noops", st.noops})
 			if len(failures) > 0 {
-				obj = append(obj, orderedKV{"failures", []any{}})
+				obj = append(obj, ojson.KV{"failures", []any{}})
 			}
 			arr[i] = obj
 		}
-		report = append(report, orderedKV{"slices", arr})
+		report = append(report, ojson.KV{"slices", arr})
 	}
 	status := 200
 	if len(failures) > 0 {
@@ -314,7 +317,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 	writeJSON(w, status, report)
 }
 
-func validateByQueryScript(script any) *apiError {
+func validateByQueryScript(script any) *apierr.Error {
 	var src string
 	switch t := script.(type) {
 	case string:
@@ -325,30 +328,30 @@ func validateByQueryScript(script any) *apiError {
 	trimmed := strings.TrimSpace(src)
 	if strings.HasSuffix(trimmed, "=") || strings.HasSuffix(trimmed, "+") && !strings.HasSuffix(trimmed, "++") ||
 		strings.HasSuffix(trimmed, "-") && !strings.HasSuffix(trimmed, "--") {
-		return &apiError{Type: "script_exception", Status: 400, Reason: "compile error",
-			CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "unexpected end of script"}}
+		return &apierr.Error{Type: "script_exception", Status: 400, Reason: "compile error",
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "unexpected end of script"}}
 	}
 	return nil
 }
 
-func byQueryFailure(index, id string, e *apiError) map[string]any {
+func byQueryFailure(index, id string, e *apierr.Error) map[string]any {
 	return map[string]any{
 		"index": index, "id": id, "status": e.Status, "cause": errorObject(e),
 	}
 }
 
 // checkByQueryCtx rejects ctx changes a by-query script may not make.
-func checkByQueryCtx(res updateScriptResult, index, id string) *apiError {
+func checkByQueryCtx(res updateScriptResult, index, id string) *apierr.Error {
 	switch res.rawOp {
 	case "noop", "index", "delete":
 	default:
-		return errBad("Operation type [" + res.rawOp + "] not allowed, only [noop, index, delete] are allowed")
+		return apierr.BadRequest("Operation type [" + res.rawOp + "] not allowed, only [noop, index, delete] are allowed")
 	}
 	if painless.ToString(res.id) != id {
-		return errBad("Modifying [_id] not allowed")
+		return apierr.BadRequest("Modifying [_id] not allowed")
 	}
 	if painless.ToString(res.index) != index {
-		return errBad("Modifying [_index] not allowed")
+		return apierr.BadRequest("Modifying [_index] not allowed")
 	}
 	return nil
 }

@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/settings"
 )
 
 // Shard request cache (IndicesRequestCache). OpenSearch caches the result
@@ -105,7 +106,7 @@ func (s *Server) requestCacheKey(r *http.Request, raw []byte) string {
 		return ""
 	}
 	size := int64(10)
-	if v, ok := toFloat(body["size"]); ok {
+	if v, ok := jsonv.ToFloat(body["size"]); ok {
 		size = int64(v)
 	}
 	if v := q.Get("size"); v != "" {
@@ -121,11 +122,11 @@ func (s *Server) requestCacheKey(r *http.Request, raw []byte) string {
 		return ""
 	}
 	for _, idx := range indices {
-		if v, ok := findSetting(idx.Settings, "search.default_pipeline"); ok && settingsValueString(v) != "_none" {
+		if v, ok := settings.Find(idx.Settings, "search.default_pipeline"); ok && settingsValueString(v) != "_none" {
 			return ""
 		}
 		if explicit == "" {
-			if v, ok := findSetting(idx.Settings, "requests.cache.enable"); ok && settingsValueString(v) == "false" {
+			if v, ok := settings.Find(idx.Settings, "requests.cache.enable"); ok && settingsValueString(v) == "false" {
 				return ""
 			}
 		}

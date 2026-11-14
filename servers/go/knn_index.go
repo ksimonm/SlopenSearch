@@ -9,7 +9,11 @@ import (
 	"strconv"
 	"strings"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/ojson"
+	"slopensearch/internal/settings"
 )
 
 // ---------------------------------------------------------------------------
@@ -17,15 +21,15 @@ import (
 // ---------------------------------------------------------------------------
 
 // indexKnnEnabled reports whether the index has index.knn = true.
-func indexKnnEnabled(idx *Index) bool {
+func indexKnnEnabled(idx *model.Index) bool {
 	if idx == nil {
 		return false
 	}
-	v, ok := findSetting(idx.Settings, "knn")
+	v, ok := settings.Find(idx.Settings, "knn")
 	return ok && settingsValueString(v) == "true"
 }
 
-func knnValueError(c *indexCtx, path string, preview, causeType, causeReason string) *apiError {
+func knnValueError(c *indexCtx, path string, preview, causeType, causeReason string) *apierr.Error {
 	reason := fmt.Sprintf("failed to parse field [%s] of type [knn_vector] in document with id '%s'. Preview of field's value: '%s'", path, c.docID, preview)
 	return mapperErr("mapper_parsing_exception", reason, causeType, causeReason)
 }
@@ -72,7 +76,7 @@ func knnTokenText(v any) string {
 
 // parseKnnVector validates a knn_vector value against its mapping and returns
 // the stored vector values (floats, or signed bytes for byte/binary).
-func parseKnnVector(c *indexCtx, path string, def map[string]any, raw any) ([]float64, *apiError) {
+func parseKnnVector(c *indexCtx, path string, def map[string]any, raw any) ([]float64, *apierr.Error) {
 	fi := knnInfo(def)
 	dataType := fi.dataType
 	expected := fi.dim
@@ -125,7 +129,7 @@ func parseKnnVector(c *indexCtx, path string, def map[string]any, raw any) ([]fl
 			}
 			f = v
 		default:
-			v, ok := toFloat(e)
+			v, ok := jsonv.ToFloat(e)
 			if !ok {
 				return nil, knnValueError(c, path, knnTokenText(e), "illegal_argument_exception", "malformed")
 			}
@@ -180,7 +184,7 @@ func parseKnnVector(c *indexCtx, path string, def map[string]any, raw any) ([]fl
 }
 
 // indexKnnVector stores a knn_vector field value.
-func (c *indexCtx) indexKnnVector(path string, def map[string]any, raw any) *apiError {
+func (c *indexCtx) indexKnnVector(path string, def map[string]any, raw any) *apierr.Error {
 	if raw == nil {
 		return nil
 	}
@@ -199,7 +203,7 @@ func (c *indexCtx) indexKnnVector(path string, def map[string]any, raw any) *api
 // knnDeriveSource rewrites knn_vector values of a document the way an
 // index.knn index returns them from its derived _source: as stored floats
 // (or integers for byte/binary vectors). It reports whether anything changed.
-func knnDeriveSource(idx *Index, doc map[string]any) bool {
+func knnDeriveSource(idx *model.Index, doc map[string]any) bool {
 	if !indexKnnEnabled(idx) {
 		return false
 	}
@@ -207,7 +211,7 @@ func knnDeriveSource(idx *Index, doc map[string]any) bool {
 	return knnDeriveObject(idx, props, doc)
 }
 
-func knnDeriveObject(idx *Index, props map[string]any, doc map[string]any) bool {
+func knnDeriveObject(idx *model.Index, props map[string]any, doc map[string]any) bool {
 	changed := false
 	for k, v := range doc {
 		def, ok := props[k].(map[string]any)
@@ -258,7 +262,7 @@ func knnDeriveObject(idx *Index, props map[string]any, doc map[string]any) bool 
 
 // knnPutMappingCheck validates knn_vector fields of a put-mapping request and
 // rejects updates of their fixed parameters.
-func knnPutMappingCheck(idx *Index, existing, incoming map[string]any) *apiError {
+func knnPutMappingCheck(idx *model.Index, existing, incoming map[string]any) *apierr.Error {
 	if indexKnnEnabled(idx) {
 		if err := knnIndexMappings(incoming); err != nil {
 			return err
@@ -267,7 +271,7 @@ func knnPutMappingCheck(idx *Index, existing, incoming map[string]any) *apiError
 	return knnMergeConflicts(existing, incoming)
 }
 
-func knnMergeConflicts(existing, incoming map[string]any) *apiError {
+func knnMergeConflicts(existing, incoming map[string]any) *apierr.Error {
 	for _, name := range sortedAnyKeys(incoming) {
 		nd, ok := incoming[name].(map[string]any)
 		if !ok {
@@ -304,7 +308,7 @@ func knnMergeConflicts(existing, incoming map[string]any) *apiError {
 				ns = strings.ToLower(settingsValueString(nv))
 			}
 			if os != ns {
-				return &apiError{Type: "illegal_argument_exception", Status: 400,
+				return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "Mapper for [" + name + "] conflicts with existing mapper:\n\tCannot update parameter [" + p + "] from [" + os + "] to [" + ns + "]"}
 			}
 		}
@@ -348,15 +352,15 @@ func knnOrderMappings(v any) any {
 	return out
 }
 
-func orderKeys(m map[string]any, first []string, conv func(string, any) any) orderedJSON {
-	out := orderedJSON{}
+func orderKeys(m map[string]any, first []string, conv func(string, any) any) ojson.Object {
+	out := ojson.Object{}
 	seen := map[string]bool{}
 	add := func(k string) {
 		x := m[k]
 		if conv != nil {
 			x = conv(k, x)
 		}
-		out = append(out, orderedKV{k, x})
+		out = append(out, ojson.KV{k, x})
 		seen[k] = true
 	}
 	for _, k := range first {

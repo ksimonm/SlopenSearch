@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
 )
 
@@ -60,7 +61,7 @@ func sortedAnyKeys(m map[string]any) []string {
 }
 
 func intFromAny(v any) (int64, bool) {
-	f, ok := toFloat(v)
+	f, ok := jsonv.ToFloat(v)
 	if !ok {
 		return 0, false
 	}
@@ -170,7 +171,7 @@ func validateProps(props map[string]any) *mappingValidationError {
 			if !has {
 				return mve("Field [scaling_factor] is required", "illegal_argument_exception")
 			}
-			f, _ := toFloat(sf)
+			f, _ := jsonv.ToFloat(sf)
 			if f <= 0 {
 				return mve(fmt.Sprintf("[scaling_factor] must be a positive number, got [%s]", javaFloatRepr(f)), "illegal_argument_exception")
 			}
@@ -264,7 +265,7 @@ func validateProps(props map[string]any) *mappingValidationError {
 		}
 		if t == "integer" || t == "long" || t == "short" || t == "byte" {
 			if nv, ok := def["null_value"]; ok && nv != nil {
-				if _, isNum := toFloat(nv); !isNum {
+				if _, isNum := jsonv.ToFloat(nv); !isNum {
 					return mve("For input string: \""+previewValue(nv)+"\"", "number_format_exception")
 				}
 			}
@@ -319,9 +320,9 @@ func countMappingType(props map[string]any, wanted string) int {
 }
 
 // validatePropsMeta performs the checks OpenSearch runs before mapper parsing.
-func validatePropsMeta(props map[string]any) *apiError {
-	var walk func(props map[string]any) *apiError
-	walk = func(props map[string]any) *apiError {
+func validatePropsMeta(props map[string]any) *apierr.Error {
+	var walk func(props map[string]any) *apierr.Error
+	walk = func(props map[string]any) *apierr.Error {
 		for _, name := range sortedAnyKeys(props) {
 			if name == "" || strings.Contains(name, "..") {
 				reason := "name cannot be empty string"
@@ -342,11 +343,11 @@ func validatePropsMeta(props map[string]any) *apiError {
 				return wrappedMappingError(reason, "mapper_parsing_exception")
 			}
 			if ia, has := def["ignore_above"]; has {
-				if _, ok := toFloat(ia); !ok {
+				if _, ok := jsonv.ToFloat(ia); !ok {
 					reason := fmt.Sprintf("Failed to parse value [%s] as only [true] or [false] are allowed.", previewJSON(ia))
-					return &apiError{Type: "mapper_parsing_exception", Status: 400,
+					return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 						Reason:   "Failed to parse mapping [_doc]: " + reason,
-						CausedBy: &apiError{Type: "mapper_parsing_exception", Reason: "failed to parse"}}
+						CausedBy: &apierr.Error{Type: "mapper_parsing_exception", Reason: "failed to parse"}}
 				}
 			}
 			if sub, ok := def["properties"].(map[string]any); ok {
@@ -366,10 +367,10 @@ func validatePropsMeta(props map[string]any) *apiError {
 	return nil
 }
 
-func wrappedMappingError(reason, cause string) *apiError {
-	return &apiError{Type: "mapper_parsing_exception", Status: 400,
+func wrappedMappingError(reason, cause string) *apierr.Error {
+	return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 		Reason:   "Failed to parse mapping [_doc]: " + reason,
-		CausedBy: &apiError{Type: cause, Reason: reason}}
+		CausedBy: &apierr.Error{Type: cause, Reason: reason}}
 }
 
 func aliasTarget(props map[string]any, path string) map[string]any {
@@ -391,12 +392,12 @@ func aliasTarget(props map[string]any, path string) map[string]any {
 	return nil
 }
 
-func aliasInvalidError(reason string) *apiError {
-	return &apiError{Type: "mapper_parsing_exception", Status: 400, Reason: reason,
-		CausedBy: &apiError{Type: "mapper_parsing_exception", Reason: reason}}
+func aliasInvalidError(reason string) *apierr.Error {
+	return &apierr.Error{Type: "mapper_parsing_exception", Status: 400, Reason: reason,
+		CausedBy: &apierr.Error{Type: "mapper_parsing_exception", Reason: reason}}
 }
 
-func validateAliasMappings(props map[string]any) *apiError {
+func validateAliasMappings(props map[string]any) *apierr.Error {
 	for _, name := range sortedAnyKeys(props) {
 		def, ok := props[name].(map[string]any)
 		if !ok {
@@ -434,7 +435,7 @@ func validateAliasMappings(props map[string]any) *apiError {
 		if scope, _, found := strings.Cut(path, "."); found {
 			if scopeDef, ok := props[scope].(map[string]any); ok {
 				if st, _ := scopeDef["type"].(string); st == "nested" {
-					return &apiError{Type: "illegal_argument_exception", Status: 400,
+					return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 						Reason: fmt.Sprintf("Invalid [path] value [%s] for field alias [%s]: an alias must have the same nested scope as its target. The alias is not nested, but the target's nested scope is [%s].", path, name, scope)}
 				}
 			}
@@ -443,7 +444,7 @@ func validateAliasMappings(props map[string]any) *apiError {
 	return nil
 }
 
-func validateCopyToTargets(props map[string]any) *apiError {
+func validateCopyToTargets(props map[string]any) *apierr.Error {
 	for _, name := range sortedAnyKeys(props) {
 		def, ok := props[name].(map[string]any)
 		if !ok {
@@ -463,11 +464,11 @@ func validateCopyToTargets(props map[string]any) *apiError {
 		for _, target := range targets {
 			if td := aliasTarget(props, target); td != nil {
 				if td["properties"] != nil {
-					return &apiError{Type: "illegal_argument_exception", Status: 400,
+					return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 						Reason: fmt.Sprintf("Cannot copy to field [%s] since it is mapped as an object", target)}
 				}
 				if tt, _ := td["type"].(string); tt == "object" || tt == "nested" {
-					return &apiError{Type: "illegal_argument_exception", Status: 400,
+					return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 						Reason: fmt.Sprintf("Cannot copy to field [%s] since it is mapped as an object", target)}
 				}
 			}
@@ -481,7 +482,7 @@ func validateCopyToTargets(props map[string]any) *apiError {
 	return nil
 }
 
-func validateJoinPlacement(props map[string]any, prefix string) *apiError {
+func validateJoinPlacement(props map[string]any, prefix string) *apierr.Error {
 	for _, name := range sortedAnyKeys(props) {
 		def, ok := props[name].(map[string]any)
 		if !ok {
@@ -514,7 +515,7 @@ func validateJoinPlacement(props map[string]any, prefix string) *apiError {
 	return nil
 }
 
-func validateMappingSource(mappings map[string]any) *apiError {
+func validateMappingSource(mappings map[string]any) *apierr.Error {
 	if src, ok := mappings["_source"].(map[string]any); ok {
 		for _, k := range sortedAnyKeys(src) {
 			switch k {

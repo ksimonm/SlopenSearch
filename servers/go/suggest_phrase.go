@@ -9,8 +9,11 @@ import (
 	"sync"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
 	"slopensearch/internal/mustache"
+	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
 )
 
@@ -40,7 +43,7 @@ type phTerms struct {
 func (t *phTerms) get(term string) phTermStats { return t.stats[term] }
 
 // phraseIndexAnalyzer is the analyzer a field is indexed with.
-func phraseIndexAnalyzer(idx *Index, def map[string]any) string {
+func phraseIndexAnalyzer(idx *model.Index, def map[string]any) string {
 	if a, ok := def["analyzer"].(string); ok && a != "" {
 		return a
 	}
@@ -48,7 +51,7 @@ func phraseIndexAnalyzer(idx *Index, def map[string]any) string {
 }
 
 // phraseSearchAnalyzer is the search analyzer of a field (TextSearchInfo).
-func phraseSearchAnalyzer(idx *Index, def map[string]any) string {
+func phraseSearchAnalyzer(idx *model.Index, def map[string]any) string {
 	if t, _ := def["type"].(string); t == "keyword" {
 		return "keyword"
 	}
@@ -70,7 +73,7 @@ func phraseSearchAnalyzer(idx *Index, def map[string]any) string {
 
 // phraseFieldTerms collects the inverted index statistics of a field, or nil
 // when the field has no terms (unmapped, not indexed, or no values).
-func phraseFieldTerms(idx *Index, field string) *phTerms {
+func phraseFieldTerms(idx *model.Index, field string) *phTerms {
 	def, ok := mappingFieldDef(idx, field)
 	if !ok {
 		return nil
@@ -89,7 +92,7 @@ func phraseFieldTerms(idx *Index, field string) *phTerms {
 	}
 	analyzer := phraseIndexAnalyzer(idx, def)
 	ignoreAbove := -1
-	if n, ok := toFloat(def["ignore_above"]); ok {
+	if n, ok := jsonv.ToFloat(def["ignore_above"]); ok {
 		ignoreAbove = int(n)
 	}
 	t := &phTerms{stats: map[string]phTermStats{}}
@@ -210,7 +213,7 @@ func defaultPhGenSpec(field string) *phGenSpec {
 
 type phGen struct {
 	spec               *phGenSpec
-	idx                *Index
+	idx                *model.Index
 	terms              *phTerms
 	sumTTF             int64
 	nonErrorLikelihood float64
@@ -218,7 +221,7 @@ type phGen struct {
 	spare              string // BytesRefBuilder shared by pre and post filters
 }
 
-func newPhGen(spec *phGenSpec, idx *Index, terms *phTerms, nonErrorLikelihood float64) *phGen {
+func newPhGen(spec *phGenSpec, idx *model.Index, terms *phTerms, nonErrorLikelihood float64) *phGen {
 	g := &phGen{spec: spec, idx: idx, terms: terms, sumTTF: terms.sumTTF, nonErrorLikelihood: nonErrorLikelihood}
 	tf := spec.minDocFreq
 	if tf >= 1 {
@@ -881,20 +884,20 @@ func phIsScalar(v any) bool {
 	return true
 }
 
-func phParseErr(reason string) *apiError {
-	return &apiError{Type: "parsing_exception", Status: 400, Reason: reason}
+func phParseErr(reason string) *apierr.Error {
+	return &apierr.Error{Type: "parsing_exception", Status: 400, Reason: reason}
 }
 
-func phXContentErr(reason string, cause *apiError) *apiError {
-	return &apiError{Type: "x_content_parse_exception", Status: 400, Reason: reason, CausedBy: cause}
+func phXContentErr(reason string, cause *apierr.Error) *apierr.Error {
+	return &apierr.Error{Type: "x_content_parse_exception", Status: 400, Reason: reason, CausedBy: cause}
 }
 
 func phNum(v any) float64 {
-	f, _ := toFloat(v)
+	f, _ := jsonv.ToFloat(v)
 	return f
 }
 
-func parsePhraseRequest(body map[string]any) (*phraseRequest, *apiError) {
+func parsePhraseRequest(body map[string]any) (*phraseRequest, *apierr.Error) {
 	r := &phraseRequest{size: 5, realWord: 0.95, confidence: 1.0, separator: " ", maxErrors: 0.5,
 		forceUnigrams: true, tokenLimit: 10}
 	hasField := false
@@ -1049,7 +1052,7 @@ func parsePhraseRequest(body map[string]any) (*phraseRequest, *apiError) {
 		}
 	}
 	if !hasField {
-		return nil, &apiError{Type: "parse_exception", Status: 400, Reason: "the required field option [field] is missing"}
+		return nil, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "the required field option [field] is missing"}
 	}
 	if r.field == "" {
 		return nil, suggestIllegal("suggestion field name is empty")
@@ -1057,7 +1060,7 @@ func parsePhraseRequest(body map[string]any) (*phraseRequest, *apiError) {
 	return r, nil
 }
 
-func parsePhGenerator(m map[string]any) (*phGenRequest, *apiError) {
+func parsePhGenerator(m map[string]any) (*phGenRequest, *apierr.Error) {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -1072,14 +1075,14 @@ func parsePhGenerator(m map[string]any) (*phGenRequest, *apiError) {
 	if s, ok := m["size"]; ok {
 		if phNum(s) <= 0 {
 			return nil, phXContentErr("[direct_generator] failed to parse field [size]",
-				&apiError{Type: "illegal_argument_exception", Reason: "Size must be positive"})
+				&apierr.Error{Type: "illegal_argument_exception", Reason: "Size must be positive"})
 		}
 	}
 	if e, ok := m["max_edits"]; ok {
 		n := int(phNum(e))
 		if n < 1 || n > 2 {
 			return nil, phXContentErr("[direct_generator] failed to parse field [max_edits]",
-				&apiError{Type: "illegal_argument_exception", Reason: "Illegal max_edits value " + strconv.Itoa(n)})
+				&apierr.Error{Type: "illegal_argument_exception", Reason: "Illegal max_edits value " + strconv.Itoa(n)})
 		}
 	}
 	f, ok := m["field"]
@@ -1090,7 +1093,7 @@ func parsePhGenerator(m map[string]any) (*phGenRequest, *apiError) {
 	return g, nil
 }
 
-func parsePhSmoothing(obj map[string]any) (*phSmoothing, *apiError) {
+func parsePhSmoothing(obj map[string]any) (*phSmoothing, *apierr.Error) {
 	var model *phSmoothing
 	keys := make([]string, 0, len(obj))
 	for k := range obj {
@@ -1162,7 +1165,7 @@ func phTokenName(v any) string {
 }
 
 // buildPhGenSpec resolves a direct_generator against an index (shard level).
-func buildPhGenSpec(idx *Index, g *phGenRequest) (*phGenSpec, *apiError) {
+func buildPhGenSpec(idx *model.Index, g *phGenRequest) (*phGenSpec, *apierr.Error) {
 	sp := defaultPhGenSpec(g.field)
 	m := g.opts
 	if v, ok := m["size"]; ok {
@@ -1231,7 +1234,7 @@ func buildPhGenSpec(idx *Index, g *phGenRequest) (*phGenSpec, *apiError) {
 	return sp, nil
 }
 
-func phAnalyzerExists(idx *Index, name string) bool {
+func phAnalyzerExists(idx *model.Index, name string) bool {
 	if name == "" {
 		return false
 	}
@@ -1245,7 +1248,7 @@ func phAnalyzerExists(idx *Index, name string) bool {
 }
 
 // phShingle returns the first shingle filter of an analyzer.
-func phShingle(idx *Index, analyzer string) (minS, maxS int, unigrams, found bool) {
+func phShingle(idx *model.Index, analyzer string) (minS, maxS int, unigrams, found bool) {
 	if idx == nil || !(analysis.Scope{Index: analysisIndex(idx)}).IndexHasAnalyzer(analyzer) {
 		return
 	}
@@ -1282,12 +1285,12 @@ func (e *phEntry) addOption(o *phOption) {
 	}
 }
 
-func phraseSuggest(spec, body map[string]any, indices []*Index, globalText any) ([]any, *apiError) {
+func phraseSuggest(spec, body map[string]any, indices []*model.Index, globalText any) ([]any, *apierr.Error) {
 	req, err := parsePhraseRequest(body)
 	if err != nil {
 		return nil, err
 	}
-	var first *Index
+	var first *model.Index
 	if len(indices) > 0 {
 		first = indices[0]
 	}
@@ -1304,7 +1307,7 @@ func phraseSuggest(spec, body map[string]any, indices []*Index, globalText any) 
 	text, _ := toString(rawText)
 
 	var entries []*phEntry
-	var lastErr *apiError
+	var lastErr *apierr.Error
 	for _, idx := range indices {
 		e, err := phraseSuggestIndex(req, idx, text)
 		if err != nil {
@@ -1363,20 +1366,20 @@ func phraseSuggest(spec, body map[string]any, indices []*Index, globalText any) 
 	}
 	opts := make([]any, 0, len(entry.options))
 	for _, o := range entry.options {
-		oj := orderedJSON{{"text", o.text}}
+		oj := ojson.Object{{"text", o.text}}
 		if o.highlighted != nil {
-			oj = append(oj, orderedKV{"highlighted", *o.highlighted})
+			oj = append(oj, ojson.KV{"highlighted", *o.highlighted})
 		}
-		oj = append(oj, orderedKV{"score", painless.JSONFloat32(o.score)})
+		oj = append(oj, ojson.KV{"score", painless.JSONFloat32(o.score)})
 		if o.collate != nil {
-			oj = append(oj, orderedKV{"collate_match", *o.collate})
+			oj = append(oj, ojson.KV{"collate_match", *o.collate})
 		}
 		opts = append(opts, oj)
 	}
-	return []any{orderedJSON{{"text", text}, {"offset", 0}, {"length", analysis.UTF16Offset(text)}, {"options", opts}}}, nil
+	return []any{ojson.Object{{"text", text}, {"offset", 0}, {"length", analysis.UTF16Offset(text)}, {"options", opts}}}, nil
 }
 
-func phraseSuggestIndex(req *phraseRequest, idx *Index, text string) (*phEntry, *apiError) {
+func phraseSuggestIndex(req *phraseRequest, idx *model.Index, text string) (*phEntry, *apierr.Error) {
 	def, ok := mappingFieldDef(idx, req.field)
 	if !ok {
 		return nil, suggestShardError(idx, "no mapping found for field ["+req.field+"]")
@@ -1460,11 +1463,11 @@ func phraseSuggestIndex(req *phraseRequest, idx *Index, text string) (*phEntry, 
 		sets = append(sets, cur)
 	}
 	if req.forceUnigrams && !anyUnigram && anyTokens {
-		return nil, &apiError{Type: "search_phase_execution_exception", Status: 500, Reason: "all shards failed",
+		return nil, &apierr.Error{Type: "search_phase_execution_exception", Status: 500, Reason: "all shards failed",
 			Shard: &shardFailure{status: 500, index: idx.Name,
-				root:  orderedJSON{{"type", "illegal_state_exception"}, {"reason", "At least one unigram is required but all tokens were ngrams"}},
-				shard: orderedJSON{{"type", "illegal_state_exception"}, {"reason", "At least one unigram is required but all tokens were ngrams"}},
-				top:   orderedJSON{{"type", "illegal_state_exception"}, {"reason", "At least one unigram is required but all tokens were ngrams"}}}}
+				root:  ojson.Object{{"type", "illegal_state_exception"}, {"reason", "At least one unigram is required but all tokens were ngrams"}},
+				shard: ojson.Object{{"type", "illegal_state_exception"}, {"reason", "At least one unigram is required but all tokens were ngrams"}},
+				top:   ojson.Object{{"type", "illegal_state_exception"}, {"reason", "At least one unigram is required but all tokens were ngrams"}}}}
 	}
 	if len(sets) == 0 || len(sets) >= req.tokenLimit {
 		return entry, nil
@@ -1514,7 +1517,7 @@ func phraseSuggestIndex(req *phraseRequest, idx *Index, text string) (*phEntry, 
 
 // phCollateMatches renders the collate template for a suggestion and reports
 // whether its query matches any document of the index.
-func phCollateMatches(idx *Index, req *phraseRequest, suggestion string) (bool, *apiError) {
+func phCollateMatches(idx *model.Index, req *phraseRequest, suggestion string) (bool, *apierr.Error) {
 	tpl, ok := mustache.TemplateText(req.collateSource)
 	if !ok {
 		return false, nil
@@ -1530,7 +1533,7 @@ func phCollateMatches(idx *Index, req *phraseRequest, suggestion string) (bool, 
 	}
 	var q map[string]any
 	if err := jsonv.Unmarshal([]byte(src), &q); err != nil {
-		return false, &apiError{Type: "parsing_exception", Status: 400, Reason: "Failed to parse collate query"}
+		return false, &apierr.Error{Type: "parsing_exception", Status: 400, Reason: "Failed to parse collate query"}
 	}
 	for _, id := range idx.Order {
 		doc, live := idx.Docs[id]

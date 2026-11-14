@@ -9,6 +9,10 @@ import (
 	"strings"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
 )
 
@@ -28,10 +32,10 @@ type plScriptErr struct {
 	reason    string
 	nilReason bool
 	inner     *painless.CompileError
-	extra     orderedJSON
+	extra     ojson.Object
 }
 
-func (e *plScriptErr) object(withCause bool) orderedJSON {
+func (e *plScriptErr) object(withCause bool) ojson.Object {
 	kind := "runtime error"
 	if e.compile {
 		kind = "compile error"
@@ -43,49 +47,49 @@ func (e *plScriptErr) object(withCause bool) orderedJSON {
 	if lang == "" {
 		lang = "painless"
 	}
-	o := orderedJSON{{"type", "script_exception"}, {"reason", kind}}
+	o := ojson.Object{{"type", "script_exception"}, {"reason", kind}}
 	o = append(o, e.extra...)
 	stack := make([]any, len(e.stack))
 	for i, s := range e.stack {
 		stack[i] = s
 	}
-	o = append(o, orderedKV{"script_stack", stack}, orderedKV{"script", e.script}, orderedKV{"lang", lang})
+	o = append(o, ojson.KV{"script_stack", stack}, ojson.KV{"script", e.script}, ojson.KV{"lang", lang})
 	if e.pos != nil {
-		o = append(o, orderedKV{"position", orderedJSON{{"offset", e.pos[0]}, {"start", e.pos[1]}, {"end", e.pos[2]}}})
+		o = append(o, ojson.KV{"position", ojson.Object{{"offset", e.pos[0]}, {"start", e.pos[1]}, {"end", e.pos[2]}}})
 	}
 	if withCause {
-		o = append(o, orderedKV{"caused_by", e.causeObject()})
+		o = append(o, ojson.KV{"caused_by", e.causeObject()})
 	}
 	return o
 }
 
-func (e *plScriptErr) causeObject() orderedJSON {
+func (e *plScriptErr) causeObject() ojson.Object {
 	var reason any = e.reason
 	if e.nilReason {
 		reason = nil
 	}
-	c := orderedJSON{{"type", e.causeType}, {"reason", reason}}
+	c := ojson.Object{{"type", e.causeType}, {"reason", reason}}
 	if e.inner != nil {
 		var ir any = e.inner.Reason
 		if e.inner.NilReason {
 			ir = nil
 		}
-		c = append(c, orderedKV{"caused_by", orderedJSON{{"type", e.inner.Type}, {"reason", ir}}})
+		c = append(c, ojson.KV{"caused_by", ojson.Object{{"type", e.inner.Type}, {"reason", ir}}})
 	}
 	return c
 }
 
 // errorBody renders the full {"error": ..., "status": 400} response.
-func (e *plScriptErr) errorBody() orderedJSON {
-	errObj := orderedJSON{{"root_cause", []any{e.object(false)}}}
+func (e *plScriptErr) errorBody() ojson.Object {
+	errObj := ojson.Object{{"root_cause", []any{e.object(false)}}}
 	errObj = append(errObj, e.object(true)...)
-	return orderedJSON{{"error", errObj}, {"status", 400}}
+	return ojson.Object{{"error", errObj}, {"status", 400}}
 }
 
 // asAPIError wraps the script error for callers that report apiErrors.
-func (e *plScriptErr) asAPIError() *apiError {
-	return &apiError{Type: "script_exception", Status: 400, Reason: map[bool]string{true: "compile error", false: "runtime error"}[e.compile],
-		Extra: e, CausedBy: &apiError{Type: e.causeType, Reason: e.reason}}
+func (e *plScriptErr) asAPIError() *apierr.Error {
+	return &apierr.Error{Type: "script_exception", Status: 400, Reason: map[bool]string{true: "compile error", false: "runtime error"}[e.compile],
+		Extra: e, CausedBy: &apierr.Error{Type: e.causeType, Reason: e.reason}}
 }
 
 func plCompileFailure(src, name string, ce *painless.CompileError) *plScriptErr {
@@ -119,7 +123,7 @@ func plCompileFailure(src, name string, ce *painless.CompileError) *plScriptErr 
 func plRuntimeFailure(s *plScript, name string, re *painless.RuntimeError) *plScriptErr {
 	e := &plScriptErr{script: name, causeType: re.Type, reason: re.Reason, nilReason: re.NilReason}
 	for _, f := range re.Extra {
-		e.extra = append(e.extra, orderedKV{f.Name, f.Value})
+		e.extra = append(e.extra, ojson.KV{f.Name, f.Value})
 	}
 	src := s.s.Source()
 	off := re.Offset
@@ -250,14 +254,14 @@ func plDocValuesFor(qc *queryCtx, field string, off int) (*painless.DocValues, *
 	case "integer", "long", "short", "byte", "unsigned_long", "token_count":
 		dv.Kind = "Longs"
 		for _, v := range vals {
-			if f, ok := toFloat(v); ok {
+			if f, ok := jsonv.ToFloat(v); ok {
 				dv.Values = append(dv.Values, int64(f))
 			}
 		}
 	case "float", "double", "half_float", "scaled_float":
 		dv.Kind = "Doubles"
 		for _, v := range vals {
-			if f, ok := toFloat(v); ok {
+			if f, ok := jsonv.ToFloat(v); ok {
 				dv.Values = append(dv.Values, f)
 			}
 		}
@@ -274,7 +278,7 @@ func plDocValuesFor(qc *queryCtx, field string, off int) (*painless.DocValues, *
 		dv.Kind = "Dates"
 		ms := []int64{}
 		for _, v := range vals {
-			if f, ok := toFloat(v); ok {
+			if f, ok := jsonv.ToFloat(v); ok {
 				ms = append(ms, int64(f))
 			}
 		}
@@ -287,8 +291,8 @@ func plDocValuesFor(qc *queryCtx, field string, off int) (*painless.DocValues, *
 		dv.Kind = "GeoPoints"
 		for _, v := range vals {
 			if m, ok := v.(map[string]any); ok {
-				lat, _ := toFloat(m["lat"])
-				lon, _ := toFloat(m["lon"])
+				lat, _ := jsonv.ToFloat(m["lat"])
+				lon, _ := jsonv.ToFloat(m["lon"])
 				dv.Values = append(dv.Values, &painless.GeoPoint{Lat: lat, Lon: lon})
 			}
 		}
@@ -365,18 +369,18 @@ func (s *Server) handlePainlessExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(strings.TrimSpace(string(raw))) == 0 {
-		writeError(w, &apiError{Type: "parse_exception", Status: 400, Reason: "request body or source parameter is required"})
+		writeError(w, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "request body or source parameter is required"})
 		return
 	}
 	scriptRaw, ok := body["script"]
 	if !ok {
-		writeError(w, errBad("Required [script]"))
+		writeError(w, apierr.BadRequest("Required [script]"))
 		return
 	}
 	sm, ok := scriptRaw.(map[string]any)
 	if !ok {
 		col := strings.Index(string(raw), `"script"`) + len(`"script"`) + 2
-		writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason: "[1:" + itoa(col) + "] [painless_execute_request] script doesn't support values of type: VALUE_STRING"})
 		return
 	}
@@ -387,32 +391,32 @@ func (s *Server) handlePainlessExecute(w http.ResponseWriter, r *http.Request) {
 	switch ctxName {
 	case "painless_test", "filter", "score":
 	default:
-		writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason:   "Failed to build [painless_execute_request] after last required field arrived",
-			CausedBy: &apiError{Type: "unsupported_operation_exception", Reason: "unsupported script context name [" + ctxName + "]"}})
+			CausedBy: &apierr.Error{Type: "unsupported_operation_exception", Reason: "unsupported script context name [" + ctxName + "]"}})
 		return
 	}
 	if _, hasID := sm["id"]; hasID {
-		writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: only inline scripts are supported;"})
 		return
 	}
 	src, _ := sm["source"].(string)
 	if len(src) > 65535 {
-		writeError(w, errBad("exceeded max allowed inline script size in bytes [65535] with size ["+itoa(len(src))+"] for script ["+src+"]"))
+		writeError(w, apierr.BadRequest("exceeded max allowed inline script size in bytes [65535] with size ["+itoa(len(src))+"] for script ["+src+"]"))
 		return
 	}
 	lang, _ := sm["lang"].(string)
 	switch lang {
 	case "", "painless":
 	case "expression":
-		writeError(w, errBad("expression engine does not know how to handle script context ["+ctxName+"]"))
+		writeError(w, apierr.BadRequest("expression engine does not know how to handle script context ["+ctxName+"]"))
 		return
 	case "mustache":
-		writeError(w, errBad("mustache engine does not know how to handle context ["+ctxName+"]"))
+		writeError(w, apierr.BadRequest("mustache engine does not know how to handle context ["+ctxName+"]"))
 		return
 	default:
-		writeError(w, errBad("script_lang not supported ["+lang+"]"))
+		writeError(w, apierr.BadRequest("script_lang not supported ["+lang+"]"))
 		return
 	}
 	params := painless.FromJSON(map[string]any{}, painless.Hash).(*painless.Map)
@@ -469,13 +473,13 @@ func (s *Server) handlePainlessExecute(w http.ResponseWriter, r *http.Request) {
 	default:
 		result = painless.ToJSON(v)
 	}
-	writeJSON(w, 200, orderedJSON{{"result", result}})
+	writeJSON(w, 200, ojson.Object{{"result", result}})
 }
 
 // plTempIndex is a single-document copy of an index, like the in-memory
 // index the execute API builds for context_setup.
-func plTempIndex(idx *Index, doc map[string]any) *Index {
-	tmp := &Index{Name: idx.Name, UUID: idx.UUID, Settings: idx.Settings,
+func plTempIndex(idx *model.Index, doc map[string]any) *model.Index {
+	tmp := &model.Index{Name: idx.Name, UUID: idx.UUID, Settings: idx.Settings,
 		Mappings:   deepCopySource(idx.Mappings).(map[string]any),
 		Docs:       map[string]map[string]any{"_execute": doc},
 		Order:      []string{"_execute"},

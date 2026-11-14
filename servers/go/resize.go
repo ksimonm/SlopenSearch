@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
 )
 
@@ -27,12 +28,12 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request, src, op, t
 		return
 	}
 	if !blockOn(idx, "write") {
-		writeError(w, &apiError{Type: "illegal_state_exception", Status: 500,
+		writeError(w, &apierr.Error{Type: "illegal_state_exception", Status: 500,
 			Reason: fmt.Sprintf("index %s must block write operations to resize index", src)})
 		return
 	}
 	if _, exists := s.indices[target]; exists {
-		writeError(w, &apiError{Type: "resource_already_exists_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "resource_already_exists_exception", Status: 400,
 			Reason: "index [" + target + "] already exists", Fields: map[string]any{"index": target}})
 		return
 	}
@@ -54,19 +55,19 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request, src, op, t
 		if hasN {
 			n, ok := settingsValueInt(nRaw)
 			if !ok {
-				writeError(w, errBad("Failed to parse value ["+settingsValueString(nRaw)+"] for setting [index.number_of_shards]"))
+				writeError(w, apierr.BadRequest("Failed to parse value ["+settingsValueString(nRaw)+"] for setting [index.number_of_shards]"))
 				return
 			}
 			want = n
 		}
 		if want != srcShards {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: fmt.Sprintf("the number of target shards (%d) must be the same as the number of source shards (%d)", want, srcShards)})
 			return
 		}
 	case "shrink":
 		if srcShards == 1 {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "can't shrink an index with only one shard"})
 			return
 		}
@@ -74,30 +75,30 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request, src, op, t
 		if hasN {
 			n, ok := settingsValueInt(nRaw)
 			if !ok {
-				writeError(w, errBad("Failed to parse value ["+settingsValueString(nRaw)+"] for setting [index.number_of_shards]"))
+				writeError(w, apierr.BadRequest("Failed to parse value ["+settingsValueString(nRaw)+"] for setting [index.number_of_shards]"))
 				return
 			}
 			want = n
 		}
 		if want >= srcShards {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: fmt.Sprintf("the number of target shards [%d] must be less that the number of source shards [%d]", want, srcShards)})
 			return
 		}
 	case "split":
 		if !hasN {
-			writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: index.number_of_shards is required for split operations;"})
 			return
 		}
 		n, ok := settingsValueInt(nRaw)
 		if !ok {
-			writeError(w, errBad("Failed to parse value ["+settingsValueString(nRaw)+"] for setting [index.number_of_shards]"))
+			writeError(w, apierr.BadRequest("Failed to parse value ["+settingsValueString(nRaw)+"] for setting [index.number_of_shards]"))
 			return
 		}
 		want = n
 		if srcShards == 0 || want%srcShards != 0 {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: fmt.Sprintf("the number of source shards [%d] must be a factor of [%d]", srcShards, want)})
 			return
 		}

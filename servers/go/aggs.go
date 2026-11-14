@@ -12,7 +12,10 @@ import (
 	_ "time/tzdata"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
 )
 
@@ -67,7 +70,7 @@ func numericValues(docs []map[string]any, field, pathPrefix string) []float64 {
 		if !ok {
 			continue
 		}
-		if f, ok := toFloat(v); ok {
+		if f, ok := jsonv.ToFloat(v); ok {
 			out = append(out, f)
 		}
 	}
@@ -75,7 +78,7 @@ func numericValues(docs []map[string]any, field, pathPrefix string) []float64 {
 }
 
 type aggHit struct {
-	idx   *Index
+	idx   *model.Index
 	id    string
 	doc   map[string]any
 	score float64
@@ -174,11 +177,11 @@ func aggDocs(hits []aggHit) []map[string]any {
 	return out
 }
 
-func evalAggs(aggs map[string]any, hits []aggHit, idx *Index, pathPrefix string, typed bool) (map[string]any, *apiError) {
+func evalAggs(aggs map[string]any, hits []aggHit, idx *model.Index, pathPrefix string, typed bool) (map[string]any, *apierr.Error) {
 	return evalAggsMode(aggs, hits, idx, pathPrefix, typed, true)
 }
 
-func evalAggsMode(aggs map[string]any, hits []aggHit, idx *Index, pathPrefix string, typed bool, allowParent bool) (map[string]any, *apiError) {
+func evalAggsMode(aggs map[string]any, hits []aggHit, idx *model.Index, pathPrefix string, typed bool, allowParent bool) (map[string]any, *apierr.Error) {
 	docs := aggDocs(hits)
 	out := map[string]any{}
 	for name, raw := range aggs {
@@ -187,15 +190,15 @@ func evalAggsMode(aggs map[string]any, hits []aggHit, idx *Index, pathPrefix str
 			continue
 		}
 		if strings.ContainsAny(name, "[]>") {
-			return nil, &apiError{Type: "parsing_exception", Status: 400,
+			return nil, &apierr.Error{Type: "parsing_exception", Status: 400,
 				Reason: "Invalid aggregation name [" + name + "]. Aggregation names can contain any character except '[', ']', and '>'"}
 		}
 		if len(def) == 0 {
-			return nil, &apiError{Type: "parsing_exception", Status: 400,
+			return nil, &apierr.Error{Type: "parsing_exception", Status: 400,
 				Reason: "Missing definition for aggregation [" + name + "]"}
 		}
 		if types := aggDefinitionTypes(def); len(types) > 1 {
-			return nil, &apiError{Type: "parsing_exception", Status: 400,
+			return nil, &apierr.Error{Type: "parsing_exception", Status: 400,
 				Reason: "Found two aggregation type definitions in [" + name + "]: [" + types[0] + "] and [" + types[1] + "]"}
 		}
 		t := aggTypeOf(def)
@@ -230,10 +233,10 @@ func evalAggsMode(aggs map[string]any, hits []aggHit, idx *Index, pathPrefix str
 				continue
 			}
 			if t == "bucket_script" {
-				return nil, &apiError{Type: "action_request_validation_exception", Status: 400,
+				return nil, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 					Reason: "Validation Failed: 1: bucket_script aggregation [" + name + "] must be declared inside of another aggregation;"}
 			}
-			return nil, &apiError{Type: "action_request_validation_exception", Status: 400,
+			return nil, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: No aggregation found for path [" + bucketPathsOf(def[t].(map[string]any))[0] + "];"}
 		}
 		if !isSiblingPipelineType(t) {
@@ -248,7 +251,7 @@ func evalAggsMode(aggs map[string]any, hits []aggHit, idx *Index, pathPrefix str
 	return out, nil
 }
 
-func typedAggPrefix(def map[string]any, idx *Index, pathPrefix string) string {
+func typedAggPrefix(def map[string]any, idx *model.Index, pathPrefix string) string {
 	if t, ok := def["terms"].(map[string]any); ok {
 		field, _ := toString(t["field"])
 		switch fieldType(idx, resolveField(field, pathPrefix)) {
@@ -331,7 +334,7 @@ func subAggsOf(def map[string]any) map[string]any {
 	return nil
 }
 
-func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *Index, pathPrefix string, typed bool) (any, *apiError) {
+func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, typed bool) (any, *apierr.Error) {
 	if t, ok := def["terms"].(map[string]any); ok {
 		return termsAgg(name, t, docs, idx, pathPrefix, subAggsOf(def), typed)
 	}
@@ -448,10 +451,10 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *Ind
 		if err := validateMetricParams("extended_stats", t, allowed); err != nil {
 			return nil, err
 		}
-		if v, ok := toFloat(t["sigma"]); ok && v < 0 {
-			return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+		if v, ok := jsonv.ToFloat(t["sigma"]); ok && v < 0 {
+			return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "Failed to parse aggregation [a]",
-				CausedBy: &apiError{Type: "illegal_argument_exception",
+				CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 					Reason: fmt.Sprintf("[sigma] must be greater than or equal to 0. Found [%s] in [a]", formatFloatOne(v))}}
 		}
 		return extendedStatsAgg(t, docs, idx, pathPrefix)
@@ -461,10 +464,10 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *Ind
 		if err := validateMetricParams("cardinality", t, allowed); err != nil {
 			return nil, err
 		}
-		if v, ok := toFloat(t["precision_threshold"]); ok && v < 0 {
-			return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+		if v, ok := jsonv.ToFloat(t["precision_threshold"]); ok && v < 0 {
+			return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "Failed to parse aggregation [a]",
-				CausedBy: &apiError{Type: "illegal_argument_exception",
+				CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 					Reason: fmt.Sprintf("[precisionThreshold] must be greater than or equal to 0. Found [%s] in [a]", jsonv.FormatNumber(v))}}
 		}
 		return cardinalityAgg(t, docs, idx, pathPrefix)
@@ -499,7 +502,7 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *Ind
 	}
 	if t, ok := def["top_hits"].(map[string]any); ok {
 		if subAggsOf(def) != nil {
-			return nil, &apiError{Type: "aggregation_initialization_exception", Status: 500,
+			return nil, &apierr.Error{Type: "aggregation_initialization_exception", Status: 500,
 				Reason: "Aggregator [a] of type [top_hits] cannot accept sub-aggregations"}
 		}
 		return topHitsAgg(t, docs, idx)
@@ -514,7 +517,7 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *Ind
 	}
 	if t, ok := def["global"].(map[string]any); ok {
 		if len(t) > 0 {
-			return nil, &apiError{Type: "parsing_exception", Status: 400, Reason: "Unknown key for a VALUE_OBJECT in [global]."}
+			return nil, &apierr.Error{Type: "parsing_exception", Status: 400, Reason: "Unknown key for a VALUE_OBJECT in [global]."}
 		}
 		return globalAgg(subAggsOf(def), idx, pathPrefix, typed)
 	}
@@ -574,8 +577,8 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *Ind
 		if s := aggSuggestion(aggName); s != "" {
 			reason += " did you mean [" + s + "]?"
 		}
-		return nil, &apiError{Type: "parsing_exception", Status: 400, Reason: reason,
-			CausedBy: &apiError{Type: "named_object_not_found_exception", Reason: "[1:14] not found"}}
+		return nil, &apierr.Error{Type: "parsing_exception", Status: 400, Reason: reason,
+			CausedBy: &apierr.Error{Type: "named_object_not_found_exception", Reason: "[1:14] not found"}}
 	}
 	return map[string]any{}, nil
 }
@@ -620,7 +623,7 @@ func canonicalTermKey(v any) string {
 	return fmt.Sprintf("x:%v", v)
 }
 
-func termKeyFor(v any, ft, valueType, format string, idx *Index, field string) (any, string, bool, string, bool) {
+func termKeyFor(v any, ft, valueType, format string, idx *model.Index, field string) (any, string, bool, string, bool) {
 	switch ft {
 	case "integer", "long", "short", "byte", "unsigned_long":
 		if ft == "unsigned_long" {
@@ -637,7 +640,7 @@ func termKeyFor(v any, ft, valueType, format string, idx *Index, field string) (
 				}
 			}
 		}
-		if f, ok := toFloat(v); ok {
+		if f, ok := jsonv.ToFloat(v); ok {
 			k := int64(f)
 			return k, "", false, canonicalTermKey(k), true
 		}
@@ -645,7 +648,7 @@ func termKeyFor(v any, ft, valueType, format string, idx *Index, field string) (
 			return v, "", false, canonicalTermKey(v), true
 		}
 	case "float", "double", "half_float", "scaled_float":
-		if f, ok := toFloat(v); ok {
+		if f, ok := jsonv.ToFloat(v); ok {
 			return f, "", false, canonicalTermKey(f), true
 		}
 	case "boolean":
@@ -656,7 +659,7 @@ func termKeyFor(v any, ft, valueType, format string, idx *Index, field string) (
 		case string:
 			b = tv == "true"
 		default:
-			if f, ok := toFloat(v); ok {
+			if f, ok := jsonv.ToFloat(v); ok {
 				b = f != 0
 			}
 		}
@@ -678,7 +681,7 @@ func termKeyFor(v any, ft, valueType, format string, idx *Index, field string) (
 		return ms, kas, true, canonicalTermKey(ms), true
 	case "":
 		if valueType == "long" {
-			if f, ok := toFloat(v); ok {
+			if f, ok := jsonv.ToFloat(v); ok {
 				k := int64(f)
 				return k, "", false, canonicalTermKey(k), true
 			}
@@ -693,14 +696,14 @@ func termKeyFor(v any, ft, valueType, format string, idx *Index, field string) (
 	return nil, "", false, "", false
 }
 
-func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool) (any, *apiError) {
+func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	allowed := map[string]bool{"field": true, "size": true, "order": true, "min_doc_count": true,
 		"shard_size": true, "shard_min_doc_count": true, "include": true, "exclude": true,
 		"missing": true, "value_type": true, "format": true, "script": true, "execution_hint": true,
 		"collect_mode": true, "show_term_doc_count_error": true}
 	for k := range spec {
 		if !allowed[k] {
-			return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+			return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "[terms] unknown field [" + k + "]"}
 		}
 	}
@@ -716,15 +719,15 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *Inde
 	}
 	if field == "_ignored" && !mapped {
 		reason := "Fielddata is not supported on field [_ignored] of type [_ignored]"
-		return nil, &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
-			RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
-			CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}}
+		return nil, &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
+			RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason},
+			CausedBy:  &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 	}
 	if ft == "search_as_you_type" {
 		reason := "Fielddata is not supported on field [" + field + "] of type [search_as_you_type]"
-		return nil, &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
-			RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
-			CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}}
+		return nil, &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
+			RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason},
+			CausedBy:  &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 	}
 	if isRangeFieldType(ft) {
 		reason := "Field [" + field + "] of type [" + ft + "] is not supported for aggregation [terms]"
@@ -737,9 +740,9 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *Inde
 		}
 		if !fd {
 			reason := "Text fields are not optimised for operations that require per-document field data like aggregations and sorting, so these operations are disabled by default. Please use a keyword field instead. Alternatively, set fielddata=true on [" + field + "] in order to load field data by uninverting the inverted index. Note that this can use significant memory."
-			return nil, &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed", Phase: "query",
-				RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
-				CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}}
+			return nil, &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed", Phase: "query",
+				RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason},
+				CausedBy:  &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 		}
 	}
 	if def, ok := mappingFieldDef(idx, resolved); ok {
@@ -751,17 +754,17 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *Inde
 	}
 	size := intField(spec, "size", 10)
 	if size <= 0 {
-		return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+		return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason: "Failed to parse aggregation [" + name + "]",
-			CausedBy: &apiError{Type: "illegal_argument_exception",
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 				Reason: fmt.Sprintf("[size] must be greater than 0. Found [%d] in [%s]", size, name)}}
 	}
 	if hint, ok := toString(spec["execution_hint"]); ok && hint != "" && hint != "map" && hint != "global_ordinals" {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "Unknown `execution_hint`: [" + hint + "], expected any of [map, global_ordinals]"}
 	}
 	if mode, ok := toString(spec["collect_mode"]); ok && mode != "" && mode != "breadth_first" && mode != "depth_first" {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "no [collect_mode] found for value [" + mode + "]"}
 	}
 	valueType, _ := toString(spec["value_type"])
@@ -985,7 +988,7 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *Inde
 		}
 		if strings.Contains(o.field, ">_count") || strings.HasPrefix(o.field, "_") {
 			reason := "Invalid aggregation order path [" + o.field + "]. The provided aggregation [_count] either does not exist, or is a pipeline aggregation and cannot be used to sort the buckets."
-			return nil, &apiError{Type: "aggregation_execution_exception", Status: 500, Reason: reason}
+			return nil, &apierr.Error{Type: "aggregation_execution_exception", Status: 500, Reason: reason}
 		}
 		first := strings.Split(o.field, ">")[0]
 		first = strings.Split(first, ".")[0]
@@ -995,20 +998,20 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *Inde
 		def, ok := sub[first].(map[string]any)
 		if !ok {
 			reason := "Invalid aggregation order path [" + o.field + "]. The provided aggregation [" + first + "] either does not exist, or is a pipeline aggregation and cannot be used to sort the buckets."
-			return nil, &apiError{Type: "aggregation_execution_exception", Status: 500, Reason: reason}
+			return nil, &apierr.Error{Type: "aggregation_execution_exception", Status: 500, Reason: reason}
 		}
 		if t := aggTypeOf(def); t == "terms" || t == "histogram" || t == "date_histogram" || t == "filter" || t == "filters" || t == "range" {
 			if t == "filter" {
 				// single bucket: allowed, continue into path
 			} else if !strings.Contains(o.field, ">") {
 				reason := "Invalid aggregation order path [" + o.field + "]. Buckets can only be sorted on a sub-aggregator path that is built out of zero or more single-bucket aggregations within the path and a final single-bucket or a metrics aggregation at the path end."
-				return nil, &apiError{Type: "aggregation_execution_exception", Status: 500, Reason: reason}
+				return nil, &apierr.Error{Type: "aggregation_execution_exception", Status: 500, Reason: reason}
 			}
 		}
 		if !strings.Contains(o.field, ".") && !strings.Contains(o.field, ">") && !strings.Contains(o.field, "[") {
 			if t := aggTypeOf(def); t == "stats" || t == "extended_stats" || t == "percentiles" || t == "percentile_ranks" || t == "matrix_stats" || t == "top_hits" {
 				reason := "Invalid aggregation order path [" + o.field + "]. When ordering on a multi-value metrics aggregation a metric name must be specified."
-				return nil, &apiError{Type: "aggregation_execution_exception", Status: 500, Reason: reason}
+				return nil, &apierr.Error{Type: "aggregation_execution_exception", Status: 500, Reason: reason}
 			}
 		}
 	}
@@ -1017,8 +1020,8 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *Inde
 			var av, bv any
 			var aok, bok bool
 			if o.field == "_count" {
-				av, aok = toFloat(bmaps[i]["doc_count"])
-				bv, bok = toFloat(bmaps[j]["doc_count"])
+				av, aok = jsonv.ToFloat(bmaps[i]["doc_count"])
+				bv, bok = jsonv.ToFloat(bmaps[j]["doc_count"])
 			} else if o.field == "_key" {
 				av, aok = bmaps[i]["key"], true
 				bv, bok = bmaps[j]["key"], true
@@ -1059,7 +1062,7 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *Inde
 	sumOther := 0
 	if len(bmaps) > size {
 		for _, b := range bmaps[size:] {
-			dc, _ := toFloat(b["doc_count"])
+			dc, _ := jsonv.ToFloat(b["doc_count"])
 			sumOther += int(dc)
 		}
 		bmaps = bmaps[:size]
@@ -1080,15 +1083,15 @@ type termOrder struct {
 	desc  bool
 }
 
-func parseTermOrders(raw any) ([]termOrder, *apiError) {
+func parseTermOrders(raw any) ([]termOrder, *apierr.Error) {
 	out := []termOrder{}
-	add := func(v any) *apiError {
+	add := func(v any) *apierr.Error {
 		switch t := v.(type) {
 		case map[string]any:
 			for k, dirRaw := range t {
 				dir, _ := toString(dirRaw)
 				if dir != "asc" && dir != "desc" {
-					return &apiError{Type: "parsing_exception", Status: 400,
+					return &apierr.Error{Type: "parsing_exception", Status: 400,
 						Reason: "Unknown order direction [" + dir + "]"}
 				}
 				out = append(out, termOrder{field: k, desc: dir == "desc"})
@@ -1096,7 +1099,7 @@ func parseTermOrders(raw any) ([]termOrder, *apiError) {
 		case string:
 			dir := t
 			if dir != "asc" && dir != "desc" {
-				return &apiError{Type: "parsing_exception", Status: 400,
+				return &apierr.Error{Type: "parsing_exception", Status: 400,
 					Reason: "Unknown order direction [" + dir + "]"}
 			}
 			out = append(out, termOrder{field: "_count", desc: dir == "desc"})
@@ -1127,7 +1130,7 @@ func singleBucketOrderValue(v any) any {
 				return dc
 			}
 		}
-	case orderedJSON:
+	case ojson.Object:
 		if _, hasBuckets := orderedGet(m, "buckets"); !hasBuckets {
 			if dc, ok := orderedGet(m, "doc_count"); ok {
 				return dc
@@ -1165,7 +1168,7 @@ func termOrderValue(b map[string]any, path string) (any, bool) {
 	return nil, false
 }
 
-func termsFilters(inc any, hasInc bool, exc any, hasExc bool, ft string, idx *Index, field, valueType string) (*regexp.Regexp, *regexp.Regexp, map[string]bool, map[string]bool, func(any) bool, *apiError) {
+func termsFilters(inc any, hasInc bool, exc any, hasExc bool, ft string, idx *model.Index, field, valueType string) (*regexp.Regexp, *regexp.Regexp, map[string]bool, map[string]bool, func(any) bool, *apierr.Error) {
 	var incRe, excRe *regexp.Regexp
 	var incSet, excSet map[string]bool
 	var partFilter func(any) bool
@@ -1174,11 +1177,11 @@ func termsFilters(inc any, hasInc bool, exc any, hasExc bool, ft string, idx *In
 			part := intField(obj, "partition", -1)
 			num := intField(obj, "num_partitions", -1)
 			if part < 0 {
-				return nil, nil, nil, nil, nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+				return nil, nil, nil, nil, nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "Missing [partition] parameter for partition-based include"}
 			}
 			if num <= 0 {
-				return nil, nil, nil, nil, nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+				return nil, nil, nil, nil, nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "Missing [num_partitions] parameter for partition-based include"}
 			}
 			partFilter = func(v any) bool {
@@ -1195,16 +1198,16 @@ func termsFilters(inc any, hasInc bool, exc any, hasExc bool, ft string, idx *In
 			}
 		}
 	}
-	compile := func(raw any) (*regexp.Regexp, map[string]bool, *apiError) {
+	compile := func(raw any) (*regexp.Regexp, map[string]bool, *apierr.Error) {
 		switch t := raw.(type) {
 		case string:
 			if t == "[[" {
-				return nil, nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+				return nil, nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "expected ']' at position 2"}
 			}
 			re, err := regexp.Compile("^(?:" + t + ")$")
 			if err != nil {
-				return nil, nil, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
+				return nil, nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
 			}
 			return re, nil, nil
 		case []any:
@@ -1221,7 +1224,7 @@ func termsFilters(inc any, hasInc bool, exc any, hasExc bool, ft string, idx *In
 	}
 	if hasInc {
 		if _, isObj := inc.(map[string]any); !isObj {
-			var e *apiError
+			var e *apierr.Error
 			incRe, incSet, e = compile(inc)
 			if e != nil {
 				return nil, nil, nil, nil, nil, e
@@ -1229,7 +1232,7 @@ func termsFilters(inc any, hasInc bool, exc any, hasExc bool, ft string, idx *In
 		}
 	}
 	if hasExc {
-		var e *apiError
+		var e *apierr.Error
 		excRe, excSet, e = compile(exc)
 		if e != nil {
 			return nil, nil, nil, nil, nil, e
@@ -1308,24 +1311,24 @@ func termsScriptKey(r any, valueScript bool, valueType string, expression bool) 
 	return painless.ToString(r)
 }
 
-func loadAggLocation(tz string) (*time.Location, *apiError) {
+func loadAggLocation(tz string) (*time.Location, *apierr.Error) {
 	if tz == "" || tz == "UTC" || tz == "utc" || tz == "Z" {
 		return time.UTC, nil
 	}
 	if strings.HasPrefix(tz, "+") || strings.HasPrefix(tz, "-") {
 		off, err := parseTZOffset(tz)
 		if err != nil {
-			return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+			return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason:   "Failed to parse aggregation [x]",
-				CausedBy: &apiError{Type: "zone_rules_exception", Reason: "Unknown time-zone ID: " + tz}}
+				CausedBy: &apierr.Error{Type: "zone_rules_exception", Reason: "Unknown time-zone ID: " + tz}}
 		}
 		return time.FixedZone(tz, int(off/1000)), nil
 	}
 	loc, err := timeLoadLocation(tz)
 	if err != nil {
-		return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+		return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason:   "Failed to parse aggregation [x]",
-			CausedBy: &apiError{Type: "zone_rules_exception", Reason: "Unknown time-zone ID: " + tz}}
+			CausedBy: &apierr.Error{Type: "zone_rules_exception", Reason: "Unknown time-zone ID: " + tz}}
 	}
 	return loc, nil
 }
@@ -1474,20 +1477,20 @@ func formatDateHistKey(ms int64, format string, loc *time.Location, withZone boo
 	return t.Format("2006-01-02T15:04:05.000Z")
 }
 
-func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool) (any, *apiError) {
+func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	resolved := resolveField(field, pathPrefix)
 	ft, _ := idx.FieldTypes[resolved]
 	if ft == "keyword" || ft == "text" || ft == "ip" || ft == "boolean" {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "Field [" + field + "] of type [" + ft + "] is not supported for aggregation [date_histogram]"}
 	}
 	calRaw, hasCal := spec["calendar_interval"]
 	fixedRaw, hasFixed := spec["fixed_interval"]
 	intervalRaw, hasInterval := spec["interval"]
 	if hasCal && hasFixed {
-		return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+		return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason: "Failed to parse aggregation [x]",
-			CausedBy: &apiError{Type: "illegal_argument_exception",
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 				Reason: "Cannot use [fixed_interval] with [calendar_interval] configuration option."}}
 	}
 	unit := ""
@@ -1497,9 +1500,9 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 		s, _ := toString(calRaw)
 		u, ok := parseCalendarUnit(s)
 		if !ok {
-			return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+			return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "Failed to parse aggregation [x]",
-				CausedBy: &apiError{Type: "illegal_argument_exception",
+				CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 					Reason: "The supplied interval [" + s + "] could not be parsed as a calendar interval."}}
 		}
 		unit = u
@@ -1507,9 +1510,9 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 		s, _ := toString(fixedRaw)
 		ms, ok := parseFixedInterval(s)
 		if !ok {
-			return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+			return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "Failed to parse aggregation [x]",
-				CausedBy: &apiError{Type: "illegal_argument_exception",
+				CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 					Reason: "failed to parse setting [date_histogram.fixedInterval] with value [" + s + "] as a time value: unit is missing or unrecognized"}}
 		}
 		fixedMs = ms
@@ -1524,13 +1527,13 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 		} else if u, ok := parseCalendarUnit(s); ok {
 			unit = u
 		} else {
-			return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+			return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "Failed to parse aggregation [x]",
-				CausedBy: &apiError{Type: "illegal_argument_exception",
+				CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 					Reason: "The supplied interval [" + s + "] could not be parsed as a calendar interval."}}
 		}
 	} else {
-		return nil, &apiError{Type: "parsing_exception", Status: 400,
+		return nil, &apierr.Error{Type: "parsing_exception", Status: 400,
 			Reason: "Invalid interval specified, must be non-null and non-empty"}
 	}
 	tz, _ := toString(spec["time_zone"])
@@ -1558,7 +1561,7 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 		var ok bool
 		missingMs, ok = parseDateHistBound(missing, ft, idx, resolved, format)
 		if !ok {
-			return nil, &apiError{Type: "parse_exception", Status: 400,
+			return nil, &apierr.Error{Type: "parse_exception", Status: 400,
 				Reason: "failed to parse date field [" + fmt.Sprint(missing) + "]"}
 		}
 	}
@@ -1621,7 +1624,7 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 		if v, ok := hb["min"]; ok {
 			ms, ok := parseBound(v)
 			if !ok {
-				return nil, &apiError{Type: "parse_exception", Status: 400,
+				return nil, &apierr.Error{Type: "parse_exception", Status: 400,
 					Reason: "failed to parse date field [" + fmt.Sprint(v) + "]"}
 			}
 			hardMin, hasHardMin = startFor(ms), true
@@ -1629,7 +1632,7 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 		if v, ok := hb["max"]; ok {
 			ms, ok := parseBound(v)
 			if !ok {
-				return nil, &apiError{Type: "parse_exception", Status: 400,
+				return nil, &apierr.Error{Type: "parse_exception", Status: 400,
 					Reason: "failed to parse date field [" + fmt.Sprint(v) + "]"}
 			}
 			hardMax, hasHardMax = startFor(ms), true
@@ -1731,11 +1734,11 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 				var aok, bok bool
 				switch o.field {
 				case "_count":
-					av, aok = toFloat(bmaps[i]["doc_count"])
-					bv, bok = toFloat(bmaps[j]["doc_count"])
+					av, aok = jsonv.ToFloat(bmaps[i]["doc_count"])
+					bv, bok = jsonv.ToFloat(bmaps[j]["doc_count"])
 				case "_key":
-					av, aok = toFloat(bmaps[i]["key"])
-					bv, bok = toFloat(bmaps[j]["key"])
+					av, aok = jsonv.ToFloat(bmaps[i]["key"])
+					bv, bok = jsonv.ToFloat(bmaps[j]["key"])
 				default:
 					av, aok = termOrderValue(bmaps[i], o.field)
 					bv, bok = termOrderValue(bmaps[j], o.field)
@@ -1766,10 +1769,10 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 		})
 	}
 	if keyed {
-		out := orderedJSON{}
+		out := ojson.Object{}
 		for _, b := range bmaps {
 			kas, _ := toString(b["key_as_string"])
-			out = append(out, orderedKV{kas, b})
+			out = append(out, ojson.KV{kas, b})
 		}
 		return map[string]any{"buckets": out}, nil
 	}
@@ -1813,7 +1816,7 @@ func parseDateOffsetMillis(s string) int64 {
 	return 0
 }
 
-func parseDateHistBound(v any, ft string, idx *Index, field, format string) (int64, bool) {
+func parseDateHistBound(v any, ft string, idx *model.Index, field, format string) (int64, bool) {
 	switch t := v.(type) {
 	case int64:
 		return t, true
@@ -1842,7 +1845,7 @@ func parseDateHistBound(v any, ft string, idx *Index, field, format string) (int
 	return 0, false
 }
 
-func dateMillisFor(idx *Index, field, ft string, v any) (int64, bool) {
+func dateMillisFor(idx *model.Index, field, ft string, v any) (int64, bool) {
 	switch t := v.(type) {
 	case int64:
 		return t, true
@@ -1860,15 +1863,15 @@ func dateMillisFor(idx *Index, field, ft string, v any) (int64, bool) {
 	return 0, false
 }
 
-func histogramAgg(name, field string, spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool) (any, *apiError) {
+func histogramAgg(name, field string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	resolved := resolveField(field, pathPrefix)
 	ft, _ := idx.FieldTypes[resolved]
 	if ft == "keyword" || ft == "text" || ft == "ip" || ft == "boolean" {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "Field [" + field + "] of type [" + ft + "] is not supported for aggregation [histogram]"}
 	}
 	rawInterval, hasInterval := spec["interval"]
-	interval, ok := toFloat(rawInterval)
+	interval, ok := jsonv.ToFloat(rawInterval)
 	if !ok {
 		if s, ok := toString(rawInterval); ok {
 			interval, _ = strconv.ParseFloat(s, 64)
@@ -1876,15 +1879,15 @@ func histogramAgg(name, field string, spec map[string]any, docs []map[string]any
 	}
 	if interval <= 0 {
 		if !hasInterval || rawInterval == nil {
-			return nil, &apiError{Type: "parsing_exception", Status: 400,
+			return nil, &apierr.Error{Type: "parsing_exception", Status: 400,
 				Reason: "interval must be positive, got: 0.0"}
 		}
-		return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+		return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason: "Failed to parse aggregation [" + name + "]",
-			CausedBy: &apiError{Type: "illegal_argument_exception",
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 				Reason: "[interval] must be >0 for histogram aggregation [" + name + "]"}}
 	}
-	offset, _ := toFloat(spec["offset"])
+	offset, _ := jsonv.ToFloat(spec["offset"])
 	missing, hasMissing := spec["missing"]
 	keyed, _ := spec["keyed"].(bool)
 	minDocCount := intField(spec, "min_doc_count", 0)
@@ -1898,7 +1901,7 @@ func histogramAgg(name, field string, spec map[string]any, docs []map[string]any
 			}
 			v = missing
 		}
-		f, ok := toFloat(v)
+		f, ok := jsonv.ToFloat(v)
 		if !ok {
 			continue
 		}
@@ -1914,8 +1917,8 @@ func histogramAgg(name, field string, spec map[string]any, docs []map[string]any
 	var hardMin, hardMax float64
 	var hasHardMin, hasHardMax bool
 	if hb, ok := spec["hard_bounds"].(map[string]any); ok {
-		hardMin, hasHardMin = toFloat(hb["min"])
-		hardMax, hasHardMax = toFloat(hb["max"])
+		hardMin, hasHardMin = jsonv.ToFloat(hb["min"])
+		hardMax, hasHardMax = jsonv.ToFloat(hb["max"])
 	}
 	if minDocCount == 0 {
 		lo, hi := float64(0), float64(0)
@@ -1924,12 +1927,12 @@ func histogramAgg(name, field string, spec map[string]any, docs []map[string]any
 			lo, hi = keys[0], keys[len(keys)-1]
 		}
 		if eb, ok := spec["extended_bounds"].(map[string]any); ok {
-			emin, hasMin := toFloat(eb["min"])
-			emax, hasMax := toFloat(eb["max"])
+			emin, hasMin := jsonv.ToFloat(eb["min"])
+			emax, hasMax := jsonv.ToFloat(eb["max"])
 			if hasMin && hasMax && emax < emin {
-				return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+				return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 					Reason: "Failed to parse aggregation [" + name + "]",
-					CausedBy: &apiError{Type: "illegal_argument_exception",
+					CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 						Reason: fmt.Sprintf("max bound [%s] must be greater than min bound [%s]", formatFloatOne(emax), formatFloatOne(emin))}}
 			}
 			if hasMin {
@@ -1969,7 +1972,7 @@ func histogramAgg(name, field string, spec map[string]any, docs []map[string]any
 	}
 	bmaps := []map[string]any{}
 	for _, k := range keys {
-		b := map[string]any{"key": rawFloat(k), "doc_count": counts[k]}
+		b := map[string]any{"key": jsonv.Float(k), "doc_count": counts[k]}
 		if sub != nil {
 			subRes, err := evalAggsMode(sub, docsToHits(group[k], idx), idx, pathPrefix, typed, false)
 			if err != nil {
@@ -1996,11 +1999,11 @@ func histogramAgg(name, field string, spec map[string]any, docs []map[string]any
 				var aok, bok bool
 				switch o.field {
 				case "_count":
-					av, aok = toFloat(bmaps[i]["doc_count"])
-					bv, bok = toFloat(bmaps[j]["doc_count"])
+					av, aok = jsonv.ToFloat(bmaps[i]["doc_count"])
+					bv, bok = jsonv.ToFloat(bmaps[j]["doc_count"])
 				case "_key":
-					av, aok = toFloat(bmaps[i]["key"])
-					bv, bok = toFloat(bmaps[j]["key"])
+					av, aok = jsonv.ToFloat(bmaps[i]["key"])
+					bv, bok = jsonv.ToFloat(bmaps[j]["key"])
 				default:
 					av, aok = termOrderValue(bmaps[i], o.field)
 					bv, bok = termOrderValue(bmaps[j], o.field)
@@ -2031,10 +2034,10 @@ func histogramAgg(name, field string, spec map[string]any, docs []map[string]any
 		})
 	}
 	if keyed {
-		out := orderedJSON{}
+		out := ojson.Object{}
 		for _, b := range bmaps {
-			f, _ := toFloat(b["key"])
-			out = append(out, orderedKV{rangeKeyNumber(f), b})
+			f, _ := jsonv.ToFloat(b["key"])
+			out = append(out, ojson.KV{rangeKeyNumber(f), b})
 		}
 		return map[string]any{"buckets": out}, nil
 	}
@@ -2087,7 +2090,7 @@ func relativizeQuery(v any, prefix string) any {
 	return v
 }
 
-func filterAgg(spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool) (any, *apiError) {
+func filterAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	if pathPrefix != "" {
 		spec = relativizeQuery(spec, pathPrefix).(map[string]any)
 	}
@@ -2114,7 +2117,7 @@ func filterAgg(spec map[string]any, docs []map[string]any, idx *Index, pathPrefi
 	return out, nil
 }
 
-func rangeAgg(field string, rangesRaw any, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool) (any, *apiError) {
+func rangeAgg(field string, rangesRaw any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	ranges, ok := rangesRaw.([]any)
 	if !ok {
 		return nil, errParsing("range requires ranges")
@@ -2125,15 +2128,15 @@ func rangeAgg(field string, rangesRaw any, docs []map[string]any, idx *Index, pa
 		if !ok {
 			continue
 		}
-		from, hasFrom := toFloat(r["from"])
-		to, hasTo := toFloat(r["to"])
+		from, hasFrom := jsonv.ToFloat(r["from"])
+		to, hasTo := jsonv.ToFloat(r["to"])
 		var bucketDocs []map[string]any
 		for _, d := range docs {
 			v, ok := aggFieldValue(d, field, pathPrefix)
 			if !ok {
 				continue
 			}
-			n, ok := toFloat(v)
+			n, ok := jsonv.ToFloat(v)
 			if !ok {
 				continue
 			}
@@ -2171,7 +2174,7 @@ type nestedCtx struct {
 	ancestors map[string]map[string]any
 }
 
-func nestedAgg(path string, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool) (any, *apiError) {
+func nestedAgg(path string, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	rel := path
 	if pathPrefix != "" && strings.HasPrefix(path, pathPrefix+".") {
 		rel = strings.TrimPrefix(path, pathPrefix+".")
@@ -2263,7 +2266,7 @@ func mapKeysOf(m map[string]any) []string {
 	return out
 }
 
-func reverseNestedAgg(name, path string, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool) (any, *apiError) {
+func reverseNestedAgg(name, path string, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	selected := []map[string]any{}
 	seen := map[string]bool{}
 	sawCtx := false
@@ -2308,7 +2311,7 @@ func reverseNestedAgg(name, path string, docs []map[string]any, idx *Index, path
 	}
 	if !sawCtx {
 		if pathPrefix == "" {
-			return nil, &apiError{Type: "parsing_exception", Status: 400,
+			return nil, &apierr.Error{Type: "parsing_exception", Status: 400,
 				Reason: "Reverse nested aggregation [" + name + "] can only be used inside a [nested] aggregation"}
 		}
 	}
@@ -2367,11 +2370,11 @@ func maxOf(vals []float64) any {
 	return m
 }
 
-func docsToHits(docs []map[string]any, idx *Index) []aggHit {
+func docsToHits(docs []map[string]any, idx *model.Index) []aggHit {
 	out := make([]aggHit, 0, len(docs))
 	for _, d := range docs {
 		id, _ := d["__slop_id"].(string)
-		score, _ := toFloat(d["__slop_score"])
+		score, _ := jsonv.ToFloat(d["__slop_score"])
 		terms, _ := d["__slop_query_terms"].([]string)
 		out = append(out, aggHit{idx: idx, id: id, doc: d, score: score, terms: terms})
 	}

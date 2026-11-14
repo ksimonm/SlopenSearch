@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/model"
 )
 
 // Highlighting of text fields through their analyzers: the document value is
@@ -81,7 +82,7 @@ func queryHighlightTexts(q map[string]any) []hlQueryText {
 }
 
 // hlAnalyzedSpans marks the tokens of a text field value matching the query.
-func hlAnalyzedSpans(idx *Index, field, text string, query map[string]any) []hlSpan {
+func hlAnalyzedSpans(idx *model.Index, field, text string, query map[string]any) []hlSpan {
 	qc := &queryCtx{idx: idx}
 	terms := map[string]bool{}
 	for _, qt := range queryHighlightTexts(query) {

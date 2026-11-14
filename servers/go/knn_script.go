@@ -6,6 +6,10 @@ import (
 	"math/bits"
 	"strings"
 
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
 )
 
@@ -15,18 +19,18 @@ import (
 
 // knnShardFail renders a "failed to create query" shard failure whose
 // cause is an illegal_argument_exception.
-func knnShardFail(idx *Index, reason string) *apiError {
-	return knnShardFailWith(idx, "failed to create query: "+reason, orderedJSON{
+func knnShardFail(idx *model.Index, reason string) *apierr.Error {
+	return knnShardFailWith(idx, "failed to create query: "+reason, ojson.Object{
 		{"type", "illegal_argument_exception"}, {"reason", reason}}, true)
 }
 
 // knnShardFailWith builds a query_shard_exception shard failure with the
 // given shard reason and cause; rootIsShard picks whether root_cause and the
 // top-level cause are the query_shard_exception or the inner cause.
-func knnShardFailWith(idx *Index, shardReason string, cause orderedJSON, rootIsShard bool) *apiError {
-	shard := orderedJSON{{"type", "query_shard_exception"}, {"reason", shardReason},
+func knnShardFailWith(idx *model.Index, shardReason string, cause ojson.Object, rootIsShard bool) *apierr.Error {
+	shard := ojson.Object{{"type", "query_shard_exception"}, {"reason", shardReason},
 		{"index", idx.Name}, {"index_uuid", idx.UUID}, {"caused_by", cause}}
-	root := orderedJSON{{"type", "query_shard_exception"}, {"reason", shardReason},
+	root := ojson.Object{{"type", "query_shard_exception"}, {"reason", shardReason},
 		{"index", idx.Name}, {"index_uuid", idx.UUID}}
 	top := shard
 	if !rootIsShard {
@@ -34,7 +38,7 @@ func knnShardFailWith(idx *Index, shardReason string, cause orderedJSON, rootIsS
 		top = cause
 	}
 	f := &shardFailure{status: 400, index: idx.Name, root: root, shard: shard, top: top}
-	return &apiError{Type: "query_shard_exception", Status: 400, Reason: shardReason, Shard: f}
+	return &apierr.Error{Type: "query_shard_exception", Status: 400, Reason: shardReason, Shard: f}
 }
 
 var knnScriptSpaces = map[string]bool{
@@ -42,11 +46,11 @@ var knnScriptSpaces = map[string]bool{
 }
 
 // knnScriptScore computes a knn_score script score for the current document.
-func (c *queryCtx) knnScriptScore(sm map[string]any) (float64, *apiError) {
+func (c *queryCtx) knnScriptScore(sm map[string]any) (float64, *apierr.Error) {
 	src, _ := sm["source"].(string)
 	if src != "knn_score" {
 		return 0, knnShardFailWith(c.idx, fmt.Sprintf("failed to create query: Failed to compile inline script [%s] using lang [knn]", src),
-			orderedJSON{{"type", "illegal_argument_exception"}, {"reason", "Unknown script name " + src}}, false)
+			ojson.Object{{"type", "illegal_argument_exception"}, {"reason", "Unknown script name " + src}}, false)
 	}
 	params, _ := sm["params"].(map[string]any)
 	for _, p := range []string{"field", "query_value", "space_type"} {
@@ -102,7 +106,7 @@ func plKnnDocValues(field string, vals []any) *painless.DocValues {
 	}
 	arr := &painless.Array{Elem: "float"}
 	for _, v := range vals {
-		f, _ := toFloat(v)
+		f, _ := jsonv.ToFloat(v)
 		arr.Items = append(arr.Items, float32(f))
 	}
 	dv.Values = []any{arr}
@@ -217,21 +221,21 @@ func plKnnBindings() map[string]func(args []any, off int) (any, *painless.Runtim
 // ---- unsupported operations on vector fields ----
 
 // knnUnsupportedSort reports a sort on a knn_vector field.
-func knnUnsupportedSort(idx *Index, field string) *apiError {
+func knnUnsupportedSort(idx *model.Index, field string) *apierr.Error {
 	def, _ := mappingFieldDef(idx, field)
 	if t, _ := def["type"].(string); t != "knn_vector" {
 		return nil
 	}
-	e := &apiError{Type: "unsupported_operation_exception", Status: 500, Reason: "knn vector field doesn't support this operation"}
+	e := &apierr.Error{Type: "unsupported_operation_exception", Status: 500, Reason: "knn vector field doesn't support this operation"}
 	return plainShardError(idx, e)
 }
 
 // knnScriptScoreFinish applies boost and min_score of a script_score query.
-func knnScriptScoreFinish(bm map[string]any, score float64) (bool, float64, *apiError) {
-	if b, ok := toFloat(bm["boost"]); ok {
+func knnScriptScoreFinish(bm map[string]any, score float64) (bool, float64, *apierr.Error) {
+	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		score = float64(float32(score * b))
 	}
-	if ms, ok := toFloat(bm["min_score"]); ok && score < ms {
+	if ms, ok := jsonv.ToFloat(bm["min_score"]); ok && score < ms {
 		return false, 0, nil
 	}
 	return true, score, nil

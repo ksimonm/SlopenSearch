@@ -5,10 +5,13 @@ import (
 	"math"
 	"sort"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/ojson"
 )
 
-func matrixStatsAgg(spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string) (any, *apiError) {
+func matrixStatsAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) (any, *apierr.Error) {
 	fields := anyStringList(spec["fields"])
 	cols := map[string][]float64{}
 	for _, f := range fields {
@@ -24,7 +27,7 @@ func matrixStatsAgg(spec map[string]any, docs []map[string]any, idx *Index, path
 				ok = false
 				break
 			}
-			n, valid := toFloat(v)
+			n, valid := jsonv.ToFloat(v)
 			if !valid {
 				ok = false
 				break
@@ -65,12 +68,12 @@ func matrixStatsAgg(spec map[string]any, docs []map[string]any, idx *Index, path
 			skew = (m3 / float64(len(vals))) / math.Pow(m2/float64(len(vals)), 1.5)
 			kurt = (m4 / float64(len(vals))) / math.Pow(m2/float64(len(vals)), 2)
 		}
-		cov := orderedJSON{}
-		corr := orderedJSON{}
+		cov := ojson.Object{}
+		corr := ojson.Object{}
 		for _, g := range fields {
 			if n == 0 {
-				cov = append(cov, orderedKV{g, rawFloat(0)})
-				corr = append(corr, orderedKV{g, rawFloat(1)})
+				cov = append(cov, ojson.KV{g, jsonv.Float(0)})
+				corr = append(corr, ojson.KV{g, jsonv.Float(1)})
 				continue
 			}
 			c := 0.0
@@ -82,7 +85,7 @@ func matrixStatsAgg(spec map[string]any, docs []map[string]any, idx *Index, path
 			if n > 1 {
 				c /= float64(n - 1)
 			}
-			cov = append(cov, orderedKV{g, rawFloat(c)})
+			cov = append(cov, ojson.KV{g, jsonv.Float(c)})
 			vg := 0.0
 			if len(cols[g]) > 1 {
 				for _, v := range cols[g] {
@@ -94,15 +97,15 @@ func matrixStatsAgg(spec map[string]any, docs []map[string]any, idx *Index, path
 			if variance > 0 && vg > 0 {
 				cc = c / math.Sqrt(variance*vg)
 			}
-			corr = append(corr, orderedKV{g, rawFloat(cc)})
+			corr = append(corr, ojson.KV{g, jsonv.Float(cc)})
 		}
-		entries = append(entries, orderedJSON{
-			{"name", f}, {"count", len(vals)}, {"mean", rawFloat(mean)}, {"variance", rawFloat(variance)},
-			{"skewness", rawFloat(skew)}, {"kurtosis", rawFloat(kurt)},
+		entries = append(entries, ojson.Object{
+			{"name", f}, {"count", len(vals)}, {"mean", jsonv.Float(mean)}, {"variance", jsonv.Float(variance)},
+			{"skewness", jsonv.Float(skew)}, {"kurtosis", jsonv.Float(kurt)},
 			{"covariance", cov}, {"correlation", corr},
 		})
 	}
-	return orderedJSON{{"doc_count", n}, {"fields", entries}}, nil
+	return ojson.Object{{"doc_count", n}, {"fields", entries}}, nil
 }
 
 func indexOfString(xs []string, s string) int {
@@ -114,7 +117,7 @@ func indexOfString(xs []string, s string) int {
 	return -1
 }
 
-func geoBoundsAgg(spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string) (any, *apiError) {
+func geoBoundsAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) (any, *apierr.Error) {
 	field, _ := toString(spec["field"])
 	lats, lons := []float64{}, []float64{}
 	for _, d := range docs {
@@ -175,13 +178,13 @@ func geoBoundsAgg(spec map[string]any, docs []map[string]any, idx *Index, pathPr
 		}
 		minLon, maxLon = sm, sx
 	}
-	return orderedJSON{{"bounds", orderedJSON{
-		{"top_left", orderedJSON{{"lat", rawFloat(maxLat)}, {"lon", rawFloat(minLon)}}},
-		{"bottom_right", orderedJSON{{"lat", rawFloat(minLat)}, {"lon", rawFloat(maxLon)}}},
+	return ojson.Object{{"bounds", ojson.Object{
+		{"top_left", ojson.Object{{"lat", jsonv.Float(maxLat)}, {"lon", jsonv.Float(minLon)}}},
+		{"bottom_right", ojson.Object{{"lat", jsonv.Float(minLat)}, {"lon", jsonv.Float(maxLon)}}},
 	}}}, nil
 }
 
-func geoCentroidAgg(spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string) (any, *apiError) {
+func geoCentroidAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) (any, *apierr.Error) {
 	field, _ := toString(spec["field"])
 	latSum, lonSum := 0.0, 0.0
 	count := 0
@@ -198,24 +201,24 @@ func geoCentroidAgg(spec map[string]any, docs []map[string]any, idx *Index, path
 		lonSum += lon
 		count++
 	}
-	out := orderedJSON{{"count", count}}
+	out := ojson.Object{{"count", count}}
 	if count > 0 {
-		out = append(out, orderedKV{"location", orderedJSON{{"lat", rawFloat(latSum / float64(count))}, {"lon", rawFloat(lonSum / float64(count))}}})
+		out = append(out, ojson.KV{"location", ojson.Object{{"lat", jsonv.Float(latSum / float64(count))}, {"lon", jsonv.Float(lonSum / float64(count))}}})
 	}
 	return out, nil
 }
 
-func topHitsAgg(spec map[string]any, docs []map[string]any, idx *Index) (any, *apiError) {
+func topHitsAgg(spec map[string]any, docs []map[string]any, idx *model.Index) (any, *apierr.Error) {
 	if sub := subAggsOf(spec); sub != nil {
-		return nil, &apiError{Type: "aggregation_initialization_exception", Status: 500,
+		return nil, &apierr.Error{Type: "aggregation_initialization_exception", Status: 500,
 			Reason: "Aggregator [a] of type [top_hits] cannot accept sub-aggregations"}
 	}
 	from := intField(spec, "from", 0)
 	size := intField(spec, "size", 3)
 	if from+size > 100 {
 		reason := fmt.Sprintf("Top hits result window is too large, the top hits aggregator [a]'s from + size must be less than or equal to: [100] but was [%d]. This limit can be set by changing the [index.max_inner_result_window] index level setting.", from+size)
-		return nil, &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: reason,
-			RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason}}
+		return nil, &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: reason,
+			RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 	}
 	sorts := parseSortList(spec["sort"])
 	if len(sorts) > 0 {
@@ -268,7 +271,7 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *Index) (any, *a
 	maxScore := 0.0
 	hasScores := len(sorts) == 0 || trackScores
 	for _, d := range docs {
-		sc, _ := toFloat(d["__slop_score"])
+		sc, _ := jsonv.ToFloat(d["__slop_score"])
 		if sc > maxScore {
 			maxScore = sc
 		}
@@ -276,21 +279,21 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *Index) (any, *a
 	for i := start; i < end; i++ {
 		d := docs[i]
 		id, _ := d["__slop_id"].(string)
-		sc, _ := toFloat(d["__slop_score"])
-		h := orderedJSON{}
+		sc, _ := jsonv.ToFloat(d["__slop_score"])
+		h := ojson.Object{}
 		if !storedNone {
-			h = append(h, orderedKV{"_index", idx.Name}, orderedKV{"_id", id})
+			h = append(h, ojson.KV{"_index", idx.Name}, ojson.KV{"_id", id})
 		}
 		if hasScores {
-			h = append(h, orderedKV{"_score", rawFloat(sc)})
+			h = append(h, ojson.KV{"_score", jsonv.Float(sc)})
 		} else {
-			h = append(h, orderedKV{"_score", nil})
+			h = append(h, ojson.KV{"_score", nil})
 		}
 		if includeSource {
 			src := filterSourceDoc(d, sourceIncludes, sourceExcludes)
 			delete(src, "__slop_id")
 			delete(src, "__slop_score")
-			h = append(h, orderedKV{"_source", normalizeNumbers(src)})
+			h = append(h, ojson.KV{"_source", normalizeNumbers(src)})
 		}
 		if v, ok := spec["version"].(bool); ok && v {
 			ver := int64(1)
@@ -299,7 +302,7 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *Index) (any, *a
 					ver = x
 				}
 			}
-			h = append(h, orderedKV{"_version", ver})
+			h = append(h, ojson.KV{"_version", ver})
 		}
 		if v, ok := spec["seq_no_primary_term"].(bool); ok && v {
 			seq := int64(0)
@@ -314,7 +317,7 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *Index) (any, *a
 					pt = x
 				}
 			}
-			h = append(h, orderedKV{"_seq_no", seq}, orderedKV{"_primary_term", pt})
+			h = append(h, ojson.KV{"_seq_no", seq}, ojson.KV{"_primary_term", pt})
 		}
 		if len(sorts) > 0 {
 			sv := []any{}
@@ -322,13 +325,13 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *Index) (any, *a
 				v, _ := sortValue(d, s.field, idx)
 				sv = append(sv, normalizeNumbers(v))
 			}
-			h = append(h, orderedKV{"sort", sv})
+			h = append(h, ojson.KV{"sort", sv})
 		}
-		fields := orderedJSON{}
+		fields := ojson.Object{}
 		if dv, ok := spec["docvalue_fields"]; ok {
 			for _, f := range anyStringList(dv) {
 				if v, ok := fieldValue(d, f); ok {
-					fields = append(fields, orderedKV{f, []any{normalizeNumbers(v)}})
+					fields = append(fields, ojson.KV{f, []any{normalizeNumbers(v)}})
 				}
 			}
 		}
@@ -338,25 +341,25 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *Index) (any, *a
 				return nil, serr
 			}
 			for _, name := range jsonv.SortedKeys(got) {
-				fields = append(fields, orderedKV{name, got[name]})
+				fields = append(fields, ojson.KV{name, got[name]})
 			}
 		}
 		if len(fields) > 0 {
-			h = append(h, orderedKV{"fields", fields})
+			h = append(h, ojson.KV{"fields", fields})
 		}
 		if hm, ok := spec["highlight"].(map[string]any); ok {
 			if hf, ok := hm["fields"].(map[string]any); ok {
 				terms, _ := d["__slop_query_terms"].([]string)
-				hl := orderedJSON{}
+				hl := ojson.Object{}
 				for fname := range hf {
 					txt, ok := toString(d[fname])
 					if !ok {
 						continue
 					}
-					hl = append(hl, orderedKV{fname, []any{highlightText(txt, terms)}})
+					hl = append(hl, ojson.KV{fname, []any{highlightText(txt, terms)}})
 				}
 				if len(hl) > 0 {
-					h = append(h, orderedKV{"highlight", hl})
+					h = append(h, ojson.KV{"highlight", hl})
 				}
 			}
 		}
@@ -364,10 +367,10 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *Index) (any, *a
 	}
 	var max any
 	if hasScores && total > 0 {
-		max = rawFloat(maxScore)
+		max = jsonv.Float(maxScore)
 	}
-	return orderedJSON{{"hits", orderedJSON{
-		{"total", orderedJSON{{"value", total}, {"relation", "eq"}}},
+	return ojson.Object{{"hits", ojson.Object{
+		{"total", ojson.Object{{"value", total}, {"relation", "eq"}}},
 		{"max_score", max},
 		{"hits", hits},
 	}}}, nil
@@ -414,7 +417,7 @@ func parseSortEntry(raw any) []sortSpec {
 	return nil
 }
 
-func sortValue(doc map[string]any, field string, idx *Index) (any, bool) {
+func sortValue(doc map[string]any, field string, idx *model.Index) (any, bool) {
 	if field == "_score" {
 		return doc["__slop_score"], true
 	}
@@ -433,8 +436,8 @@ func sortValue(doc map[string]any, field string, idx *Index) (any, bool) {
 }
 
 func compareAggSortValues(a, b any) int {
-	af, aok := toFloat(a)
-	bf, bok := toFloat(b)
+	af, aok := jsonv.ToFloat(a)
+	bf, bok := jsonv.ToFloat(b)
 	if aok && bok {
 		if af < bf {
 			return -1

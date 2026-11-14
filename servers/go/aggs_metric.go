@@ -8,16 +8,19 @@ import (
 	"strconv"
 	"strings"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
 )
 
-func metricParamError(name, key string) *apiError {
-	return &apiError{Type: "x_content_parse_exception", Status: 400,
+func metricParamError(name, key string) *apierr.Error {
+	return &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 		Reason: "[" + name + "] unknown field [" + key + "]"}
 }
 
-func validateMetricParams(name string, spec map[string]any, allowed map[string]bool) *apiError {
+func validateMetricParams(name string, spec map[string]any, allowed map[string]bool) *apierr.Error {
 	for k := range spec {
 		if !allowed[k] {
 			return metricParamError(name, k)
@@ -30,7 +33,7 @@ var commonMetricParams = map[string]bool{
 	"field": true, "missing": true, "script": true, "format": true,
 }
 
-func metricUnsupported(idx *Index, field, name, pathPrefix string) *apiError {
+func metricUnsupported(idx *model.Index, field, name, pathPrefix string) *apierr.Error {
 	if field == "" {
 		return nil
 	}
@@ -50,15 +53,15 @@ func metricUnsupported(idx *Index, field, name, pathPrefix string) *apiError {
 		return nil
 	case "text", "match_only_text", "search_as_you_type":
 		reason := "Text fields are not optimised for operations that require per-document field data like aggregations and sorting, so these operations are disabled by default. Please use a keyword field instead. Alternatively, set fielddata=true on [" + field + "] in order to load field data by uninverting the inverted index. Note that this can use significant memory."
-		return &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: reason,
-			RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason}}
+		return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: reason,
+			RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 	}
 	reason := fmt.Sprintf("Field [%s] of type [%s] is not supported for aggregation [%s]", field, ft, name)
-	return &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: reason,
-		RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason}}
+	return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: reason,
+		RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 }
 
-func numericFromRaw(idx *Index, field string, v any) (float64, bool) {
+func numericFromRaw(idx *model.Index, field string, v any) (float64, bool) {
 	def, _ := mappingFieldDef(idx, field)
 	ft, _ := def["type"].(string)
 	if ft == "date" || ft == "date_nanos" {
@@ -76,7 +79,7 @@ func numericFromRaw(idx *Index, field string, v any) (float64, bool) {
 			return 0, false
 		}
 	}
-	return toFloat(v)
+	return jsonv.ToFloat(v)
 }
 
 func flattenMetricRaw(v any, out *[]any) {
@@ -111,14 +114,14 @@ func scriptText(raw any) (string, map[string]any) {
 	return "", map[string]any{}
 }
 
-func scriptNumericValues(docs []map[string]any, idx *Index, script any, field string, pathPrefix string) []float64 {
+func scriptNumericValues(docs []map[string]any, idx *model.Index, script any, field string, pathPrefix string) []float64 {
 	out, _ := scriptNumericValuesErr(docs, idx, script, field, pathPrefix)
 	return out
 }
 
 // scriptNumericValuesErr evaluates a metric aggregation script for every
 // document; with a field the script is a value script over its values.
-func scriptNumericValuesErr(docs []map[string]any, idx *Index, script any, field string, pathPrefix string) ([]float64, *apiError) {
+func scriptNumericValuesErr(docs []map[string]any, idx *model.Index, script any, field string, pathPrefix string) ([]float64, *apierr.Error) {
 	out := []float64{}
 	cs, err := prepareAggScript(idx, script)
 	if err != nil {
@@ -146,7 +149,7 @@ func scriptNumericValuesErr(docs []map[string]any, idx *Index, script any, field
 		for _, r := range res {
 			if painless.IsNumber(r) {
 				out = append(out, painless.F64(r))
-			} else if f, ok := toFloat(r); ok {
+			} else if f, ok := jsonv.ToFloat(r); ok {
 				out = append(out, f)
 			}
 		}
@@ -154,11 +157,11 @@ func scriptNumericValuesErr(docs []map[string]any, idx *Index, script any, field
 	return out, nil
 }
 
-func metricValues(spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string) ([]float64, *apiError) {
+func metricValues(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) ([]float64, *apierr.Error) {
 	field, _ := toString(spec["field"])
 	script, hasScript := spec["script"]
 	if field == "" && !hasScript {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "Required one of fields [field, script], but none were specified. "}
 	}
 	if hasScript {
@@ -188,7 +191,7 @@ func metricValues(spec map[string]any, docs []map[string]any, idx *Index, pathPr
 	return out, nil
 }
 
-func countValues(spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string) int {
+func countValues(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) int {
 	field, _ := toString(spec["field"])
 	if script, ok := spec["script"]; ok && field == "" {
 		return len(scriptNumericValues(docs, idx, script, "", pathPrefix))
@@ -251,13 +254,13 @@ func fmtMetricNumber(f float64, format string) string {
 	return s
 }
 
-func metricValueObject(value float64, hasValue bool, spec map[string]any, idx *Index, field string) orderedJSON {
-	out := orderedJSON{}
+func metricValueObject(value float64, hasValue bool, spec map[string]any, idx *model.Index, field string) ojson.Object {
+	out := ojson.Object{}
 	if !hasValue {
-		out = append(out, orderedKV{"value", nil})
+		out = append(out, ojson.KV{"value", nil})
 		return out
 	}
-	out = append(out, orderedKV{"value", rawFloat(value)})
+	out = append(out, ojson.KV{"value", jsonv.Float(value)})
 	format, _ := toString(spec["format"])
 	def, _ := mappingFieldDef(idx, resolveField(field, ""))
 	ft, _ := def["type"].(string)
@@ -266,15 +269,15 @@ func metricValueObject(value float64, hasValue bool, spec map[string]any, idx *I
 			format = "strict_date_optional_time"
 		}
 		if s, ok := formatDocValue(idx, resolveField(field, ""), ft, int64(value), format).(string); ok {
-			out = append(out, orderedKV{"value_as_string", s})
+			out = append(out, ojson.KV{"value_as_string", s})
 		}
 	} else if format != "" {
-		out = append(out, orderedKV{"value_as_string", fmtMetricNumber(value, format)})
+		out = append(out, ojson.KV{"value_as_string", fmtMetricNumber(value, format)})
 	}
 	return out
 }
 
-func extendedStatsAgg(spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string) (any, *apiError) {
+func extendedStatsAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) (any, *apierr.Error) {
 	field, _ := toString(spec["field"])
 	if err := metricUnsupported(idx, field, "extended_stats", pathPrefix); err != nil {
 		return nil, err
@@ -285,12 +288,12 @@ func extendedStatsAgg(spec map[string]any, docs []map[string]any, idx *Index, pa
 	}
 	n := len(vals)
 	if n == 0 {
-		return orderedJSON{
-			{"count", 0}, {"min", nil}, {"max", nil}, {"avg", nil}, {"sum", rawFloat(0)},
+		return ojson.Object{
+			{"count", 0}, {"min", nil}, {"max", nil}, {"avg", nil}, {"sum", jsonv.Float(0)},
 			{"sum_of_squares", nil}, {"variance", nil}, {"variance_population", nil},
 			{"variance_sampling", nil}, {"std_deviation", nil}, {"std_deviation_population", nil},
 			{"std_deviation_sampling", nil},
-			{"std_deviation_bounds", orderedJSON{{"upper", nil}, {"lower", nil}, {"upper_population", nil},
+			{"std_deviation_bounds", ojson.Object{{"upper", nil}, {"lower", nil}, {"upper_population", nil},
 				{"lower_population", nil}, {"upper_sampling", nil}, {"lower_sampling", nil}}},
 		}, nil
 	}
@@ -308,23 +311,23 @@ func extendedStatsAgg(spec map[string]any, docs []map[string]any, idx *Index, pa
 	var stdSample any = nil
 	if n > 1 {
 		vs := (sumSq - float64(n)*avg*avg) / float64(n-1)
-		varSample = rawFloat(vs)
-		stdSample = rawFloat(math.Sqrt(vs))
+		varSample = jsonv.Float(vs)
+		stdSample = jsonv.Float(math.Sqrt(vs))
 	}
 	stdPop := math.Sqrt(varPop)
 	sigma := 2.0
-	if v, ok := toFloat(spec["sigma"]); ok {
+	if v, ok := jsonv.ToFloat(spec["sigma"]); ok {
 		sigma = v
 	}
-	return orderedJSON{
-		{"count", n}, {"min", rawFloat(minOf(vals).(float64))}, {"max", rawFloat(maxOf(vals).(float64))},
-		{"avg", rawFloat(avg)}, {"sum", rawFloat(sum)}, {"sum_of_squares", rawFloat(sumSq)},
-		{"variance", rawFloat(varPop)}, {"variance_population", rawFloat(varPop)},
-		{"variance_sampling", varSample}, {"std_deviation", rawFloat(stdPop)},
-		{"std_deviation_population", rawFloat(stdPop)}, {"std_deviation_sampling", stdSample},
-		{"std_deviation_bounds", orderedJSON{
-			{"upper", rawFloat(avg + sigma*stdPop)}, {"lower", rawFloat(avg - sigma*stdPop)},
-			{"upper_population", rawFloat(avg + sigma*stdPop)}, {"lower_population", rawFloat(avg - sigma*stdPop)},
+	return ojson.Object{
+		{"count", n}, {"min", jsonv.Float(minOf(vals).(float64))}, {"max", jsonv.Float(maxOf(vals).(float64))},
+		{"avg", jsonv.Float(avg)}, {"sum", jsonv.Float(sum)}, {"sum_of_squares", jsonv.Float(sumSq)},
+		{"variance", jsonv.Float(varPop)}, {"variance_population", jsonv.Float(varPop)},
+		{"variance_sampling", varSample}, {"std_deviation", jsonv.Float(stdPop)},
+		{"std_deviation_population", jsonv.Float(stdPop)}, {"std_deviation_sampling", stdSample},
+		{"std_deviation_bounds", ojson.Object{
+			{"upper", jsonv.Float(avg + sigma*stdPop)}, {"lower", jsonv.Float(avg - sigma*stdPop)},
+			{"upper_population", jsonv.Float(avg + sigma*stdPop)}, {"lower_population", jsonv.Float(avg - sigma*stdPop)},
 			{"upper_sampling", anyOrNil(stdSample, func(s float64) float64 { return avg + sigma*s })},
 			{"lower_sampling", anyOrNil(stdSample, func(s float64) float64 { return avg - sigma*s })},
 		}},
@@ -337,15 +340,15 @@ func anyOrNil(v any, f func(float64) float64) interface{} {
 	}
 	var fv float64
 	switch t := v.(type) {
-	case rawFloat:
+	case jsonv.Float:
 		fv = float64(t)
 	default:
-		fv, _ = toFloat(v)
+		fv, _ = jsonv.ToFloat(v)
 	}
-	return rawFloat(f(fv))
+	return jsonv.Float(f(fv))
 }
 
-func statsAgg(spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string) (any, *apiError) {
+func statsAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) (any, *apierr.Error) {
 	field, _ := toString(spec["field"])
 	if err := metricUnsupported(idx, field, "stats", pathPrefix); err != nil {
 		return nil, err
@@ -359,15 +362,15 @@ func statsAgg(spec map[string]any, docs []map[string]any, idx *Index, pathPrefix
 	ft, _ := def["type"].(string)
 	isDate := ft == "date" || ft == "date_nanos"
 	if len(vals) == 0 {
-		return orderedJSON{{"count", 0}, {"min", nil}, {"max", nil}, {"avg", nil}, {"sum", rawFloat(0)}}, nil
+		return ojson.Object{{"count", 0}, {"min", nil}, {"max", nil}, {"avg", nil}, {"sum", jsonv.Float(0)}}, nil
 	}
 	minV := minOf(vals).(float64)
 	maxV := maxOf(vals).(float64)
 	avg := sumOf(vals) / float64(len(vals))
 	sum := sumOf(vals)
-	out := orderedJSON{
-		{"count", len(vals)}, {"min", rawFloat(minV)}, {"max", rawFloat(maxV)},
-		{"avg", rawFloat(avg)}, {"sum", rawFloat(sum)},
+	out := ojson.Object{
+		{"count", len(vals)}, {"min", jsonv.Float(minV)}, {"max", jsonv.Float(maxV)},
+		{"avg", jsonv.Float(avg)}, {"sum", jsonv.Float(sum)},
 	}
 	if isDate {
 		fmtFor := format
@@ -375,27 +378,27 @@ func statsAgg(spec map[string]any, docs []map[string]any, idx *Index, pathPrefix
 			fmtFor = "strict_date_optional_time"
 		}
 		out = append(out,
-			orderedKV{"min_as_string", formatDocValue(idx, resolveField(field, pathPrefix), ft, int64(minV), fmtFor)},
-			orderedKV{"max_as_string", formatDocValue(idx, resolveField(field, pathPrefix), ft, int64(maxV), fmtFor)},
-			orderedKV{"avg_as_string", formatDocValue(idx, resolveField(field, pathPrefix), ft, int64(avg), fmtFor)},
-			orderedKV{"sum_as_string", formatDocValue(idx, resolveField(field, pathPrefix), ft, int64(sum), fmtFor)})
+			ojson.KV{"min_as_string", formatDocValue(idx, resolveField(field, pathPrefix), ft, int64(minV), fmtFor)},
+			ojson.KV{"max_as_string", formatDocValue(idx, resolveField(field, pathPrefix), ft, int64(maxV), fmtFor)},
+			ojson.KV{"avg_as_string", formatDocValue(idx, resolveField(field, pathPrefix), ft, int64(avg), fmtFor)},
+			ojson.KV{"sum_as_string", formatDocValue(idx, resolveField(field, pathPrefix), ft, int64(sum), fmtFor)})
 	} else if format != "" {
 		out = append(out,
-			orderedKV{"min_as_string", fmtMetricNumber(minV, format)},
-			orderedKV{"max_as_string", fmtMetricNumber(maxV, format)},
-			orderedKV{"avg_as_string", fmtMetricNumber(avg, format)},
-			orderedKV{"sum_as_string", fmtMetricNumber(sum, format)})
+			ojson.KV{"min_as_string", fmtMetricNumber(minV, format)},
+			ojson.KV{"max_as_string", fmtMetricNumber(maxV, format)},
+			ojson.KV{"avg_as_string", fmtMetricNumber(avg, format)},
+			ojson.KV{"sum_as_string", fmtMetricNumber(sum, format)})
 	}
 	return out, nil
 }
 
-func weightedAvgAgg(spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string) (any, *apiError) {
+func weightedAvgAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) (any, *apierr.Error) {
 	valueSpec, _ := spec["value"].(map[string]any)
 	weightSpec, _ := spec["weight"].(map[string]any)
 	if weightSpec == nil {
-		return nil, &apiError{Type: "search_phase_execution_exception", Status: 400,
+		return nil, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 			Reason:    "Could not find field name [weight] in multiValuesSource",
-			RootCause: &apiError{Type: "illegal_argument_exception", Reason: "Could not find field name [weight] in multiValuesSource"}}
+			RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: "Could not find field name [weight] in multiValuesSource"}}
 	}
 	vf, _ := toString(valueSpec["field"])
 	if err := metricUnsupported(idx, vf, "weighted_avg", pathPrefix); err != nil {
@@ -428,15 +431,15 @@ func weightedAvgAgg(spec map[string]any, docs []map[string]any, idx *Index, path
 				flattenMetricRaw(raw, &flat)
 				if len(flat) > 1 {
 					reason := "Encountered more than one weight for a single document. Consider using a single-value field or scripting."
-					return nil, &apiError{Type: "search_phase_execution_exception", Status: 500, Reason: reason,
-						RootCause: &apiError{Type: "aggregation_execution_exception", Reason: reason}}
+					return nil, &apierr.Error{Type: "search_phase_execution_exception", Status: 500, Reason: reason,
+						RootCause: &apierr.Error{Type: "aggregation_execution_exception", Reason: reason}}
 				}
 				if len(flat) == 1 {
 					w, wok = numericFromRaw(idx, resolveField(wf, pathPrefix), flat[0])
 				}
 			}
 			if !wok && hasWMissing {
-				w, wok = toFloat(wMissing)
+				w, wok = jsonv.ToFloat(wMissing)
 			}
 		}
 		if !wok {
@@ -460,17 +463,17 @@ func weightedAvgAgg(spec map[string]any, docs []map[string]any, idx *Index, path
 		}
 	}
 	if weightSum == 0 {
-		return orderedJSON{{"value", nil}}, nil
+		return ojson.Object{{"value", nil}}, nil
 	}
 	val := total / weightSum
-	out := orderedJSON{{"value", rawFloat(val)}}
+	out := ojson.Object{{"value", jsonv.Float(val)}}
 	if format, _ := toString(spec["format"]); format != "" {
-		out = append(out, orderedKV{"value_as_string", fmtMetricNumber(val, format)})
+		out = append(out, ojson.KV{"value_as_string", fmtMetricNumber(val, format)})
 	}
 	return out, nil
 }
 
-func cardinalityAgg(spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string) (any, *apiError) {
+func cardinalityAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) (any, *apierr.Error) {
 	field, _ := toString(spec["field"])
 	if field == "" {
 		if script, ok := spec["script"]; ok {
@@ -505,13 +508,13 @@ func cardinalityAgg(spec map[string]any, docs []map[string]any, idx *Index, path
 		}
 	}
 	n := len(seen)
-	if pt, ok := toFloat(spec["precision_threshold"]); ok && pt > 0 && float64(n) > 1000 && float64(n) > pt {
+	if pt, ok := jsonv.ToFloat(spec["precision_threshold"]); ok && pt > 0 && float64(n) > 1000 && float64(n) > pt {
 		n = n - int(math.Max(1, float64(n)/100))
 	}
 	return map[string]any{"value": n}, nil
 }
 
-func medianAbsoluteDeviation(spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string) (any, *apiError) {
+func medianAbsoluteDeviation(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) (any, *apierr.Error) {
 	field, _ := toString(spec["field"])
 	if err := metricUnsupported(idx, field, "median_absolute_deviation", pathPrefix); err != nil {
 		return nil, err
@@ -526,7 +529,7 @@ func medianAbsoluteDeviation(spec map[string]any, docs []map[string]any, idx *In
 		dev[i] = math.Abs(v - median)
 	}
 	mad := tdigestQuantile(dev, 0.5)
-	return orderedJSON{{"value", rawFloat(mad)}}, nil
+	return ojson.Object{{"value", jsonv.Float(mad)}}, nil
 }
 
 func meanF(vals []float64) float64 {
@@ -738,31 +741,31 @@ func percentileKey(p float64) string {
 	return strconv.FormatFloat(p, 'f', 1, 64)
 }
 
-func parsePercents(raw any, def []float64) ([]float64, *apiError) {
+func parsePercents(raw any, def []float64) ([]float64, *apierr.Error) {
 	if raw == nil {
 		return def, nil
 	}
 	arr, ok := raw.([]any)
 	if !ok {
-		return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+		return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason:   "Failed to build [percentiles] after last required field arrived",
-			CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "[percents] must be an array"}}
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "[percents] must be an array"}}
 	}
 	if len(arr) == 0 {
-		return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+		return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason:   "Failed to build [percentiles] after last required field arrived",
-			CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "[percents] must not be empty: [a]"}}
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "[percents] must not be empty: [a]"}}
 	}
 	out := []float64{}
 	for _, e := range arr {
-		f, ok := toFloat(e)
+		f, ok := jsonv.ToFloat(e)
 		if !ok {
 			continue
 		}
 		if f < 0 || f > 100 {
-			return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+			return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "Failed to build [percentiles] after last required field arrived",
-				CausedBy: &apiError{Type: "illegal_argument_exception",
+				CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 					Reason: fmt.Sprintf("percent must be in [0,100], got [%s]: [a]", formatFloatOne(f))}}
 		}
 		out = append(out, f)
@@ -777,7 +780,7 @@ func parsePercents(raw any, def []float64) ([]float64, *apiError) {
 	return dedup, nil
 }
 
-func percentilesAgg(spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string) (any, *apiError) {
+func percentilesAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) (any, *apierr.Error) {
 	allowed := map[string]bool{"field": true, "missing": true, "script": true, "percents": true,
 		"keyed": true, "format": true, "tdigest": true, "hdr": true}
 	if err := validateMetricParams("percentiles", spec, allowed); err != nil {
@@ -790,26 +793,26 @@ func percentilesAgg(spec map[string]any, docs []map[string]any, idx *Index, path
 	td, hasTD := spec["tdigest"].(map[string]any)
 	hd, hasHD := spec["hdr"].(map[string]any)
 	if hasTD && hasHD {
-		return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+		return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason:   "Failed to build [percentiles] after last required field arrived",
-			CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "Only one percentiles method should be declared."}}
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "Only one percentiles method should be declared."}}
 	}
 	if hasTD {
-		if v, ok := toFloat(td["compression"]); ok && v < 0 {
-			inner := &apiError{Type: "illegal_argument_exception",
+		if v, ok := jsonv.ToFloat(td["compression"]); ok && v < 0 {
+			inner := &apierr.Error{Type: "illegal_argument_exception",
 				Reason: fmt.Sprintf("[compression] must be greater than or equal to 0. Found [%s]", formatFloatOne(v))}
-			return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+			return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "Failed to build [percentiles] after last required field arrived",
-				CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "compression must be >= 0",
+				CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "compression must be >= 0",
 					CausedBy: inner}}
 		}
 	}
 	if hasHD {
-		if v, ok := toFloat(hd["number_of_significant_value_digits"]); ok && (v < 0 || v > 5) {
-			inner := &apiError{Type: "illegal_argument_exception", Reason: "[numberOfSignificantValueDigits] must be between 0 and 5"}
-			return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+		if v, ok := jsonv.ToFloat(hd["number_of_significant_value_digits"]); ok && (v < 0 || v > 5) {
+			inner := &apierr.Error{Type: "illegal_argument_exception", Reason: "[numberOfSignificantValueDigits] must be between 0 and 5"}
+			return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "Failed to build [percentiles] after last required field arrived",
-				CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "digits must be between 0 and 5",
+				CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "digits must be between 0 and 5",
 					CausedBy: inner}}
 		}
 	}
@@ -830,7 +833,7 @@ func percentilesAgg(spec map[string]any, docs []map[string]any, idx *Index, path
 	def, _ := mappingFieldDef(idx, resolved)
 	ft, _ := def["type"].(string)
 	if keyed {
-		values := orderedJSON{}
+		values := ojson.Object{}
 		for _, p := range percents {
 			var v any
 			if len(vals) > 0 {
@@ -838,28 +841,28 @@ func percentilesAgg(spec map[string]any, docs []map[string]any, idx *Index, path
 				if hasHD {
 					q = hdrQuantile(vals, p/100)
 				}
-				v = rawFloat(q)
+				v = jsonv.Float(q)
 				if format != "" || ft == "date" || ft == "date_nanos" {
 					fmtFor := format
 					if ft == "date" || ft == "date_nanos" {
 						if fmtFor == "" {
 							fmtFor = "strict_date_optional_time"
 						}
-						v = rawFloat(q)
+						v = jsonv.Float(q)
 						if s, ok := formatDocValue(idx, resolved, ft, int64(q), fmtFor).(string); ok {
-							values = append(values, orderedKV{percentileKey(p), v}, orderedKV{percentileKey(p) + "_as_string", s})
+							values = append(values, ojson.KV{percentileKey(p), v}, ojson.KV{percentileKey(p) + "_as_string", s})
 						}
 					} else {
-						values = append(values, orderedKV{percentileKey(p), v}, orderedKV{percentileKey(p) + "_as_string", fmtMetricNumber(q, fmtFor)})
+						values = append(values, ojson.KV{percentileKey(p), v}, ojson.KV{percentileKey(p) + "_as_string", fmtMetricNumber(q, fmtFor)})
 					}
 				} else {
-					values = append(values, orderedKV{percentileKey(p), v})
+					values = append(values, ojson.KV{percentileKey(p), v})
 				}
 			} else {
-				values = append(values, orderedKV{percentileKey(p), nil})
+				values = append(values, ojson.KV{percentileKey(p), nil})
 			}
 		}
-		return orderedJSON{{"values", values}}, nil
+		return ojson.Object{{"values", values}}, nil
 	}
 	items := []any{}
 	for _, p := range percents {
@@ -869,14 +872,14 @@ func percentilesAgg(spec map[string]any, docs []map[string]any, idx *Index, path
 			if hasHD {
 				q = hdrQuantile(vals, p/100)
 			}
-			v = rawFloat(q)
+			v = jsonv.Float(q)
 		}
-		items = append(items, orderedJSON{{"key", rawFloat(p)}, {"value", v}})
+		items = append(items, ojson.Object{{"key", jsonv.Float(p)}, {"value", v}})
 	}
-	return orderedJSON{{"values", items}}, nil
+	return ojson.Object{{"values", items}}, nil
 }
 
-func percentileRanksAgg(spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string) (any, *apiError) {
+func percentileRanksAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) (any, *apierr.Error) {
 	allowed := map[string]bool{"field": true, "missing": true, "script": true, "values": true,
 		"keyed": true, "format": true, "tdigest": true, "hdr": true}
 	if err := validateMetricParams("percentile_ranks", spec, allowed); err != nil {
@@ -888,18 +891,18 @@ func percentileRanksAgg(spec map[string]any, docs []map[string]any, idx *Index, 
 	}
 	rawVals, ok := spec["values"].([]any)
 	if !ok {
-		return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+		return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason:   "Failed to build [percentile_ranks] after last required field arrived",
-			CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "[values] must not be null: [a]"}}
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "[values] must not be null: [a]"}}
 	}
 	if len(rawVals) == 0 {
-		return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+		return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason:   "Failed to build [percentile_ranks] after last required field arrived",
-			CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "[values] must not be an empty array: [a]"}}
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "[values] must not be an empty array: [a]"}}
 	}
 	vals := []float64{}
 	for _, e := range rawVals {
-		if f, ok := toFloat(e); ok {
+		if f, ok := jsonv.ToFloat(e); ok {
 			vals = append(vals, f)
 		}
 	}
@@ -921,7 +924,7 @@ func percentileRanksAgg(spec map[string]any, docs []map[string]any, idx *Index, 
 		keyed = k
 	}
 	if keyed {
-		values := orderedJSON{}
+		values := ojson.Object{}
 		for _, v := range vals {
 			var out any
 			if len(metrics) > 0 {
@@ -935,11 +938,11 @@ func percentileRanksAgg(spec map[string]any, docs []map[string]any, idx *Index, 
 						cdf = 1
 					}
 				}
-				out = rawFloat(cdf * 100)
+				out = jsonv.Float(cdf * 100)
 			}
-			values = append(values, orderedKV{percentileKey(v), out})
+			values = append(values, ojson.KV{percentileKey(v), out})
 		}
-		return orderedJSON{{"values", values}}, nil
+		return ojson.Object{{"values", values}}, nil
 	}
 	items := []any{}
 	for _, v := range vals {
@@ -955,11 +958,11 @@ func percentileRanksAgg(spec map[string]any, docs []map[string]any, idx *Index, 
 					cdf = 1
 				}
 			}
-			out = rawFloat(cdf * 100)
+			out = jsonv.Float(cdf * 100)
 		}
-		items = append(items, orderedJSON{{"key", rawFloat(v)}, {"value", out}})
+		items = append(items, ojson.Object{{"key", jsonv.Float(v)}, {"value", out}})
 	}
-	return orderedJSON{{"values", items}}, nil
+	return ojson.Object{{"values", items}}, nil
 }
 
 func hdrQuantile(vals []float64, p float64) float64 {

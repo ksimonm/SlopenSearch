@@ -8,15 +8,17 @@ import (
 	"strconv"
 	"strings"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/mustache"
+	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
 )
 
 // resolveTemplate finds the template text of a render / search template
 // request: an inline source (which wins), the legacy "inline" key or a
 // stored script id.
-func (s *Server) resolveTemplate(body map[string]any) (text string, rendered bool, err *apiError) {
+func (s *Server) resolveTemplate(body map[string]any) (text string, rendered bool, err *apierr.Error) {
 	source, hasSource := body["source"]
 	if !hasSource {
 		source, hasSource = body["inline"]
@@ -30,7 +32,7 @@ func (s *Server) resolveTemplate(body map[string]any) (text string, rendered boo
 	}
 	id, _ := body["id"].(string)
 	if id == "" {
-		return "", false, &apiError{Type: "action_request_validation_exception", Status: 400,
+		return "", false, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: template is missing;2: template's script type is missing;"}
 	}
 	sc, serr := storedScript(id)
@@ -42,17 +44,17 @@ func (s *Server) resolveTemplate(body map[string]any) (text string, rendered boo
 		if lang == "painless" {
 			script, se := plCompileScript(src, "template", id)
 			if se != nil {
-				return "", false, &apiError{Type: "script_exception", Status: 400, Reason: "compile error",
+				return "", false, &apierr.Error{Type: "script_exception", Status: 400, Reason: "compile error",
 					Shard: &shardFailure{raw: se.errorBody(), status: 400}}
 			}
 			v, se := script.exec(painless.Bindings{Vars: map[string]any{"params": scriptParams(templateParams(body))}}, id)
 			if se != nil {
-				return "", false, &apiError{Type: "script_exception", Status: 400, Reason: "runtime error",
+				return "", false, &apierr.Error{Type: "script_exception", Status: 400, Reason: "runtime error",
 					Shard: &shardFailure{raw: se.errorBody(), status: 400}}
 			}
 			return painless.ToString(v), true, nil
 		}
-		return "", false, errBad(lang + " engine does not know how to handle context [template]")
+		return "", false, apierr.BadRequest(lang + " engine does not know how to handle context [template]")
 	}
 	return src, false, nil
 }
@@ -66,7 +68,7 @@ func templateParams(body map[string]any) map[string]any {
 }
 
 // renderTemplateText renders the template of a request to text.
-func (s *Server) renderTemplateText(body map[string]any) (string, *apiError) {
+func (s *Server) renderTemplateText(body map[string]any) (string, *apierr.Error) {
 	text, rendered, err := s.resolveTemplate(body)
 	if err != nil || rendered {
 		return text, err
@@ -82,7 +84,7 @@ var searchTemplateKeys = map[string]bool{"source": true, "inline": true, "id": t
 	"explain": true, "profile": true, "file": true}
 
 // renderTemplateBody renders a search template into a search request body.
-func (s *Server) renderTemplateBody(body map[string]any) (map[string]any, *apiError) {
+func (s *Server) renderTemplateBody(body map[string]any) (map[string]any, *apierr.Error) {
 	text, err := s.renderTemplateText(body)
 	if err != nil {
 		return nil, err
@@ -93,14 +95,14 @@ func (s *Server) renderTemplateBody(body map[string]any) (map[string]any, *apiEr
 		if uerr != nil {
 			reason = uerr.Error()
 		}
-		return nil, &apiError{Type: "json_parse_exception", Status: 400, Reason: reason,
-			CausedBy: &apiError{Type: "stream_read_exception", Reason: reason}}
+		return nil, &apierr.Error{Type: "json_parse_exception", Status: 400, Reason: reason,
+			CausedBy: &apierr.Error{Type: "stream_read_exception", Reason: reason}}
 	}
 	for _, k := range []string{"size", "from", "terminate_after"} {
 		if str, ok := out[k].(string); ok {
 			n, perr := strconv.Atoi(strings.TrimSpace(str))
 			if perr != nil {
-				return nil, &apiError{Type: "number_format_exception", Status: 400, Reason: `For input string: "` + str + `"`}
+				return nil, &apierr.Error{Type: "number_format_exception", Status: 400, Reason: `For input string: "` + str + `"`}
 			}
 			out[k] = json.Number(strconv.Itoa(n))
 		}
@@ -126,7 +128,7 @@ func (s *Server) executeSearchRaw(r *http.Request, name string, searchBody map[s
 	return rec.Code, rec.Body.Bytes()
 }
 
-func (s *Server) executeTemplateSearch(r *http.Request, name string, tplBody map[string]any) (int, []byte, *apiError) {
+func (s *Server) executeTemplateSearch(r *http.Request, name string, tplBody map[string]any) (int, []byte, *apierr.Error) {
 	searchBody, apiErr := s.renderTemplateBody(tplBody)
 	if apiErr != nil {
 		return 0, nil, apiErr
@@ -144,7 +146,7 @@ func (s *Server) handleSearchTemplate(w http.ResponseWriter, r *http.Request, na
 	for _, k := range jsonv.SortedKeys(body) {
 		if !searchTemplateKeys[k] {
 			col := strings.Index(string(raw), `"`+k+`"`) + 1
-			writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "[1:" + itoa(col) + "] [search_template] unknown field [" + k + "]"})
 			return
 		}
@@ -183,12 +185,12 @@ func (s *Server) handleRenderTemplate(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 	// the rendered template is written verbatim, valid JSON or not
-	writeJSON(w, 200, verbatimJSON(`{"template_output":`+out+`}`))
+	writeJSON(w, 200, ojson.Verbatim(`{"template_output":`+out+`}`))
 }
 
-func parseMsearchPairs(raw []byte) ([][2]map[string]any, *apiError) {
+func parseMsearchPairs(raw []byte) ([][2]map[string]any, *apierr.Error) {
 	if len(raw) == 0 || raw[len(raw)-1] != '\n' {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "The msearch request must be terminated by a newline [\n]"}
 	}
 	lines := strings.Split(string(raw), "\n")
@@ -204,14 +206,14 @@ func parseMsearchPairs(raw []byte) ([][2]map[string]any, *apiError) {
 		}
 		for k := range header {
 			if !msearchHeaderKeys[k] {
-				return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+				return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "key [" + k + "] is not supported in the metadata section"}
 			}
 		}
 		pairs = append(pairs, [2]map[string]any{header, body})
 	}
 	if len(pairs) == 0 {
-		return nil, &apiError{Type: "action_request_validation_exception", Status: 400,
+		return nil, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: no requests added;"}
 	}
 	return pairs, nil
@@ -220,7 +222,7 @@ func parseMsearchPairs(raw []byte) ([][2]map[string]any, *apiError) {
 func (s *Server) handleMsearchTemplate(w http.ResponseWriter, r *http.Request, pathIndex string) {
 	raw, err := ioReadAll(r)
 	if err != nil {
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "failed to read request body"})
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "failed to read request body"})
 		return
 	}
 	pairs, apiErr := parseMsearchPairs(raw)
@@ -268,7 +270,7 @@ func ioReadAll(r *http.Request) ([]byte, error) {
 	return b.Bytes(), err
 }
 
-func errorJSON(e *apiError) map[string]any {
+func errorJSON(e *apierr.Error) map[string]any {
 	status := e.Status
 	if status == 0 {
 		status = 400

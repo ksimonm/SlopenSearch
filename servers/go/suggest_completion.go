@@ -9,6 +9,10 @@ import (
 	"unicode/utf8"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/ojson"
 )
 
 // Completion suggester: a model of Lucene's NRT completion suggester as used by
@@ -29,10 +33,10 @@ var suggesterTypes = map[string]bool{"term": true, "phrase": true, "completion":
 
 // validateSuggestBody checks the shape of the "suggest" section of a search
 // request (parse-time errors, answered before any shard is searched).
-func validateSuggestBody(v any) *apiError {
+func validateSuggestBody(v any) *apierr.Error {
 	m, ok := v.(map[string]any)
 	if !ok {
-		return &apiError{Type: "parsing_exception", Status: 400,
+		return &apierr.Error{Type: "parsing_exception", Status: 400,
 			Reason: "Unknown key for a " + searchValueType(v) + " in [suggest]."}
 	}
 	for _, name := range sortedAnyKeys(m) {
@@ -53,7 +57,7 @@ func validateSuggestBody(v any) *apiError {
 				continue
 			}
 			if !suggesterTypes[k] {
-				return &apiError{Type: "named_object_not_found_exception", Status: 400,
+				return &apierr.Error{Type: "named_object_not_found_exception", Status: 400,
 					Reason: "unknown field [" + k + "]"}
 			}
 			found = true
@@ -64,7 +68,7 @@ func validateSuggestBody(v any) *apiError {
 			}
 		}
 		if !found {
-			return &apiError{Type: "parse_exception", Status: 400, Reason: "missing suggestion object"}
+			return &apierr.Error{Type: "parse_exception", Status: 400, Reason: "missing suggestion object"}
 		}
 	}
 	return nil
@@ -75,28 +79,28 @@ var completionSuggestOptions = map[string]bool{
 	"skip_duplicates": true, "fuzzy": true, "regex": true, "contexts": true,
 }
 
-func validateCompletionOptions(body map[string]any) *apiError {
+func validateCompletionOptions(body map[string]any) *apierr.Error {
 	for _, k := range sortedAnyKeys(body) {
 		if !completionSuggestOptions[k] {
-			return &apiError{Type: "x_content_parse_exception", Status: 400,
+			return &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "[completion] unknown field [" + k + "]"}
 		}
 	}
 	for _, k := range []string{"size", "shard_size"} {
 		if v, has := body[k]; has {
-			if n, ok := toFloat(v); ok && n <= 0 {
+			if n, ok := jsonv.ToFloat(v); ok && n <= 0 {
 				reason := "size must be positive"
 				if k == "shard_size" {
 					reason = "shardSize must be positive"
 				}
-				return &apiError{Type: "x_content_parse_exception", Status: 400,
+				return &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 					Reason:   "[completion] failed to parse field [" + k + "]",
-					CausedBy: &apiError{Type: "illegal_argument_exception", Reason: reason}}
+					CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 			}
 		}
 	}
 	if f, ok := toString(body["field"]); !ok || f == "" {
-		return &apiError{Type: "parse_exception", Status: 400, Reason: "the required field option [field] is missing"}
+		return &apierr.Error{Type: "parse_exception", Status: 400, Reason: "the required field option [field] is missing"}
 	}
 	return nil
 }
@@ -117,20 +121,20 @@ func isSuggestOnlySearch(body map[string]any) bool {
 
 // orderSearchResponse renders the top-level search response keys in the
 // order OpenSearch writes them.
-func orderSearchResponse(resp map[string]any) orderedJSON {
+func orderSearchResponse(resp map[string]any) ojson.Object {
 	first := []string{"_scroll_id", "took", "timed_out", "terminated_early", "_shards", "hits",
 		"aggregations", "suggest", "profile"}
-	out := orderedJSON{}
+	out := ojson.Object{}
 	seen := map[string]bool{}
 	for _, k := range first {
 		if v, ok := resp[k]; ok {
-			out = append(out, orderedKV{k, v})
+			out = append(out, ojson.KV{k, v})
 			seen[k] = true
 		}
 	}
 	for _, k := range sortedAnyKeys(resp) {
 		if !seen[k] {
-			out = append(out, orderedKV{k, resp[k]})
+			out = append(out, ojson.KV{k, resp[k]})
 		}
 	}
 	return out
@@ -158,7 +162,7 @@ func completionContextDefs(def map[string]any) []completionContextDef {
 		t, _ := toString(m["type"])
 		c.typ = strings.ToLower(t)
 		c.path, _ = toString(m["path"])
-		if p, ok := toFloat(m["precision"]); ok {
+		if p, ok := jsonv.ToFloat(m["precision"]); ok {
 			c.precision = int(p)
 		}
 		out = append(out, c)
@@ -242,25 +246,25 @@ func normalizeCompletionMapping(def map[string]any) {
 
 // ---------------------------------------------------------------- indexing
 
-func completionParseError(causeType, reason string) *apiError {
+func completionParseError(causeType, reason string) *apierr.Error {
 	e := mapperErr("mapper_parsing_exception", "failed to parse", causeType, reason)
 	if causeType == "parsing_exception" {
-		e.RootCause = &apiError{Type: causeType, Reason: reason}
+		e.RootCause = &apierr.Error{Type: causeType, Reason: reason}
 	}
 	return e
 }
 
 // checkCompletionContexts validates the contexts of a completion value at
 // index time against the field's context mappings.
-func (c *indexCtx) checkCompletionContexts(path string, def map[string]any, v any) *apiError {
+func (c *indexCtx) checkCompletionContexts(path string, def map[string]any, v any) *apierr.Error {
 	ctxs := completionContextDefs(def)
 	known := map[string]bool{}
 	for _, cd := range ctxs {
 		known[cd.name] = true
 	}
 	count := 0
-	var visit func(v any) *apiError
-	visit = func(v any) *apiError {
+	var visit func(v any) *apierr.Error
+	visit = func(v any) *apierr.Error {
 		switch t := v.(type) {
 		case []any:
 			for _, e := range t {
@@ -295,7 +299,7 @@ func (c *indexCtx) checkCompletionContexts(path string, def map[string]any, v an
 		}
 	}
 	if count == 0 {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "Contexts are mandatory in context enabled completion field [" + path + "]"}
 	}
 	return nil
@@ -332,7 +336,7 @@ func completionEntriesOf(v any) []completionEntry {
 		case map[string]any:
 			w := 1.0
 			if wv, ok := t["weight"]; ok {
-				if f, ok := toFloat(wv); ok {
+				if f, ok := jsonv.ToFloat(wv); ok {
 					w = f
 				} else if s, ok := wv.(string); ok {
 					if n, err := strconv.ParseFloat(s, 64); err == nil {
@@ -409,10 +413,10 @@ func parseCompletionFuzzy(raw any, text string) completionFuzzy {
 		if b, ok := m["transpositions"].(bool); ok {
 			f.transpose = b
 		}
-		if n, ok := toFloat(m["min_length"]); ok {
+		if n, ok := jsonv.ToFloat(m["min_length"]); ok {
 			f.minLength = int(n)
 		}
-		if n, ok := toFloat(m["prefix_length"]); ok {
+		if n, ok := jsonv.ToFloat(m["prefix_length"]); ok {
 			f.prefixLength = int(n)
 		}
 		if b, ok := m["unicode_aware"].(bool); ok {
@@ -424,7 +428,7 @@ func parseCompletionFuzzy(raw any, text string) completionFuzzy {
 }
 
 func fuzzinessDistance(v any, text string) int {
-	if n, ok := toFloat(v); ok {
+	if n, ok := jsonv.ToFloat(v); ok {
 		return min(max(int(n), 0), 2)
 	}
 	s, _ := toString(v)
@@ -538,7 +542,7 @@ func parseCategoryQueryContexts(v any) []completionQueryCtx {
 		case map[string]any:
 			q := completionQueryCtx{boost: 1}
 			q.value, _ = valueScalarString(t["context"])
-			if b, ok := toFloat(t["boost"]); ok {
+			if b, ok := jsonv.ToFloat(t["boost"]); ok {
 				q.boost = b
 			}
 			if p, ok := t["prefix"].(bool); ok {
@@ -602,8 +606,8 @@ func parseGeoQueryContexts(v any, mappingPrecision int) []completionQueryCtx {
 	case []any:
 		// a [lon, lat] pair is one point, otherwise a list of contexts
 		if len(t) == 2 {
-			_, ok1 := toFloat(t[0])
-			_, ok2 := toFloat(t[1])
+			_, ok1 := jsonv.ToFloat(t[0])
+			_, ok2 := jsonv.ToFloat(t[1])
 			if ok1 && ok2 {
 				list = []any{v}
 				break
@@ -623,14 +627,14 @@ func parseGeoQueryContexts(v any, mappingPrecision int) []completionQueryCtx {
 			if c, has := m["context"]; has {
 				point = c
 			}
-			if p, ok := toFloat(m["precision"]); ok {
+			if p, ok := jsonv.ToFloat(m["precision"]); ok {
 				precision = int(p)
 			}
-			if b, ok := toFloat(m["boost"]); ok {
+			if b, ok := jsonv.ToFloat(m["boost"]); ok {
 				boost = b
 			}
 			for _, nb := range completionValueList(m["neighbours"]) {
-				if n, ok := toFloat(nb); ok {
+				if n, ok := jsonv.ToFloat(nb); ok {
 					neighbours = append(neighbours, int(n))
 				}
 			}
@@ -703,7 +707,7 @@ func indexedContexts(ctxs []completionContextDef, e completionEntry, doc map[str
 // ---------------------------------------------------------------- the suggester
 
 type completionHit struct {
-	idx      *Index
+	idx      *model.Index
 	idxPos   int
 	docPos   int
 	id       string
@@ -717,12 +721,12 @@ type completionCtxHit struct {
 	score       float64
 }
 
-func completionSuggest(spec, body map[string]any, indices []*Index, globalText any, searchBody map[string]any) ([]any, *apiError) {
+func completionSuggest(spec, body map[string]any, indices []*model.Index, globalText any, searchBody map[string]any) ([]any, *apierr.Error) {
 	if err := validateCompletionOptions(body); err != nil {
 		return nil, err
 	}
 	field, _ := toString(body["field"])
-	var first *Index
+	var first *model.Index
 	if len(indices) > 0 {
 		first = indices[0]
 	}
@@ -756,7 +760,7 @@ func completionSuggest(spec, body map[string]any, indices []*Index, globalText a
 	}
 
 	size := 5
-	if n, ok := toFloat(body["size"]); ok {
+	if n, ok := jsonv.ToFloat(body["size"]); ok {
 		size = int(n)
 	}
 	skipDup, _ := body["skip_duplicates"].(bool)
@@ -770,7 +774,7 @@ func completionSuggest(spec, body map[string]any, indices []*Index, globalText a
 
 	// resolve the field in every index
 	type target struct {
-		idx *Index
+		idx *model.Index
 		pos int
 		def map[string]any
 	}
@@ -846,7 +850,7 @@ func completionSuggest(spec, body map[string]any, indices []*Index, globalText a
 			preservePos = b
 		}
 		maxLen := 50
-		if n, ok := toFloat(def["max_input_length"]); ok && n > 0 {
+		if n, ok := jsonv.ToFloat(def["max_input_length"]); ok && n > 0 {
 			maxLen = int(n)
 		}
 
@@ -975,22 +979,22 @@ func completionSuggest(spec, body map[string]any, indices []*Index, globalText a
 			}
 			seenText[h.text] = true
 		}
-		opt := orderedJSON{{"text", h.text}, {"_index", h.idx.Name}, {"_id", h.id},
+		opt := ojson.Object{{"text", h.text}, {"_index", h.idx.Name}, {"_id", h.id},
 			{"_score", scoreJSON(float64(float32(h.score)))}}
 		if !omitSource {
 			src := h.idx.Docs[h.id]
 			if len(includes) > 0 || len(excludes) > 0 {
 				src = filterSourceDoc(src, includes, excludes)
 			}
-			opt = append(opt, orderedKV{"_source", src})
+			opt = append(opt, ojson.KV{"_source", src})
 		}
 		if len(h.contexts) > 0 {
 			sort.SliceStable(h.contexts, func(i, j int) bool { return h.contexts[i].score > h.contexts[j].score })
-			ctxOut := orderedJSON{}
+			ctxOut := ojson.Object{}
 			for _, ch := range h.contexts {
-				pos := findKey(ctxOut, ch.name)
+				pos := ctxOut.Index(ch.name)
 				if pos < 0 {
-					ctxOut = append(ctxOut, orderedKV{ch.name, []any{ch.value}})
+					ctxOut = append(ctxOut, ojson.KV{ch.name, []any{ch.value}})
 					continue
 				}
 				vals := ctxOut[pos].V.([]any)
@@ -1004,11 +1008,11 @@ func completionSuggest(spec, body map[string]any, indices []*Index, globalText a
 					ctxOut[pos].V = append(vals, ch.value)
 				}
 			}
-			opt = append(opt, orderedKV{"contexts", ctxOut})
+			opt = append(opt, ojson.KV{"contexts", ctxOut})
 		}
 		options = append(options, opt)
 	}
-	entry := orderedJSON{{"text", text}, {"offset", 0}, {"length", analysis.UTF16Len([]rune(text))}, {"options", options}}
+	entry := ojson.Object{{"text", text}, {"offset", 0}, {"length", analysis.UTF16Len([]rune(text))}, {"options", options}}
 	return []any{entry}, nil
 }
 

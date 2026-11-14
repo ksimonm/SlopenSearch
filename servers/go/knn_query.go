@@ -6,6 +6,11 @@ import (
 	"fmt"
 	"math"
 	"strings"
+
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/ojson"
 )
 
 // ---------------------------------------------------------------------------
@@ -161,22 +166,22 @@ func jsonFindKnn(raw []byte) []int {
 	return out
 }
 
-func knnXContentErr(raw []byte, off int, msg string, cause orderedJSON) *apiError {
+func knnXContentErr(raw []byte, off int, msg string, cause ojson.Object) *apierr.Error {
 	line, col := jsonLineCol(raw, off)
 	reason := fmt.Sprintf("[%d:%d] %s", line, col, msg)
-	top := orderedJSON{{"type", "x_content_parse_exception"}, {"reason", reason}}
+	top := ojson.Object{{"type", "x_content_parse_exception"}, {"reason", reason}}
 	root := top
 	if cause != nil {
-		top = append(top, orderedKV{"caused_by", cause})
+		top = append(top, ojson.KV{"caused_by", cause})
 	}
-	body := orderedJSON{{"error", append(orderedJSON{{"root_cause", []any{root}}}, top...)}, {"status", 400}}
-	return &apiError{Type: "x_content_parse_exception", Status: 400, Reason: reason,
+	body := ojson.Object{{"error", append(ojson.Object{{"root_cause", []any{root}}}, top...)}, {"status", 400}}
+	return &apierr.Error{Type: "x_content_parse_exception", Status: 400, Reason: reason,
 		Shard: &shardFailure{raw: body, status: 400}}
 }
 
 // knnParseCheck validates every knn clause of a search body the way the
 // query parser does, before any shard is involved.
-func knnParseCheck(raw []byte) *apiError {
+func knnParseCheck(raw []byte) *apierr.Error {
 	if len(raw) == 0 {
 		return nil
 	}
@@ -188,7 +193,7 @@ func knnParseCheck(raw []byte) *apiError {
 	return nil
 }
 
-func knnParseClause(raw []byte, kp int) *apiError {
+func knnParseClause(raw []byte, kp int) *apierr.Error {
 	entries := jsonObjectEntries(raw, kp)
 	if raw[jsonSkipWS(raw, kp)] != '{' {
 		return nil
@@ -207,14 +212,14 @@ func knnParseClause(raw []byte, kp int) *apiError {
 		}
 	}
 	if len(entries) == 0 {
-		return errBad("[knn] field 'vector' requires to be non-null and non-empty")
+		return apierr.BadRequest("[knn] field 'vector' requires to be non-null and non-empty")
 	}
 	if len(entries) > 1 {
 		line, col := jsonLineCol(raw, entries[1].valPos)
 		reason := fmt.Sprintf("[knn] query doesn't support multiple fields, found [%s] and [%s]", entries[0].key, entries[1].key)
-		obj := orderedJSON{{"type", "parsing_exception"}, {"reason", reason}, {"line", line}, {"col", col}}
-		body := orderedJSON{{"error", append(orderedJSON{{"root_cause", []any{obj}}}, obj...)}, {"status", 400}}
-		return &apiError{Type: "parsing_exception", Status: 400, Reason: reason, Shard: &shardFailure{raw: body, status: 400}}
+		obj := ojson.Object{{"type", "parsing_exception"}, {"reason", reason}, {"line", line}, {"col", col}}
+		body := ojson.Object{{"error", append(ojson.Object{{"root_cause", []any{obj}}}, obj...)}, {"status", 400}}
+		return &apierr.Error{Type: "parsing_exception", Status: 400, Reason: reason, Shard: &shardFailure{raw: body, status: 400}}
 	}
 	fe := entries[0]
 	if raw[fe.valPos] != '{' {
@@ -237,12 +242,12 @@ func knnParseClause(raw []byte, kp int) *apiError {
 					if !knnMethodParams[me.key] {
 						line, col := jsonLineCol(raw, e.valEnd-1)
 						reason := "[knn] unknown method parameter found [" + me.key + "]"
-						inner := orderedJSON{{"type", "parsing_exception"}, {"reason", reason}, {"line", line}, {"col", col}}
-						top := orderedJSON{{"type", "x_content_parse_exception"},
+						inner := ojson.Object{{"type", "parsing_exception"}, {"reason", reason}, {"line", line}, {"col", col}}
+						top := ojson.Object{{"type", "x_content_parse_exception"},
 							{"reason", fmt.Sprintf("[%d:%d] [knn] failed to parse field [method_parameters]", line, col)},
 							{"caused_by", inner}}
-						body := orderedJSON{{"error", append(orderedJSON{{"root_cause", []any{inner}}}, top...)}, {"status", 400}}
-						return &apiError{Type: "x_content_parse_exception", Status: 400, Reason: reason,
+						body := ojson.Object{{"error", append(ojson.Object{{"root_cause", []any{inner}}}, top...)}, {"status", 400}}
+						return &apierr.Error{Type: "x_content_parse_exception", Status: 400, Reason: reason,
 							Shard: &shardFailure{raw: body, status: 400}}
 					}
 				}
@@ -250,15 +255,15 @@ func knnParseClause(raw []byte, kp int) *apiError {
 		}
 	}
 	if !hasVector {
-		return errBad("[knn] requires query vector")
+		return apierr.BadRequest("[knn] requires query vector")
 	}
 	return nil
 }
 
-func knnParseVector(raw []byte, e jsonEntry) *apiError {
-	fail := func(off int, typ, reason string) *apiError {
+func knnParseVector(raw []byte, e jsonEntry) *apierr.Error {
+	fail := func(off int, typ, reason string) *apierr.Error {
 		return knnXContentErr(raw, off, "[knn] failed to parse field [vector]",
-			orderedJSON{{"type", typ}, {"reason", reason}})
+			ojson.Object{{"type", typ}, {"reason", reason}})
 	}
 	c := raw[e.valPos]
 	if c == '"' {
@@ -298,7 +303,7 @@ func knnParseVector(raw []byte, e jsonEntry) *apiError {
 	}
 }
 
-func knnIsVectorField(idx *Index, field string) bool {
+func knnIsVectorField(idx *model.Index, field string) bool {
 	def, _ := mappingFieldDef(idx, field)
 	t, _ := def["type"].(string)
 	return t == "knn_vector"
@@ -306,7 +311,7 @@ func knnIsVectorField(idx *Index, field string) bool {
 
 // knnFieldOutput renders a vector for the fields option (the float array) or
 // for docvalue_fields (the stored little-endian bytes, base64 encoded).
-func knnFieldOutput(idx *Index, id, field string, def map[string]any, fields bool) ([]any, bool, *apiError) {
+func knnFieldOutput(idx *model.Index, id, field string, def map[string]any, fields bool) ([]any, bool, *apierr.Error) {
 	vals := idx.DocValues[id][field]
 	if len(vals) == 0 {
 		return nil, false, nil
@@ -315,18 +320,18 @@ func knnFieldOutput(idx *Index, id, field string, def map[string]any, fields boo
 	if fields {
 		out := make([]any, 0, len(vals))
 		for _, v := range vals {
-			f, _ := toFloat(v)
+			f, _ := jsonv.ToFloat(v)
 			if dt == "byte" || dt == "binary" {
 				out = append(out, int64(f))
 			} else {
-				out = append(out, rawFloat(float32(f)))
+				out = append(out, jsonv.Float(float32(f)))
 			}
 		}
 		return out, true, nil
 	}
 	var b []byte
 	for _, v := range vals {
-		f, _ := toFloat(v)
+		f, _ := jsonv.ToFloat(v)
 		if dt == "byte" || dt == "binary" {
 			b = append(b, byte(int8(f)))
 		} else {
@@ -337,7 +342,7 @@ func knnFieldOutput(idx *Index, id, field string, def map[string]any, fields boo
 }
 
 // knnTermCheck rejects term queries on knn_vector fields.
-func knnTermCheck(idx *Index, raw any) *apiError {
+func knnTermCheck(idx *model.Index, raw any) *apierr.Error {
 	bm, ok := raw.(map[string]any)
 	if !ok {
 		return nil
@@ -348,16 +353,16 @@ func knnTermCheck(idx *Index, raw any) *apiError {
 			continue
 		}
 		reason := "KNN vector do not support exact searching, use KNN queries instead: [" + field + "]"
-		obj := orderedJSON{{"type", "query_shard_exception"}, {"reason", reason},
+		obj := ojson.Object{{"type", "query_shard_exception"}, {"reason", reason},
 			{"index", idx.Name}, {"index_uuid", idx.UUID}}
 		f := &shardFailure{status: 400, index: idx.Name, root: obj, shard: obj, top: obj}
-		return &apiError{Type: "query_shard_exception", Status: 400, Reason: reason, Shard: f}
+		return &apierr.Error{Type: "query_shard_exception", Status: 400, Reason: reason, Shard: f}
 	}
 	return nil
 }
 
 // validateKnnQuery runs the shard-level checks of a knn query.
-func validateKnnQuery(idx *Index, raw any) *apiError {
+func validateKnnQuery(idx *model.Index, raw any) *apierr.Error {
 	bm, ok := raw.(map[string]any)
 	if !ok || len(bm) != 1 {
 		return nil
@@ -404,7 +409,7 @@ func validateKnnQuery(idx *Index, raw any) *apiError {
 				}
 			}
 		}
-		if md, ok := toFloat(p["max_distance"]); ok && md < 0 && fi.space != "innerproduct" {
+		if md, ok := jsonv.ToFloat(p["max_distance"]); ok && md < 0 && fi.space != "innerproduct" {
 			return knnShardFail(idx, "[knn] requires distance to be non-negative for space type: "+strings.ToUpper(fi.space))
 		}
 		if en, _ := p["expand_nested_docs"].(bool); en && !nested {

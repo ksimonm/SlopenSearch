@@ -4,7 +4,9 @@ import (
 	"math"
 	"strconv"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
 	"slopensearch/internal/painless"
 )
 
@@ -27,13 +29,13 @@ func valueToScriptString(v any) (string, bool) {
 	return "", false
 }
 
-func (c *queryCtx) evalScriptQuery(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalScriptQuery(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("[script] query malformed")
 	}
 	boost := 1.0
-	if b, ok := toFloat(bm["boost"]); ok {
+	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		boost = b
 	}
 	cs, se, ae := prepareScript(bm["script"], "filter")
@@ -52,7 +54,7 @@ func (c *queryCtx) evalScriptQuery(body any) (bool, float64, *apiError) {
 
 // luceneDocNum is the position of a document in its index, which stands in
 // for the Lucene doc id in error messages.
-func luceneDocNum(idx *Index, id string) int {
+func luceneDocNum(idx *model.Index, id string) int {
 	for i, d := range idx.Order {
 		if d == id {
 			return i
@@ -61,7 +63,7 @@ func luceneDocNum(idx *Index, id string) int {
 	return 0
 }
 
-func (c *queryCtx) evalScriptScore(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalScriptScore(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("[script_score] query malformed")
@@ -94,14 +96,14 @@ func (c *queryCtx) evalScriptScore(body any) (bool, float64, *apiError) {
 	}
 	score := painless.F64(v)
 	if score < 0 || math.IsNaN(score) {
-		return false, 0, plainShardError(c.idx, errBad("script_score script returned an invalid score ["+
+		return false, 0, plainShardError(c.idx, apierr.BadRequest("script_score script returned an invalid score ["+
 			painless.FormatDouble(score)+"] for doc ["+itoa(luceneDocNum(c.idx, c.id))+"]. Must be a non-negative score!"))
 	}
 	score = float64(float32(score))
-	if b, ok := toFloat(bm["boost"]); ok {
+	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		score = float64(float32(score * b))
 	}
-	if ms, ok := toFloat(bm["min_score"]); ok && score < ms {
+	if ms, ok := jsonv.ToFloat(bm["min_score"]); ok && score < ms {
 		return false, 0, nil
 	}
 	return true, score, nil

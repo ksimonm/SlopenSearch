@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/apierr"
 )
 
 func (c *queryCtx) bm25Explain(field, term string, score float64) map[string]any {
@@ -134,7 +135,7 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request, name, id 
 		hasQuery = true
 	}
 	if !hasQuery {
-		writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: query is missing;"})
 		return
 	}

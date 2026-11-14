@@ -3,6 +3,9 @@ package main
 import (
 	"net/http"
 	"strings"
+
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/ojson"
 )
 
 // ---------------------------------------------------------------------------
@@ -33,8 +36,8 @@ func knnNodeStatValue(name string) any {
 	case "indices_in_cache":
 		return map[string]any{}
 	case "graph_stats":
-		return orderedJSON{{"refresh", orderedJSON{{"total", 0}, {"total_time_in_millis", 0}}},
-			{"merge", orderedJSON{{"current", 0}, {"total", 0}, {"total_time_in_millis", 0},
+		return ojson.Object{{"refresh", ojson.Object{{"total", 0}, {"total_time_in_millis", 0}}},
+			{"merge", ojson.Object{{"current", 0}, {"total", 0}, {"total_time_in_millis", 0},
 				{"current_docs", 0}, {"total_docs", 0}, {"total_size_in_bytes", 0}, {"current_size_in_bytes", 0}}}}
 	case "remote_vector_index_build_stats":
 		return map[string]any{}
@@ -83,28 +86,28 @@ func (s *Server) handleKnnStats(w http.ResponseWriter, r *http.Request, segs []s
 		sel[n] = true
 	}
 	if len(unknown) > 0 {
-		writeError(w, errBad("request ["+r.URL.Path+"] contains unrecognized stat: ["+strings.Join(unknown, ", ")+"]"))
+		writeError(w, apierr.BadRequest("request ["+r.URL.Path+"] contains unrecognized stat: ["+strings.Join(unknown, ", ")+"]"))
 		return
 	}
 	all := len(sel) == 0
-	out := orderedJSON{{"_nodes", orderedJSON{{"total", 1}, {"successful", 1}, {"failed", 0}}},
+	out := ojson.Object{{"_nodes", ojson.Object{{"total", 1}, {"successful", 1}, {"failed", 0}}},
 		{"cluster_name", "opensearch"}}
 	for _, n := range knnClusterStats {
 		if all || sel[n] {
 			if n == "circuit_breaker_triggered" {
-				out = append(out, orderedKV{n, false})
+				out = append(out, ojson.KV{n, false})
 			} else {
-				out = append(out, orderedKV{n, nil})
+				out = append(out, ojson.KV{n, nil})
 			}
 		}
 	}
-	node := orderedJSON{}
+	node := ojson.Object{}
 	for _, n := range knnNodeStats {
 		if all || sel[n] {
-			node = append(node, orderedKV{n, knnNodeStatValue(n)})
+			node = append(node, ojson.KV{n, knnNodeStatValue(n)})
 		}
 	}
-	out = append(out, orderedKV{"nodes", orderedJSON{{nodeID, node}}})
+	out = append(out, ojson.KV{"nodes", ojson.Object{{nodeID, node}}})
 	writeJSON(w, 200, out)
 }
 
@@ -119,11 +122,11 @@ func (s *Server) handleKnnWarmup(w http.ResponseWriter, r *http.Request, spec st
 	shards := 0
 	for _, idx := range indices {
 		if !indexKnnEnabled(idx) {
-			writeError(w, &apiError{Type: "k_n_n_invalid_indices_exception", Status: 500,
+			writeError(w, &apierr.Error{Type: "k_n_n_invalid_indices_exception", Status: 500,
 				Reason: "Warm up request rejected. One or more indices have 'index.knn' set to false."})
 			return
 		}
 		shards += numShards(idx)
 	}
-	writeJSON(w, 200, orderedJSON{{"_shards", orderedJSON{{"total", shards}, {"successful", shards}, {"failed", 0}}}})
+	writeJSON(w, 200, ojson.Object{{"_shards", ojson.Object{{"total", shards}, {"successful", shards}, {"failed", 0}}}})
 }

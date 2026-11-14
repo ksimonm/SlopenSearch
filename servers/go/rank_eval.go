@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
 )
 
 func rankEvalRating(ratings []any, index, id string) (any, bool) {
@@ -35,17 +38,17 @@ func (s *Server) handleRankEval(w http.ResponseWriter, r *http.Request, name str
 	allowed := map[string]bool{"precision": true, "recall": true, "mean_reciprocal_rank": true, "dcg": true, "ndcg": true, "expected_reciprocal_rank": true}
 	if !allowed[metricName] {
 		reason := "[rank_eval] failed to parse field [metric]"
-		writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400, Reason: reason,
-			RootCause: &apiError{Type: "named_object_not_found_exception", Reason: reason},
-			CausedBy:  &apiError{Type: "named_object_not_found_exception", Reason: reason}})
+		writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400, Reason: reason,
+			RootCause: &apierr.Error{Type: "named_object_not_found_exception", Reason: reason},
+			CausedBy:  &apierr.Error{Type: "named_object_not_found_exception", Reason: reason}})
 		return
 	}
 	k := 10
-	if f, ok := toFloat(metricOpts["k"]); ok && f > 0 {
+	if f, ok := jsonv.ToFloat(metricOpts["k"]); ok && f > 0 {
 		k = int(f)
 	}
 	threshold := 1.0
-	if f, ok := toFloat(metricOpts["relevant_rating_threshold"]); ok {
+	if f, ok := jsonv.ToFloat(metricOpts["relevant_rating_threshold"]); ok {
 		threshold = f
 	}
 	totalScore := 0.0
@@ -87,7 +90,7 @@ func (s *Server) handleRankEval(w http.ResponseWriter, r *http.Request, name str
 			if !ok {
 				rating = nil
 				unrated = append(unrated, map[string]any{"_index": hi, "_id": hid})
-			} else if f, ok := toFloat(rating); ok && f >= threshold {
+			} else if f, ok := jsonv.ToFloat(rating); ok && f >= threshold {
 				relevantRetrieved++
 				if firstRelevant == 0 {
 					firstRelevant = i + 1
@@ -98,7 +101,7 @@ func (s *Server) handleRankEval(w http.ResponseWriter, r *http.Request, name str
 		relevantDocs := 0
 		for _, raw := range ratings {
 			rm, _ := raw.(map[string]any)
-			if f, ok := toFloat(rm["rating"]); ok && f >= threshold {
+			if f, ok := jsonv.ToFloat(rm["rating"]); ok && f >= threshold {
 				relevantDocs++
 			}
 		}

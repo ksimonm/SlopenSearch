@@ -5,7 +5,9 @@ import (
 	"strconv"
 	"strings"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
 	"slopensearch/internal/painless"
 )
 
@@ -47,7 +49,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 		case "source", "dest", "script", "max_docs", "conflicts", "wait_for_completion",
 			"refresh", "timeout", "scroll", "size", "slices":
 		default:
-			writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "[1:0] [reindex] unknown field [" + k + "]"})
 			return
 		}
@@ -55,18 +57,18 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 	srcRaw, _ := body["source"].(map[string]any)
 	destRaw, _ := body["dest"].(map[string]any)
 	if destRaw == nil {
-		writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: index must be specified;"})
 		return
 	}
 	destName, _ := destRaw["index"].(string)
 	if destName == "" {
-		writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: index must be specified;"})
 		return
 	}
 	if srcRaw == nil || srcRaw["index"] == nil {
-		writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: use _all if you really want to copy from all existing indexes;"})
 		return
 	}
@@ -74,7 +76,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 		host, _ := remote["host"].(string)
 		host = strings.TrimPrefix(host, "http://")
 		host = strings.TrimPrefix(host, "https://")
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "[" + host + "] not allowlisted in reindex.remote.allowlist"})
 		return
 	}
@@ -91,12 +93,12 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 	}
 	srcSpec := strings.Join(srcSpecs, ",")
 	if srcSpec == "" {
-		writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: use _all if you really want to copy from all existing indexes;"})
 		return
 	}
 	if srcSpec == destName {
-		writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: reindex cannot write into an index its reading from [" + srcSpec + "];"})
 		return
 	}
@@ -104,23 +106,23 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 	if v, ok := body["max_docs"]; ok && v != nil {
 		n, isInt := settingsValueInt(v)
 		if !isInt {
-			writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "[1:0] [reindex] failed to parse field [max_docs]",
-				CausedBy: &apiError{Type: "illegal_argument_exception",
+				CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 					Reason: "[max_docs] should be >= [slices]"}})
 			return
 		}
 		if n < 0 {
-			writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "[1:0] [reindex] failed to parse field [max_docs]",
-				CausedBy: &apiError{Type: "illegal_argument_exception",
+				CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 					Reason: "[max_docs] parameter cannot be negative, found [" + strconv.Itoa(n) + "]"}})
 			return
 		}
 		if n < 1 {
-			writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "[1:0] [reindex] failed to parse field [max_docs]",
-				CausedBy: &apiError{Type: "illegal_argument_exception",
+				CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 					Reason: "[max_docs] should be >= [slices]"}})
 			return
 		}
@@ -161,7 +163,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type item struct {
-		idx *Index
+		idx *model.Index
 		id  string
 		doc map[string]any
 	}
@@ -208,7 +210,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				if serr.CausedBy != nil {
-					writeError(w, &apiError{Type: serr.CausedBy.Type, Status: 400, Reason: serr.CausedBy.Reason})
+					writeError(w, &apierr.Error{Type: serr.CausedBy.Type, Status: 400, Reason: serr.CausedBy.Reason})
 					return
 				}
 				writeError(w, serr)
@@ -223,7 +225,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 				continue
 			case "index", "create":
 			default:
-				writeError(w, errBad("Operation type ["+res.rawOp+"] not allowed, only [noop, index, delete] are allowed"))
+				writeError(w, apierr.BadRequest("Operation type ["+res.rawOp+"] not allowed, only [noop, index, delete] are allowed"))
 				return
 			}
 			doc = res.source

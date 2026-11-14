@@ -8,7 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
 )
 
 var rolloverSuffixRE = regexp.MustCompile(`^(.*)-(\d+)$`)
@@ -16,7 +18,7 @@ var rolloverSuffixRE = regexp.MustCompile(`^(.*)-(\d+)$`)
 func parseDurationMillis(v any) (int64, bool) {
 	s, ok := v.(string)
 	if !ok {
-		if f, ok2 := toFloat(v); ok2 {
+		if f, ok2 := jsonv.ToFloat(v); ok2 {
 			return int64(f), true
 		}
 		return 0, false
@@ -75,7 +77,7 @@ func (s *Server) handleRollover(w http.ResponseWriter, r *http.Request, target, 
 		case "max_docs", "max_age", "max_size", "max_primary_shard_size", "max_primary_shard_docs":
 			condNames = append(condNames, name)
 		default:
-			writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "unknown field [" + name + "]",
 				Fields: map[string]any{"rollover.conditions." + name: "unknown field"}})
 			return
@@ -85,21 +87,21 @@ func (s *Server) handleRollover(w http.ResponseWriter, r *http.Request, target, 
 	dryRun := queryBool(r, "dry_run")
 
 	if _, isConcrete := s.indices[target]; isConcrete {
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "rollover target is a [concrete index] but one of [alias,data_stream] was expected"})
 		return
 	}
 
 	if ds := s.resolveDataStream(target); ds != nil {
 		if len(ds.BackingIndices) == 0 {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "rollover target [" + target + "] does not exist"})
 			return
 		}
 		last := ds.BackingIndices[len(ds.BackingIndices)-1]
 		oldIdx := s.indices[last]
 		if oldIdx == nil {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "rollover target [" + target + "] does not exist"})
 			return
 		}
@@ -139,8 +141,8 @@ func (s *Server) handleRollover(w http.ResponseWriter, r *http.Request, target, 
 	}
 
 	// Alias path.
-	var withAlias []*Index
-	var writeIdx *Index
+	var withAlias []*model.Index
+	var writeIdx *model.Index
 	for _, name := range sortedIndexNames(s) {
 		idx := s.indices[name]
 		if def, ok := idx.Aliases[target]; ok {
@@ -151,17 +153,17 @@ func (s *Server) handleRollover(w http.ResponseWriter, r *http.Request, target, 
 		}
 	}
 	if len(withAlias) == 0 {
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "rollover target [" + target + "] does not exist"})
 		return
 	}
-	var oldIdx *Index
+	var oldIdx *model.Index
 	if writeIdx != nil {
 		oldIdx = writeIdx
 	} else if len(withAlias) == 1 {
 		oldIdx = withAlias[0]
 	} else {
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "rollover target [" + target + "] does not point to a write index"})
 		return
 	}
@@ -170,7 +172,7 @@ func (s *Server) handleRollover(w http.ResponseWriter, r *http.Request, target, 
 	if newName == "" {
 		m := rolloverSuffixRE.FindStringSubmatch(oldIdx.Name)
 		if m == nil {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "index name [" + oldIdx.Name + "] does not match pattern '^.*-\\d+$'"})
 			return
 		}
@@ -230,7 +232,7 @@ func (s *Server) handleRollover(w http.ResponseWriter, r *http.Request, target, 
 }
 
 // evaluateRolloverConditions evaluates each condition; true means "ready to roll over".
-func (s *Server) evaluateRolloverConditions(raw map[string]any, names []string, idx *Index) map[string]any {
+func (s *Server) evaluateRolloverConditions(raw map[string]any, names []string, idx *model.Index) map[string]any {
 	out := map[string]any{}
 	for _, name := range names {
 		v := raw[name]

@@ -7,7 +7,11 @@ import (
 	"strings"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/ojson"
+	"slopensearch/internal/settings"
 )
 
 // The _analyze API (TransportAnalyzeAction).
@@ -92,9 +96,9 @@ func topLevelKeyPositions(body []byte) []jsonKeyPos {
 	return out
 }
 
-func xcontentParseError(reason string, cause *apiError) *apiError {
-	return &apiError{Type: "x_content_parse_exception", Status: 400, Reason: reason,
-		RootCause: &apiError{Type: "x_content_parse_exception", Reason: reason}, CausedBy: cause}
+func xcontentParseError(reason string, cause *apierr.Error) *apierr.Error {
+	return &apierr.Error{Type: "x_content_parse_exception", Status: 400, Reason: reason,
+		RootCause: &apierr.Error{Type: "x_content_parse_exception", Reason: reason}, CausedBy: cause}
 }
 
 var analyzeRequestFields = map[string]bool{
@@ -116,7 +120,7 @@ type analyzeRequest struct {
 	attributes  []string
 }
 
-func parseAnalyzeRequest(body map[string]any, raw []byte) (*analyzeRequest, *apiError) {
+func parseAnalyzeRequest(body map[string]any, raw []byte) (*analyzeRequest, *apierr.Error) {
 	positions := topLevelKeyPositions(raw)
 	pos := func(key string, value bool) string {
 		for _, p := range positions {
@@ -152,7 +156,7 @@ func parseAnalyzeRequest(body map[string]any, raw []byte) (*analyzeRequest, *api
 			req.tokInline, req.hasTok = t, true
 		}
 	}
-	var err *apiError
+	var err *apierr.Error
 	filterRaw := body["filter"]
 	if filterRaw == nil {
 		filterRaw = body["token_filter"]
@@ -183,18 +187,18 @@ func parseAnalyzeRequest(body map[string]any, raw []byte) (*analyzeRequest, *api
 		case "false":
 		default:
 			return nil, xcontentParseError(pos("explain", true)+" [analyze_request] failed to parse field [explain]",
-				&apiError{Type: "illegal_argument_exception", Reason: "Failed to parse value [" + v + "] as only [true] or [false] are allowed."})
+				&apierr.Error{Type: "illegal_argument_exception", Reason: "Failed to parse value [" + v + "] as only [true] or [false] are allowed."})
 		}
 	default:
 		return nil, xcontentParseError(pos("explain", true)+" [analyze_request] failed to parse field [explain]",
-			&apiError{Type: "illegal_argument_exception", Reason: "Failed to parse value [" + analysis.AnonymousJSON(map[string]any{"v": v}) + "] as only [true] or [false] are allowed."})
+			&apierr.Error{Type: "illegal_argument_exception", Reason: "Failed to parse value [" + analysis.AnonymousJSON(map[string]any{"v": v}) + "] as only [true] or [false] are allowed."})
 	}
 	req.attributes = analysis.FilterNames(body["attributes"])
 	return req, nil
 }
 
 // validate mirrors AnalyzeAction.Request.validate().
-func (req *analyzeRequest) validate(hasIndex bool) *apiError {
+func (req *analyzeRequest) validate(hasIndex bool) *apierr.Error {
 	var msgs []string
 	if len(req.texts) == 0 {
 		msgs = append(msgs, "text is missing")
@@ -227,7 +231,7 @@ func (req *analyzeRequest) validate(hasIndex bool) *apiError {
 
 // resolveAnalyzeChain picks the analyzer for a request, in the order of
 // TransportAnalyzeAction.
-func resolveAnalyzeChain(idx *Index, sc analysis.Scope, req *analyzeRequest) (*analysis.Chain, *apiError) {
+func resolveAnalyzeChain(idx *model.Index, sc analysis.Scope, req *analyzeRequest) (*analysis.Chain, *apierr.Error) {
 	if req.hasTok {
 		return sc.BuildRequestChain(req.tokName, req.tokInline, req.charFilters, req.filters)
 	}
@@ -261,7 +265,7 @@ func resolveAnalyzeChain(idx *Index, sc analysis.Scope, req *analyzeRequest) (*a
 			switch typ {
 			case "text", "match_only_text", "search_as_you_type", "":
 				var c *analysis.Chain
-				var err *apiError
+				var err *apierr.Error
 				if a, ok := def["analyzer"].(string); ok && a != "" {
 					c, err = sc.AnalyzerChain(a)
 				} else {
@@ -270,7 +274,7 @@ func resolveAnalyzeChain(idx *Index, sc analysis.Scope, req *analyzeRequest) (*a
 				if err != nil {
 					return nil, err
 				}
-				if n, ok := toFloat(def["position_increment_gap"]); ok {
+				if n, ok := jsonv.ToFloat(def["position_increment_gap"]); ok {
 					c.Gap = int(n)
 				}
 				return c, nil
@@ -319,19 +323,19 @@ type tokenAttrs struct {
 	include map[string]bool
 }
 
-func tokenJSON(t analysis.Token, attrs *tokenAttrs) orderedJSON {
+func tokenJSON(t analysis.Token, attrs *tokenAttrs) ojson.Object {
 	typ := t.Type
 	if typ == "" {
 		typ = "<ALPHANUM>"
 	}
-	o := orderedJSON{{"token", t.Term}, {"start_offset", t.Start}, {"end_offset", t.End}, {"type", typ}, {"position", t.Pos}}
+	o := ojson.Object{{"token", t.Term}, {"start_offset", t.Start}, {"end_offset", t.End}, {"type", typ}, {"position", t.Pos}}
 	posLen := t.PosLen
 	if posLen < 1 {
 		posLen = 1
 	}
 	if attrs == nil {
 		if posLen > 1 {
-			o = append(o, orderedKV{"positionLength", posLen})
+			o = append(o, ojson.KV{"positionLength", posLen})
 		}
 		return o
 	}
@@ -339,16 +343,16 @@ func tokenJSON(t analysis.Token, attrs *tokenAttrs) orderedJSON {
 		return len(attrs.include) == 0 || attrs.include[strings.ToLower(k)]
 	}
 	if want("bytes") {
-		o = append(o, orderedKV{"bytes", analysis.TokenBytes(t.Term)})
+		o = append(o, ojson.KV{"bytes", analysis.TokenBytes(t.Term)})
 	}
 	if attrs.keyword && want("keyword") {
-		o = append(o, orderedKV{"keyword", t.Keyword})
+		o = append(o, ojson.KV{"keyword", t.Keyword})
 	}
 	if want("positionLength") {
-		o = append(o, orderedKV{"positionLength", posLen})
+		o = append(o, ojson.KV{"positionLength", posLen})
 	}
 	if want("termFrequency") {
-		o = append(o, orderedKV{"termFrequency", 1})
+		o = append(o, ojson.KV{"termFrequency", 1})
 	}
 	return o
 }
@@ -361,17 +365,17 @@ func tokensJSON(toks []analysis.Token, attrs *tokenAttrs) []any {
 	return out
 }
 
-func tokenLimitError(limit int) *apiError {
+func tokenLimitError(limit int) *apierr.Error {
 	reason := "The number of tokens produced by calling _analyze has exceeded the allowed maximum of [" + strconv.Itoa(limit) + "]. This limit can be set by changing the [index.analyze.max_token_count] index level setting."
-	return &apiError{Type: "illegal_state_exception", Status: 500, Reason: reason,
-		RootCause: &apiError{Type: "illegal_state_exception", Status: 500, Reason: reason}}
+	return &apierr.Error{Type: "illegal_state_exception", Status: 500, Reason: reason,
+		RootCause: &apierr.Error{Type: "illegal_state_exception", Status: 500, Reason: reason}}
 }
 
 func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request, name string) {
-	var idx *Index
+	var idx *model.Index
 	if name != "" {
 		s.mu.RLock()
-		var apiErr *apiError
+		var apiErr *apierr.Error
 		idx, apiErr = s.getIndex(name)
 		s.mu.RUnlock()
 		if apiErr != nil {
@@ -381,20 +385,20 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request, name stri
 	}
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeError(w, errBad("failed to read body"))
+		writeError(w, apierr.BadRequest("failed to read body"))
 		return
 	}
 	if len(strings.TrimSpace(string(raw))) == 0 {
 		src := r.URL.Query().Get("source")
 		if src == "" {
-			writeError(w, &apiError{Type: "parse_exception", Status: 400, Reason: "request body or source parameter is required"})
+			writeError(w, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "request body or source parameter is required"})
 			return
 		}
 		raw = []byte(src)
 	}
 	var body map[string]any
 	if uerr := jsonv.Unmarshal(raw, &body); uerr != nil {
-		writeError(w, &apiError{Type: "json_parse_exception", Status: 400, Reason: "Failed to parse request body: " + uerr.Error()})
+		writeError(w, &apierr.Error{Type: "json_parse_exception", Status: 400, Reason: "Failed to parse request body: " + uerr.Error()})
 		return
 	}
 	req, apiErr := parseAnalyzeRequest(body, raw)
@@ -414,7 +418,7 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request, name stri
 	}
 	limit := 10000
 	if idx != nil {
-		if n, ok := settingInt(idx.Settings, "analyze.max_token_count"); ok {
+		if n, ok := settings.Int(idx.Settings, "analyze.max_token_count"); ok {
 			limit = n
 		}
 	}
@@ -435,10 +439,10 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request, name stri
 			return
 		}
 	}
-	writeJSON(w, 200, orderedJSON{{"tokens", tokensJSON(tl.tokens, nil)}})
+	writeJSON(w, 200, ojson.Object{{"tokens", tokensJSON(tl.tokens, nil)}})
 }
 
-func (s *Server) writeAnalyzeExplain(w http.ResponseWriter, idx *Index, chain *analysis.Chain, req *analyzeRequest, limit int) {
+func (s *Server) writeAnalyzeExplain(w http.ResponseWriter, idx *model.Index, chain *analysis.Chain, req *analyzeRequest, limit int) {
 	include := map[string]bool{}
 	for _, a := range req.attributes {
 		include[strings.ToLower(a)] = true
@@ -464,9 +468,9 @@ func (s *Server) writeAnalyzeExplain(w http.ResponseWriter, idx *Index, chain *a
 			}
 		}
 		name := chain.Name
-		writeJSON(w, 200, orderedJSON{{"detail", orderedJSON{
+		writeJSON(w, 200, ojson.Object{{"detail", ojson.Object{
 			{"custom_analyzer", false},
-			{"analyzer", orderedJSON{{"name", name}, {"tokens", tokensJSON(tl.tokens, &tokenAttrs{keyword: kw, include: include})}}},
+			{"analyzer", ojson.Object{{"name", name}, {"tokens", tokensJSON(tl.tokens, &tokenAttrs{keyword: kw, include: include})}}},
 		}}})
 		return
 	}
@@ -498,7 +502,7 @@ func (s *Server) writeAnalyzeExplain(w http.ResponseWriter, idx *Index, chain *a
 		for _, t := range charTexts[i] {
 			texts = append(texts, t)
 		}
-		cfs = append(cfs, orderedJSON{{"name", cf.Name}, {"filtered_text", texts}})
+		cfs = append(cfs, ojson.Object{{"name", cf.Name}, {"filtered_text", texts}})
 	}
 	tfs := make([]any, 0, len(chain.Filters))
 	kw := false
@@ -506,12 +510,12 @@ func (s *Server) writeAnalyzeExplain(w http.ResponseWriter, idx *Index, chain *a
 		if analysis.FilterHasKeywordAttr(f.Spec.Type) {
 			kw = true
 		}
-		tfs = append(tfs, orderedJSON{{"name", f.Name}, {"tokens", tokensJSON(stages[i+1].tokens, &tokenAttrs{keyword: kw, include: include})}})
+		tfs = append(tfs, ojson.Object{{"name", f.Name}, {"tokens", tokensJSON(stages[i+1].tokens, &tokenAttrs{keyword: kw, include: include})}})
 	}
-	writeJSON(w, 200, orderedJSON{{"detail", orderedJSON{
+	writeJSON(w, 200, ojson.Object{{"detail", ojson.Object{
 		{"custom_analyzer", true},
 		{"charfilters", cfs},
-		{"tokenizer", orderedJSON{{"name", chain.TokenizerName}, {"tokens", tokensJSON(stages[0].tokens, &tokenAttrs{include: include})}}},
+		{"tokenizer", ojson.Object{{"name", chain.TokenizerName}, {"tokens", tokensJSON(stages[0].tokens, &tokenAttrs{include: include})}}},
 		{"tokenfilters", tfs},
 	}}})
 }

@@ -9,6 +9,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
 )
 
 var msearchHeaderKeys = map[string]bool{
@@ -20,11 +23,11 @@ var msearchHeaderKeys = map[string]bool{
 func (s *Server) handleMsearch(w http.ResponseWriter, r *http.Request, pathIndex string) {
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "failed to read request body"})
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "failed to read request body"})
 		return
 	}
 	if len(raw) == 0 || (len(raw) > 0 && raw[len(raw)-1] != '\n') {
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "The msearch request must be terminated by a newline [\n]"})
 		return
 	}
@@ -48,7 +51,7 @@ func (s *Server) handleMsearch(w http.ResponseWriter, r *http.Request, pathIndex
 				return
 			}
 			for k := range m {
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "key [" + k + "] is not supported in the metadata section"})
 				return
 			}
@@ -62,7 +65,7 @@ func (s *Server) handleMsearch(w http.ResponseWriter, r *http.Request, pathIndex
 		}
 		for k := range header {
 			if !msearchHeaderKeys[k] {
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "key [" + k + "] is not supported in the metadata section"})
 				return
 			}
@@ -73,8 +76,8 @@ func (s *Server) handleMsearch(w http.ResponseWriter, r *http.Request, pathIndex
 			return
 		}
 		if f, ok := body["from"]; ok {
-			if n, ok := toFloat(f); ok && n < 0 {
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			if n, ok := jsonv.ToFloat(f); ok && n < 0 {
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "[from] parameter cannot be negative, found [" + strconv.FormatInt(int64(n), 10) + "]"})
 				return
 			}
@@ -82,7 +85,7 @@ func (s *Server) handleMsearch(w http.ResponseWriter, r *http.Request, pathIndex
 		pairs = append(pairs, pair{header: header, body: body})
 	}
 	if len(pairs) == 0 {
-		writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: no requests added;"})
 		return
 	}

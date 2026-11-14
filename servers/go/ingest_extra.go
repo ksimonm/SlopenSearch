@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/painless"
 )
@@ -29,7 +30,7 @@ func parseIP(s string) (net.IP, bool) {
 	return ip, true
 }
 
-func (s *Server) procJSON(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procJSON(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok {
@@ -37,21 +38,21 @@ func (s *Server) procJSON(cfg map[string]any, env *ingestEnv) *apiError {
 	}
 	str, ok := v.(string)
 	if !ok {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] of type [" + javaTypeName(v) + "] cannot be cast to [java.lang.String]"}
 	}
 	dec := json.NewDecoder(strings.NewReader(str))
 	dec.UseNumber()
 	var parsed any
 	if err := dec.Decode(&parsed); err != nil {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
-			Reason: "failed to parse JSON", CausedBy: &apiError{Type: "json_parse_exception", Status: 400, Reason: err.Error()}}
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
+			Reason: "failed to parse JSON", CausedBy: &apierr.Error{Type: "json_parse_exception", Status: 400, Reason: err.Error()}}
 	}
 	parsed = normalizeJSONNumbers(parsed)
 	if cfgBool(cfg, "add_to_root", false) {
 		m, ok := parsed.(map[string]any)
 		if !ok {
-			return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "cannot add non-map fields to root of document"}
+			return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "cannot add non-map fields to root of document"}
 		}
 		for k, vv := range m {
 			env.source[k] = vv
@@ -89,7 +90,7 @@ func normalizeJSONNumbers(v any) any {
 	return v
 }
 
-func (s *Server) procKV(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procKV(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok {
@@ -97,16 +98,16 @@ func (s *Server) procKV(cfg map[string]any, env *ingestEnv) *apiError {
 	}
 	str, ok := v.(string)
 	if !ok {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] of type [" + javaTypeName(v) + "] cannot be cast to [java.lang.String]"}
 	}
 	fieldSplit, err := regexp.Compile(cfgString(cfg, "field_split"))
 	if err != nil {
-		return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
 	}
 	valueSplit, err := regexp.Compile(cfgString(cfg, "value_split"))
 	if err != nil {
-		return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
 	}
 	include := stringSet(cfg["include_keys"])
 	exclude := stringSet(cfg["exclude_keys"])
@@ -132,13 +133,13 @@ func (s *Server) procKV(cfg map[string]any, env *ingestEnv) *apiError {
 		}
 		loc := valueSplit.FindStringIndex(token)
 		if loc == nil {
-			return &apiError{Type: "illegal_argument_exception", Status: 400,
+			return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "field [" + field + "] does not contain value_split [" + cfgString(cfg, "value_split") + "]"}
 		}
 		key := token[:loc[0]]
 		val := token[loc[1]:]
 		if key == "" {
-			return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "path cannot be null nor empty"}
+			return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "path cannot be null nor empty"}
 		}
 		matched = true
 		if trimKey != "" {
@@ -170,7 +171,7 @@ func (s *Server) procKV(cfg map[string]any, env *ingestEnv) *apiError {
 		}
 	}
 	if !matched {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] does not contain value_split [" + cfgString(cfg, "value_split") + "]"}
 	}
 	if target == "" {
@@ -214,7 +215,7 @@ func stringSet(v any) map[string]bool {
 	return out
 }
 
-func (s *Server) procCSV(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procCSV(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok {
@@ -222,7 +223,7 @@ func (s *Server) procCSV(cfg map[string]any, env *ingestEnv) *apiError {
 	}
 	str, ok := v.(string)
 	if !ok {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] of type [" + javaTypeName(v) + "] cannot be cast to [java.lang.String]"}
 	}
 	sep := ','
@@ -261,7 +262,7 @@ func (s *Server) procCSV(cfg map[string]any, env *ingestEnv) *apiError {
 	return nil
 }
 
-func parseCSVRecord(s string, sep, quote rune, trim bool) ([]string, *apiError) {
+func parseCSVRecord(s string, sep, quote rune, trim bool) ([]string, *apierr.Error) {
 	if trim {
 		re := regexp.MustCompile(`\s*` + regexp.QuoteMeta(string(sep)) + `\s*`)
 		parts := re.Split(s, -1)
@@ -301,7 +302,7 @@ func parseCSVRecord(s string, sep, quote rune, trim bool) ([]string, *apiError) 
 		cur.WriteRune(c)
 	}
 	if inQuotes {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "Unmatched quote"}
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "Unmatched quote"}
 	}
 	out = append(out, cur.String())
 	if trim {
@@ -312,7 +313,7 @@ func parseCSVRecord(s string, sep, quote rune, trim bool) ([]string, *apiError) 
 	return out, nil
 }
 
-func (s *Server) procURLDecode(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procURLDecode(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	if target == "" {
@@ -322,15 +323,15 @@ func (s *Server) procURLDecode(cfg map[string]any, env *ingestEnv) *apiError {
 	if !ok {
 		return s.fieldMissing(field, cfgBool(cfg, "ignore_missing", false))
 	}
-	decode := func(x any) (any, *apiError) {
+	decode := func(x any) (any, *apierr.Error) {
 		str, ok := x.(string)
 		if !ok {
-			return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+			return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "field [" + field + "] of type [" + javaTypeName(x) + "] cannot be cast to [java.lang.String]"}
 		}
 		out, err := url.QueryUnescape(str)
 		if err != nil {
-			return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+			return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "URLDecoder: Illegal hex characters in escape (%) pattern - " + err.Error()}
 		}
 		return out, nil
@@ -369,7 +370,7 @@ func stripHTML(s string) string {
 	return repl.Replace(s)
 }
 
-func (s *Server) procHTMLStrip(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procHTMLStrip(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	if target == "" {
@@ -384,7 +385,7 @@ func (s *Server) procHTMLStrip(cfg map[string]any, env *ingestEnv) *apiError {
 		for i, e := range list {
 			str, ok := e.(string)
 			if !ok {
-				return &apiError{Type: "illegal_argument_exception", Status: 400,
+				return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "field [" + field + "] of type [" + javaTypeName(e) + "] cannot be cast to [java.lang.String]"}
 			}
 			out[i] = stripHTML(str)
@@ -393,7 +394,7 @@ func (s *Server) procHTMLStrip(cfg map[string]any, env *ingestEnv) *apiError {
 	}
 	str, ok := v.(string)
 	if !ok {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] of type [" + javaTypeName(v) + "] cannot be cast to [java.lang.String]"}
 	}
 	return env.setField(target, stripHTML(str), true)
@@ -401,7 +402,7 @@ func (s *Server) procHTMLStrip(cfg map[string]any, env *ingestEnv) *apiError {
 
 var bytesRE = regexp.MustCompile(`(?i)^([+-]?(?:\d+\.?\d*|\.\d+))\s*([a-z]*)$`)
 
-func (s *Server) procBytes(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procBytes(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	if target == "" {
@@ -414,29 +415,29 @@ func (s *Server) procBytes(cfg map[string]any, env *ingestEnv) *apiError {
 	str := ingestString(v)
 	m := bytesRE.FindStringSubmatch(str)
 	if m == nil {
-		return &apiError{Type: "parse_exception", Status: 400,
+		return &apierr.Error{Type: "parse_exception", Status: 400,
 			Reason: "failed to parse setting [Ingest Field] with value [" + str + "] as a size in bytes: unit is missing or unrecognized"}
 	}
 	num, _ := strconv.ParseFloat(m[1], 64)
 	unit := strings.ToLower(m[2])
 	if strings.Contains(m[1], ".") {
-		return &apiError{Type: "parse_exception", Status: 400,
+		return &apierr.Error{Type: "parse_exception", Status: 400,
 			Reason: "Failed to parse bytes value [" + str + "]. Fractional bytes values have been deprecated"}
 	}
 	if num < 0 {
-		return &apiError{Type: "parse_exception", Status: 400,
+		return &apierr.Error{Type: "parse_exception", Status: 400,
 			Reason: "failed to parse setting [Ingest Field] with value [" + str + "] as a size in bytes: unit is missing or unrecognized"}
 	}
 	mult := map[string]float64{"b": 1, "k": 1024, "kb": 1024, "m": 1048576, "mb": 1048576, "g": 1073741824, "gb": 1073741824, "t": 1099511627776, "tb": 1099511627776, "p": 1125899906842624, "pb": 1125899906842624}
 	f, ok := mult[unit]
 	if !ok {
-		return &apiError{Type: "parse_exception", Status: 400,
+		return &apierr.Error{Type: "parse_exception", Status: 400,
 			Reason: "failed to parse setting [Ingest Field] with value [" + str + "] as a size in bytes: unit is missing or unrecognized"}
 	}
 	return env.setField(target, int64(num*f), true)
 }
 
-func (s *Server) procSplitToFields(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procSplitToFields(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok {
@@ -444,12 +445,12 @@ func (s *Server) procSplitToFields(cfg map[string]any, env *ingestEnv) *apiError
 	}
 	str, ok := v.(string)
 	if !ok {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] of type [" + javaTypeName(v) + "] cannot be cast to [java.lang.String]"}
 	}
 	re, err := regexp.Compile(cfgString(cfg, "separator"))
 	if err != nil {
-		return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
 	}
 	parts := re.Split(str, -1)
 	for i, f := range env.resolveFieldPath(cfg["target_fields"]) {
@@ -463,11 +464,11 @@ func (s *Server) procSplitToFields(cfg map[string]any, env *ingestEnv) *apiError
 	return nil
 }
 
-func (s *Server) procFingerprint(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procFingerprint(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	fields := env.resolveFieldPath(cfg["fields"])
 	excludes := env.resolveFieldPath(cfg["exclude_fields"])
 	if len(fields) > 0 && len(excludes) > 0 {
-		return &apiError{Type: "parse_exception", Status: 400, Reason: "[fields] either fields or exclude_fields can be set"}
+		return &apierr.Error{Type: "parse_exception", Status: 400, Reason: "[fields] either fields or exclude_fields can be set"}
 	}
 	method := cfgString(cfg, "hash_method")
 	if method == "" {
@@ -476,7 +477,7 @@ func (s *Server) procFingerprint(cfg map[string]any, env *ingestEnv) *apiError {
 	valid := map[string]bool{"MD5@2.16.0": true, "SHA-1@2.16.0": true, "SHA-256@2.16.0": true, "SHA3-256@2.16.0": true}
 	upper := strings.ToUpper(method)
 	if !valid[upper] {
-		return &apiError{Type: "parse_exception", Status: 400,
+		return &apierr.Error{Type: "parse_exception", Status: 400,
 			Reason: "[hash_method] hash method must be MD5@2.16.0, SHA-1@2.16.0, SHA-256@2.16.0 or SHA3-256@2.16.0"}
 	}
 	var selected []string
@@ -491,7 +492,7 @@ func (s *Server) procFingerprint(cfg map[string]any, env *ingestEnv) *apiError {
 				if cfgBool(cfg, "ignore_missing", false) {
 					continue
 				}
-				return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "field [" + f + "] doesn't exist"}
+				return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "field [" + f + "] doesn't exist"}
 			}
 			selected = append(selected, f)
 		}
@@ -570,7 +571,7 @@ func ingestFlattenMap(m map[string]any, prefix string, out map[string]any) {
 	}
 }
 
-func (s *Server) procCommunityID(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procCommunityID(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	get := func(key string) (any, bool) {
 		f := cfgString(cfg, key)
 		if f == "" {
@@ -583,7 +584,7 @@ func (s *Server) procCommunityID(cfg map[string]any, env *ingestEnv) *apiError {
 	srcIP, ok1 := parseIP(ingestString(srcIPRaw))
 	dstIP, ok2 := parseIP(ingestString(dstIPRaw))
 	if !ok1 || !ok2 {
-		return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "source and destination IP fields are required"}
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "source and destination IP fields are required"}
 	}
 	proto := 0
 	if v, ok := get("iana_protocol_number_field"); ok {
@@ -613,7 +614,7 @@ func (s *Server) procCommunityID(cfg map[string]any, env *ingestEnv) *apiError {
 		spRaw, hasSP := get("source_port_field")
 		dpRaw, hasDP := get("destination_port_field")
 		if !hasSP || !hasDP {
-			return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "both source port and destination port field path cannot be null nor empty"}
+			return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "both source port and destination port field path cannot be null nor empty"}
 		}
 		sp, _ = ingestInt(spRaw)
 		dp, _ = ingestInt(dpRaw)
@@ -678,16 +679,16 @@ var uaMacRE = regexp.MustCompile(`Mac OS X ([0-9_]+)`)
 var uaiOSRE = regexp.MustCompile(`OS ([0-9_]+) like Mac OS X`)
 var uaCurlRE = regexp.MustCompile(`^curl/([0-9.]+)`)
 
-func (s *Server) procUserAgent(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procUserAgent(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] not present as part of path [" + field + "]"}
 	}
 	str, ok := v.(string)
 	if !ok {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] of type [" + javaTypeName(v) + "] cannot be cast to [java.lang.String]"}
 	}
 	result := map[string]any{"original": str}
@@ -765,17 +766,17 @@ func (s *Server) procUserAgent(cfg map[string]any, env *ingestEnv) *apiError {
 	return env.setField(target, result, true)
 }
 
-func (s *Server) procDate(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procDate(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] not present as part of path [" + field + "]"}
 	}
 	formats := env.resolveFieldPath(cfg["formats"])
 	loc, zoneName, zerr := ingestLocation(cfgString(cfg, "timezone"))
 	if zerr != nil {
-		return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "failed to parse date", CausedBy: zerr}
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "failed to parse date", CausedBy: zerr}
 	}
 	t, err := parseIngestDate(v, formats, loc, cfgString(cfg, "locale"))
 	if err != nil {
@@ -796,7 +797,7 @@ func (s *Server) procDate(cfg map[string]any, env *ingestEnv) *apiError {
 	return env.setField(target, formatted, true)
 }
 
-func ingestLocation(name string) (*time.Location, string, *apiError) {
+func ingestLocation(name string) (*time.Location, string, *apierr.Error) {
 	if name == "" || name == "UTC" {
 		return time.UTC, "UTC", nil
 	}
@@ -816,12 +817,12 @@ func ingestLocation(name string) (*time.Location, string, *apiError) {
 	}
 	loc, err := time.LoadLocation(name)
 	if err != nil {
-		return nil, name, &apiError{Type: "zone_rules_exception", Status: 400, Reason: "Unknown time-zone ID: " + name}
+		return nil, name, &apierr.Error{Type: "zone_rules_exception", Status: 400, Reason: "Unknown time-zone ID: " + name}
 	}
 	return loc, name, nil
 }
 
-func parseIngestDate(v any, formats []string, loc *time.Location, locale string) (time.Time, *apiError) {
+func parseIngestDate(v any, formats []string, loc *time.Location, locale string) (time.Time, *apierr.Error) {
 	raw := ingestString(v)
 	for _, f := range formats {
 		switch f {
@@ -856,11 +857,11 @@ func parseIngestDate(v any, formats []string, loc *time.Location, locale string)
 	if len(formats) > 0 {
 		format = formats[0]
 	}
-	return time.Time{}, &apiError{Type: "illegal_argument_exception", Status: 400,
+	return time.Time{}, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 		Reason: "unable to parse date [" + raw + "]",
-		CausedBy: &apiError{Type: "illegal_argument_exception", Status: 400,
+		CausedBy: &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason:   "failed to parse date field [" + raw + "] with format [" + format + "]",
-			CausedBy: &apiError{Type: "date_time_parse_exception", Status: 400, Reason: "failed to parse date field [" + raw + "] with format [" + format + "]"}}}
+			CausedBy: &apierr.Error{Type: "date_time_parse_exception", Status: 400, Reason: "failed to parse date field [" + raw + "] with format [" + format + "]"}}}
 }
 
 func parseTAI64N(s string, loc *time.Location) (time.Time, bool) {
@@ -958,11 +959,11 @@ func formatISOMillis(t time.Time) string {
 	return t.Format("2006-01-02T15:04:05.000-07:00")
 }
 
-func (s *Server) procDateIndexName(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procDateIndexName(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] not present as part of path [" + field + "]"}
 	}
 	formats := env.resolveFieldPath(cfg["date_formats"])
@@ -971,7 +972,7 @@ func (s *Server) procDateIndexName(cfg map[string]any, env *ingestEnv) *apiError
 	}
 	loc, zoneName, zerr := ingestLocation(cfgString(cfg, "timezone"))
 	if zerr != nil {
-		return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "failed to parse date", CausedBy: zerr}
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "failed to parse date", CausedBy: zerr}
 	}
 	t, err := parseIngestDate(v, formats, loc, cfgString(cfg, "locale"))
 	if err != nil {
@@ -1006,7 +1007,7 @@ func ingestScriptSpec(cfg map[string]any) map[string]any {
 
 // ingestScriptError converts a script exception into the error an ingest
 // processor reports.
-func ingestScriptError(se *plScriptErr, tag string) *apiError {
+func ingestScriptError(se *plScriptErr, tag string) *apierr.Error {
 	fields := map[string]any{"script_stack": anySlice(se.stack), "script": se.script, "lang": map[bool]string{true: "expression", false: "painless"}[se.lang == "expression"]}
 	if se.pos != nil {
 		fields["position"] = map[string]any{"offset": se.pos[0], "start": se.pos[1], "end": se.pos[2]}
@@ -1022,8 +1023,8 @@ func ingestScriptError(se *plScriptErr, tag string) *apiError {
 	for _, kv := range se.extra {
 		fields[kv.K] = kv.V
 	}
-	return &apiError{Type: "script_exception", Status: 400, Reason: kind, Fields: fields,
-		CausedBy: &apiError{Type: se.causeType, Reason: se.reason}}
+	return &apierr.Error{Type: "script_exception", Status: 400, Reason: kind, Fields: fields,
+		CausedBy: &apierr.Error{Type: se.causeType, Reason: se.reason}}
 }
 
 func anySlice(ss []string) []any {
@@ -1035,7 +1036,7 @@ func anySlice(ss []string) []any {
 }
 
 // compileIngestScript compiles a script processor's script.
-func compileIngestScript(raw map[string]any, ctxName, tag string) (*plScript, *scriptSpec, *apiError) {
+func compileIngestScript(raw map[string]any, ctxName, tag string) (*plScript, *scriptSpec, *apierr.Error) {
 	spec, ae := parseScriptSpec(raw)
 	if ae != nil {
 		return nil, nil, ae
@@ -1077,7 +1078,7 @@ func ingestCtx(env *ingestEnv) *painless.Map {
 	return ctx
 }
 
-func (s *Server) procScript(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procScript(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	script, spec, err := compileIngestScript(ingestScriptSpec(cfg), "ingest", cfgString(cfg, "tag"))
 	if err != nil {
 		return err
@@ -1104,7 +1105,7 @@ func (s *Server) procScript(cfg map[string]any, env *ingestEnv) *apiError {
 	return nil
 }
 
-func (s *Server) procDissect(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procDissect(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok {
@@ -1112,7 +1113,7 @@ func (s *Server) procDissect(cfg map[string]any, env *ingestEnv) *apiError {
 	}
 	str, ok := v.(string)
 	if !ok {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] of type [" + javaTypeName(v) + "] cannot be cast to [java.lang.String]"}
 	}
 	pattern := cfgString(cfg, "pattern")
@@ -1122,7 +1123,7 @@ func (s *Server) procDissect(cfg map[string]any, env *ingestEnv) *apiError {
 		return err
 	}
 	if values == nil {
-		return &apiError{Type: "find_match", Status: 200,
+		return &apierr.Error{Type: "find_match", Status: 200,
 			Reason: "Unable to find match for dissect pattern: " + pattern + " against source: " + str}
 	}
 	for k, vv := range values {
@@ -1148,11 +1149,11 @@ type dissectField struct {
 	skipRep  bool
 }
 
-func dissectMatch(pattern, source, appendSep string) (map[string]any, *apiError) {
+func dissectMatch(pattern, source, appendSep string) (map[string]any, *apierr.Error) {
 	if !strings.Contains(pattern, "%{") {
-		return nil, &apiError{Type: "exception", Status: 500,
+		return nil, &apierr.Error{Type: "exception", Status: 500,
 			Reason: "Unable to parse pattern: " + pattern,
-			CausedBy: &apiError{Type: "pattern_parse", Status: 500,
+			CausedBy: &apierr.Error{Type: "pattern_parse", Status: 500,
 				Reason: "Unable to parse pattern: " + pattern + " Reason: Unable to find any keys or delimiters."}}
 	}
 	type token struct {
@@ -1173,9 +1174,9 @@ func dissectMatch(pattern, source, appendSep string) (map[string]any, *apiError)
 		i += idx
 		end := strings.Index(pattern[i:], "}")
 		if end < 0 {
-			return nil, &apiError{Type: "exception", Status: 500,
+			return nil, &apierr.Error{Type: "exception", Status: 500,
 				Reason: "Unable to parse pattern: " + pattern,
-				CausedBy: &apiError{Type: "pattern_parse", Status: 500,
+				CausedBy: &apierr.Error{Type: "pattern_parse", Status: 500,
 					Reason: "Unable to parse pattern: " + pattern + " Reason: Unable to find any keys or delimiters."}}
 		}
 		inner := pattern[i+2 : i+end]
@@ -1213,9 +1214,9 @@ func dissectMatch(pattern, source, appendSep string) (map[string]any, *apiError)
 	}
 	for _, t := range tokens {
 		if t.f != nil && t.f.ref && !hasStar {
-			return nil, &apiError{Type: "exception", Status: 500,
+			return nil, &apierr.Error{Type: "exception", Status: 500,
 				Reason: "Unable to parse pattern: " + pattern,
-				CausedBy: &apiError{Type: "pattern_parse", Status: 500,
+				CausedBy: &apierr.Error{Type: "pattern_parse", Status: 500,
 					Reason: "Unable to parse pattern: " + pattern + " Reason: Found invalid key/reference associations: '" + t.f.key + "' Please ensure each '*<key>' is matched with a matching '&<key>"}}
 		}
 	}
@@ -1384,36 +1385,36 @@ func grokFieldKey(field, conv string) string {
 	return key
 }
 
-func grokCompile(pattern string, defs map[string]string) (*regexp.Regexp, *apiError) {
+func grokCompile(pattern string, defs map[string]string) (*regexp.Regexp, *apierr.Error) {
 	expanded, missing, ok := grokExpand(pattern, defs)
 	if !ok {
-		return nil, &apiError{Type: "parse_exception", Status: 400,
+		return nil, &apierr.Error{Type: "parse_exception", Status: 400,
 			Reason: "[patterns] Invalid regex pattern found in: [" + pattern + "]. Unable to find pattern [" + missing + "] in Grok's pattern dictionary",
 			Fields: map[string]any{"processor_type": "grok"}}
 	}
 	expanded = namedGroupRE.ReplaceAllString(expanded, `(?P<$1>`)
 	re, err := regexp.Compile(expanded)
 	if err != nil {
-		return nil, &apiError{Type: "parse_exception", Status: 400,
+		return nil, &apierr.Error{Type: "parse_exception", Status: 400,
 			Reason: "[patterns] Invalid regex pattern found in: [" + pattern + "]. " + err.Error(),
 			Fields: map[string]any{"processor_type": "grok"}}
 	}
 	return re, nil
 }
 
-func (s *Server) procGrok(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procGrok(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok {
 		if cfgBool(cfg, "ignore_missing", false) {
 			return nil
 		}
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] not present as part of path [" + field + "]"}
 	}
 	str, ok := v.(string)
 	if !ok {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] of type [" + javaTypeName(v) + "] cannot be cast to [java.lang.String]"}
 	}
 	defs := map[string]string{}
@@ -1469,14 +1470,14 @@ func (s *Server) procGrok(cfg map[string]any, env *ingestEnv) *apiError {
 		}
 		return nil
 	}
-	return &apiError{Type: "illegal_argument_exception", Status: 400,
+	return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 		Reason: "Provided Grok expressions do not match field value: [" + str + "]"}
 }
 
 var containsKeyRE = regexp.MustCompile(`^ctx\.containsKey\(['"]([^'"]+)['"]\)$`)
 var conditionCmpRE = regexp.MustCompile(`^ctx\.([A-Za-z0-9_.?]+)\s*(==|!=|>=|<=|>|<)\s*(.+)$`)
 
-func evalIngestCondition(cond any, env *ingestEnv) (bool, *apiError) {
+func evalIngestCondition(cond any, env *ingestEnv) (bool, *apierr.Error) {
 	switch t := cond.(type) {
 	case bool:
 		return t, nil
@@ -1486,14 +1487,14 @@ func evalIngestCondition(cond any, env *ingestEnv) (bool, *apiError) {
 		src, _ := t["source"].(string)
 		return evalConditionSource(src, t["params"], env)
 	}
-	return false, &apiError{Type: "script_exception", Status: 400, Reason: "compile error",
+	return false, &apierr.Error{Type: "script_exception", Status: 400, Reason: "compile error",
 		Fields: map[string]any{"processor_type": env.processor}}
 }
 
-func evalConditionSource(src string, params any, env *ingestEnv) (bool, *apiError) {
+func evalConditionSource(src string, params any, env *ingestEnv) (bool, *apierr.Error) {
 	trimmed := strings.TrimSpace(src)
 	if trimmed == "" || strings.HasSuffix(trimmed, "=") && !strings.HasSuffix(trimmed, "==") && !strings.HasSuffix(trimmed, "!=") && !strings.HasSuffix(trimmed, ">=") && !strings.HasSuffix(trimmed, "<=") {
-		return false, &apiError{Type: "script_exception", Status: 400, Reason: "compile error",
+		return false, &apierr.Error{Type: "script_exception", Status: 400, Reason: "compile error",
 			Fields: map[string]any{"processor_type": env.processor}}
 	}
 	if m := containsKeyRE.FindStringSubmatch(trimmed); m != nil {
@@ -1505,9 +1506,9 @@ func evalConditionSource(src string, params any, env *ingestEnv) (bool, *apiErro
 		if strings.Contains(path, ".") && !strings.Contains(path, "?") && !strings.HasPrefix(path, "_ingest.") {
 			first := strings.Split(path, ".")[0]
 			if _, ok := env.lookup(first); !ok {
-				return false, &apiError{Type: "script_exception", Status: 400, Reason: "runtime error",
+				return false, &apierr.Error{Type: "script_exception", Status: 400, Reason: "runtime error",
 					Fields: map[string]any{"lang": "painless"},
-					CausedBy: &apiError{Type: "null_pointer_exception", Status: 400,
+					CausedBy: &apierr.Error{Type: "null_pointer_exception", Status: 400,
 						Reason: "Cannot invoke \"Object.getClass()\" because \"ctx." + first + "\" is null"}}
 			}
 		}
@@ -1566,12 +1567,12 @@ func evalConditionSource(src string, params any, env *ingestEnv) (bool, *apiErro
 		if !ok || v == nil {
 			return false, nil
 		}
-		return false, &apiError{Type: "script_exception", Status: 400, Reason: "runtime error",
+		return false, &apierr.Error{Type: "script_exception", Status: 400, Reason: "runtime error",
 			Fields: map[string]any{"lang": "painless"},
-			CausedBy: &apiError{Type: "class_cast_exception", Status: 400,
+			CausedBy: &apierr.Error{Type: "class_cast_exception", Status: 400,
 				Reason: "cannot cast def [" + painlessDefType(v) + "] to boolean"}}
 	}
-	return false, &apiError{Type: "script_exception", Status: 400, Reason: "compile error",
+	return false, &apierr.Error{Type: "script_exception", Status: 400, Reason: "compile error",
 		Fields: map[string]any{"processor_type": env.processor}}
 }
 

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/painless"
 )
@@ -39,9 +40,9 @@ func (s *Server) handleScriptsRoute(w http.ResponseWriter, r *http.Request, segs
 		}
 		if ctxName != "" {
 			if !knownScriptContext(ctxName) {
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason:   "failed to parse/compile stored script [" + id + "]",
-					CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "Unknown context [" + ctxName + "]"}})
+					CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "Unknown context [" + ctxName + "]"}})
 				return true
 			}
 			src, _ := sc["source"].(string)
@@ -83,7 +84,7 @@ func (s *Server) handleScriptsRoute(w http.ResponseWriter, r *http.Request, segs
 		delete(s.scripts, id)
 		s.scriptsMu.Unlock()
 		if !ok {
-			writeError(w, &apiError{Type: "resource_not_found_exception", Status: 404,
+			writeError(w, &apierr.Error{Type: "resource_not_found_exception", Status: 404,
 				Reason: "stored script [" + id + "] does not exist and cannot be deleted"})
 			return true
 		}
@@ -97,7 +98,7 @@ func (s *Server) handleScriptsRoute(w http.ResponseWriter, r *http.Request, segs
 // evalScriptFields evaluates the script_fields section of a search body.
 // All script fields of a hit share one params._source map, so a script that
 // mutates it is seen by the next one.
-func evalScriptFields(hit multiHit, specs map[string]any) (map[string]any, *apiError) {
+func evalScriptFields(hit multiHit, specs map[string]any) (map[string]any, *apierr.Error) {
 	out := map[string]any{}
 	qc := newQueryCtxForDoc(hit.idx, hit.id, hit.doc)
 	src := map[string]any{}
@@ -129,12 +130,12 @@ func evalScriptFields(hit multiHit, specs map[string]any) (map[string]any, *apiE
 }
 
 // runPainless executes a painless/expression script against a context map.
-func runPainless(source string, ctx map[string]any) (any, *apiError) {
+func runPainless(source string, ctx map[string]any) (any, *apierr.Error) {
 	return nil, nil
 }
 
 // buildStoredScript validates a stored script body like StoredScriptSource.
-func buildStoredScript(body map[string]any) (map[string]any, *apiError) {
+func buildStoredScript(body map[string]any) (map[string]any, *apierr.Error) {
 	raw, has := body["script"]
 	if !has {
 		if len(body) == 0 {
@@ -151,22 +152,22 @@ func buildStoredScript(body map[string]any) (map[string]any, *apiError) {
 	}
 	lang, hasLang := sc["lang"].(string)
 	if !hasLang {
-		return nil, errBad("must specify lang for stored script")
+		return nil, apierr.BadRequest("must specify lang for stored script")
 	}
 	switch lang {
 	case "painless", "expression", "mustache":
 	default:
-		return nil, errBad("unable to put stored script with unsupported lang [" + lang + "]")
+		return nil, apierr.BadRequest("unable to put stored script with unsupported lang [" + lang + "]")
 	}
 	srcRaw, hasSrc := sc["source"]
 	if !hasSrc {
-		return nil, errBad("must specify source for stored script")
+		return nil, apierr.BadRequest("must specify source for stored script")
 	}
 	out := map[string]any{"lang": lang}
 	switch src := srcRaw.(type) {
 	case string:
 		if src == "" && lang != "mustache" {
-			return nil, errBad("source cannot be empty")
+			return nil, apierr.BadRequest("source cannot be empty")
 		}
 		out["source"] = src
 	case map[string]any:
@@ -186,7 +187,7 @@ func buildStoredScript(body map[string]any) (map[string]any, *apiError) {
 			}
 		}
 		if extra.Size() > 0 {
-			return nil, errBad("illegal compiler options [" + painless.ToString(extra) + "] specified")
+			return nil, apierr.BadRequest("illegal compiler options [" + painless.ToString(extra) + "] specified")
 		}
 		if ct, ok := opts["content_type"]; ok {
 			out["options"] = map[string]any{"content_type": ct}

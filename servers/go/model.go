@@ -36,29 +36,26 @@ var validTypes = map[string]bool{
 	"xy_point": true, "knn_vector": true,
 }
 
-// Index is the in-memory state of an index (internal/model).
-type Index = model.Index
-
 const versionCreated = "137307827"
 
-func isHidden(idx *Index) bool {
-	v, ok := findSetting(idx.Settings, "hidden")
+func isHidden(idx *model.Index) bool {
+	v, ok := settings.Find(idx.Settings, "hidden")
 	if !ok {
 		return false
 	}
 	return settingsValueString(v) == "true"
 }
 
-func blockOn(idx *Index, name string) bool {
-	v, ok := findSetting(idx.Settings, "blocks."+name)
+func blockOn(idx *model.Index, name string) bool {
+	v, ok := settings.Find(idx.Settings, "blocks."+name)
 	if !ok {
 		return false
 	}
 	return settingsValueString(v) == "true"
 }
 
-func refreshDisabled(idx *Index) bool {
-	v, ok := findSetting(idx.Settings, "refresh_interval")
+func refreshDisabled(idx *model.Index) bool {
+	v, ok := settings.Find(idx.Settings, "refresh_interval")
 	if !ok {
 		return false
 	}
@@ -109,40 +106,31 @@ const (
 	nodeVersion = "3.9.0"
 )
 
-func numShards(idx *Index) int {
-	if v, ok := settingInt(idx.Settings, "number_of_shards"); ok {
+func numShards(idx *model.Index) int {
+	if v, ok := settings.Int(idx.Settings, "number_of_shards"); ok {
 		return v
 	}
 	return 1
 }
 
-func numReplicas(idx *Index) int {
-	if v, ok := settingInt(idx.Settings, "number_of_replicas"); ok {
+func numReplicas(idx *model.Index) int {
+	if v, ok := settings.Int(idx.Settings, "number_of_replicas"); ok {
 		return v
 	}
 	return 1
 }
 
-func settingInt(m map[string]any, key string) (int, bool) { return settings.Int(m, key) }
-
-func findSetting(m map[string]any, key string) (any, bool) { return settings.Find(m, key) }
-
-// apiError is the API error type (internal/apierr).
-type apiError = apierr.Error
-
-func errNotFound(index string) *apiError {
-	return &apiError{Type: "index_not_found_exception", Reason: "no such index [" + index + "]", Status: 404}
+func errNotFound(index string) *apierr.Error {
+	return &apierr.Error{Type: "index_not_found_exception", Reason: "no such index [" + index + "]", Status: 404}
 }
 
-func errBad(reason string) *apiError { return apierr.BadRequest(reason) }
-
-func errParsing(reason string) *apiError {
-	return &apiError{Type: "parsing_exception", Reason: reason, Status: 400}
+func errParsing(reason string) *apierr.Error {
+	return &apierr.Error{Type: "parsing_exception", Reason: reason, Status: 400}
 }
 
 type Server struct {
 	mu                  sync.RWMutex
-	indices             map[string]*Index
+	indices             map[string]*model.Index
 	counter             int64
 	stateVersion        int64
 	clusterPersistent   map[string]any
@@ -177,7 +165,7 @@ var globalServer *Server
 
 func NewServer() *Server {
 	s := &Server{
-		indices:             map[string]*Index{},
+		indices:             map[string]*model.Index{},
 		stateVersion:        1,
 		clusterPersistent:   map[string]any{},
 		clusterTransient:    map[string]any{},
@@ -294,8 +282,6 @@ func autoFuzziness(term string) int {
 	}
 }
 
-func toFloat(v any) (float64, bool) { return jsonv.ToFloat(v) }
-
 func toString(v any) (string, bool) {
 	switch t := v.(type) {
 	case string:
@@ -403,7 +389,7 @@ func validateDoc(props map[string]any, src map[string]any) error {
 		t, _ := def["type"].(string)
 		switch t {
 		case "integer", "long", "short", "byte", "float", "double", "half_float", "scaled_float":
-			if _, ok := toFloat(val); !ok {
+			if _, ok := jsonv.ToFloat(val); !ok {
 				return fmt.Errorf("failed to parse field [%s] of type [%s]", name, t)
 			}
 		case "boolean":
@@ -497,7 +483,7 @@ func fieldValue(doc map[string]any, path string) (any, bool) {
 var datePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$`)
 
 func parseDate(v any) (float64, bool) {
-	if f, ok := toFloat(v); ok {
+	if f, ok := jsonv.ToFloat(v); ok {
 		return f, true
 	}
 	s, ok := v.(string)
@@ -588,11 +574,11 @@ func dynamicString(v any) string {
 	return "true"
 }
 
-func rootDynamicString(idx *Index) string {
+func rootDynamicString(idx *model.Index) string {
 	return dynamicString(idx.Mappings["dynamic"])
 }
 
-func inferDynamicValue(idx *Index, v any) map[string]any {
+func inferDynamicValue(idx *model.Index, v any) map[string]any {
 	switch t := v.(type) {
 	case bool:
 		return map[string]any{"type": "boolean"}
@@ -635,7 +621,7 @@ func inferDynamicValue(idx *Index, v any) map[string]any {
 	return nil
 }
 
-func inferDynamicString(idx *Index, s string) map[string]any {
+func inferDynamicString(idx *model.Index, s string) map[string]any {
 	if nd, _ := idx.Mappings["numeric_detection"].(bool); nd {
 		if _, err := strconv.ParseInt(s, 10, 64); err == nil {
 			return map[string]any{"type": "long"}
@@ -861,7 +847,7 @@ func containsDynamicTypePlaceholder(v any) bool {
 	return false
 }
 
-func matchDynamicTemplate(idx *Index, path, name, dynType string) (map[string]any, bool) {
+func matchDynamicTemplate(idx *model.Index, path, name, dynType string) (map[string]any, bool) {
 	templates, _ := idx.Mappings["dynamic_templates"].([]any)
 	for _, t := range templates {
 		obj, ok := t.(map[string]any)
@@ -911,7 +897,7 @@ func matchDynamicTemplate(idx *Index, path, name, dynType string) (map[string]an
 
 // dynamicDefFor resolves the mapping for an undeclared field, applying dynamic
 // templates and dynamic type detection.
-func dynamicDefFor(idx *Index, path, name string, raw any) (map[string]any, bool, *apiError) {
+func dynamicDefFor(idx *model.Index, path, name string, raw any) (map[string]any, bool, *apierr.Error) {
 	if arr, ok := raw.([]any); ok {
 		firstKind := ""
 		firstObj := false
@@ -930,7 +916,7 @@ func dynamicDefFor(idx *Index, path, name string, raw any) (map[string]any, bool
 				continue
 			}
 			if isObj != firstObj {
-				return nil, false, &apiError{Type: "illegal_argument_exception", Status: 400,
+				return nil, false, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "can't merge a non object mapping [" + name + "] with an object mapping"}
 			}
 			if !isObj && kind != firstKind {
@@ -941,7 +927,7 @@ func dynamicDefFor(idx *Index, path, name string, raw any) (map[string]any, bool
 				if to == "string" {
 					to = "text"
 				}
-				return nil, false, &apiError{Type: "illegal_argument_exception", Status: 400,
+				return nil, false, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: fmt.Sprintf("mapper [%s] cannot be changed from type [%s] to [%s]", name, from, to)}
 			}
 		}
@@ -976,9 +962,9 @@ func dynamicDefFor(idx *Index, path, name string, raw any) (map[string]any, bool
 		delete(def, "doc_values")
 	}
 	if a, ok := def["analyzer"].(string); ok && a != "" && !matchAnalyzerExists(idx, a) {
-		return nil, matched, &apiError{Type: "mapper_parsing_exception", Status: 400,
+		return nil, matched, &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 			Reason:   "failed to parse",
-			CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "analyzer [" + a + "] has not been configured in mappings"}}
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "analyzer [" + a + "] has not been configured in mappings"}}
 	}
 	if ct, ok := def["copy_to"].(string); ok {
 		def["copy_to"] = []any{ct}
@@ -1006,7 +992,7 @@ func dynamicDefFor(idx *Index, path, name string, raw any) (map[string]any, bool
 	return def, matched, nil
 }
 
-func mergeMappingForIndex(idx *Index, props, src map[string]any) *apiError {
+func mergeMappingForIndex(idx *model.Index, props, src map[string]any) *apierr.Error {
 	if enabled, ok := idx.Mappings["enabled"].(bool); ok && !enabled {
 		return nil
 	}
@@ -1017,7 +1003,7 @@ func mergeMappingForIndex(idx *Index, props, src map[string]any) *apiError {
 	return mergeMapping(idx, props, "", dyn, src)
 }
 
-func mergeMapping(idx *Index, props map[string]any, path, dyn string, src map[string]any) *apiError {
+func mergeMapping(idx *model.Index, props map[string]any, path, dyn string, src map[string]any) *apierr.Error {
 	if dyn == "false" {
 		return nil
 	}
@@ -1080,7 +1066,7 @@ func mergeMapping(idx *Index, props map[string]any, path, dyn string, src map[st
 	return nil
 }
 
-func ensureFieldTypes(idx *Index) {
+func ensureFieldTypes(idx *model.Index) {
 	fresh := map[string]string{}
 	buildFieldTypes(idx.Mappings, "", fresh)
 	for path, t := range fresh {
@@ -1108,7 +1094,7 @@ func httpPortNum() int {
 }
 
 // analysisIndex is the analysis view of idx (nil for nil).
-func analysisIndex(idx *Index) *analysis.Index {
+func analysisIndex(idx *model.Index) *analysis.Index {
 	if idx == nil {
 		return nil
 	}

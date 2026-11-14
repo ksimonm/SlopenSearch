@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
 	"slopensearch/internal/painless"
 )
 
@@ -146,7 +148,7 @@ func (c *queryCtx) bm25FieldScore(field string, qtokens []string, operator strin
 	return score * boost
 }
 
-func (c *queryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apiError) {
+func (c *queryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apierr.Error) {
 	query, _ := toString(bm["query"])
 	if query == "" {
 		return false, 0, errParsing("[multi_match] requires 'query'")
@@ -158,7 +160,7 @@ func (c *queryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apiError) 
 	switch typ {
 	case "best_fields", "most_fields", "cross_fields", "phrase", "phrase_prefix", "bool_prefix":
 	default:
-		return false, 0, &apiError{Type: "parse_exception", Status: 400,
+		return false, 0, &apierr.Error{Type: "parse_exception", Status: 400,
 			Reason: "failed to parse [multi_match] query type [" + typ + "]. unknown type."}
 	}
 	var fields []string
@@ -173,11 +175,11 @@ func (c *queryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apiError) 
 		fields = []string{t}
 	}
 	boost := 1.0
-	if b, ok := toFloat(bm["boost"]); ok {
+	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		boost *= b
 	}
 	tie := 0.0
-	if t, ok := toFloat(bm["tie_breaker"]); ok {
+	if t, ok := jsonv.ToFloat(bm["tie_breaker"]); ok {
 		tie = t
 	}
 	if len(fields) == 0 {
@@ -210,7 +212,7 @@ func (c *queryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apiError) 
 			if typ == "phrase" {
 				slop := 0.0
 				if v, has := bm["slop"]; has {
-					if f, ok := toFloat(v); ok {
+					if f, ok := jsonv.ToFloat(v); ok {
 						slop = f
 					}
 				}
@@ -326,7 +328,7 @@ func (c *queryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apiError) 
 				if v, has := bm["lenient"]; has {
 					opts["lenient"] = v
 				}
-				var err *apiError
+				var err *apierr.Error
 				ok, sc, err = c.evalMatch(name, opts, boost*fb)
 				if err != nil {
 					return false, 0, err
@@ -355,7 +357,7 @@ func (c *queryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apiError) 
 	}
 }
 
-func (c *queryCtx) evalCombinedFields(bm map[string]any) (bool, float64, *apiError) {
+func (c *queryCtx) evalCombinedFields(bm map[string]any) (bool, float64, *apierr.Error) {
 	query, _ := toString(bm["query"])
 	var fields []string
 	switch t := bm["fields"].(type) {
@@ -470,7 +472,7 @@ func containsString(list []string, s string) bool {
 // nested / join queries
 // ---------------------------------------------------------------------------
 
-func (c *queryCtx) evalNested(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalNested(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("[nested] query malformed")
@@ -621,8 +623,8 @@ func nestedSourceFilter(obj map[string]any, path string, spec any) any {
 }
 
 func nestedSortCompare(a, b any) int {
-	af, aok := toFloat(a)
-	bf, bok := toFloat(b)
+	af, aok := jsonv.ToFloat(a)
+	bf, bok := jsonv.ToFloat(b)
 	if aok && bok {
 		switch {
 		case af < bf:
@@ -725,11 +727,11 @@ func collectOneNestedInnerHits(c *queryCtx, path string, inner map[string]any, s
 		name = n
 	}
 	from := 0
-	if n, ok := toFloat(specMap["from"]); ok {
+	if n, ok := jsonv.ToFloat(specMap["from"]); ok {
 		from = int(n)
 	}
 	size := 3
-	if n, ok := toFloat(specMap["size"]); ok {
+	if n, ok := jsonv.ToFloat(specMap["size"]); ok {
 		size = int(n)
 	}
 	type nestedInnerHit struct {
@@ -826,7 +828,7 @@ func collectOneNestedInnerHits(c *queryCtx, path string, inner map[string]any, s
 	}}
 }
 
-func findJoinField(idx *Index) (string, map[string]any, bool) {
+func findJoinField(idx *model.Index) (string, map[string]any, bool) {
 	props, _ := idx.Mappings["properties"].(map[string]any)
 	for name, raw := range props {
 		def, ok := raw.(map[string]any)
@@ -894,11 +896,11 @@ func joinParentRelation(relations map[string]any, child string) string {
 	return ""
 }
 
-func joinError(clause, reason string) *apiError {
+func joinError(clause, reason string) *apierr.Error {
 	return matchSearchError("query_shard_exception", "["+clause+"] "+reason)
 }
 
-func (c *queryCtx) joinChildContexts(childType string, inner map[string]any) ([]*queryCtx, []float64, *apiError) {
+func (c *queryCtx) joinChildContexts(childType string, inner map[string]any) ([]*queryCtx, []float64, *apierr.Error) {
 	var ctxs []*queryCtx
 	var scores []float64
 	for _, id := range c.idx.Order {
@@ -926,12 +928,12 @@ func (c *queryCtx) joinChildContexts(childType string, inner map[string]any) ([]
 	return ctxs, scores, nil
 }
 
-func fieldOfJoin(idx *Index) string {
+func fieldOfJoin(idx *model.Index) string {
 	field, _, _ := findJoinField(idx)
 	return field
 }
 
-func (c *queryCtx) evalHasChild(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalHasChild(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("[has_child] query malformed")
@@ -958,10 +960,10 @@ func (c *queryCtx) evalHasChild(body any) (bool, float64, *apiError) {
 		return false, 0, err
 	}
 	count := len(ctxs)
-	if minRaw, ok := toFloat(bm["min_children"]); ok && count < int(minRaw) {
+	if minRaw, ok := jsonv.ToFloat(bm["min_children"]); ok && count < int(minRaw) {
 		return false, 0, nil
 	}
-	if maxRaw, ok := toFloat(bm["max_children"]); ok && count > int(maxRaw) {
+	if maxRaw, ok := jsonv.ToFloat(bm["max_children"]); ok && count > int(maxRaw) {
 		return false, 0, nil
 	}
 	if count == 0 {
@@ -1004,7 +1006,7 @@ func (c *queryCtx) evalHasChild(body any) (bool, float64, *apiError) {
 	return true, 1, nil
 }
 
-func (c *queryCtx) evalHasParent(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalHasParent(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("[has_parent] query malformed")
@@ -1058,7 +1060,7 @@ func (c *queryCtx) evalHasParent(body any) (bool, float64, *apiError) {
 	return true, 1, nil
 }
 
-func (c *queryCtx) evalParentId(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalParentId(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("[parent_id] query malformed")
@@ -1274,11 +1276,11 @@ func collectOneJoinInnerHits(c *queryCtx, clause string, bm map[string]any, spec
 	}
 	sortSpecs, _ := parseSortSpecs(specMap["sort"], "")
 	from := 0
-	if n, ok := toFloat(specMap["from"]); ok {
+	if n, ok := jsonv.ToFloat(specMap["from"]); ok {
 		from = int(n)
 	}
 	size := 3
-	if n, ok := toFloat(specMap["size"]); ok {
+	if n, ok := jsonv.ToFloat(specMap["size"]); ok {
 		size = int(n)
 	}
 	var name string
@@ -1358,15 +1360,15 @@ func collectOneJoinInnerHits(c *queryCtx, clause string, bm map[string]any, spec
 func geoPointOf(v any) (float64, float64, bool) {
 	switch t := v.(type) {
 	case map[string]any:
-		lat, ok1 := toFloat(t["lat"])
-		lon, ok2 := toFloat(t["lon"])
+		lat, ok1 := jsonv.ToFloat(t["lat"])
+		lon, ok2 := jsonv.ToFloat(t["lon"])
 		if ok1 && ok2 {
 			return lat, lon, true
 		}
 		if typ, _ := t["type"].(string); strings.EqualFold(typ, "point") {
 			if coords, ok := t["coordinates"].([]any); ok && len(coords) >= 2 {
-				lon, ok1 := toFloat(coords[0])
-				lat, ok2 := toFloat(coords[1])
+				lon, ok1 := jsonv.ToFloat(coords[0])
+				lat, ok2 := jsonv.ToFloat(coords[1])
 				if ok1 && ok2 {
 					return lat, lon, true
 				}
@@ -1374,8 +1376,8 @@ func geoPointOf(v any) (float64, float64, bool) {
 		}
 	case []any:
 		if len(t) == 2 {
-			lon, ok1 := toFloat(t[0])
-			lat, ok2 := toFloat(t[1])
+			lon, ok1 := jsonv.ToFloat(t[0])
+			lat, ok2 := jsonv.ToFloat(t[1])
 			if ok1 && ok2 {
 				return lat, lon, true
 			}
@@ -1466,7 +1468,7 @@ func haversineMeters(lat1, lon1, lat2, lon2 float64) float64 {
 	return 2 * r * math.Asin(math.Sqrt(a))
 }
 
-func geoFieldTypeOf(idx *Index, field string) (string, bool) {
+func geoFieldTypeOf(idx *model.Index, field string) (string, bool) {
 	def, ok := mappingFieldDef(idx, field)
 	if !ok {
 		return "", false
@@ -1475,7 +1477,7 @@ func geoFieldTypeOf(idx *Index, field string) (string, bool) {
 	return t, true
 }
 
-func geoQueryShardError(reason string) *apiError {
+func geoQueryShardError(reason string) *apierr.Error {
 	return matchSearchError("query_shard_exception", reason)
 }
 
@@ -1487,7 +1489,7 @@ func geoFloatString(f float64) string {
 	return s
 }
 
-func (c *queryCtx) evalGeoDistance(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalGeoDistance(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("[geo_distance] query malformed")
@@ -1533,20 +1535,20 @@ func (c *queryCtx) evalGeoDistance(body any) (bool, float64, *apiError) {
 			reason := "failed to create query: invalid latitude " + latText +
 				"; must be between -90.0 and 90.0"
 			e := geoQueryShardError(reason)
-			e.CausedBy = &apiError{Type: "illegal_argument_exception", Status: 400,
+			e.CausedBy = &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "invalid latitude " + latText + "; must be between -90.0 and 90.0"}
 			return false, 0, e
 		}
 		e := geoQueryShardError("couldn't validate latitude/ longitude values")
-		e.CausedBy = &apiError{Type: "query_shard_exception", Status: 400,
+		e.CausedBy = &apierr.Error{Type: "query_shard_exception", Status: 400,
 			Reason: "couldn't validate latitude/ longitude values",
-			CausedBy: &apiError{Type: "query_validation_exception", Status: 400,
+			CausedBy: &apierr.Error{Type: "query_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: [geo_distance] center point latitude is invalid: " +
 					latText + ";"}}
 		return false, 0, e
 	}
 	boost := 1.0
-	if b, ok := toFloat(bm["boost"]); ok {
+	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		boost = b
 	}
 	vals, present := c.values(field)
@@ -1588,7 +1590,7 @@ func parseWktBBox(s string) (top, left, bottom, right float64, ok bool) {
 	return nums[2], nums[0], nums[3], nums[1], true
 }
 
-func (c *queryCtx) evalGeoBoundingBox(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalGeoBoundingBox(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("[geo_bounding_box] query malformed")
@@ -1648,17 +1650,17 @@ func (c *queryCtx) evalGeoBoundingBox(body any) (bool, float64, *apiError) {
 		}
 	}
 	if !have {
-		top, _ = toFloat(spec["top"])
-		left, _ = toFloat(spec["left"])
-		bottom, _ = toFloat(spec["bottom"])
-		right, _ = toFloat(spec["right"])
+		top, _ = jsonv.ToFloat(spec["top"])
+		left, _ = jsonv.ToFloat(spec["left"])
+		bottom, _ = jsonv.ToFloat(spec["bottom"])
+		right, _ = jsonv.ToFloat(spec["right"])
 	}
 	if top < bottom {
-		return false, 0, &apiError{Type: "illegal_argument_exception", Status: 400,
+		return false, 0, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "top is below bottom corner: " + jsonv.FormatNumber(top) + " vs. " + jsonv.FormatNumber(bottom)}
 	}
 	boost := 1.0
-	if b, ok := toFloat(bm["boost"]); ok {
+	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		boost = b
 	}
 	vals, present := c.values(field)
@@ -1678,7 +1680,7 @@ func (c *queryCtx) evalGeoBoundingBox(body any) (bool, float64, *apiError) {
 	return false, 0, nil
 }
 
-func (c *queryCtx) evalGeoPolygon(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalGeoPolygon(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("[geo_polygon] query malformed")
@@ -1721,7 +1723,7 @@ func (c *queryCtx) evalGeoPolygon(body any) (bool, float64, *apiError) {
 		return false, 0, errParsing("failed to parse geo_polygon")
 	}
 	boost := 1.0
-	if b, ok := toFloat(bm["boost"]); ok {
+	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		boost = b
 	}
 	vals, present := c.values(field)
@@ -1767,8 +1769,8 @@ func shapeCoordPair(v any) (float64, float64, bool) {
 	if !ok || len(arr) < 2 {
 		return 0, 0, false
 	}
-	lon, ok1 := toFloat(arr[0])
-	lat, ok2 := toFloat(arr[1])
+	lon, ok1 := jsonv.ToFloat(arr[0])
+	lat, ok2 := jsonv.ToFloat(arr[1])
 	return lon, lat, ok1 && ok2
 }
 
@@ -1815,7 +1817,7 @@ func parseGeoShape(v any) (*geoShape, bool) {
 	case "circle":
 		if r, ok := m["radius"].(string); ok {
 			gs.radiusM, _ = parseDistanceMeters(r)
-		} else if r, ok := toFloat(m["radius"]); ok {
+		} else if r, ok := jsonv.ToFloat(m["radius"]); ok {
 			gs.radiusM = r
 		}
 		lon, lat, ok := shapeCoordPair(m["coordinates"])
@@ -2100,7 +2102,7 @@ func lookupIndexedShape(spec map[string]any) (any, bool) {
 	return cur, cur != nil
 }
 
-func (c *queryCtx) evalGeoShape(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalGeoShape(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("[geo_shape] query malformed")
@@ -2155,7 +2157,7 @@ func (c *queryCtx) evalGeoShape(body any) (bool, float64, *apiError) {
 	}
 	relation = strings.ToUpper(relation)
 	boost := 1.0
-	if b, ok := toFloat(bm["boost"]); ok {
+	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		boost = b
 	}
 	vals, present := c.values(field)
@@ -2199,7 +2201,7 @@ func (c *queryCtx) evalGeoShape(body any) (bool, float64, *apiError) {
 // rank_feature / distance_feature
 // ---------------------------------------------------------------------------
 
-func rankFeatureFieldDef(idx *Index, field string) (map[string]any, string) {
+func rankFeatureFieldDef(idx *model.Index, field string) (map[string]any, string) {
 	if def, ok := mappingFieldDef(idx, field); ok {
 		t, _ := def["type"].(string)
 		if t == "rank_feature" || t == "rank_features" {
@@ -2219,14 +2221,14 @@ func rankFeatureFieldDef(idx *Index, field string) (map[string]any, string) {
 	return nil, ""
 }
 
-func (c *queryCtx) evalRankFeature(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalRankFeature(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("[rank_feature] query malformed")
 	}
 	field, _ := bm["field"].(string)
 	boost := 1.0
-	if b, ok := toFloat(bm["boost"]); ok {
+	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		boost = b
 	}
 	fnCount := 0
@@ -2236,9 +2238,9 @@ func (c *queryCtx) evalRankFeature(body any) (bool, float64, *apiError) {
 		}
 	}
 	if fnCount > 1 {
-		return false, 0, &apiError{Type: "x_content_parse_exception", Status: 400,
+		return false, 0, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason: "Failed to build [feature] after last required field arrived",
-			CausedBy: &apiError{Type: "illegal_argument_exception", Status: 400,
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "Can only specify one of [log], [saturation], [sigmoid] and [linear]"}}
 	}
 	def, ftype := rankFeatureFieldDef(c.idx, field)
@@ -2249,14 +2251,14 @@ func (c *queryCtx) evalRankFeature(body any) (bool, float64, *apiError) {
 		reason := "[rank_feature] query only works on [rank_feature] fields and features of " +
 			"[rank_features] fields, not [" + ftype + "]"
 		e := geoQueryShardError("failed to create query: " + reason)
-		e.CausedBy = &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "failed to create query: " + reason}
+		e.CausedBy = &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "failed to create query: " + reason}
 		return false, 0, e
 	}
 	vals, present := c.values(field)
 	if !present {
 		return false, 0, nil
 	}
-	f, ok := toFloat(vals[0])
+	f, ok := jsonv.ToFloat(vals[0])
 	if !ok {
 		return false, 0, nil
 	}
@@ -2270,22 +2272,22 @@ func (c *queryCtx) evalRankFeature(body any) (bool, float64, *apiError) {
 	sc := f
 	if sat, ok := bm["saturation"].(map[string]any); ok {
 		pivot := 3.0
-		if p, ok := toFloat(sat["pivot"]); ok {
+		if p, ok := jsonv.ToFloat(sat["pivot"]); ok {
 			pivot = p
 		}
 		sc = f / (f + pivot)
 	} else if lg, ok := bm["log"].(map[string]any); ok {
 		sc = math.Log(1 + f)
-		if s, ok := toFloat(lg["scaling_factor"]); ok {
+		if s, ok := jsonv.ToFloat(lg["scaling_factor"]); ok {
 			sc *= s
 		}
 	} else if sg, ok := bm["sigmoid"].(map[string]any); ok {
 		pivot := 1.0
 		exponent := 1.0
-		if p, ok := toFloat(sg["pivot"]); ok {
+		if p, ok := jsonv.ToFloat(sg["pivot"]); ok {
 			pivot = p
 		}
-		if e, ok := toFloat(sg["exponent"]); ok {
+		if e, ok := jsonv.ToFloat(sg["exponent"]); ok {
 			exponent = e
 		}
 		fe := math.Pow(f, exponent)
@@ -2293,7 +2295,7 @@ func (c *queryCtx) evalRankFeature(body any) (bool, float64, *apiError) {
 		sc = fe / (fe + pe)
 	} else if ln, ok := bm["linear"].(map[string]any); ok {
 		sc = f
-		if s, ok := toFloat(ln["scaling_factor"]); ok {
+		if s, ok := jsonv.ToFloat(ln["scaling_factor"]); ok {
 			sc *= s
 		}
 	} else if ftype == "rank_features" {
@@ -2305,7 +2307,7 @@ func (c *queryCtx) evalRankFeature(body any) (bool, float64, *apiError) {
 }
 
 func datePivotMillis(v any) (float64, bool) {
-	if f, ok := toFloat(v); ok {
+	if f, ok := jsonv.ToFloat(v); ok {
 		return f, true
 	}
 	s, ok := v.(string)
@@ -2340,14 +2342,14 @@ func datePivotMillis(v any) (float64, bool) {
 	return num * mult, true
 }
 
-func (c *queryCtx) evalDistanceFeature(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalDistanceFeature(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("[distance_feature] query malformed")
 	}
 	field, _ := bm["field"].(string)
 	boost := 1.0
-	if b, ok := toFloat(bm["boost"]); ok {
+	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		boost = b
 	}
 	def, _ := mappingFieldDef(c.idx, field)
@@ -2360,7 +2362,7 @@ func (c *queryCtx) evalDistanceFeature(body any) (bool, float64, *apiError) {
 		reason := "Illegal data type of [" + shown + "]![distance_feature] query can only be run on " +
 			"a date, date_nanos or geo_point field type!"
 		e := geoQueryShardError("failed to create query: " + reason)
-		e.CausedBy = &apiError{Type: "illegal_argument_exception", Status: 400, Reason: reason}
+		e.CausedBy = &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: reason}
 		return false, 0, e
 	}
 	vals, present := c.values(field)
@@ -2383,7 +2385,7 @@ func (c *queryCtx) evalDistanceFeature(body any) (bool, float64, *apiError) {
 		dist := haversineMeters(olat, olon, lat, lon)
 		return true, boost * pivot / (pivot + dist), nil
 	}
-	v, ok := toFloat(vals[0])
+	v, ok := jsonv.ToFloat(vals[0])
 	if !ok {
 		return false, 0, nil
 	}
@@ -2392,11 +2394,11 @@ func (c *queryCtx) evalDistanceFeature(body any) (bool, float64, *apiError) {
 		return false, 0, nil
 	}
 	var origin float64
-	if o, ok := toFloat(bm["origin"]); ok {
+	if o, ok := jsonv.ToFloat(bm["origin"]); ok {
 		origin = o
 	} else if s, isStr := bm["origin"].(string); isStr {
 		if o, err := parseQueryDate(def, bm["origin"], ""); err == nil {
-			origin, _ = toFloat(o)
+			origin, _ = jsonv.ToFloat(o)
 			if !strings.Contains(s, "T") {
 				origin += 86399999
 			}
@@ -2413,7 +2415,7 @@ func (c *queryCtx) evalDistanceFeature(body any) (bool, float64, *apiError) {
 // wrapper / pinned / percolate / terms_set
 // ---------------------------------------------------------------------------
 
-func (c *queryCtx) evalWrapper(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalWrapper(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("[wrapper] query malformed")
@@ -2442,13 +2444,13 @@ func (c *queryCtx) evalWrapper(body any) (bool, float64, *apiError) {
 	return false, 0, errParsing("failed to parse wrapper query")
 }
 
-func (c *queryCtx) evalPinned(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalPinned(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("[pinned] query malformed")
 	}
 	boost := 1.0
-	if b, ok := toFloat(bm["boost"]); ok {
+	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		boost = b
 	}
 	pinned := false
@@ -2487,7 +2489,7 @@ func percolateFieldName(bm map[string]any) string {
 	return field
 }
 
-func percolateInputDocs(idx *Index, bm map[string]any) ([]map[string]any, *apiError) {
+func percolateInputDocs(idx *model.Index, bm map[string]any) ([]map[string]any, *apierr.Error) {
 	if d, ok := bm["document"].(map[string]any); ok {
 		return []map[string]any{d}, nil
 	}
@@ -2506,7 +2508,7 @@ func percolateInputDocs(idx *Index, bm map[string]any) ([]map[string]any, *apiEr
 		if idxName == "" {
 			idxName = idx.Name
 		}
-		var target *Index
+		var target *model.Index
 		if idxName == idx.Name {
 			target = idx
 		}
@@ -2515,7 +2517,7 @@ func percolateInputDocs(idx *Index, bm map[string]any) ([]map[string]any, *apiEr
 			doc = target.Docs[id]
 		}
 		if doc == nil {
-			return nil, &apiError{Type: "resource_not_found_exception", Status: 404,
+			return nil, &apierr.Error{Type: "resource_not_found_exception", Status: 404,
 				Reason: "indexed document [" + idxName + "/" + id + "] couldn't be found"}
 		}
 		return []map[string]any{doc}, nil
@@ -2523,7 +2525,7 @@ func percolateInputDocs(idx *Index, bm map[string]any) ([]map[string]any, *apiEr
 	return nil, errParsing("[percolate] requires 'document'")
 }
 
-func percolateInputCtx(idx *Index, doc map[string]any) *queryCtx {
+func percolateInputCtx(idx *model.Index, doc map[string]any) *queryCtx {
 	inputCtx := newIndexCtx(idx, "_percolate")
 	inputCtx.doc = doc
 	if err := inputCtx.buildDocValues(); err != nil {
@@ -2532,7 +2534,7 @@ func percolateInputCtx(idx *Index, doc map[string]any) *queryCtx {
 	return &queryCtx{idx: idx, id: "_percolate", doc: doc, vals: inputCtx.values}
 }
 
-func (c *queryCtx) evalPercolate(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalPercolate(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("[percolate] query malformed")
@@ -2697,7 +2699,7 @@ func percolateHighlights(c *queryCtx, query map[string]any, cfg *highlightConfig
 	return out
 }
 
-func (c *queryCtx) evalTermsSet(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalTermsSet(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("[terms_set] query malformed")
@@ -2717,7 +2719,7 @@ func (c *queryCtx) evalTermsSet(body any) (bool, float64, *apiError) {
 	}
 	terms, _ := spec["terms"].([]any)
 	boost := 1.0
-	if b, ok := toFloat(bm["boost"]); ok {
+	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		boost = b
 	}
 	vals, present := c.values(field)
@@ -2761,7 +2763,7 @@ func numericInt(v any) (int, bool) {
 	if n, ok := integerOf(v); ok {
 		return int(n), true
 	}
-	if f, ok := toFloat(v); ok {
+	if f, ok := jsonv.ToFloat(v); ok {
 		return int(f), true
 	}
 	return 0, false
@@ -2820,7 +2822,7 @@ func isSpanType(k string) bool {
 	return false
 }
 
-func spanTermValue(bm map[string]any) (string, string, *apiError) {
+func spanTermValue(bm map[string]any) (string, string, *apierr.Error) {
 	keys := []string{}
 	for k := range bm {
 		if k == "boost" || k == "_name" {
@@ -2847,7 +2849,7 @@ func spanTermValue(bm map[string]any) (string, string, *apiError) {
 	return field, term, nil
 }
 
-func (c *queryCtx) evalSpanTerm(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalSpanTerm(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("span_term malformed")
@@ -2859,7 +2861,7 @@ func (c *queryCtx) evalSpanTerm(body any) (bool, float64, *apiError) {
 	return len(spans) > 0, 1, nil
 }
 
-func (c *queryCtx) spanTermSpans(bm map[string]any) ([]intervalSpan, string, *apiError) {
+func (c *queryCtx) spanTermSpans(bm map[string]any) ([]intervalSpan, string, *apierr.Error) {
 	field, term, err := spanTermValue(bm)
 	if err != nil {
 		return nil, "", err
@@ -2890,7 +2892,7 @@ func (c *queryCtx) spanTermSpans(bm map[string]any) ([]intervalSpan, string, *ap
 	return spans, field, nil
 }
 
-func (c *queryCtx) spanQuery(body any) ([]intervalSpan, string, *apiError) {
+func (c *queryCtx) spanQuery(body any) ([]intervalSpan, string, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return nil, "", errParsing("span query malformed")
@@ -2932,7 +2934,7 @@ func (c *queryCtx) spanQuery(body any) ([]intervalSpan, string, *apiError) {
 			lists = append(lists, spans)
 		}
 		slop := 0
-		if v, ok := toFloat(inner["slop"]); ok {
+		if v, ok := jsonv.ToFloat(inner["slop"]); ok {
 			slop = int(v)
 		}
 		inOrder := true
@@ -2964,7 +2966,7 @@ func (c *queryCtx) spanQuery(body any) ([]intervalSpan, string, *apiError) {
 	case "span_first":
 		match, _ := inner["match"].(map[string]any)
 		end := 1
-		if v, ok := toFloat(inner["end"]); ok {
+		if v, ok := jsonv.ToFloat(inner["end"]); ok {
 			end = int(v)
 		}
 		spans, field, err := c.spanQuery(match)
@@ -2989,9 +2991,9 @@ func (c *queryCtx) spanQuery(body any) ([]intervalSpan, string, *apiError) {
 		if err != nil {
 			return nil, "", err
 		}
-		pre, hasPre := toFloat(inner["pre"])
-		post, hasPost := toFloat(inner["post"])
-		dist, hasDist := toFloat(inner["dist"])
+		pre, hasPre := jsonv.ToFloat(inner["pre"])
+		post, hasPost := jsonv.ToFloat(inner["post"])
+		dist, hasDist := jsonv.ToFloat(inner["dist"])
 		out := []intervalSpan{}
 		for _, a := range inc {
 			drop := false
@@ -3140,7 +3142,7 @@ func (c *queryCtx) spanQuery(body any) ([]intervalSpan, string, *apiError) {
 	return nil, "", errParsing("unknown span query [" + kind + "]")
 }
 
-func (c *queryCtx) evalSpanNear(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalSpanNear(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("span_near malformed")
@@ -3152,7 +3154,7 @@ func (c *queryCtx) evalSpanNear(body any) (bool, float64, *apiError) {
 	return len(spans) > 0, 1, nil
 }
 
-func (c *queryCtx) evalSpanOr(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalSpanOr(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("span_or malformed")
@@ -3164,7 +3166,7 @@ func (c *queryCtx) evalSpanOr(body any) (bool, float64, *apiError) {
 	return len(spans) > 0, 1, nil
 }
 
-func (c *queryCtx) evalSpanFirst(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalSpanFirst(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("span_first malformed")
@@ -3176,7 +3178,7 @@ func (c *queryCtx) evalSpanFirst(body any) (bool, float64, *apiError) {
 	return len(spans) > 0, 1, nil
 }
 
-func (c *queryCtx) evalSpanNot(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalSpanNot(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("span_not malformed")
@@ -3188,7 +3190,7 @@ func (c *queryCtx) evalSpanNot(body any) (bool, float64, *apiError) {
 	return len(spans) > 0, 1, nil
 }
 
-func (c *queryCtx) evalSpanContaining(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalSpanContaining(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("span_containing malformed")
@@ -3200,7 +3202,7 @@ func (c *queryCtx) evalSpanContaining(body any) (bool, float64, *apiError) {
 	return len(spans) > 0, 1, nil
 }
 
-func (c *queryCtx) evalSpanWithin(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalSpanWithin(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("span_within malformed")
@@ -3212,7 +3214,7 @@ func (c *queryCtx) evalSpanWithin(body any) (bool, float64, *apiError) {
 	return len(spans) > 0, 1, nil
 }
 
-func (c *queryCtx) evalSpanMulti(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalSpanMulti(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("span_multi malformed")
@@ -3229,7 +3231,7 @@ type intervalSpan struct {
 	end   int
 }
 
-func (c *queryCtx) evalIntervals(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalIntervals(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("intervals malformed")
@@ -3301,7 +3303,7 @@ func (c *queryCtx) intervalPositions(field string) []analysis.Token {
 	vals := c.mustValues(field)
 	def, _ := mappingFieldDef(c.idx, field)
 	gap := 100
-	if g, ok := toFloat(def["position_increment_gap"]); ok {
+	if g, ok := jsonv.ToFloat(def["position_increment_gap"]); ok {
 		gap = int(g)
 	}
 	out := []analysis.Token{}
@@ -3396,7 +3398,7 @@ func combineUnorderedIntervals(lists [][]intervalSpan, maxGaps int) []intervalSp
 	return cur
 }
 
-func (c *queryCtx) intervalRule(rule map[string]any, positions []analysis.Token, field string) ([]intervalSpan, *apiError) {
+func (c *queryCtx) intervalRule(rule map[string]any, positions []analysis.Token, field string) ([]intervalSpan, *apierr.Error) {
 	kind := ""
 	var bm map[string]any
 	for k, v := range rule {
@@ -3430,7 +3432,7 @@ func (c *queryCtx) intervalRule(rule map[string]any, positions []analysis.Token,
 			return nil, nil
 		}
 		maxGaps := -1
-		if g, ok := toFloat(bm["max_gaps"]); ok {
+		if g, ok := jsonv.ToFloat(bm["max_gaps"]); ok {
 			maxGaps = int(g)
 		}
 		ordered, _ := bm["ordered"].(bool)
@@ -3475,7 +3477,7 @@ func (c *queryCtx) intervalRule(rule map[string]any, positions []analysis.Token,
 			}
 		}
 		prefixLen := 0
-		if pl, ok := toFloat(bm["prefix_length"]); ok {
+		if pl, ok := jsonv.ToFloat(bm["prefix_length"]); ok {
 			prefixLen = int(pl)
 		}
 		for _, p := range positions {
@@ -3501,7 +3503,7 @@ func (c *queryCtx) intervalRule(rule map[string]any, positions []analysis.Token,
 			lists = append(lists, sp)
 		}
 		maxGaps := -1
-		if g, ok := toFloat(bm["max_gaps"]); ok {
+		if g, ok := jsonv.ToFloat(bm["max_gaps"]); ok {
 			maxGaps = int(g)
 		}
 		ordered, _ := bm["ordered"].(bool)
@@ -3533,7 +3535,7 @@ func (c *queryCtx) intervalRule(rule map[string]any, positions []analysis.Token,
 	return spans, nil
 }
 
-func (c *queryCtx) filterIntervalSpans(spans []intervalSpan, filter map[string]any, positions []analysis.Token, field string) ([]intervalSpan, *apiError) {
+func (c *queryCtx) filterIntervalSpans(spans []intervalSpan, filter map[string]any, positions []analysis.Token, field string) ([]intervalSpan, *apierr.Error) {
 	if len(spans) == 0 {
 		return spans, nil
 	}
@@ -3617,7 +3619,7 @@ func (c *queryCtx) filterIntervalSpans(spans []intervalSpan, filter map[string]a
 	return out, nil
 }
 
-func (c *queryCtx) evalTermSingle(field string, bm map[string]any) (bool, float64, *apiError) {
+func (c *queryCtx) evalTermSingle(field string, bm map[string]any) (bool, float64, *apierr.Error) {
 	q, _ := bm["query"].(string)
 	if field == "" {
 		for f := range c.valuesMap() {
@@ -3653,7 +3655,7 @@ func (c *queryCtx) evalIntervalsSimple(pred func(field string, tokens []string) 
 // more_like_this
 // ---------------------------------------------------------------------------
 
-func mltFieldTokens(idx *Index, field, text string) []string {
+func mltFieldTokens(idx *model.Index, field, text string) []string {
 	if def, ok := mappingFieldDef(idx, field); ok {
 		switch t, _ := def["type"].(string); t {
 		case "keyword", "constant_keyword", "wildcard":
@@ -3715,7 +3717,7 @@ func mltTermSet(c *queryCtx, raw any, fields []string) map[string]bool {
 	return out
 }
 
-func mltDocHasTerm(idx *Index, doc map[string]any, fields []string, term string) bool {
+func mltDocHasTerm(idx *model.Index, doc map[string]any, fields []string, term string) bool {
 	found := false
 	for _, f := range fields {
 		v, ok := fieldValue(doc, f)
@@ -3745,7 +3747,7 @@ func mltDocHasTerm(idx *Index, doc map[string]any, fields []string, term string)
 	return false
 }
 
-func (c *queryCtx) evalMoreLikeThis(bm map[string]any) (bool, float64, *apiError) {
+func (c *queryCtx) evalMoreLikeThis(bm map[string]any) (bool, float64, *apierr.Error) {
 	var fields []string
 	switch t := bm["fields"].(type) {
 	case []any:
@@ -3810,19 +3812,19 @@ func (c *queryCtx) evalMoreLikeThis(bm map[string]any) (bool, float64, *apiError
 		}
 	}
 	minTermFreq := 2
-	if n, ok := toFloat(bm["min_term_freq"]); ok {
+	if n, ok := jsonv.ToFloat(bm["min_term_freq"]); ok {
 		minTermFreq = int(n)
 	}
 	maxTermFreq := math.MaxInt32
-	if n, ok := toFloat(bm["max_term_freq"]); ok {
+	if n, ok := jsonv.ToFloat(bm["max_term_freq"]); ok {
 		maxTermFreq = int(n)
 	}
 	minDocFreq := 5
-	if n, ok := toFloat(bm["min_doc_freq"]); ok {
+	if n, ok := jsonv.ToFloat(bm["min_doc_freq"]); ok {
 		minDocFreq = int(n)
 	}
 	maxDocFreq := math.MaxInt32
-	if n, ok := toFloat(bm["max_doc_freq"]); ok {
+	if n, ok := jsonv.ToFloat(bm["max_doc_freq"]); ok {
 		maxDocFreq = int(n)
 	}
 	terms := map[string]bool{}
@@ -3867,7 +3869,7 @@ func (c *queryCtx) evalMoreLikeThis(bm map[string]any) (bool, float64, *apiError
 		return false, 0, nil
 	}
 	boost := 1.0
-	if b, ok := toFloat(bm["boost"]); ok {
+	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		boost = b
 	}
 	return true, float64(matched) * boost, nil
@@ -3911,7 +3913,7 @@ func collectDocTexts(doc map[string]any, fields []string) []string {
 // knn
 // ---------------------------------------------------------------------------
 
-func (c *queryCtx) evalKnn(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalKnn(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("[knn] query malformed")
@@ -3929,7 +3931,7 @@ func (c *queryCtx) evalKnn(body any) (bool, float64, *apiError) {
 	vecRaw, _ := bm["query_vector"].([]any)
 	var qv []float64
 	for _, e := range vecRaw {
-		if f, ok := toFloat(e); ok {
+		if f, ok := jsonv.ToFloat(e); ok {
 			qv = append(qv, f)
 		}
 	}
@@ -3942,7 +3944,7 @@ func (c *queryCtx) evalKnn(body any) (bool, float64, *apiError) {
 	}
 	var dv []float64
 	for _, e := range vals {
-		if f, ok := toFloat(e); ok {
+		if f, ok := jsonv.ToFloat(e); ok {
 			dv = append(dv, f)
 		}
 	}
@@ -4005,8 +4007,8 @@ func javaDoubleString(f float64) string {
 	return s
 }
 
-func newFunctionScoreFailure(marker, reason string) *apiError {
-	return &apiError{Type: "search_phase_execution_exception", Status: 400,
+func newFunctionScoreFailure(marker, reason string) *apierr.Error {
+	return &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 		Reason: reason, SearchFailure: marker}
 }
 
@@ -4041,7 +4043,7 @@ func parseDecayDurationMillis(v any) (float64, bool) {
 		}
 		return num * mult, true
 	default:
-		return toFloat(v)
+		return jsonv.ToFloat(v)
 	}
 }
 
@@ -4052,7 +4054,7 @@ func decayDateMillis(def map[string]any, v any) (int64, bool) {
 	return integerOf(v)
 }
 
-func (c *queryCtx) evalFunctionScore(body any) (bool, float64, *apiError) {
+func (c *queryCtx) evalFunctionScore(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("[function_score] query malformed")
@@ -4068,7 +4070,7 @@ func (c *queryCtx) evalFunctionScore(body any) (bool, float64, *apiError) {
 	if !matched {
 		return false, 0, nil
 	}
-	if b, ok := toFloat(bm["boost"]); ok {
+	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		base *= b
 	}
 	functions := asQueryList(bm["functions"])
@@ -4103,7 +4105,7 @@ func (c *queryCtx) evalFunctionScore(body any) (bool, float64, *apiError) {
 			}
 		}
 		weight := 1.0
-		if w, ok := toFloat(fn["weight"]); ok {
+		if w, ok := jsonv.ToFloat(fn["weight"]); ok {
 			weight = w
 		}
 		fv, ferr := c.applyScoreFunction(fn, base)
@@ -4170,20 +4172,20 @@ func (c *queryCtx) evalFunctionScore(body any) (bool, float64, *apiError) {
 	default:
 		combined = base * finalScore
 	}
-	if mb, ok := toFloat(bm["max_boost"]); ok && combined > mb {
+	if mb, ok := jsonv.ToFloat(bm["max_boost"]); ok && combined > mb {
 		combined = mb
 	}
-	if ms, ok := toFloat(bm["min_score"]); ok && combined < ms {
+	if ms, ok := jsonv.ToFloat(bm["min_score"]); ok && combined < ms {
 		return false, 0, nil
 	}
 	return true, combined, nil
 }
 
-func (c *queryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (float64, *apiError) {
+func (c *queryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (float64, *apierr.Error) {
 	if fvf, ok := fn["field_value_factor"].(map[string]any); ok {
 		field, _ := fvf["field"].(string)
 		factor := 1.0
-		if v, ok := toFloat(fvf["factor"]); ok {
+		if v, ok := jsonv.ToFloat(fvf["factor"]); ok {
 			factor = v
 		}
 		modifier, _ := fvf["modifier"].(string)
@@ -4191,14 +4193,14 @@ func (c *queryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 		var value float64
 		vals, present := c.values(field)
 		if present && len(vals) > 0 {
-			n, ok := toFloat(vals[0])
+			n, ok := jsonv.ToFloat(vals[0])
 			if !ok {
 				return 0, newFunctionScoreFailure("fvf_unmapped",
 					"Unable to find a field mapper for field ["+field+"]. No 'missing' value defined.")
 			}
 			value = n
 		} else if hasMissing {
-			n, ok := toFloat(missingRaw)
+			n, ok := jsonv.ToFloat(missingRaw)
 			if !ok {
 				return 0, newFunctionScoreFailure("fvf_missing",
 					"Missing value for field ["+field+"]")
@@ -4261,7 +4263,7 @@ func (c *queryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 		}
 		score := painless.F64(v)
 		if score < 0 {
-			return 0, plainShardError(c.idx, errBad("script score function must not produce negative scores, but got: ["+painless.FormatDouble(score)+"]"))
+			return 0, plainShardError(c.idx, apierr.BadRequest("script score function must not produce negative scores, but got: ["+painless.FormatDouble(score)+"]"))
 		}
 		return float64(float32(score)), nil
 	}
@@ -4290,7 +4292,7 @@ func (c *queryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 		def, _ := mappingFieldDef(c.idx, field)
 		ftype, _ := def["type"].(string)
 		decayV := 0.5
-		if d, ok := toFloat(spec["decay"]); ok {
+		if d, ok := jsonv.ToFloat(spec["decay"]); ok {
 			decayV = d
 		}
 		geo := ftype == "geo_point" || ftype == "geo_shape"
@@ -4334,15 +4336,15 @@ func (c *queryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 				offset = o
 			}
 		} else {
-			val, _ := toFloat(vals[0])
+			val, _ := jsonv.ToFloat(vals[0])
 			origin := 0.0
-			if o, ok := toFloat(spec["origin"]); ok {
+			if o, ok := jsonv.ToFloat(spec["origin"]); ok {
 				origin = o
 			}
-			if s, ok := toFloat(spec["scale"]); ok {
+			if s, ok := jsonv.ToFloat(spec["scale"]); ok {
 				scale = s
 			}
-			if o, ok := toFloat(spec["offset"]); ok {
+			if o, ok := jsonv.ToFloat(spec["offset"]); ok {
 				offset = o
 			}
 			dist = math.Abs(val - origin)
@@ -4455,7 +4457,7 @@ func tokenizeQueryString(s string) []string {
 	return out
 }
 
-func (p *qsParser) parse() (map[string]any, *apiError) {
+func (p *qsParser) parse() (map[string]any, *apierr.Error) {
 	q, err := p.parseOr()
 	if err != nil {
 		return nil, err
@@ -4463,7 +4465,7 @@ func (p *qsParser) parse() (map[string]any, *apiError) {
 	return q, nil
 }
 
-func (p *qsParser) parseOr() (map[string]any, *apiError) {
+func (p *qsParser) parseOr() (map[string]any, *apierr.Error) {
 	left, err := p.parseAnd()
 	if err != nil {
 		return nil, err
@@ -4487,7 +4489,7 @@ func (p *qsParser) parseOr() (map[string]any, *apiError) {
 	return left, nil
 }
 
-func (p *qsParser) parseAnd() (map[string]any, *apiError) {
+func (p *qsParser) parseAnd() (map[string]any, *apierr.Error) {
 	must := []any{}
 	should := []any{}
 	mustNot := []any{}
@@ -4588,7 +4590,7 @@ func (p *qsParser) parseAnd() (map[string]any, *apiError) {
 	}
 	return map[string]any{"bool": bm}, nil
 }
-func (p *qsParser) parseUnary() (map[string]any, *apiError) {
+func (p *qsParser) parseUnary() (map[string]any, *apierr.Error) {
 	if p.pos < len(p.tokens) {
 		tok := p.tokens[p.pos]
 		if tok == "NOT" || tok == "!" {
@@ -4652,7 +4654,7 @@ func parsePhraseToken(tok string) (string, float64, bool) {
 	return phrase, slop, true
 }
 
-func (p *qsParser) parseTerm() (map[string]any, *apiError) {
+func (p *qsParser) parseTerm() (map[string]any, *apierr.Error) {
 	if p.pos >= len(p.tokens) {
 		return map[string]any{"match_all": map[string]any{}}, nil
 	}
@@ -4957,7 +4959,7 @@ func applyQueryBoost(q map[string]any, boost float64) map[string]any {
 	return q
 }
 
-func (p *qsParser) valueQuery(field, value string) (map[string]any, *apiError) {
+func (p *qsParser) valueQuery(field, value string) (map[string]any, *apierr.Error) {
 	value = unescapeQueryString(value)
 	if i := strings.LastIndex(value, "^"); i > 0 {
 		if f, err := strconv.ParseFloat(value[i+1:], 64); err == nil {
@@ -5078,7 +5080,7 @@ func (p *qsParser) valueQuery(field, value string) (map[string]any, *apiError) {
 		return map[string]any{"term": map[string]any{field: value}}, nil
 	}
 	if isNumericType(ftype) {
-		if _, isNum := toFloat(lintValue(value)); !isNum {
+		if _, isNum := jsonv.ToFloat(lintValue(value)); !isNum {
 			return map[string]any{"match_none": map[string]any{}}, nil
 		}
 	}
@@ -5103,11 +5105,11 @@ func boolQuery(kind string, clauses []any, msm int) map[string]any {
 	return map[string]any{"bool": bm}
 }
 
-func qsParseError(query string) *apiError {
-	return &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
-		RootCause: &apiError{Type: "query_shard_exception", Status: 400, Reason: "Failed to parse query [" + query + "]"},
-		CausedBy: &apiError{Type: "query_shard_exception", Status: 400, Reason: "Failed to parse query [" + query + "]",
-			CausedBy: &apiError{Type: "parse_exception", Status: 400, Reason: "Failed to parse query [" + query + "]"}}}
+func qsParseError(query string) *apierr.Error {
+	return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
+		RootCause: &apierr.Error{Type: "query_shard_exception", Status: 400, Reason: "Failed to parse query [" + query + "]"},
+		CausedBy: &apierr.Error{Type: "query_shard_exception", Status: 400, Reason: "Failed to parse query [" + query + "]",
+			CausedBy: &apierr.Error{Type: "parse_exception", Status: 400, Reason: "Failed to parse query [" + query + "]"}}}
 }
 
 func applyQueryLenient(q map[string]any) {
@@ -5197,7 +5199,7 @@ func applyQueryFuzzyTranspositions(q map[string]any, transpositions bool) {
 	}
 }
 
-func (c *queryCtx) evalQueryString(body any, simple bool) (bool, float64, *apiError) {
+func (c *queryCtx) evalQueryString(body any, simple bool) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("query_string malformed")
@@ -5225,7 +5227,7 @@ func (c *queryCtx) evalQueryString(body any, simple bool) (bool, float64, *apiEr
 	if o, ok := bm["default_operator"].(string); ok {
 		operator = strings.ToUpper(o)
 		if operator != "AND" && operator != "OR" {
-			return false, 0, &apiError{Type: "illegal_argument_exception", Status: 400,
+			return false, 0, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "No enum constant org.opensearch.index.query.Operator." + operator}
 		}
 	}
@@ -5322,7 +5324,7 @@ func (c *queryCtx) evalQueryString(body any, simple bool) (bool, float64, *apiEr
 			case "AND", "OR", "NOT", "PREFIX", "PHRASE", "PRECEDENCE", "ESCAPE", "WHITESPACE", "FUZZY", "NEAR", "SLOP":
 				allowed[f] = true
 			default:
-				return false, 0, &apiError{Type: "illegal_argument_exception", Status: 400,
+				return false, 0, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "Unknown simple_query_string flag [" + f + "]"}
 			}
 		}
@@ -5445,7 +5447,7 @@ func expandMultifield(q map[string]any, c *queryCtx) map[string]any {
 	return q
 }
 
-func fieldUnderNested(idx *Index, field string) bool {
+func fieldUnderNested(idx *model.Index, field string) bool {
 	parts := strings.Split(field, ".")
 	props := ensureProperties(idx.Mappings)
 	for i := 0; i < len(parts)-1; i++ {
@@ -5503,7 +5505,7 @@ type fieldTermStats struct {
 }
 
 type termStatsKey struct {
-	idx             *Index
+	idx             *model.Index
 	field, analyzer string
 }
 
@@ -5512,7 +5514,7 @@ var (
 	termStatsCache = map[termStatsKey]*fieldTermStats{}
 )
 
-func termStatsFor(idx *Index, field, analyzer string, docTerms func([]any) []string) *fieldTermStats {
+func termStatsFor(idx *model.Index, field, analyzer string, docTerms func([]any) []string) *fieldTermStats {
 	key := termStatsKey{idx, field, analyzer}
 	termStatsMu.Lock()
 	st := termStatsCache[key]

@@ -6,6 +6,11 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/ojson"
 )
 
 // ---------------------------------------------------------------------------
@@ -13,7 +18,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // knnExplain explains a top-level knn query hit, or returns nil.
-func knnExplain(idx *Index, query map[string]any, id string, score float64) any {
+func knnExplain(idx *model.Index, query map[string]any, id string, score float64) any {
 	kq, ok := query["knn"].(map[string]any)
 	if !ok || len(query) != 1 || len(kq) != 1 {
 		return nil
@@ -23,14 +28,14 @@ func knnExplain(idx *Index, query map[string]any, id string, score float64) any 
 		if !ok {
 			return nil
 		}
-		k, hasK := toFloat(p["k"])
+		k, hasK := jsonv.ToFloat(p["k"])
 		if !hasK {
 			return nil
 		}
 		def, _ := knnFieldDef(idx, field)
 		fi := knnInfo(def)
 		if fi.engine == "lucene" {
-			return orderedJSON{{"value", scoreJSON(score)},
+			return ojson.Object{{"value", scoreJSON(score)},
 				{"description", fmt.Sprintf("within top %d docs", int(k))}, {"details", []any{}}}
 		}
 		qv, _ := floatList(p["vector"])
@@ -49,12 +54,12 @@ func knnExplain(idx *Index, query map[string]any, id string, score float64) any 
 			raw = 1 - raw
 			formula = "`(1 + rawScore) / 2`"
 		}
-		return orderedJSON{{"value", scoreJSON(score)},
+		return ojson.Object{{"value", scoreJSON(score)},
 			{"description", "the type of knn search executed was Approximate-NN"},
-			{"details", []any{orderedJSON{{"value", scoreJSON(score)},
+			{"details", []any{ojson.Object{{"value", scoreJSON(score)},
 				{"description", fmt.Sprintf("the type of knn search executed at leaf was Approximate-NN with vectorDataType = %s, spaceType = %s where score is computed as %s from:",
 					strings.ToUpper(fi.dataType), fi.space, formula)},
-				{"details", []any{orderedJSON{{"value", scoreJSON(float64(float32(raw)))},
+				{"details", []any{ojson.Object{{"value", scoreJSON(float64(float32(raw)))},
 					{"description", "rawScore, returned from FAISS library"}, {"details", []any{}}}}}}}}}
 	}
 	return nil
@@ -66,7 +71,7 @@ type knnParentHit struct {
 }
 
 type knnNestedEntry struct {
-	idx  *Index
+	idx  *model.Index
 	path string
 	hits map[string]knnParentHit
 }
@@ -80,7 +85,7 @@ var (
 // best parents (by their best child) match; without expand_nested_docs only
 // the best child of each of them matches.
 func (c *queryCtx) knnNestedTopK(p map[string]any, k int, filter map[string]any,
-	score func(*queryCtx) (bool, float64, float64), boost float64) (bool, float64, *apiError) {
+	score func(*queryCtx) (bool, float64, float64), boost float64) (bool, float64, *apierr.Error) {
 	hits, err := c.knnNestedHits(p, k, filter, score)
 	if err != nil {
 		return false, 0, err
@@ -100,7 +105,7 @@ func (c *queryCtx) knnNestedTopK(p map[string]any, k int, filter map[string]any,
 }
 
 func (c *queryCtx) knnNestedHits(p map[string]any, k int, filter map[string]any,
-	score func(*queryCtx) (bool, float64, float64)) (map[string]knnParentHit, *apiError) {
+	score func(*queryCtx) (bool, float64, float64)) (map[string]knnParentHit, *apierr.Error) {
 	key := reflect.ValueOf(p).Pointer()
 	knnNestedMu.Lock()
 	for _, e := range knnNestedCache[key] {

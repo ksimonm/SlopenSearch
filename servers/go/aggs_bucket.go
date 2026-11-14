@@ -10,9 +10,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/ojson"
 )
 
-func allIndexDocs(idx *Index) []map[string]any {
+func allIndexDocs(idx *model.Index) []map[string]any {
 	out := []map[string]any{}
 	for _, id := range idx.Order {
 		doc, ok := idx.Docs[id]
@@ -26,7 +31,7 @@ func allIndexDocs(idx *Index) []map[string]any {
 	return out
 }
 
-func globalAgg(sub map[string]any, idx *Index, pathPrefix string, typed bool) (any, *apiError) {
+func globalAgg(sub map[string]any, idx *model.Index, pathPrefix string, typed bool) (any, *apierr.Error) {
 	docs := allIndexDocs(idx)
 	out := map[string]any{"doc_count": len(docs)}
 	if sub != nil {
@@ -41,21 +46,21 @@ func globalAgg(sub map[string]any, idx *Index, pathPrefix string, typed bool) (a
 	return out, nil
 }
 
-func globalSubError(name string, sub map[string]any) *apiError {
+func globalSubError(name string, sub map[string]any) *apierr.Error {
 	for gname, raw := range sub {
 		def, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
 		if _, ok := def["global"]; ok {
-			return &apiError{Type: "aggregation_execution_exception", Status: 500,
+			return &apierr.Error{Type: "aggregation_execution_exception", Status: 500,
 				Reason: "Aggregation [" + name + "] cannot have a global sub-aggregation [" + gname + "]. Global aggregations can only be defined as top level aggregations"}
 		}
 	}
 	return nil
 }
 
-func missingAgg(field string, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool) (any, *apiError) {
+func missingAgg(field string, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	resolved := resolveField(field, pathPrefix)
 	nestedParent := false
 	parts := strings.Split(resolved, ".")
@@ -103,11 +108,11 @@ func isEmptyAggValue(v any) bool {
 	return false
 }
 
-func rangeAggSpec(name, field string, spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool) (any, *apiError) {
+func rangeAggSpec(name, field string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	rawRanges, hasRanges := spec["ranges"]
 	ranges, ok := rawRanges.([]any)
 	if !hasRanges || !ok || len(ranges) == 0 {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "No [ranges] specified for the [" + name + "] aggregation"}
 	}
 	missing, hasMissing := spec["missing"]
@@ -130,10 +135,10 @@ func rangeAggSpec(name, field string, spec map[string]any, docs []map[string]any
 			continue
 		}
 		x := &rng{}
-		if v, ok := toFloat(r["from"]); ok {
+		if v, ok := jsonv.ToFloat(r["from"]); ok {
 			x.from, x.hasFrom = v, true
 		}
-		if v, ok := toFloat(r["to"]); ok {
+		if v, ok := jsonv.ToFloat(r["to"]); ok {
 			x.to, x.hasTo = v, true
 		}
 		if k, ok := toString(r["key"]); ok {
@@ -158,7 +163,7 @@ func rangeAggSpec(name, field string, spec map[string]any, docs []map[string]any
 		return false
 	})
 	buckets := []any{}
-	keyedBuckets := orderedJSON{}
+	keyedBuckets := ojson.Object{}
 	for _, x := range parsed {
 		var bucketDocs []map[string]any
 		for _, d := range docs {
@@ -169,7 +174,7 @@ func rangeAggSpec(name, field string, spec map[string]any, docs []map[string]any
 				}
 				v = missing
 			}
-			n, ok := toFloat(v)
+			n, ok := jsonv.ToFloat(v)
 			if !ok {
 				continue
 			}
@@ -184,7 +189,7 @@ func rangeAggSpec(name, field string, spec map[string]any, docs []map[string]any
 		b := map[string]any{"doc_count": len(bucketDocs)}
 		fromS, toS := "*", "*"
 		if x.hasFrom {
-			b["from"] = rawFloat(x.from)
+			b["from"] = jsonv.Float(x.from)
 			fromS = rangeKeyNumber(x.from)
 			if format != "" {
 				x.fromStr = fmtMetricNumber(x.from, format)
@@ -192,7 +197,7 @@ func rangeAggSpec(name, field string, spec map[string]any, docs []map[string]any
 			}
 		}
 		if x.hasTo {
-			b["to"] = rawFloat(x.to)
+			b["to"] = jsonv.Float(x.to)
 			toS = rangeKeyNumber(x.to)
 			if format != "" {
 				x.toStr = fmtMetricNumber(x.to, format)
@@ -216,7 +221,7 @@ func rangeAggSpec(name, field string, spec map[string]any, docs []map[string]any
 			}
 		}
 		if keyed {
-			keyedBuckets = append(keyedBuckets, orderedKV{key, b})
+			keyedBuckets = append(keyedBuckets, ojson.KV{key, b})
 		} else {
 			buckets = append(buckets, b)
 		}
@@ -338,11 +343,11 @@ func applyDateMath(t time.Time, mathExpr string) time.Time {
 	return t
 }
 
-func dateRangeAgg(name, field string, spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool) (any, *apiError) {
+func dateRangeAgg(name, field string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	rawRanges, hasRanges := spec["ranges"]
 	ranges, ok := rawRanges.([]any)
 	if !hasRanges || !ok || len(ranges) == 0 {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "No [ranges] specified for the [" + name + "] aggregation"}
 	}
 	resolved := resolveField(field, pathPrefix)
@@ -419,7 +424,7 @@ func dateRangeAgg(name, field string, spec map[string]any, docs []map[string]any
 		return t.UTC().Format("2006-01-02T15:04:05.000Z")
 	}
 	buckets := []any{}
-	keyedBuckets := orderedJSON{}
+	keyedBuckets := ojson.Object{}
 	for _, x := range parsed {
 		var bucketDocs []map[string]any
 		for _, d := range docs {
@@ -446,13 +451,13 @@ func dateRangeAgg(name, field string, spec map[string]any, docs []map[string]any
 		fromS, toS := "*", "*"
 		if x.hasFrom {
 			x.fromS = fmtDate(x.from)
-			b["from"] = rawFloat(float64(x.from))
+			b["from"] = jsonv.Float(float64(x.from))
 			b["from_as_string"] = x.fromS
 			fromS = x.fromS
 		}
 		if x.hasTo {
 			x.toS = fmtDate(x.to)
-			b["to"] = rawFloat(float64(x.to))
+			b["to"] = jsonv.Float(float64(x.to))
 			b["to_as_string"] = x.toS
 			toS = x.toS
 		}
@@ -474,7 +479,7 @@ func dateRangeAgg(name, field string, spec map[string]any, docs []map[string]any
 		}
 		buckets = append(buckets, b)
 		if keyed {
-			keyedBuckets = append(keyedBuckets, orderedKV{key, b})
+			keyedBuckets = append(keyedBuckets, ojson.KV{key, b})
 		}
 	}
 	if keyed {
@@ -502,11 +507,11 @@ func ipLess(a, b net.IP) bool {
 	return string(aa) < string(bb)
 }
 
-func ipRangeAgg(name, field string, spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool) (any, *apiError) {
+func ipRangeAgg(name, field string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	rawRanges, hasRanges := spec["ranges"]
 	ranges, ok := rawRanges.([]any)
 	if !hasRanges || !ok || len(ranges) == 0 {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "No [ranges] specified for the [" + name + "] aggregation"}
 	}
 	keyed, _ := spec["keyed"].(bool)
@@ -532,9 +537,9 @@ func ipRangeAgg(name, field string, spec map[string]any, docs []map[string]any, 
 				if i := strings.LastIndex(mask, "/"); i >= 0 {
 					prefix = mask[i+1:]
 				}
-				return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+				return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 					Reason: "Failed to parse aggregation [" + name + "]",
-					CausedBy: &apiError{Type: "illegal_argument_exception",
+					CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 						Reason: "Illegal prefix length [" + prefix + "] in [" + mask + "]. Must be 0-32 for IPv4 ranges, 0-128 for IPv6 ranges"}}
 			}
 			from := ipnet.IP
@@ -586,7 +591,7 @@ func ipRangeAgg(name, field string, spec map[string]any, docs []map[string]any, 
 		return false
 	})
 	buckets := []any{}
-	keyedBuckets := orderedJSON{}
+	keyedBuckets := ojson.Object{}
 	for _, x := range parsed {
 		var bucketDocs []map[string]any
 		for _, d := range docs {
@@ -635,7 +640,7 @@ func ipRangeAgg(name, field string, spec map[string]any, docs []map[string]any, 
 		}
 		buckets = append(buckets, b)
 		if keyed {
-			keyedBuckets = append(keyedBuckets, orderedKV{key, b})
+			keyedBuckets = append(keyedBuckets, ojson.KV{key, b})
 		}
 	}
 	if keyed {
@@ -662,21 +667,21 @@ func nextNetwork(ip net.IP, bits, ones int) net.IP {
 	return net.IP(b)
 }
 
-func filtersAgg(name string, spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool) (any, *apiError) {
+func filtersAgg(name string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	if _, has := spec["keyed"]; has {
-		return nil, &apiError{Type: "parsing_exception", Status: 400,
+		return nil, &apierr.Error{Type: "parsing_exception", Status: 400,
 			Reason: "Unknown key for a VALUE_BOOLEAN in [" + name + "]: [keyed]."}
 	}
 	raw, ok := spec["filters"]
 	if !ok {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "[filters] cannot be empty."}
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "[filters] cannot be empty."}
 	}
 	otherKey, hasOtherKey := toString(spec["other_bucket_key"])
 	other, _ := spec["other_bucket"].(bool)
 	if hasOtherKey {
 		other = true
 	}
-	buildBucket := func(filter map[string]any, bdocs []map[string]any) (map[string]any, *apiError) {
+	buildBucket := func(filter map[string]any, bdocs []map[string]any) (map[string]any, *apierr.Error) {
 		b := map[string]any{"doc_count": len(bdocs)}
 		if sub != nil {
 			subRes, err := evalAggsMode(sub, docsToHits(bdocs, idx), idx, pathPrefix, typed, false)
@@ -694,7 +699,7 @@ func filtersAgg(name string, spec map[string]any, docs []map[string]any, idx *In
 	switch t := raw.(type) {
 	case map[string]any:
 		if len(t) == 0 {
-			return nil, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "[filters] cannot be empty."}
+			return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "[filters] cannot be empty."}
 		}
 		names := make([]string, 0, len(t))
 		for k := range t {
@@ -737,7 +742,7 @@ func filtersAgg(name string, spec map[string]any, docs []map[string]any, idx *In
 		return map[string]any{"buckets": buckets}, nil
 	case []any:
 		if len(t) == 0 {
-			return nil, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "[filters] cannot be empty."}
+			return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "[filters] cannot be empty."}
 		}
 		buckets := []any{}
 		for i, rawFilter := range t {
@@ -783,10 +788,10 @@ func filtersAgg(name string, spec map[string]any, docs []map[string]any, idx *In
 		}
 		return map[string]any{"buckets": buckets}, nil
 	}
-	return nil, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "[filters] cannot be empty."}
+	return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "[filters] cannot be empty."}
 }
 
-func unmatchedDocs(docs []map[string]any, filters map[string]any, idx *Index) []map[string]any {
+func unmatchedDocs(docs []map[string]any, filters map[string]any, idx *model.Index) []map[string]any {
 	out := []map[string]any{}
 	for _, d := range docs {
 		matched := false
@@ -805,16 +810,16 @@ func unmatchedDocs(docs []map[string]any, filters map[string]any, idx *Index) []
 	return out
 }
 
-func multiTermsAgg(name string, spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool) (any, *apiError) {
+func multiTermsAgg(name string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	terms, ok := spec["terms"].([]any)
 	if !ok || len(terms) < 2 {
 		n := 0
 		if ok {
 			n = len(terms)
 		}
-		return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+		return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason: "Failed to parse aggregation [" + name + "]",
-			CausedBy: &apiError{Type: "illegal_argument_exception",
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 				Reason: fmt.Sprintf("multi term aggregation must has at least 2 terms. Found [%d] in [%s] Use terms aggregation for single term aggregation", n, name)}}
 	}
 	type fieldInfo struct {
@@ -939,8 +944,8 @@ func multiTermsAgg(name string, spec map[string]any, docs []map[string]any, idx 
 			var aok, bok bool
 			switch o.field {
 			case "_count":
-				av, aok = toFloat(bmaps[i]["doc_count"])
-				bv, bok = toFloat(bmaps[j]["doc_count"])
+				av, aok = jsonv.ToFloat(bmaps[i]["doc_count"])
+				bv, bok = jsonv.ToFloat(bmaps[j]["doc_count"])
 			case "_key":
 				av, aok = multiKeyString(bmaps[i]["key"]), true
 				bv, bok = multiKeyString(bmaps[j]["key"]), true
@@ -975,7 +980,7 @@ func multiTermsAgg(name string, spec map[string]any, docs []map[string]any, idx 
 	sumOther := 0
 	if len(bmaps) > size {
 		for _, b := range bmaps[size:] {
-			dc, _ := toFloat(b["doc_count"])
+			dc, _ := jsonv.ToFloat(b["doc_count"])
 			sumOther += int(dc)
 		}
 		bmaps = bmaps[:size]
@@ -1021,10 +1026,10 @@ type compositeSource struct {
 	offsetMs      int64
 }
 
-func compositeAgg(name string, spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool) (any, *apiError) {
+func compositeAgg(name string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	rawSources, _ := spec["sources"].([]any)
 	if len(rawSources) == 0 {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "Composite [sources] cannot be null or empty."}
 	}
 	srcs := []*compositeSource{}
@@ -1050,7 +1055,7 @@ func compositeAgg(name string, spec map[string]any, docs []map[string]any, idx *
 				case "histogram":
 					src.kind = "histogram"
 					src.field, _ = toString(ss["field"])
-					src.interval, _ = toFloat(ss["interval"])
+					src.interval, _ = jsonv.ToFloat(ss["interval"])
 					if src.interval <= 0 {
 						src.interval = 1
 					}
@@ -1059,7 +1064,7 @@ func compositeAgg(name string, spec map[string]any, docs []map[string]any, idx *
 						src.desc = true
 					}
 					src.offsetMs = int64(0)
-					if off, ok := toFloat(ss["offset"]); ok {
+					if off, ok := jsonv.ToFloat(ss["offset"]); ok {
 						src.offsetMs = int64(off)
 					}
 				case "date_histogram":
@@ -1079,9 +1084,9 @@ func compositeAgg(name string, spec map[string]any, docs []map[string]any, idx *
 						s, _ := toString(v)
 						u, ok := parseCalendarUnit(s)
 						if !ok {
-							return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+							return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 								Reason: "Failed to parse aggregation [" + name + "]",
-								CausedBy: &apiError{Type: "illegal_argument_exception",
+								CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 									Reason: "The supplied interval [" + s + "] could not be parsed as a calendar interval."}}
 						}
 						src.calUnit = u
@@ -1089,9 +1094,9 @@ func compositeAgg(name string, spec map[string]any, docs []map[string]any, idx *
 						s, _ := toString(v)
 						ms, ok := parseFixedInterval(s)
 						if !ok {
-							return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+							return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 								Reason: "Failed to parse aggregation [" + name + "]",
-								CausedBy: &apiError{Type: "illegal_argument_exception",
+								CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 									Reason: "failed to parse setting [date_histogram.fixedInterval] with value [" + s + "] as a time value: unit is missing or unrecognized"}}
 						}
 						src.fixedMs, src.isFixed = ms, true
@@ -1117,14 +1122,14 @@ func compositeAgg(name string, spec map[string]any, docs []map[string]any, idx *
 		}
 	}
 	if len(srcs) == 0 {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "Composite [sources] cannot be null or empty."}
 	}
 	afterRaw, hasAfter := spec["after"].(map[string]any)
 	if hasAfter {
 		for _, src := range srcs {
 			if _, ok := afterRaw[src.name]; !ok {
-				return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+				return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "Missing value for [after." + src.name + "]"}
 			}
 		}
@@ -1212,15 +1217,15 @@ func compositeAgg(name string, spec map[string]any, docs []map[string]any, idx *
 	}
 	buckets := []any{}
 	for _, c := range combos {
-		key := orderedJSON{}
+		key := ojson.Object{}
 		for i, src := range srcs {
 			v := c.vals[i]
 			if src.kind == "histogram" {
-				if f, ok := toFloat(v); ok {
-					v = rawFloat(f)
+				if f, ok := jsonv.ToFloat(v); ok {
+					v = jsonv.Float(f)
 				}
 			}
-			key = append(key, orderedKV{src.name, v})
+			key = append(key, ojson.KV{src.name, v})
 		}
 		b := map[string]any{"key": key, "doc_count": len(c.docs)}
 		if sub != nil {
@@ -1242,7 +1247,7 @@ func compositeAgg(name string, spec map[string]any, docs []map[string]any, idx *
 	return out, nil
 }
 
-func compositeValues(src *compositeSource, doc map[string]any, idx *Index, pathPrefix string) ([]any, bool) {
+func compositeValues(src *compositeSource, doc map[string]any, idx *model.Index, pathPrefix string) ([]any, bool) {
 	if src.kind == "terms" && src.script != nil {
 		v, ok := evalTermScript(doc, idx, src.script)
 		if !ok {
@@ -1274,13 +1279,13 @@ func compositeValues(src *compositeSource, doc map[string]any, idx *Index, pathP
 		for _, e := range flat {
 			switch src.ft {
 			case "byte", "short", "integer", "long", "unsigned_long":
-				if f, ok := toFloat(e); ok {
+				if f, ok := jsonv.ToFloat(e); ok {
 					out = append(out, int64(f))
 				} else {
 					out = append(out, fmt.Sprint(e))
 				}
 			case "float", "double", "half_float", "scaled_float":
-				if f, ok := toFloat(e); ok {
+				if f, ok := jsonv.ToFloat(e); ok {
 					out = append(out, f)
 				} else {
 					out = append(out, fmt.Sprint(e))
@@ -1288,7 +1293,7 @@ func compositeValues(src *compositeSource, doc map[string]any, idx *Index, pathP
 			case "boolean":
 				if b, ok := e.(bool); ok {
 					out = append(out, b)
-				} else if f, ok := toFloat(e); ok {
+				} else if f, ok := jsonv.ToFloat(e); ok {
 					out = append(out, f != 0)
 				}
 			default:
@@ -1298,7 +1303,7 @@ func compositeValues(src *compositeSource, doc map[string]any, idx *Index, pathP
 		}
 		return out, true
 	case "histogram":
-		f, ok := toFloat(v)
+		f, ok := jsonv.ToFloat(v)
 		if !ok {
 			if src.missingBucket {
 				return []any{nil}, true
@@ -1352,7 +1357,7 @@ func compositeCanon(vals []any) string {
 			b.WriteString("i:")
 			b.WriteString(strconv.FormatInt(t, 10))
 		default:
-			if f, ok := toFloat(v); ok {
+			if f, ok := jsonv.ToFloat(v); ok {
 				b.WriteString("f:")
 				b.WriteString(strconv.FormatFloat(f, 'g', -1, 64))
 			} else {
@@ -1395,8 +1400,8 @@ func compositeCompare(a, b any) int {
 		}
 		return 1
 	}
-	af, aok := toFloat(a)
-	bf, bok := toFloat(b)
+	af, aok := jsonv.ToFloat(a)
+	bf, bok := jsonv.ToFloat(b)
 	if aok && bok {
 		if af < bf {
 			return -1
@@ -1486,7 +1491,7 @@ func geotileKey(lat, lon float64, precision int) string {
 	return fmt.Sprintf("%d/%d/%d", precision, x, y)
 }
 
-func geoHashGridAgg(name string, spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool, tile bool) (any, *apiError) {
+func geoHashGridAgg(name string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool, tile bool) (any, *apierr.Error) {
 	field, _ := toString(spec["field"])
 	precision := intField(spec, "precision", 5)
 	maxP := 12
@@ -1498,9 +1503,9 @@ func geoHashGridAgg(name string, spec map[string]any, docs []map[string]any, idx
 		aggName = "geotile_grid"
 	}
 	if precision < minP || precision > maxP {
-		return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+		return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason: "Failed to parse aggregation [" + name + "]",
-			CausedBy: &apiError{Type: "illegal_argument_exception",
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 				Reason: fmt.Sprintf("Invalid %s precision of %d. Must be between %d and %d.", aggName, precision, minP, maxP)}}
 	}
 	counts := map[string]int{}
@@ -1557,11 +1562,11 @@ func geoHashGridAgg(name string, spec map[string]any, docs []map[string]any, idx
 	return map[string]any{"buckets": buckets}, nil
 }
 
-func geoDistanceAgg(name string, spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool) (any, *apiError) {
+func geoDistanceAgg(name string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	field, _ := toString(spec["field"])
 	olat, olon, ok := geoPointOf(spec["origin"])
 	if !ok {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "failed to parse geo_distance point"}
 	}
 	unit, _ := toString(spec["unit"])
@@ -1580,12 +1585,12 @@ func geoDistanceAgg(name string, spec map[string]any, docs []map[string]any, idx
 	for _, rr := range rawRanges {
 		r, _ := rr.(map[string]any)
 		x := &gr{}
-		if v, ok := toFloat(r["from"]); ok {
+		if v, ok := jsonv.ToFloat(r["from"]); ok {
 			x.from, x.hasFrom, x.explicitFrom = v, true, true
 		} else {
 			x.from, x.hasFrom = 0, true
 		}
-		if v, ok := toFloat(r["to"]); ok {
+		if v, ok := jsonv.ToFloat(r["to"]); ok {
 			x.to, x.hasTo = v, true
 		}
 		if k, ok := toString(r["key"]); ok {
@@ -1600,7 +1605,7 @@ func geoDistanceAgg(name string, spec map[string]any, docs []map[string]any, idx
 		return parsed[i].to < parsed[j].to
 	})
 	buckets := []any{}
-	keyedBuckets := orderedJSON{}
+	keyedBuckets := ojson.Object{}
 	for _, x := range parsed {
 		var bdocs []map[string]any
 		for _, d := range docs {
@@ -1632,9 +1637,9 @@ func geoDistanceAgg(name string, spec map[string]any, docs []map[string]any, idx
 		if x.key != "" {
 			key = x.key
 		}
-		b := map[string]any{"from": rawFloat(x.from), "doc_count": len(bdocs)}
+		b := map[string]any{"from": jsonv.Float(x.from), "doc_count": len(bdocs)}
 		if x.hasTo {
-			b["to"] = rawFloat(x.to)
+			b["to"] = jsonv.Float(x.to)
 		}
 		if !keyed {
 			b["key"] = key
@@ -1649,7 +1654,7 @@ func geoDistanceAgg(name string, spec map[string]any, docs []map[string]any, idx
 			}
 		}
 		if keyed {
-			keyedBuckets = append(keyedBuckets, orderedKV{key, b})
+			keyedBuckets = append(keyedBuckets, ojson.KV{key, b})
 		} else {
 			buckets = append(buckets, b)
 		}
@@ -1660,10 +1665,10 @@ func geoDistanceAgg(name string, spec map[string]any, docs []map[string]any, idx
 	return map[string]any{"buckets": buckets}, nil
 }
 
-func adjacencyMatrixAgg(name string, spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool) (any, *apiError) {
+func adjacencyMatrixAgg(name string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	raw, ok := spec["filters"].(map[string]any)
 	if !ok || len(raw) == 0 {
-		return nil, &apiError{Type: "aggregation_execution_exception", Status: 500,
+		return nil, &apierr.Error{Type: "aggregation_execution_exception", Status: 500,
 			Reason: "[" + name + "] is missing : filters parameter"}
 	}
 	sep, _ := toString(spec["separator"])
@@ -1732,9 +1737,9 @@ func adjacencyMatrixAgg(name string, spec map[string]any, docs []map[string]any,
 	return map[string]any{"buckets": buckets}, nil
 }
 
-func samplerAgg(spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool, diversified bool) (any, *apiError) {
+func samplerAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool, diversified bool) (any, *apierr.Error) {
 	if sub == nil {
-		return nil, &apiError{Type: "aggregation_execution_exception", Status: 500,
+		return nil, &apierr.Error{Type: "aggregation_execution_exception", Status: 500,
 			Reason: "Sampler aggregation must be used with child aggregations."}
 	}
 	shardSize := intField(spec, "shard_size", 100)
@@ -1744,8 +1749,8 @@ func samplerAgg(spec map[string]any, docs []map[string]any, idx *Index, pathPref
 	sorted := make([]map[string]any, len(docs))
 	copy(sorted, docs)
 	sort.SliceStable(sorted, func(i, j int) bool {
-		si, _ := toFloat(sorted[i]["__slop_score"])
-		sj, _ := toFloat(sorted[j]["__slop_score"])
+		si, _ := jsonv.ToFloat(sorted[i]["__slop_score"])
+		sj, _ := jsonv.ToFloat(sorted[j]["__slop_score"])
 		return si > sj
 	})
 	selected := []map[string]any{}
@@ -1880,7 +1885,7 @@ func autoBucketStart(ms int64, iv autoInterval, loc *time.Location, origin int64
 	}
 }
 
-func autoDateHistogramAgg(field string, spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool) (any, *apiError) {
+func autoDateHistogramAgg(field string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	target := intField(spec, "buckets", 10)
 	if target <= 0 {
 		target = 10
@@ -1975,7 +1980,7 @@ func autoDateHistogramAgg(field string, spec map[string]any, docs []map[string]a
 	return map[string]any{"buckets": buckets, "interval": chosen.label}, nil
 }
 
-func variableWidthHistogramAgg(field string, spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool) (any, *apiError) {
+func variableWidthHistogramAgg(field string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	target := intField(spec, "buckets", 10)
 	if target <= 0 {
 		target = 10
@@ -1993,7 +1998,7 @@ func variableWidthHistogramAgg(field string, spec map[string]any, docs []map[str
 			continue
 		}
 		for _, e := range flattenTermValues(v) {
-			f, ok := toFloat(e)
+			f, ok := jsonv.ToFloat(e)
 			if !ok {
 				continue
 			}
@@ -2036,8 +2041,8 @@ func variableWidthHistogramAgg(field string, spec map[string]any, docs []map[str
 	buckets := []any{}
 	for _, b := range bs {
 		bb := map[string]any{
-			"min": rawFloat(b.min), "key": rawFloat(b.sum / float64(b.count)),
-			"max": rawFloat(b.max), "doc_count": b.count,
+			"min": jsonv.Float(b.min), "key": jsonv.Float(b.sum / float64(b.count)),
+			"max": jsonv.Float(b.max), "doc_count": b.count,
 		}
 		if sub != nil {
 			subRes, err := evalAggsMode(sub, docsToHits(b.docs, idx), idx, pathPrefix, typed, false)
@@ -2063,7 +2068,7 @@ func copyAggDoc(doc map[string]any, id string) map[string]any {
 	return cp
 }
 
-func childrenAgg(typ string, docs []map[string]any, idx *Index, sub map[string]any, typed bool) (any, *apiError) {
+func childrenAgg(typ string, docs []map[string]any, idx *model.Index, sub map[string]any, typed bool) (any, *apierr.Error) {
 	field, _, hasJoin := findJoinField(idx)
 	if !hasJoin {
 		return map[string]any{"doc_count": 0}, nil
@@ -2099,7 +2104,7 @@ func childrenAgg(typ string, docs []map[string]any, idx *Index, sub map[string]a
 	return res, nil
 }
 
-func parentAgg(typ string, docs []map[string]any, idx *Index, sub map[string]any, typed bool) (any, *apiError) {
+func parentAgg(typ string, docs []map[string]any, idx *model.Index, sub map[string]any, typed bool) (any, *apierr.Error) {
 	field, _, hasJoin := findJoinField(idx)
 	if !hasJoin {
 		return map[string]any{"doc_count": 0}, nil

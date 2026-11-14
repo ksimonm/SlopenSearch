@@ -5,7 +5,10 @@ import (
 	"strings"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/settings"
 )
 
 // ---------------------------------------------------------------------------
@@ -15,9 +18,9 @@ import (
 // explicit mappings and for dynamically detected document fields.
 // ---------------------------------------------------------------------------
 
-func dottedConflict(name string) *apiError {
+func dottedConflict(name string) *apierr.Error {
 	reason := "can't merge a non object mapping [" + name + "] with an object mapping"
-	return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: reason}
+	return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: reason}
 }
 
 func isObjectMappingDef(def map[string]any) bool {
@@ -27,7 +30,7 @@ func isObjectMappingDef(def map[string]any) bool {
 
 // insertDottedProperty inserts one explicit mapping entry, expanding any dots
 // into object mappings.
-func insertDottedProperty(root map[string]any, key string, val map[string]any) *apiError {
+func insertDottedProperty(root map[string]any, key string, val map[string]any) *apierr.Error {
 	name := strings.TrimRight(key, ".")
 	if name == "" {
 		name = key
@@ -79,7 +82,7 @@ func insertDottedProperty(root map[string]any, key string, val map[string]any) *
 
 // expandDottedProperties rewrites every properties map so dotted names become
 // nested object mappings.
-func expandDottedProperties(props map[string]any) *apiError {
+func expandDottedProperties(props map[string]any) *apierr.Error {
 	keys := sortedAnyKeys(props)
 	out := map[string]any{}
 	for _, key := range keys {
@@ -112,7 +115,7 @@ func expandDottedProperties(props map[string]any) *apiError {
 }
 
 // expandDottedMapping expands the properties of a full mapping document.
-func expandDottedMapping(mappings map[string]any) *apiError {
+func expandDottedMapping(mappings map[string]any) *apierr.Error {
 	if props, ok := mappings["properties"].(map[string]any); ok {
 		return expandDottedProperties(props)
 	}
@@ -121,7 +124,7 @@ func expandDottedMapping(mappings map[string]any) *apiError {
 
 // expandDottedObject rewrites a source document into the nested shape used for
 // dynamic mapping detection. The caller keeps the original _source.
-func expandDottedObject(src map[string]any) (map[string]any, *apiError) {
+func expandDottedObject(src map[string]any) (map[string]any, *apierr.Error) {
 	keys := make([]string, 0, len(src))
 	for k := range src {
 		keys = append(keys, k)
@@ -137,7 +140,7 @@ func expandDottedObject(src map[string]any) (map[string]any, *apiError) {
 	return out, nil
 }
 
-func insertDottedObject(root map[string]any, key string, val any) *apiError {
+func insertDottedObject(root map[string]any, key string, val any) *apierr.Error {
 	name := strings.TrimRight(key, ".")
 	if name == "" {
 		name = key
@@ -224,12 +227,12 @@ func mergeDottedDocs(a, b map[string]any) map[string]any {
 
 // builtinAnalyzer reports whether name is an analyzer that OpenSearch ships
 // with, so a mapping may reference it without declaring it in settings.
-func settingsHasAnalyzer(settings map[string]any, key, name string) bool {
-	if _, ok := findSetting(settings, "analysis."+key+"."+name); ok {
+func settingsHasAnalyzer(indexSettings map[string]any, key, name string) bool {
+	if _, ok := settings.Find(indexSettings, "analysis."+key+"."+name); ok {
 		return true
 	}
 	prefix := "index.analysis." + key + "." + name + "."
-	for k := range settings {
+	for k := range indexSettings {
 		if strings.HasPrefix(k, prefix) {
 			return true
 		}
@@ -253,7 +256,7 @@ func normalizerFound(settings map[string]any, name string) bool {
 
 // validateMappingAnalyzers checks analyzers and normalizers referenced from a
 // mapping against the index settings.
-func validateMappingAnalyzers(props map[string]any, settings map[string]any) *apiError {
+func validateMappingAnalyzers(props map[string]any, settings map[string]any) *apierr.Error {
 	for _, name := range sortedAnyKeys(props) {
 		def, ok := props[name].(map[string]any)
 		if !ok {
@@ -261,19 +264,19 @@ func validateMappingAnalyzers(props map[string]any, settings map[string]any) *ap
 		}
 		if norm, ok := def["normalizer"].(string); ok && norm != "" && !normalizerFound(settings, norm) {
 			reason := "normalizer [" + norm + "] not found for field [" + name + "]"
-			return &apiError{Type: "mapper_parsing_exception", Status: 400,
+			return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 				Reason:    "Failed to parse mapping [_doc]: " + reason,
-				RootCause: &apiError{Type: "mapper_parsing_exception", Reason: reason},
-				CausedBy:  &apiError{Type: "mapper_parsing_exception", Reason: reason}}
+				RootCause: &apierr.Error{Type: "mapper_parsing_exception", Reason: reason},
+				CausedBy:  &apierr.Error{Type: "mapper_parsing_exception", Reason: reason}}
 		}
 		if t, _ := def["type"].(string); t == "keyword" {
 			for _, key := range []string{"analyzer", "search_analyzer", "search_quote_analyzer"} {
 				if _, ok := def[key]; ok {
 					reason := "unknown parameter [" + key + "] on mapper [" + name + "] of type [keyword]"
-					return &apiError{Type: "mapper_parsing_exception", Status: 400,
+					return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 						Reason:    "Failed to parse mapping [_doc]: " + reason,
-						RootCause: &apiError{Type: "mapper_parsing_exception", Reason: reason},
-						CausedBy:  &apiError{Type: "mapper_parsing_exception", Reason: reason}}
+						RootCause: &apierr.Error{Type: "mapper_parsing_exception", Reason: reason},
+						CausedBy:  &apierr.Error{Type: "mapper_parsing_exception", Reason: reason}}
 				}
 			}
 		}
@@ -289,10 +292,10 @@ func validateMappingAnalyzers(props map[string]any, settings map[string]any) *ap
 		for _, key := range []string{"analyzer", "search_analyzer", "search_quote_analyzer"} {
 			if a, ok := def[key].(string); ok && a != "" && !settingsAnalyzerExists(settings, a) {
 				reason := "analyzer [" + a + "] has not been configured in mappings"
-				return &apiError{Type: "mapper_parsing_exception", Status: 400,
+				return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 					Reason:    "Failed to parse mapping [_doc]: " + reason,
-					RootCause: &apiError{Type: "mapper_parsing_exception", Reason: "Failed to parse mapping [_doc]: " + reason},
-					CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}}
+					RootCause: &apierr.Error{Type: "mapper_parsing_exception", Reason: "Failed to parse mapping [_doc]: " + reason},
+					CausedBy:  &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 			}
 		}
 		if sub, ok := def["properties"].(map[string]any); ok {
@@ -315,14 +318,14 @@ var builtinMetadataFields = []string{
 	"_ignored", "_id", "_index", "_routing", "_source", "_data_stream_timestamp",
 }
 
-func validateBuiltinFieldNameLength(settings map[string]any) *apiError {
-	limit, ok := settingInt(settings, "mapping.field_name_length.limit")
+func validateBuiltinFieldNameLength(indexSettings map[string]any) *apierr.Error {
+	limit, ok := settings.Int(indexSettings, "mapping.field_name_length.limit")
 	if !ok {
 		return nil
 	}
 	for _, name := range builtinMetadataFields {
 		if len(name) > limit {
-			return &apiError{Type: "illegal_argument_exception", Status: 400,
+			return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "Field name [" + name + "] is longer than the limit of [" + strconv.Itoa(limit) + "] characters"}
 		}
 	}
@@ -333,16 +336,16 @@ func validateBuiltinFieldNameLength(settings map[string]any) *apiError {
 // Per-document mapping limits
 // ---------------------------------------------------------------------------
 
-func mappingIntSetting(idx *Index, key string, def int) int {
+func mappingIntSetting(idx *model.Index, key string, def int) int {
 	if idx != nil {
-		if v, ok := settingInt(idx.Settings, key); ok {
+		if v, ok := settings.Int(idx.Settings, key); ok {
 			return v
 		}
 	}
 	return def
 }
 
-func checkDocFieldNameLengths(v any, limit int) *apiError {
+func checkDocFieldNameLengths(v any, limit int) *apierr.Error {
 	if limit <= 0 {
 		return nil
 	}
@@ -351,7 +354,7 @@ func checkDocFieldNameLengths(v any, limit int) *apiError {
 		for k, child := range t {
 			for _, part := range strings.Split(k, ".") {
 				if len(part) > limit {
-					return &apiError{Type: "illegal_argument_exception", Status: 400,
+					return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 						Reason: "Field name [" + part + "] is longer than the limit of [" + strconv.Itoa(limit) + "] characters"}
 				}
 			}
@@ -414,15 +417,15 @@ func countNestedDocuments(props map[string]any, doc map[string]any) int {
 	return count
 }
 
-func nestedObjectsLimitError(limit int) *apiError {
+func nestedObjectsLimitError(limit int) *apierr.Error {
 	reason := "The number of nested documents has exceeded the allowed limit of [" + strconv.Itoa(limit) +
 		"]. This limit can be set by changing the [index.mapping.nested_objects.limit] index level setting."
-	return &apiError{Type: "mapper_parsing_exception", Status: 400, Reason: reason}
+	return &apierr.Error{Type: "mapper_parsing_exception", Status: 400, Reason: reason}
 }
 
 // indexDocCount returns the number of documents including nested documents,
 // which is what _cat/indices reports as docs.count.
-func indexDocCount(idx *Index) int {
+func indexDocCount(idx *model.Index) int {
 	count := len(idx.Docs)
 	props, _ := idx.Mappings["properties"].(map[string]any)
 	if props == nil {

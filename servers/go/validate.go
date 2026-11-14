@@ -3,6 +3,9 @@ package main
 import (
 	"net/http"
 	"strings"
+
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/model"
 )
 
 func (s *Server) handleValidateQuery(w http.ResponseWriter, r *http.Request, name string) {
@@ -15,7 +18,7 @@ func (s *Server) handleValidateQuery(w http.ResponseWriter, r *http.Request, nam
 	allShards := r.URL.Query().Get("all_shards") == "true"
 	query, _ := body["query"].(map[string]any)
 	if vals, has := r.URL.Query()["q"]; has {
-		var qerr *apiError
+		var qerr *apierr.Error
 		query, qerr = parseQParamOpts(vals[0], r.URL.Query().Get("df"), r.URL.Query().Get("default_operator"))
 		if qerr != nil {
 			if explain {
@@ -28,7 +31,7 @@ func (s *Server) handleValidateQuery(w http.ResponseWriter, r *http.Request, nam
 		}
 	}
 	if query == nil {
-		writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: query cannot be null;"})
 		return
 	}
@@ -46,7 +49,7 @@ func (s *Server) handleValidateQuery(w http.ResponseWriter, r *http.Request, nam
 		writeError(w, apiErr)
 		return
 	}
-	idx := (*Index)(nil)
+	idx := (*model.Index)(nil)
 	for _, cand := range indices {
 		idx = cand
 		break

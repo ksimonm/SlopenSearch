@@ -8,7 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
 	"slopensearch/internal/wildcard"
 )
 
@@ -57,13 +59,13 @@ type resolveOpts struct {
 	namedClosed    bool // explicit names match closed indices
 }
 
-func (s *Server) resolveIndices(spec string, opts resolveOpts) ([]*Index, *apiError) {
+func (s *Server) resolveIndices(spec string, opts resolveOpts) ([]*model.Index, *apierr.Error) {
 	if spec == "" {
 		spec = "*"
 	}
-	seen := map[string]*Index{}
+	seen := map[string]*model.Index{}
 	var order []string
-	add := func(idx *Index) {
+	add := func(idx *model.Index) {
 		if _, ok := seen[idx.Name]; !ok {
 			seen[idx.Name] = idx
 			order = append(order, idx.Name)
@@ -131,7 +133,7 @@ func (s *Server) resolveIndices(spec string, opts resolveOpts) ([]*Index, *apiEr
 			return nil, errNotFound(token)
 		}
 	}
-	out := make([]*Index, 0, len(order))
+	out := make([]*model.Index, 0, len(order))
 	jsonv.SortStrings(order)
 	for _, name := range order {
 		out = append(out, seen[name])
@@ -150,10 +152,10 @@ var healthKnownParams = map[string]bool{
 	"pretty": true, "format": true, "error_trace": true,
 }
 
-func validateKnownParams(r *http.Request, known map[string]bool, reqPath string) *apiError {
+func validateKnownParams(r *http.Request, known map[string]bool, reqPath string) *apierr.Error {
 	for name := range r.URL.Query() {
 		if !known[name] {
-			return &apiError{Type: "illegal_argument_exception",
+			return &apierr.Error{Type: "illegal_argument_exception",
 				Reason: fmt.Sprintf("request [%s] contains unrecognized parameter: [%s]", reqPath, name), Status: 400}
 		}
 	}
@@ -203,7 +205,7 @@ type indexHealth struct {
 	Shards        []shardHealth
 }
 
-func computeIndexHealth(idx *Index) indexHealth {
+func computeIndexHealth(idx *model.Index) indexHealth {
 	h := indexHealth{NumShards: numShards(idx), NumReplicas: numReplicas(idx), Status: "green"}
 	if idx.Closed {
 		h.Shards = nil
@@ -247,14 +249,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request, indexSpec 
 	if v := q.Get("wait_for_status"); v != "" {
 		up := strings.ToUpper(v)
 		if up != "GREEN" && up != "YELLOW" && up != "RED" {
-			writeError(w, &apiError{Type: "illegal_argument_exception",
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception",
 				Reason: "No enum constant org.opensearch.cluster.health.ClusterHealthStatus." + up, Status: 400})
 			return
 		}
 	}
 	if v := q.Get("wait_for_active_shards"); v != "" && v != "all" {
 		if n, err := strconv.Atoi(v); err != nil || n < 0 {
-			writeError(w, &apiError{Type: "illegal_argument_exception",
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception",
 				Reason: "cannot parse ActiveShardCount[" + v + "]", Status: 400})
 			return
 		}
@@ -262,14 +264,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request, indexSpec 
 	if v := q.Get("wait_for_events"); v != "" {
 		valid := map[string]bool{"immediate": true, "urgent": true, "high": true, "normal": true, "low": true, "languid": true}
 		if !valid[strings.ToLower(v)] {
-			writeError(w, &apiError{Type: "illegal_argument_exception",
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception",
 				Reason: "No enum constant org.opensearch.common.Priority." + strings.ToUpper(v), Status: 400})
 			return
 		}
 	}
 	timeout, okTimeout := parseTimeout(q.Get("timeout"))
 	if !okTimeout {
-		writeError(w, &apiError{Type: "illegal_argument_exception",
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception",
 			Reason: "failed to parse [" + q.Get("timeout") + "]", Status: 400})
 		return
 	}
@@ -278,9 +280,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request, indexSpec 
 	level := q.Get("level")
 	includeIndices := level == "indices" || level == "shards"
 	missing := false
-	var indices []*Index
+	var indices []*model.Index
 	if indexSpec != "" {
-		var err *apiError
+		var err *apierr.Error
 		indices, err = s.resolveIndices(indexSpec, resolveOpts{missing404: true, wildcardClosed: true, namedClosed: true})
 		if err != nil {
 			missing = true
@@ -483,7 +485,7 @@ func (s *Server) handleClusterState(w http.ResponseWriter, r *http.Request, metr
 	if requested["nodes"] {
 		body["nodes"] = s.stateNodes()
 	}
-	var indices []*Index
+	var indices []*model.Index
 	if indexSpec != "" {
 		indices, _ = s.resolveIndices(indexSpec, resolveOpts{namedClosed: true, wildcardClosed: true})
 	} else {
@@ -522,7 +524,7 @@ func settingsString(v any) string {
 	}
 }
 
-func (s *Server) buildStateMetadata(indices []*Index) map[string]any {
+func (s *Server) buildStateMetadata(indices []*model.Index) map[string]any {
 	idxMap := map[string]any{}
 	for _, idx := range indices {
 		state := "open"
@@ -556,7 +558,7 @@ func (s *Server) buildStateMetadata(indices []*Index) map[string]any {
 	}
 }
 
-func indexSettingsForMetadata(idx *Index) map[string]any {
+func indexSettingsForMetadata(idx *model.Index) map[string]any {
 	inner := map[string]any{
 		"number_of_shards":   settingsString(numShards(idx)),
 		"number_of_replicas": settingsString(numReplicas(idx)),
@@ -583,7 +585,7 @@ func indexSettingsForMetadata(idx *Index) map[string]any {
 	return map[string]any{"index": inner}
 }
 
-func mappingsForMetadata(idx *Index) map[string]any {
+func mappingsForMetadata(idx *model.Index) map[string]any {
 	props := map[string]any{}
 	if m, ok := idx.Mappings["properties"].(map[string]any); ok {
 		props = m
@@ -591,7 +593,7 @@ func mappingsForMetadata(idx *Index) map[string]any {
 	return map[string]any{"_doc": map[string]any{"properties": props}}
 }
 
-func (s *Server) buildRoutingTable(indices []*Index) map[string]any {
+func (s *Server) buildRoutingTable(indices []*model.Index) map[string]any {
 	idxMap := map[string]any{}
 	for _, idx := range indices {
 		shards := map[string]any{}
@@ -632,7 +634,7 @@ func (s *Server) buildRoutingTable(indices []*Index) map[string]any {
 	return map[string]any{"indices": idxMap}
 }
 
-func (s *Server) buildRoutingNodes(indices []*Index) map[string]any {
+func (s *Server) buildRoutingNodes(indices []*model.Index) map[string]any {
 	assigned := []any{}
 	unassigned := []any{}
 	for _, idx := range indices {
@@ -656,7 +658,7 @@ func (s *Server) buildRoutingNodes(indices []*Index) map[string]any {
 	}
 }
 
-func (s *Server) buildBlocks(indices []*Index) map[string]any {
+func (s *Server) buildBlocks(indices []*model.Index) map[string]any {
 	blocks := map[string]any{}
 	for _, idx := range indices {
 		if idx.Closed {
@@ -769,20 +771,20 @@ func sortAnyByKey(list []any, key string) {
 
 // ---------------------------------------------------------- cluster settings
 
-var clusterSettingValidators = map[string]func(any) (string, *apiError){
-	"cluster.max_shards_per_node": func(v any) (string, *apiError) {
+var clusterSettingValidators = map[string]func(any) (string, *apierr.Error){
+	"cluster.max_shards_per_node": func(v any) (string, *apierr.Error) {
 		s := settingsString(v)
 		if _, err := strconv.Atoi(s); err != nil {
-			return "", &apiError{Type: "illegal_argument_exception",
+			return "", &apierr.Error{Type: "illegal_argument_exception",
 				Reason: "Failed to parse value [" + s + "] for setting [cluster.max_shards_per_node]", Status: 400}
 		}
 		return s, nil
 	},
-	"cluster.routing.allocation.enable": func(v any) (string, *apiError) {
+	"cluster.routing.allocation.enable": func(v any) (string, *apierr.Error) {
 		s := settingsString(v)
 		valid := map[string]bool{"all": true, "primaries": true, "new_primaries": true, "none": true}
 		if !valid[s] {
-			return "", &apiError{Type: "illegal_argument_exception",
+			return "", &apierr.Error{Type: "illegal_argument_exception",
 				Reason: "Illegal allocation.enable value [" + strings.ToUpper(s) + "]", Status: 400}
 		}
 		return s, nil
@@ -918,7 +920,7 @@ func (s *Server) handleClusterSettingsPut(w http.ResponseWriter, r *http.Request
 		return
 	}
 	flat := paramBool(r, "flat_settings")
-	apply := func(scope string, raw any, store map[string]any) (map[string]any, *apiError) {
+	apply := func(scope string, raw any, store map[string]any) (map[string]any, *apierr.Error) {
 		updated := map[string]any{}
 		rawMap, ok := raw.(map[string]any)
 		if !ok {
@@ -928,7 +930,7 @@ func (s *Server) handleClusterSettingsPut(w http.ResponseWriter, r *http.Request
 		flattenMap("", rawMap, candidates)
 		for key, val := range candidates {
 			if !isKnownClusterSetting(key) {
-				return nil, &apiError{Type: "settings_exception",
+				return nil, &apierr.Error{Type: "settings_exception",
 					Reason: scope + " setting [" + key + "], not recognized", Status: 400}
 			}
 			if val == nil {
@@ -961,7 +963,7 @@ func (s *Server) handleClusterSettingsPut(w http.ResponseWriter, r *http.Request
 		}
 	}
 	if !hasSettings {
-		writeError(w, &apiError{Type: "action_request_validation_exception",
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception",
 			Reason: "Validation Failed: 1: no settings to update;", Status: 400})
 		return
 	}
@@ -997,10 +999,10 @@ func (s *Server) handleClusterSettingsPut(w http.ResponseWriter, r *http.Request
 }
 
 // readBodyJSON reads a JSON or YAML request body, enforcing content types.
-func readBodyJSON(w http.ResponseWriter, r *http.Request) (map[string]any, *apiError) {
+func readBodyJSON(w http.ResponseWriter, r *http.Request) (map[string]any, *apierr.Error) {
 	ctype := r.Header.Get("Content-Type")
 	if r.ContentLength == 0 {
-		return nil, &apiError{Type: "parse_exception", Reason: "request body is required", Status: 400}
+		return nil, &apierr.Error{Type: "parse_exception", Reason: "request body is required", Status: 400}
 	}
 	base := strings.TrimSpace(strings.Split(ctype, ";")[0])
 	switch base {
@@ -1020,12 +1022,12 @@ func readBodyJSON(w http.ResponseWriter, r *http.Request) (map[string]any, *apiE
 	}
 	var out map[string]any
 	if err := jsonv.Unmarshal(body, &out); err != nil {
-		return nil, &apiError{Type: "json_parse_exception", Reason: err.Error(), Status: 400}
+		return nil, &apierr.Error{Type: "json_parse_exception", Reason: err.Error(), Status: 400}
 	}
 	return out, nil
 }
 
-func readAllBody(r *http.Request) ([]byte, *apiError) {
+func readAllBody(r *http.Request) ([]byte, *apierr.Error) {
 	buf := make([]byte, 0, 64*1024)
 	tmp := make([]byte, 4096)
 	for {
@@ -1079,14 +1081,14 @@ func (s *Server) handleAllocationExplain(w http.ResponseWriter, r *http.Request)
 		raw, apiErr := readAllBody(r)
 		if apiErr == nil {
 			if err := jsonv.Unmarshal(raw, &body); err != nil {
-				writeError(w, &apiError{Type: "x_content_parse_exception", Reason: err.Error(), Status: 400})
+				writeError(w, &apierr.Error{Type: "x_content_parse_exception", Reason: err.Error(), Status: 400})
 				return
 			}
 		}
 	}
 	for k := range body {
 		if k != "index" && k != "shard" && k != "primary" && k != "current_node" && k != "include_yes_decisions" && k != "include_disk_info" {
-			writeError(w, &apiError{Type: "x_content_parse_exception",
+			writeError(w, &apierr.Error{Type: "x_content_parse_exception",
 				Reason: fmt.Sprintf("[1:2] [cluster/allocation/explain] unknown field [%s]", k), Status: 400})
 			return
 		}
@@ -1099,7 +1101,7 @@ func (s *Server) handleAllocationExplain(w http.ResponseWriter, r *http.Request)
 	var primary bool
 	hasShard := false
 	if v, ok := body["shard"]; ok {
-		if f, ok := toFloat(v); ok {
+		if f, ok := jsonv.ToFloat(v); ok {
 			shardNum = int(f)
 		}
 		hasShard = true
@@ -1123,7 +1125,7 @@ func (s *Server) handleAllocationExplain(w http.ResponseWriter, r *http.Request)
 			}
 		}
 		if indexName == "" {
-			writeError(w, &apiError{Type: "illegal_argument_exception",
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception",
 				Reason: "unable to find any unassigned shards to explain", Status: 400})
 			return
 		}
@@ -1134,12 +1136,12 @@ func (s *Server) handleAllocationExplain(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if !hasShard || shardNum < 0 {
-		writeError(w, &apiError{Type: "action_request_validation_exception",
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception",
 			Reason: "Validation Failed: 1: shard must be specified;2: primary must be specified;", Status: 400})
 		return
 	}
 	if shardNum >= numShards(idx) {
-		writeError(w, &apiError{Type: "shard_not_found_exception",
+		writeError(w, &apierr.Error{Type: "shard_not_found_exception",
 			Reason: "no shard with id [" + strconv.Itoa(shardNum) + "]", Status: 404, Extra: strconv.Itoa(shardNum)})
 		return
 	}

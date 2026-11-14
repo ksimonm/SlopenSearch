@@ -5,6 +5,10 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
 )
 
 type hlFieldSpec struct {
@@ -34,7 +38,7 @@ type highlightConfig struct {
 	query             map[string]any
 }
 
-func parseHighlightConfig(body map[string]any, query map[string]any) (*highlightConfig, *apiError) {
+func parseHighlightConfig(body map[string]any, query map[string]any) (*highlightConfig, *apierr.Error) {
 	raw, ok := body["highlight"].(map[string]any)
 	if !ok {
 		return nil, nil
@@ -70,13 +74,13 @@ func parseHighlightConfig(body map[string]any, query map[string]any) (*highlight
 		cfg.encoder = v
 	}
 	if _, has := raw["max_analyzed_offset"]; has {
-		return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
+		return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason:    "[highlight] unknown field [max_analyzed_offset] did you mean [max_analyzer_offset]?",
-			RootCause: &apiError{Type: "parsing_exception", Reason: "[highlight] unknown field [max_analyzed_offset] did you mean [max_analyzer_offset]?"}}
+			RootCause: &apierr.Error{Type: "parsing_exception", Reason: "[highlight] unknown field [max_analyzed_offset] did you mean [max_analyzer_offset]?"}}
 	}
 	fieldsRaw := raw["fields"]
 	specs := []hlFieldSpec{}
-	addSpec := func(name string, opts map[string]any) *apiError {
+	addSpec := func(name string, opts map[string]any) *apierr.Error {
 		fs := hlFieldSpec{pattern: name, typ: cfg.typ, pre: cfg.pre, post: cfg.post, fragmentSize: 100, numFragments: 5, orderScore: cfg.orderScore, encoder: cfg.encoder}
 		if opts != nil {
 			if v, ok := opts["type"].(string); ok && v != "" {
@@ -93,13 +97,13 @@ func parseHighlightConfig(body map[string]any, query map[string]any) (*highlight
 					return highlightParseError("pre_tags are set but post_tags are not set")
 				}
 			}
-			if v, ok := toFloat(opts["fragment_size"]); ok {
+			if v, ok := jsonv.ToFloat(opts["fragment_size"]); ok {
 				fs.fragmentSize = int(v)
 			}
-			if v, ok := toFloat(opts["number_of_fragments"]); ok {
+			if v, ok := jsonv.ToFloat(opts["number_of_fragments"]); ok {
 				fs.numFragments = int(v)
 			}
-			if v, ok := toFloat(opts["no_match_size"]); ok {
+			if v, ok := jsonv.ToFloat(opts["no_match_size"]); ok {
 				fs.noMatchSize = int(v)
 			}
 			if v, ok := opts["boundary_scanner"].(string); ok {
@@ -117,8 +121,8 @@ func parseHighlightConfig(body map[string]any, query map[string]any) (*highlight
 			}
 		}
 		if fs.typ != "unified" && fs.typ != "plain" && fs.typ != "fvh" {
-			return &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
-				RootCause: &apiError{Type: "illegal_argument_exception", Reason: "unknown highlighter type [" + fs.typ + "] for the field [" + name + "]"}}
+			return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
+				RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: "unknown highlighter type [" + fs.typ + "] for the field [" + name + "]"}}
 		}
 		specs = append(specs, fs)
 		return nil
@@ -152,12 +156,12 @@ func parseHighlightConfig(body map[string]any, query map[string]any) (*highlight
 	return cfg, nil
 }
 
-func highlightParseError(reason string) *apiError {
-	return &apiError{Type: "x_content_parse_exception", Status: 400, Reason: reason,
-		RootCause: &apiError{Type: "parsing_exception", Reason: reason}}
+func highlightParseError(reason string) *apierr.Error {
+	return &apierr.Error{Type: "x_content_parse_exception", Status: 400, Reason: reason,
+		RootCause: &apierr.Error{Type: "parsing_exception", Reason: reason}}
 }
 
-func (cfg *highlightConfig) validate(idx *Index) *apiError {
+func (cfg *highlightConfig) validate(idx *model.Index) *apierr.Error {
 	for _, f := range cfg.fields {
 		names := []string{f.pattern}
 		if strings.ContainsAny(f.pattern, "*?") {
@@ -183,13 +187,13 @@ func (cfg *highlightConfig) validate(idx *Index) *apiError {
 			}
 			tv, _ := def["term_vector"].(string)
 			if !strings.Contains(tv, "positions") {
-				return &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
-					RootCause: &apiError{Type: "illegal_argument_exception",
+				return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
+					RootCause: &apierr.Error{Type: "illegal_argument_exception",
 						Reason: "the field [" + name + "] should be indexed with term vector with position offsets to be used with fast vector highlighter"}}
 			}
 			if f.boundary == "sentence" && f.fragmentSize < 18 {
-				return &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
-					RootCause: &apiError{Type: "illegal_argument_exception",
+				return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
+					RootCause: &apierr.Error{Type: "illegal_argument_exception",
 						Reason: "fragCharSize(" + itoa(f.fragmentSize) + ") is too small. It must be 18 or higher."}}
 			}
 		}
@@ -323,7 +327,7 @@ func queryHighlightInfo(q map[string]any) (map[string]bool, map[string]bool, []s
 	return terms, fields, patterns
 }
 
-func (cfg *highlightConfig) render(idx *Index, doc map[string]any) map[string]any {
+func (cfg *highlightConfig) render(idx *model.Index, doc map[string]any) map[string]any {
 	out := map[string]any{}
 	for _, f := range cfg.fields {
 		names := []string{f.pattern}

@@ -3,11 +3,13 @@ package main
 import (
 	"fmt"
 	"unicode/utf8"
+
+	"slopensearch/internal/apierr"
 )
 
 // invalidUTF8Error reports the first invalid UTF-8 sequence of a document
 // body the way Jackson's UTF8StreamJsonParser does while parsing it, or nil.
-func invalidUTF8Error(raw []byte) *apiError {
+func invalidUTF8Error(raw []byte) *apierr.Error {
 	if utf8.Valid(raw) {
 		return nil
 	}
@@ -46,9 +48,9 @@ func invalidUTF8Error(raw []byte) *apiError {
 	if msg == "" {
 		return nil
 	}
-	return &apiError{Type: "mapper_parsing_exception", Status: 400, Reason: "failed to parse",
-		CausedBy: &apiError{Type: "json_parse_exception", Reason: msg,
-			CausedBy: &apiError{Type: "stream_read_exception", Reason: msg}}}
+	return &apierr.Error{Type: "mapper_parsing_exception", Status: 400, Reason: "failed to parse",
+		CausedBy: &apierr.Error{Type: "json_parse_exception", Reason: msg,
+			CausedBy: &apierr.Error{Type: "stream_read_exception", Reason: msg}}}
 }
 
 func jacksonOffset(n int) string {

@@ -9,10 +9,11 @@ import (
 	"strconv"
 	"strings"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/wildcard"
 )
 
-func (s *Server) runIngestProcessor(typ string, cfg map[string]any, env *ingestEnv) (bool, *apiError) {
+func (s *Server) runIngestProcessor(typ string, cfg map[string]any, env *ingestEnv) (bool, *apierr.Error) {
 	switch typ {
 	case "set":
 		return false, s.procSet(cfg, env)
@@ -83,7 +84,7 @@ func (s *Server) runIngestProcessor(typ string, cfg map[string]any, env *ingestE
 	case "split_to_fields":
 		return false, s.procSplitToFields(cfg, env)
 	}
-	return false, &apiError{Type: "parse_exception", Status: 400, Reason: "No processor type exists with name [" + typ + "]"}
+	return false, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "No processor type exists with name [" + typ + "]"}
 }
 
 func cfgString(cfg map[string]any, key string) string {
@@ -98,11 +99,11 @@ func cfgBool(cfg map[string]any, key string, def bool) bool {
 	return def
 }
 
-func (s *Server) fieldMissing(field string, ignore bool) *apiError {
+func (s *Server) fieldMissing(field string, ignore bool) *apierr.Error {
 	if ignore {
 		return nil
 	}
-	return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "field [" + field + "] doesn't exist"}
+	return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "field [" + field + "] doesn't exist"}
 }
 
 func (e *ingestEnv) resolveFieldPath(raw any) []string {
@@ -119,7 +120,7 @@ func (e *ingestEnv) resolveFieldPath(raw any) []string {
 	return nil
 }
 
-func (s *Server) procSet(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procSet(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	value := cfg["value"]
 	if sv, ok := value.(string); ok {
@@ -131,7 +132,7 @@ func (s *Server) procSet(cfg map[string]any, env *ingestEnv) *apiError {
 	return env.setField(field, deepCopyValue(value), cfgBool(cfg, "override", true))
 }
 
-func (s *Server) procRemove(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procRemove(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	ignore := cfgBool(cfg, "ignore_missing", false)
 	fields := env.resolveFieldPath(cfg["field"])
 	for _, f := range fields {
@@ -214,7 +215,7 @@ func collectLeafPaths(v any, prefix string) []string {
 	return out
 }
 
-func (s *Server) procRemoveByPattern(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procRemoveByPattern(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	var patterns, excludes []string
 	if v, ok := cfg["field_pattern"]; ok {
 		patterns = env.resolveFieldPath(v)
@@ -251,7 +252,7 @@ func (s *Server) procRemoveByPattern(cfg map[string]any, env *ingestEnv) *apiErr
 	return nil
 }
 
-func (s *Server) procRename(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procRename(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	ignore := cfgBool(cfg, "ignore_missing", false)
@@ -263,7 +264,7 @@ func (s *Server) procRename(cfg map[string]any, env *ingestEnv) *apiError {
 		return s.fieldMissing(field, ignore)
 	}
 	if _, exists := env.lookup(target); exists && !cfgBool(cfg, "override_target", false) {
-		return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "field [" + target + "] already exists"}
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "field [" + target + "] already exists"}
 	}
 	if err := env.setField(target, v, true); err != nil {
 		return err
@@ -276,22 +277,22 @@ func (s *Server) procRename(cfg map[string]any, env *ingestEnv) *apiError {
 	return nil
 }
 
-func (s *Server) procCopy(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procCopy(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "source_field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	ignore := cfgBool(cfg, "ignore_missing", false)
 	if field == target {
-		return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "source field path and target field path cannot be same"}
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "source field path and target field path cannot be same"}
 	}
 	v, ok := env.lookup(field)
 	if !ok {
 		if ignore {
 			return nil
 		}
-		return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "source field [" + field + "] doesn't exist"}
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "source field [" + field + "] doesn't exist"}
 	}
 	if _, exists := env.lookup(target); exists && !cfgBool(cfg, "override_target", false) {
-		return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "target field [" + target + "] already exists"}
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "target field [" + target + "] already exists"}
 	}
 	if err := env.setField(target, deepCopyValue(v), true); err != nil {
 		return err
@@ -306,7 +307,7 @@ func (s *Server) procCopy(cfg map[string]any, env *ingestEnv) *apiError {
 	return nil
 }
 
-func (s *Server) procAppend(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procAppend(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	values := []any{}
 	switch t := cfg["value"].(type) {
@@ -394,13 +395,13 @@ func ingestFloat(v any) (float64, bool) {
 	return 0, false
 }
 
-func numberFormatError(input string) *apiError {
-	return &apiError{Type: "number_format_exception", Status: 400, Reason: "For input string: \"" + input + "\""}
+func numberFormatError(input string) *apierr.Error {
+	return &apierr.Error{Type: "number_format_exception", Status: 400, Reason: "For input string: \"" + input + "\""}
 }
 
-func (s *Server) convertOne(v any, typ string) (any, *apiError) {
+func (s *Server) convertOne(v any, typ string) (any, *apierr.Error) {
 	if v == nil {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "Field is null, cannot be converted to type [" + typ + "]"}
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "Field is null, cannot be converted to type [" + typ + "]"}
 	}
 	switch typ {
 	case "integer", "long":
@@ -452,9 +453,9 @@ func (s *Server) convertOne(v any, typ string) (any, *apiError) {
 			case "false":
 				return false, nil
 			}
-			return nil, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "[" + str + "] is not a boolean value, cannot convert to boolean"}
+			return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "[" + str + "] is not a boolean value, cannot convert to boolean"}
 		}
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "[" + ingestString(v) + "] is not a boolean value, cannot convert to boolean"}
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "[" + ingestString(v) + "] is not a boolean value, cannot convert to boolean"}
 	case "string":
 		return ingestString(v), nil
 	case "auto":
@@ -482,14 +483,14 @@ func (s *Server) convertOne(v any, typ string) (any, *apiError) {
 	case "ip":
 		str := ingestString(v)
 		if _, ok := parseIP(str); !ok {
-			return nil, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "[" + str + "] is not a valid ipv4/ipv6 address"}
+			return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "[" + str + "] is not a valid ipv4/ipv6 address"}
 		}
 		return str, nil
 	}
 	return v, nil
 }
 
-func (s *Server) procConvert(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procConvert(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	typ := cfgString(cfg, "type")
 	target := env.render(cfgString(cfg, "target_field"))
@@ -501,11 +502,11 @@ func (s *Server) procConvert(cfg map[string]any, env *ingestEnv) *apiError {
 		if cfgBool(cfg, "ignore_missing", false) {
 			return nil
 		}
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] not present as part of path [" + field + "]"}
 	}
 	if v == nil {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "Field [" + field + "] is null, cannot be converted to type [" + typ + "]"}
 	}
 	if list, ok := v.([]any); ok {
@@ -526,15 +527,15 @@ func (s *Server) procConvert(cfg map[string]any, env *ingestEnv) *apiError {
 	return env.setField(target, cv, true)
 }
 
-func convertWrap(err *apiError, v any, typ string) *apiError {
+func convertWrap(err *apierr.Error, v any, typ string) *apierr.Error {
 	if err.Type == "number_format_exception" {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "unable to convert [" + ingestString(v) + "] to " + typ, CausedBy: err}
 	}
 	return err
 }
 
-func (s *Server) procCase(cfg map[string]any, env *ingestEnv, fn func(string) string) *apiError {
+func (s *Server) procCase(cfg map[string]any, env *ingestEnv, fn func(string) string) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	if target == "" {
@@ -545,19 +546,19 @@ func (s *Server) procCase(cfg map[string]any, env *ingestEnv, fn func(string) st
 		if cfgBool(cfg, "ignore_missing", false) {
 			return nil
 		}
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] not present as part of path [" + field + "]"}
 	}
 	if v == nil {
 		if cfgBool(cfg, "ignore_missing", false) {
 			return nil
 		}
-		return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "field [" + field + "] is null, cannot process it."}
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "field [" + field + "] is null, cannot process it."}
 	}
-	transform := func(x any) (any, *apiError) {
+	transform := func(x any) (any, *apierr.Error) {
 		str, ok := x.(string)
 		if !ok {
-			return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+			return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "field [" + field + "] of type [" + javaTypeName(x) + "] cannot be cast to [java.lang.String]"}
 		}
 		return fn(str), nil
@@ -566,11 +567,11 @@ func (s *Server) procCase(cfg map[string]any, env *ingestEnv, fn func(string) st
 		out := make([]any, 0, len(list))
 		for _, e := range list {
 			if e == nil {
-				return &apiError{Type: "illegal_argument_exception", Status: 400,
+				return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "value [null] of type [null] in list field [" + field + "] cannot be cast to [java.lang.String]"}
 			}
 			if _, ok := e.(string); !ok {
-				return &apiError{Type: "illegal_argument_exception", Status: 400,
+				return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "value [" + ingestString(e) + "] of type [" + javaTypeName(e) + "] in list field [" + field + "] cannot be cast to [java.lang.String]"}
 			}
 			tv, err := transform(e)
@@ -588,7 +589,7 @@ func (s *Server) procCase(cfg map[string]any, env *ingestEnv, fn func(string) st
 	return env.setField(target, tv, true)
 }
 
-func (s *Server) procSplit(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procSplit(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	if target == "" {
@@ -600,13 +601,13 @@ func (s *Server) procSplit(cfg map[string]any, env *ingestEnv) *apiError {
 	}
 	str, ok := v.(string)
 	if !ok {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] of type [" + javaTypeName(v) + "] cannot be cast to [java.lang.String]"}
 	}
 	sep := cfgString(cfg, "separator")
 	re, err := regexp.Compile(sep)
 	if err != nil {
-		return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
 	}
 	parts := re.Split(str, -1)
 	if !cfgBool(cfg, "preserve_trailing", false) && str != "" {
@@ -621,7 +622,7 @@ func (s *Server) procSplit(cfg map[string]any, env *ingestEnv) *apiError {
 	return env.setField(target, out, true)
 }
 
-func (s *Server) procJoin(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procJoin(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	if target == "" {
@@ -633,14 +634,14 @@ func (s *Server) procJoin(cfg map[string]any, env *ingestEnv) *apiError {
 	}
 	list, ok := v.([]any)
 	if !ok {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] of type [" + javaTypeName(v) + "] cannot be cast to [java.util.List]"}
 	}
 	sep := cfgString(cfg, "separator")
 	parts := make([]string, len(list))
 	for i, e := range list {
 		if e == nil {
-			return &apiError{Type: "null_pointer_exception", Status: 400, Reason: "Cannot invoke \"Object.toString()\" because \"value\" is null"}
+			return &apierr.Error{Type: "null_pointer_exception", Status: 400, Reason: "Cannot invoke \"Object.toString()\" because \"value\" is null"}
 		}
 		parts[i] = ingestString(e)
 	}
@@ -652,7 +653,7 @@ func javaRegexReplace(repl string) string {
 	return re.ReplaceAllString(repl, `${$1}`)
 }
 
-func (s *Server) procGsub(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procGsub(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	if target == "" {
@@ -664,13 +665,13 @@ func (s *Server) procGsub(cfg map[string]any, env *ingestEnv) *apiError {
 	}
 	re, err := regexp.Compile(cfgString(cfg, "pattern"))
 	if err != nil {
-		return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
 	}
 	repl := javaRegexReplace(cfgString(cfg, "replacement"))
-	apply := func(x any) (any, *apiError) {
+	apply := func(x any) (any, *apierr.Error) {
 		str, ok := x.(string)
 		if !ok {
-			return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+			return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "field [" + field + "] of type [" + javaTypeName(x) + "] cannot be cast to [java.lang.String]"}
 		}
 		return re.ReplaceAllString(str, repl), nil
@@ -693,7 +694,7 @@ func (s *Server) procGsub(cfg map[string]any, env *ingestEnv) *apiError {
 	return env.setField(target, tv, true)
 }
 
-func (s *Server) procSort(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procSort(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	if target == "" {
@@ -705,7 +706,7 @@ func (s *Server) procSort(cfg map[string]any, env *ingestEnv) *apiError {
 	}
 	list, ok := v.([]any)
 	if !ok {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] of type [" + javaTypeName(v) + "] cannot be cast to [java.util.List]"}
 	}
 	allNum, allStr := true, true
@@ -718,7 +719,7 @@ func (s *Server) procSort(cfg map[string]any, env *ingestEnv) *apiError {
 		}
 	}
 	if !allNum && !allStr {
-		return &apiError{Type: "class_cast_exception", Status: 400, Reason: "cannot sort values of mixed types"}
+		return &apierr.Error{Type: "class_cast_exception", Status: 400, Reason: "cannot sort values of mixed types"}
 	}
 	out := make([]any, len(list))
 	copy(out, list)
@@ -742,7 +743,7 @@ func (s *Server) procSort(cfg map[string]any, env *ingestEnv) *apiError {
 	return env.setField(target, out, true)
 }
 
-func (s *Server) procDotExpander(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procDotExpander(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := cfgString(cfg, "field")
 	if field == "" || !strings.Contains(field, ".") {
 		return nil
@@ -777,7 +778,7 @@ func (s *Server) procDotExpander(cfg map[string]any, env *ingestEnv) *apiError {
 		}
 		m, ok := next.(map[string]any)
 		if !ok {
-			return &apiError{Type: "illegal_argument_exception", Status: 400,
+			return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "cannot expend [" + full + "], because [" + strings.Join(parts[:i+1], ".") + "] is not an object field, but a value field"}
 		}
 		cur = m
@@ -797,24 +798,24 @@ func (s *Server) procDotExpander(cfg map[string]any, env *ingestEnv) *apiError {
 	return nil
 }
 
-func (s *Server) procForeach(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procForeach(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok || v == nil {
 		if cfgBool(cfg, "ignore_missing", false) {
 			return nil
 		}
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] not present as part of path [" + field + "]", ForceTop: true}
 	}
 	list, ok := v.([]any)
 	if !ok {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] of type [" + javaTypeName(v) + "] cannot be cast to [java.util.List]", ForceTop: true}
 	}
 	inner, ok := cfg["processor"].(map[string]any)
 	if !ok {
-		return &apiError{Type: "parse_exception", Status: 400, Reason: "[processor] required property is missing",
+		return &apierr.Error{Type: "parse_exception", Status: 400, Reason: "[processor] required property is missing",
 			Fields: map[string]any{"processor_type": "foreach", "property_name": "processor"}}
 	}
 	typ, icfg, err := processorConfig(inner)
@@ -840,26 +841,26 @@ func (s *Server) procForeach(cfg map[string]any, env *ingestEnv) *apiError {
 	return env.setField(field, list, true)
 }
 
-func (s *Server) procFail(cfg map[string]any, env *ingestEnv) *apiError {
+func (s *Server) procFail(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	msg := env.render(cfgString(cfg, "message"))
-	return &apiError{Type: "fail_processor_exception", Status: 500, Reason: msg}
+	return &apierr.Error{Type: "fail_processor_exception", Status: 500, Reason: msg}
 }
 
-func (s *Server) procPipeline(cfg map[string]any, env *ingestEnv) (bool, *apiError) {
+func (s *Server) procPipeline(cfg map[string]any, env *ingestEnv) (bool, *apierr.Error) {
 	name := env.render(cfgString(cfg, "name"))
 	if name == "" {
-		return false, &apiError{Type: "illegal_state_exception", Status: 400, Reason: "Pipeline processor configured for empty pipeline name"}
+		return false, &apierr.Error{Type: "illegal_state_exception", Status: 400, Reason: "Pipeline processor configured for empty pipeline name"}
 	}
 	for _, n := range env.stack {
 		if n == name {
-			return false, &apiError{Type: "illegal_state_exception", Status: 400, Reason: "Cycle detected for pipeline: " + name}
+			return false, &apierr.Error{Type: "illegal_state_exception", Status: 400, Reason: "Cycle detected for pipeline: " + name}
 		}
 	}
 	s.ingestMu.RLock()
 	p, ok := s.ingestPipelines[name]
 	s.ingestMu.RUnlock()
 	if !ok {
-		return false, &apiError{Type: "illegal_state_exception", Status: 400,
+		return false, &apierr.Error{Type: "illegal_state_exception", Status: 400,
 			Reason: "Pipeline processor configured for non-existent pipeline [" + name + "]"}
 	}
 	oldPipeline := env.pipeline

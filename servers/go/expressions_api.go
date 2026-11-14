@@ -3,7 +3,9 @@ package main
 import (
 	"strings"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/expressions"
+	"slopensearch/internal/model"
 	"slopensearch/internal/painless"
 )
 
@@ -27,19 +29,19 @@ func expressionScriptErr(e *expressions.Error, src string) *plScriptErr {
 }
 
 // exPrepare compiles and checks an expression for a context.
-func exPrepare(src, ctxName string) (*expressions.Script, *plScriptErr, *apiError) {
+func exPrepare(src, ctxName string) (*expressions.Script, *plScriptErr, *apierr.Error) {
 	s, err := expressions.Compile(src)
 	if err != nil {
 		return nil, expressionScriptErr(err, src), nil
 	}
 	if !expressionContexts[ctxName] {
-		return nil, nil, errBad("expression engine does not know how to handle script context [" + ctxName + "]")
+		return nil, nil, apierr.BadRequest("expression engine does not know how to handle script context [" + ctxName + "]")
 	}
 	return s, nil, nil
 }
 
 // exprFields resolves doc['field'] variables against the mapping of idx.
-func exprFields(idx *Index) func(field string) (expressions.Kind, bool) {
+func exprFields(idx *model.Index) func(field string) (expressions.Kind, bool) {
 	if idx == nil {
 		return nil
 	}

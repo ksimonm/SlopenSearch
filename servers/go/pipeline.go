@@ -6,6 +6,10 @@ import (
 	"strconv"
 	"strings"
 
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
 )
 
@@ -57,7 +61,7 @@ func withoutPipelines(sub map[string]any) map[string]any {
 	return out
 }
 
-func applyParentPipelines(sub map[string]any, buckets []map[string]any, kind string, idx *Index) ([]map[string]any, *apiError) {
+func applyParentPipelines(sub map[string]any, buckets []map[string]any, kind string, idx *model.Index) ([]map[string]any, *apierr.Error) {
 	if sub == nil {
 		return buckets, nil
 	}
@@ -85,7 +89,7 @@ func applyParentPipelines(sub map[string]any, buckets []map[string]any, kind str
 	for _, p := range pipes {
 		t := aggTypeOf(p.def)
 		if kind == "terms" && t != "bucket_script" && t != "bucket_selector" && t != "bucket_sort" {
-			return nil, &apiError{Type: "action_request_validation_exception", Status: 400,
+			return nil, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: fmt.Sprintf("Validation Failed: 1: %s aggregation [%s] must have a histogram, date_histogram or auto_date_histogram as parent;", t, p.name)}
 		}
 		body, _ := p.def[t].(map[string]any)
@@ -105,7 +109,7 @@ func applyParentPipelines(sub map[string]any, buckets []map[string]any, kind str
 				}
 			}
 			if !found {
-				return nil, &apiError{Type: "action_request_validation_exception", Status: 400,
+				return nil, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 					Reason: "Validation Failed: 1: No aggregation found for path [" + path + "];"}
 			}
 		}
@@ -130,7 +134,7 @@ func applyParentPipelines(sub map[string]any, buckets []map[string]any, kind str
 			if !pipelineDepsReady(body, buckets, applied) {
 				continue
 			}
-			var err *apiError
+			var err *apierr.Error
 			switch t {
 			case "derivative":
 				err = applyDerivative(p.name, body, buckets, kind)
@@ -207,13 +211,13 @@ func bucketPathsOf(body map[string]any) []string {
 	return out
 }
 
-func gapPolicyOf(body map[string]any) (string, *apiError) {
+func gapPolicyOf(body map[string]any) (string, *apierr.Error) {
 	gp, _ := toString(body["gap_policy"])
 	if gp == "" {
 		return "skip", nil
 	}
 	if gp != "skip" && gp != "insert_zeros" {
-		return "", &apiError{Type: "parsing_exception", Status: 400,
+		return "", &apierr.Error{Type: "parsing_exception", Status: 400,
 			Reason: fmt.Sprintf("Invalid gap policy: [%s], accepted values: [insert_zeros, skip]", gp)}
 	}
 	return gp, nil
@@ -250,7 +254,7 @@ func metricAtPath(node any, path string) (any, bool) {
 				return metricMapKey(vals, key)
 			}
 		}
-		if o, ok := v.(orderedJSON); ok {
+		if o, ok := v.(ojson.Object); ok {
 			if vals, ok := orderedGet(o, "values"); ok {
 				return metricMapKey(vals, key)
 			}
@@ -271,7 +275,7 @@ func metricAtPath(node any, path string) (any, bool) {
 			}
 			return metricAtPath(v, rest)
 		}
-	case orderedJSON:
+	case ojson.Object:
 		if v, ok := orderedGet(m, first); ok {
 			if rest == "" {
 				return metricScalar(v)
@@ -291,7 +295,7 @@ func metricAtPath(node any, path string) (any, bool) {
 			}
 		}
 	}
-	if o, ok := node.(orderedJSON); ok && rest != "" {
+	if o, ok := node.(ojson.Object); ok && rest != "" {
 		if vals, ok := orderedGet(o, "values"); ok {
 			if f, err := strconv.ParseFloat(rest, 64); err == nil {
 				if x, ok := metricMapKey(vals, percentileKey(f)); ok {
@@ -313,7 +317,7 @@ func metricScalar(v any) (any, bool) {
 			return val, true
 		}
 		return v, true
-	case orderedJSON:
+	case ojson.Object:
 		if val, ok := orderedGet(m, "value"); ok {
 			return val, true
 		}
@@ -323,7 +327,7 @@ func metricScalar(v any) (any, bool) {
 	}
 }
 
-func orderedGet(o orderedJSON, key string) (any, bool) {
+func orderedGet(o ojson.Object, key string) (any, bool) {
 	for _, kv := range o {
 		if kv.K == key {
 			return kv.V, true
@@ -334,7 +338,7 @@ func orderedGet(o orderedJSON, key string) (any, bool) {
 
 func orderedMapKey(v any, key string) (any, bool) {
 	switch m := v.(type) {
-	case orderedJSON:
+	case ojson.Object:
 		if x, ok := orderedGet(m, key); ok {
 			return x, true
 		}
@@ -348,7 +352,7 @@ func orderedMapKey(v any, key string) (any, bool) {
 
 func metricMapKey(vals any, key string) (any, bool) {
 	switch m := vals.(type) {
-	case orderedJSON:
+	case ojson.Object:
 		return orderedGet(m, key)
 	case map[string]any:
 		if v, ok := m[key]; ok {
@@ -363,7 +367,7 @@ func parentMetricValue(bucket map[string]any, path, gap string) (any, bool) {
 		v, ok := metricAtPath(bucket, path)
 		return v, ok
 	}
-	dc, _ := toFloat(bucket["doc_count"])
+	dc, _ := jsonv.ToFloat(bucket["doc_count"])
 	v, ok := metricAtPath(bucket, path)
 	if !ok || v == nil {
 		if gap == "insert_zeros" {
@@ -384,10 +388,10 @@ func pipelineValue(out any) any {
 	return out
 }
 
-func applyDerivative(name string, body map[string]any, buckets []map[string]any, kind string) *apiError {
+func applyDerivative(name string, body map[string]any, buckets []map[string]any, kind string) *apierr.Error {
 	path, _ := toString(body["buckets_path"])
 	if path == "" {
-		return &apiError{Type: "parsing_exception", Status: 400, Reason: "Missing required field [buckets_path] for aggregation [" + name + "]"}
+		return &apierr.Error{Type: "parsing_exception", Status: 400, Reason: "Missing required field [buckets_path] for aggregation [" + name + "]"}
 	}
 	gap, err := gapPolicyOf(body)
 	if err != nil {
@@ -396,8 +400,8 @@ func applyDerivative(name string, body map[string]any, buckets []map[string]any,
 	unit, _ := toString(body["unit"])
 	unitMs := durationMillis(unit)
 	if unit != "" && unitMs == 0 {
-		return &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "failed to parse [" + unit + "]",
-			CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "failed to parse [" + unit + "]"}}
+		return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "failed to parse [" + unit + "]",
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "failed to parse [" + unit + "]"}}
 	}
 	format, _ := toString(body["format"])
 	var prev any
@@ -431,23 +435,23 @@ func applyDerivative(name string, body map[string]any, buckets []map[string]any,
 			}
 		}
 		if !curOK || !prevOK {
-			nilOut := orderedJSON{{"value", nil}}
+			nilOut := ojson.Object{{"value", nil}}
 			if unit != "" {
-				nilOut = append(nilOut, orderedKV{"normalized_value", nil})
+				nilOut = append(nilOut, ojson.KV{"normalized_value", nil})
 			}
 			b[name] = nilOut
 			prev, prevOK = cur, curOK
 			continue
 		}
-		cf, _ := toFloat(cur)
-		pf, _ := toFloat(prev)
+		cf, _ := jsonv.ToFloat(cur)
+		pf, _ := jsonv.ToFloat(prev)
 		val := cf - pf
-		out := orderedJSON{{"value", rawFloat(val)}}
+		out := ojson.Object{{"value", jsonv.Float(val)}}
 		if unit != "" {
 			norm := val
 			if kind == "date_histogram" {
-				curKey, _ := toFloat(b["key"])
-				prevKey, _ := toFloat(buckets[i-1]["key"])
+				curKey, _ := jsonv.ToFloat(b["key"])
+				prevKey, _ := jsonv.ToFloat(buckets[i-1]["key"])
 				days := (curKey - prevKey) / 86400000
 				if days > 0 {
 					norm = val / days
@@ -455,10 +459,10 @@ func applyDerivative(name string, body map[string]any, buckets []map[string]any,
 			} else {
 				norm = val * unitMs / 20
 			}
-			out = append(out, orderedKV{"normalized_value", rawFloat(norm)})
+			out = append(out, ojson.KV{"normalized_value", jsonv.Float(norm)})
 		}
 		if format != "" {
-			out = append(out, orderedKV{"value_as_string", fmtMetricNumber(val, format)})
+			out = append(out, ojson.KV{"value_as_string", fmtMetricNumber(val, format)})
 		}
 		b[name] = out
 		prev, prevOK = cur, curOK
@@ -495,40 +499,40 @@ func durationMillis(unit string) float64 {
 	return n * mult
 }
 
-func applyCumulativeSum(name string, body map[string]any, buckets []map[string]any) *apiError {
+func applyCumulativeSum(name string, body map[string]any, buckets []map[string]any) *apierr.Error {
 	if _, ok := body["gap_policy"]; ok {
-		return &apiError{Type: "x_content_parse_exception", Status: 400,
+		return &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason: "[cumulative_sum] unknown field [gap_policy]"}
 	}
 	path, _ := toString(body["buckets_path"])
 	if path == "" {
-		return &apiError{Type: "parsing_exception", Status: 400, Reason: "Missing required field [buckets_path] for aggregation [" + name + "]"}
+		return &apierr.Error{Type: "parsing_exception", Status: 400, Reason: "Missing required field [buckets_path] for aggregation [" + name + "]"}
 	}
 	format, _ := toString(body["format"])
 	total := 0.0
 	for _, b := range buckets {
 		v, ok := parentMetricValue(b, path, "skip")
 		if ok {
-			f, _ := toFloat(v)
+			f, _ := jsonv.ToFloat(v)
 			total += f
 		}
-		out := orderedJSON{{"value", rawFloat(total)}}
+		out := ojson.Object{{"value", jsonv.Float(total)}}
 		if format != "" {
-			out = append(out, orderedKV{"value_as_string", fmtMetricNumber(total, format)})
+			out = append(out, ojson.KV{"value_as_string", fmtMetricNumber(total, format)})
 		}
 		b[name] = out
 	}
 	return nil
 }
 
-func applySerialDiff(name string, body map[string]any, buckets []map[string]any) *apiError {
+func applySerialDiff(name string, body map[string]any, buckets []map[string]any) *apierr.Error {
 	path, _ := toString(body["buckets_path"])
 	if path == "" {
-		return &apiError{Type: "parsing_exception", Status: 400, Reason: "Missing required field [buckets_path] for aggregation [" + name + "]"}
+		return &apierr.Error{Type: "parsing_exception", Status: 400, Reason: "Missing required field [buckets_path] for aggregation [" + name + "]"}
 	}
 	lag := intField(body, "lag", 1)
 	if lag == 0 {
-		return &apiError{Type: "parsing_exception", Status: 400,
+		return &apierr.Error{Type: "parsing_exception", Status: 400,
 			Reason: "Lag must be a positive, non-zero integer.  Value supplied was0 in [" + name + "]: [lag]."}
 	}
 	gap, err := gapPolicyOf(body)
@@ -551,22 +555,22 @@ func applySerialDiff(name string, body map[string]any, buckets []map[string]any)
 		if !curOK || !baseOK {
 			continue
 		}
-		cf, _ := toFloat(cur)
-		bf, _ := toFloat(base)
+		cf, _ := jsonv.ToFloat(cur)
+		bf, _ := jsonv.ToFloat(base)
 		val := cf - bf
-		out := orderedJSON{{"value", rawFloat(val)}}
+		out := ojson.Object{{"value", jsonv.Float(val)}}
 		if format != "" {
-			out = append(out, orderedKV{"value_as_string", fmtMetricNumber(val, format)})
+			out = append(out, ojson.KV{"value_as_string", fmtMetricNumber(val, format)})
 		}
 		buckets[i][name] = out
 	}
 	return nil
 }
 
-func applyBucketScript(name string, body map[string]any, buckets []map[string]any) *apiError {
+func applyBucketScript(name string, body map[string]any, buckets []map[string]any) *apierr.Error {
 	paths, _ := body["buckets_path"].(map[string]any)
 	if len(paths) == 0 {
-		return &apiError{Type: "parsing_exception", Status: 400, Reason: "Missing required field [buckets_path] for aggregation [" + name + "]"}
+		return &apierr.Error{Type: "parsing_exception", Status: 400, Reason: "Missing required field [buckets_path] for aggregation [" + name + "]"}
 	}
 	gap, err := gapPolicyOf(body)
 	if err != nil {
@@ -584,7 +588,7 @@ func applyBucketScript(name string, body map[string]any, buckets []map[string]an
 				missing = true
 				break
 			}
-			f, _ := toFloat(v)
+			f, _ := jsonv.ToFloat(v)
 			pvals[k] = f
 		}
 		if missing {
@@ -608,26 +612,26 @@ func applyBucketScript(name string, body map[string]any, buckets []map[string]an
 		} else if _, isStr := res.(string); !isStr {
 			r = painless.ToJSON(res)
 		}
-		if _, ok := toFloat(r); !ok {
+		if _, ok := jsonv.ToFloat(r); !ok {
 			reason := "Cannot cast from [java.lang.String] to [java.lang.Number]."
-			return &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: reason,
-				CausedBy: &apiError{Type: "script_exception", Reason: reason,
-					CausedBy: &apiError{Type: "illegal_argument_exception", Reason: reason}}}
+			return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: reason,
+				CausedBy: &apierr.Error{Type: "script_exception", Reason: reason,
+					CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}}
 		}
-		f, _ := toFloat(r)
-		out := orderedJSON{{"value", rawFloat(f)}}
+		f, _ := jsonv.ToFloat(r)
+		out := ojson.Object{{"value", jsonv.Float(f)}}
 		if format != "" {
-			out = append(out, orderedKV{"value_as_string", fmtMetricNumber(f, format)})
+			out = append(out, ojson.KV{"value_as_string", fmtMetricNumber(f, format)})
 		}
 		b[name] = out
 	}
 	return nil
 }
 
-func applyBucketSelector(name string, body map[string]any, buckets []map[string]any) ([]map[string]any, *apiError) {
+func applyBucketSelector(name string, body map[string]any, buckets []map[string]any) ([]map[string]any, *apierr.Error) {
 	paths, _ := body["buckets_path"].(map[string]any)
 	if len(paths) == 0 {
-		return buckets, &apiError{Type: "parsing_exception", Status: 400, Reason: "Missing required field [buckets_path] for aggregation [" + name + "]"}
+		return buckets, &apierr.Error{Type: "parsing_exception", Status: 400, Reason: "Missing required field [buckets_path] for aggregation [" + name + "]"}
 	}
 	gap, err := gapPolicyOf(body)
 	if err != nil {
@@ -644,7 +648,7 @@ func applyBucketSelector(name string, body map[string]any, buckets []map[string]
 				missing = true
 				break
 			}
-			f, _ := toFloat(v)
+			f, _ := jsonv.ToFloat(v)
 			pvals[k] = f
 		}
 		if missing {
@@ -662,34 +666,34 @@ func applyBucketSelector(name string, body map[string]any, buckets []map[string]
 	return kept, nil
 }
 
-func applyBucketSort(name string, body map[string]any, buckets []map[string]any) ([]map[string]any, *apiError) {
+func applyBucketSort(name string, body map[string]any, buckets []map[string]any) ([]map[string]any, *apierr.Error) {
 	if _, ok := body["sort"]; !ok {
 		if _, ok := body["size"]; !ok {
 			if _, ok := body["from"]; !ok {
-				return buckets, &apiError{Type: "action_request_validation_exception", Status: 400,
+				return buckets, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 					Reason: "Validation Failed: 1: [" + name + "] is configured to perform nothing. Please set either of [sort, size, from] to use bucket_sort;"}
 			}
 		}
 	}
 	size := -1
 	if v, ok := body["size"]; ok {
-		f, _ := toFloat(v)
+		f, _ := jsonv.ToFloat(v)
 		if f < 0 {
-			return buckets, &apiError{Type: "x_content_parse_exception", Status: 400,
+			return buckets, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "Failed to parse aggregation [" + name + "]",
-				CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "size must be positive",
-					CausedBy: &apiError{Type: "illegal_argument_exception", Reason: fmt.Sprintf("[size] must be a positive integer: [%d]", int(f))}}}
+				CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "size must be positive",
+					CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: fmt.Sprintf("[size] must be a positive integer: [%d]", int(f))}}}
 		}
 		size = int(f)
 	}
 	from := 0
 	if v, ok := body["from"]; ok {
-		f, _ := toFloat(v)
+		f, _ := jsonv.ToFloat(v)
 		if f < 0 {
-			return buckets, &apiError{Type: "x_content_parse_exception", Status: 400,
+			return buckets, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "Failed to parse aggregation [" + name + "]",
-				CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "from must be non-negative",
-					CausedBy: &apiError{Type: "illegal_argument_exception", Reason: fmt.Sprintf("[from] must be a non-negative integer: [%d]", int(f))}}}
+				CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "from must be non-negative",
+					CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: fmt.Sprintf("[from] must be a non-negative integer: [%d]", int(f))}}}
 		}
 		from = int(f)
 	}
@@ -710,13 +714,13 @@ func applyBucketSort(name string, body map[string]any, buckets []map[string]any)
 				}
 			}
 			if !found {
-				return buckets, &apiError{Type: "action_request_validation_exception", Status: 400,
+				return buckets, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 					Reason: "Validation Failed: 1: No aggregation found for path [" + s.field + "];"}
 			}
 			if multi {
 				reason := "buckets_path must reference either a number value or a single value numeric metric aggregation, but [" + s.field + "] contains multiple values. Please specify which to use."
-				return buckets, &apiError{Type: "search_phase_execution_exception", Status: 500, Reason: reason,
-					CausedBy: &apiError{Type: "aggregation_execution_exception", Reason: reason}}
+				return buckets, &apierr.Error{Type: "search_phase_execution_exception", Status: 500, Reason: reason,
+					CausedBy: &apierr.Error{Type: "aggregation_execution_exception", Reason: reason}}
 			}
 		}
 		sort.SliceStable(buckets, func(i, j int) bool {
@@ -798,7 +802,7 @@ func metricContainerValue(v any, key string) (any, bool) {
 	case map[string]any:
 		x, ok := m[key]
 		return x, ok
-	case orderedJSON:
+	case ojson.Object:
 		return orderedGet(m, key)
 	}
 	return nil, false
@@ -811,7 +815,7 @@ func isMultiValue(v any) bool {
 			return false
 		}
 		return len(m) > 1
-	case orderedJSON:
+	case ojson.Object:
 		if _, ok := orderedGet(m, "value"); ok {
 			return false
 		}
@@ -820,10 +824,10 @@ func isMultiValue(v any) bool {
 	return false
 }
 
-func evalSiblingPipeline(name string, body map[string]any, typ string, out map[string]any) (any, *apiError) {
+func evalSiblingPipeline(name string, body map[string]any, typ string, out map[string]any) (any, *apierr.Error) {
 	path, _ := toString(body["buckets_path"])
 	if path == "" {
-		return nil, &apiError{Type: "parsing_exception", Status: 400,
+		return nil, &apierr.Error{Type: "parsing_exception", Status: 400,
 			Reason: "Missing required field [buckets_path] for aggregation [" + name + "]"}
 	}
 	gap, err := gapPolicyOf(body)
@@ -838,24 +842,24 @@ func evalSiblingPipeline(name string, body map[string]any, typ string, out map[s
 	switch typ {
 	case "avg_bucket":
 		if len(vals) == 0 {
-			return orderedJSON{{"value", nil}}, nil
+			return ojson.Object{{"value", nil}}, nil
 		}
 		v := meanF(vals)
-		o := orderedJSON{{"value", rawFloat(v)}}
+		o := ojson.Object{{"value", jsonv.Float(v)}}
 		if format != "" {
-			o = append(o, orderedKV{"value_as_string", fmtMetricNumber(v, format)})
+			o = append(o, ojson.KV{"value_as_string", fmtMetricNumber(v, format)})
 		}
 		return o, nil
 	case "sum_bucket":
 		v := sumOf(vals)
-		o := orderedJSON{{"value", rawFloat(v)}}
+		o := ojson.Object{{"value", jsonv.Float(v)}}
 		if format != "" {
-			o = append(o, orderedKV{"value_as_string", fmtMetricNumber(v, format)})
+			o = append(o, ojson.KV{"value_as_string", fmtMetricNumber(v, format)})
 		}
 		return o, nil
 	case "min_bucket", "max_bucket":
 		if len(vals) == 0 {
-			return orderedJSON{{"value", nil}, {"keys", []any{}}}, nil
+			return ojson.Object{{"value", nil}, {"keys", []any{}}}, nil
 		}
 		best := vals[0]
 		bestKeys := []any{}
@@ -874,18 +878,18 @@ func evalSiblingPipeline(name string, body map[string]any, typ string, out map[s
 				bestKeys = append(bestKeys, keys[i])
 			}
 		}
-		o := orderedJSON{{"value", rawFloat(best)}, {"keys", bestKeys}}
+		o := ojson.Object{{"value", jsonv.Float(best)}, {"keys", bestKeys}}
 		if format != "" {
-			o = append(o, orderedKV{"value_as_string", fmtMetricNumber(best, format)})
+			o = append(o, ojson.KV{"value_as_string", fmtMetricNumber(best, format)})
 		}
 		return o, nil
 	case "stats_bucket":
 		if len(vals) == 0 {
-			return orderedJSON{{"count", 0}, {"min", nil}, {"max", nil}, {"avg", nil}, {"sum", rawFloat(0)}}, nil
+			return ojson.Object{{"count", 0}, {"min", nil}, {"max", nil}, {"avg", nil}, {"sum", jsonv.Float(0)}}, nil
 		}
-		return orderedJSON{
-			{"count", len(vals)}, {"min", rawFloat(minF(vals))}, {"max", rawFloat(maxF(vals))},
-			{"avg", rawFloat(meanF(vals))}, {"sum", rawFloat(sumOf(vals))},
+		return ojson.Object{
+			{"count", len(vals)}, {"min", jsonv.Float(minF(vals))}, {"max", jsonv.Float(maxF(vals))},
+			{"avg", jsonv.Float(meanF(vals))}, {"sum", jsonv.Float(sumOf(vals))},
 		}, nil
 	case "extended_stats_bucket":
 		return siblingExtendedStats(body, vals)
@@ -895,30 +899,30 @@ func evalSiblingPipeline(name string, body map[string]any, typ string, out map[s
 	return map[string]any{}, nil
 }
 
-func siblingPathValues(out map[string]any, path, gap string) ([]float64, []any, *apiError) {
+func siblingPathValues(out map[string]any, path, gap string) ([]float64, []any, *apierr.Error) {
 	segs := splitBucketPath(path, out)
 	if len(segs) == 0 {
-		return nil, nil, &apiError{Type: "action_request_validation_exception", Status: 400,
+		return nil, nil, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: No aggregation found for path [" + path + "];"}
 	}
 	first := segs[0]
 	node, ok := out[first]
 	if !ok {
-		return nil, nil, &apiError{Type: "action_request_validation_exception", Status: 400,
+		return nil, nil, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: No aggregation found for path [" + path + "];"}
 	}
 	vals := []float64{}
 	keys := []any{}
 	missingAgg := ""
-	var collectErr *apiError
+	var collectErr *apierr.Error
 	var walk func(node any, segs []string, key any) bool
 	walk = func(node any, segs []string, key any) bool {
 		if len(segs) == 0 {
 			if m, ok := node.(map[string]any); ok {
 				if _, isBucket := m["buckets"]; isBucket {
-					collectErr = &apiError{Type: "search_phase_execution_exception", Status: 500,
+					collectErr = &apierr.Error{Type: "search_phase_execution_exception", Status: 500,
 						Reason: "buckets_path must reference either a number value or a single value numeric metric aggregation, got: [Bucket] at aggregation [" + first + "]",
-						CausedBy: &apiError{Type: "aggregation_execution_exception",
+						CausedBy: &apierr.Error{Type: "aggregation_execution_exception",
 							Reason: "buckets_path must reference either a number value or a single value numeric metric aggregation, got: [Bucket] at aggregation [" + first + "]"}}
 					return false
 				}
@@ -931,13 +935,13 @@ func siblingPathValues(out map[string]any, path, gap string) ([]float64, []any, 
 				return true
 			}
 			if isMultiValue(v) {
-				collectErr = &apiError{Type: "search_phase_execution_exception", Status: 500,
+				collectErr = &apierr.Error{Type: "search_phase_execution_exception", Status: 500,
 					Reason: "buckets_path must reference either a number value or a single value numeric metric aggregation, but [" + lastPathSeg(path) + "] contains multiple values. Please specify which to use.",
-					CausedBy: &apiError{Type: "aggregation_execution_exception",
+					CausedBy: &apierr.Error{Type: "aggregation_execution_exception",
 						Reason: "buckets_path must reference either a number value or a single value numeric metric aggregation, but [" + lastPathSeg(path) + "] contains multiple values. Please specify which to use."}}
 				return false
 			}
-			f, ok := toFloat(v)
+			f, ok := jsonv.ToFloat(v)
 			if !ok {
 				return true
 			}
@@ -953,7 +957,7 @@ func siblingPathValues(out map[string]any, path, gap string) ([]float64, []any, 
 					if b == nil {
 						continue
 					}
-					dc, _ := toFloat(b["doc_count"])
+					dc, _ := jsonv.ToFloat(b["doc_count"])
 					seg := segs[0]
 					if seg == "_count" || seg == "_bucket_count" {
 						if seg == "_count" {
@@ -983,7 +987,7 @@ func siblingPathValues(out map[string]any, path, gap string) ([]float64, []any, 
 			seg := segs[0]
 			if seg == "_count" {
 				if dc, ok := m["doc_count"]; ok {
-					f, _ := toFloat(dc)
+					f, _ := jsonv.ToFloat(dc)
 					vals = append(vals, f)
 					keys = append(keys, key)
 					return true
@@ -1022,7 +1026,7 @@ func siblingPathValues(out map[string]any, path, gap string) ([]float64, []any, 
 			}
 			return walk(child, segs[1:], key)
 		}
-		if o, ok := node.(orderedJSON); ok {
+		if o, ok := node.(ojson.Object); ok {
 			seg := segs[0]
 			if vals, ok := orderedGet(o, "values"); ok {
 				if x, ok := metricMapKey(vals, seg); ok {
@@ -1038,9 +1042,9 @@ func siblingPathValues(out map[string]any, path, gap string) ([]float64, []any, 
 			if !ok {
 				if _, hasCount := orderedGet(o, "count"); hasCount {
 					if _, hasSum := orderedGet(o, "sum"); hasSum {
-						collectErr = &apiError{Type: "search_phase_execution_exception", Status: 400,
+						collectErr = &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 							Reason: "No enum constant org.opensearch.search.aggregations.metrics.InternalStats.Metrics." + seg,
-							CausedBy: &apiError{Type: "illegal_argument_exception",
+							CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 								Reason: "No enum constant org.opensearch.search.aggregations.metrics.InternalStats.Metrics." + seg}}
 						return false
 					}
@@ -1057,7 +1061,7 @@ func siblingPathValues(out map[string]any, path, gap string) ([]float64, []any, 
 			return nil, nil, collectErr
 		}
 		if missingAgg != "" {
-			return nil, nil, &apiError{Type: "action_request_validation_exception", Status: 400,
+			return nil, nil, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: No aggregation [" + missingAgg + "] found for path [" + path + "];"}
 		}
 	}
@@ -1134,7 +1138,7 @@ func bucketKey(b map[string]any) any {
 	}
 	if k, ok := b["key"]; ok {
 		switch t := k.(type) {
-		case rawFloat:
+		case jsonv.Float:
 			return strconv.FormatFloat(float64(t), 'f', 1, 64)
 		case float64:
 			return strconv.FormatFloat(t, 'f', 1, 64)
@@ -1144,15 +1148,15 @@ func bucketKey(b map[string]any) any {
 	return nil
 }
 
-func siblingExtendedStats(body map[string]any, vals []float64) (any, *apiError) {
+func siblingExtendedStats(body map[string]any, vals []float64) (any, *apierr.Error) {
 	n := len(vals)
 	if n == 0 {
-		return orderedJSON{
-			{"count", 0}, {"min", nil}, {"max", nil}, {"avg", nil}, {"sum", rawFloat(0)},
+		return ojson.Object{
+			{"count", 0}, {"min", nil}, {"max", nil}, {"avg", nil}, {"sum", jsonv.Float(0)},
 			{"sum_of_squares", nil}, {"variance", nil}, {"variance_population", nil},
 			{"variance_sampling", nil}, {"std_deviation", nil}, {"std_deviation_population", nil},
 			{"std_deviation_sampling", nil},
-			{"std_deviation_bounds", orderedJSON{{"upper", nil}, {"lower", nil}, {"upper_population", nil},
+			{"std_deviation_bounds", ojson.Object{{"upper", nil}, {"lower", nil}, {"upper_population", nil},
 				{"lower_population", nil}, {"upper_sampling", nil}, {"lower_sampling", nil}}},
 		}, nil
 	}
@@ -1170,23 +1174,23 @@ func siblingExtendedStats(body map[string]any, vals []float64) (any, *apiError) 
 	var stdSample any = nil
 	if n > 1 {
 		vs := (sumSq - float64(n)*avg*avg) / float64(n-1)
-		varSample = rawFloat(vs)
-		stdSample = rawFloat(mathSqrt(vs))
+		varSample = jsonv.Float(vs)
+		stdSample = jsonv.Float(mathSqrt(vs))
 	}
 	stdPop := mathSqrt(varPop)
 	sigma := 2.0
-	if v, ok := toFloat(body["sigma"]); ok {
+	if v, ok := jsonv.ToFloat(body["sigma"]); ok {
 		sigma = v
 	}
-	return orderedJSON{
-		{"count", n}, {"min", rawFloat(minF(vals))}, {"max", rawFloat(maxF(vals))},
-		{"avg", rawFloat(avg)}, {"sum", rawFloat(sum)}, {"sum_of_squares", rawFloat(sumSq)},
-		{"variance", rawFloat(varPop)}, {"variance_population", rawFloat(varPop)},
-		{"variance_sampling", varSample}, {"std_deviation", rawFloat(stdPop)},
-		{"std_deviation_population", rawFloat(stdPop)}, {"std_deviation_sampling", stdSample},
-		{"std_deviation_bounds", orderedJSON{
-			{"upper", rawFloat(avg + sigma*stdPop)}, {"lower", rawFloat(avg - sigma*stdPop)},
-			{"upper_population", rawFloat(avg + sigma*stdPop)}, {"lower_population", rawFloat(avg - sigma*stdPop)},
+	return ojson.Object{
+		{"count", n}, {"min", jsonv.Float(minF(vals))}, {"max", jsonv.Float(maxF(vals))},
+		{"avg", jsonv.Float(avg)}, {"sum", jsonv.Float(sum)}, {"sum_of_squares", jsonv.Float(sumSq)},
+		{"variance", jsonv.Float(varPop)}, {"variance_population", jsonv.Float(varPop)},
+		{"variance_sampling", varSample}, {"std_deviation", jsonv.Float(stdPop)},
+		{"std_deviation_population", jsonv.Float(stdPop)}, {"std_deviation_sampling", stdSample},
+		{"std_deviation_bounds", ojson.Object{
+			{"upper", jsonv.Float(avg + sigma*stdPop)}, {"lower", jsonv.Float(avg - sigma*stdPop)},
+			{"upper_population", jsonv.Float(avg + sigma*stdPop)}, {"lower_population", jsonv.Float(avg - sigma*stdPop)},
 			{"upper_sampling", anyOrNil(stdSample, func(s float64) float64 { return avg + sigma*s })},
 			{"lower_sampling", anyOrNil(stdSample, func(s float64) float64 { return avg - sigma*s })},
 		}},
@@ -1204,14 +1208,14 @@ func mathSqrt(f float64) float64 {
 	return x
 }
 
-func siblingPercentiles(body map[string]any, vals []float64) (any, *apiError) {
+func siblingPercentiles(body map[string]any, vals []float64) (any, *apierr.Error) {
 	rawPercents, has := body["percents"]
 	percents := []float64{1, 5, 25, 50, 75, 95, 99}
 	if has {
 		arr, _ := rawPercents.([]any)
 		percents = []float64{}
 		for _, e := range arr {
-			if f, ok := toFloat(e); ok {
+			if f, ok := jsonv.ToFloat(e); ok {
 				percents = append(percents, f)
 			}
 		}
@@ -1223,41 +1227,41 @@ func siblingPercentiles(body map[string]any, vals []float64) (any, *apiError) {
 	if keyed {
 		sorted := append([]float64(nil), percents...)
 		sort.Float64s(sorted)
-		out := orderedJSON{}
+		out := ojson.Object{}
 		for _, p := range sorted {
 			var v any
 			if len(vals) > 0 {
-				v = rawFloat(tdigestQuantile(vals, p/100))
+				v = jsonv.Float(tdigestQuantile(vals, p/100))
 			}
-			out = append(out, orderedKV{percentileKey(p), v})
+			out = append(out, ojson.KV{percentileKey(p), v})
 		}
-		return orderedJSON{{"values", out}}, nil
+		return ojson.Object{{"values", out}}, nil
 	}
 	items := []any{}
 	for _, p := range percents {
 		var v any
 		if len(vals) > 0 {
-			v = rawFloat(tdigestQuantile(vals, p/100))
+			v = jsonv.Float(tdigestQuantile(vals, p/100))
 		}
-		items = append(items, orderedJSON{{"key", rawFloat(p)}, {"value", v}})
+		items = append(items, ojson.Object{{"key", jsonv.Float(p)}, {"value", v}})
 	}
-	return orderedJSON{{"values", items}}, nil
+	return ojson.Object{{"values", items}}, nil
 }
 
-func applyMovingFn(name string, body map[string]any, buckets []map[string]any) *apiError {
+func applyMovingFn(name string, body map[string]any, buckets []map[string]any) *apierr.Error {
 	scriptRaw, hasScript := body["script"]
 	if !hasScript {
-		return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "Required [script]"}
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "Required [script]"}
 	}
 	if _, ok := body["window"]; !ok {
-		return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "Required [window]"}
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "Required [window]"}
 	}
 	window := intField(body, "window", 0)
 	if window <= 0 {
-		inner := &apiError{Type: "illegal_argument_exception", Reason: "[window] must be a positive, non-zero integer."}
-		return &apiError{Type: "x_content_parse_exception", Status: 400,
+		inner := &apierr.Error{Type: "illegal_argument_exception", Reason: "[window] must be a positive, non-zero integer."}
+		return &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason:   "Failed to build [moving_fn] after last required field arrived",
-			CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "window must be positive", CausedBy: inner}}
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "window must be positive", CausedBy: inner}}
 	}
 	shift := intField(body, "shift", 0)
 	gap, err := gapPolicyOf(body)
@@ -1267,7 +1271,7 @@ func applyMovingFn(name string, body map[string]any, buckets []map[string]any) *
 	path, _ := toString(body["buckets_path"])
 	src, params := scriptText(scriptRaw)
 	for i, b := range buckets {
-		dc, _ := toFloat(b["doc_count"])
+		dc, _ := jsonv.ToFloat(b["doc_count"])
 		if dc == 0 && gap == "skip" {
 			continue
 		}
@@ -1275,26 +1279,26 @@ func applyMovingFn(name string, body map[string]any, buckets []map[string]any) *
 		if gap == "skip" {
 			if shift > 0 {
 				if i+shift > len(buckets) {
-					b[name] = orderedJSON{{"value", nil}}
+					b[name] = ojson.Object{{"value", nil}}
 					continue
 				}
 				for j := 0; j <= i; j++ {
-					if d, _ := toFloat(buckets[j]["doc_count"]); d == 0 {
+					if d, _ := jsonv.ToFloat(buckets[j]["doc_count"]); d == 0 {
 						continue
 					}
 					if v, ok := metricAtPath(buckets[j], path); ok {
-						if f, ok := toFloat(v); ok {
+						if f, ok := jsonv.ToFloat(v); ok {
 							vals = append(vals, f)
 						}
 					}
 				}
 			} else {
 				for j := 0; j < i; j++ {
-					if d, _ := toFloat(buckets[j]["doc_count"]); d == 0 {
+					if d, _ := jsonv.ToFloat(buckets[j]["doc_count"]); d == 0 {
 						continue
 					}
 					if v, ok := metricAtPath(buckets[j], path); ok {
-						if f, ok := toFloat(v); ok {
+						if f, ok := jsonv.ToFloat(v); ok {
 							vals = append(vals, f)
 						}
 					}
@@ -1307,20 +1311,20 @@ func applyMovingFn(name string, body map[string]any, buckets []map[string]any) *
 			end := i + shift - 1
 			start := end - window + 1
 			if end >= len(buckets) {
-				b[name] = orderedJSON{{"value", nil}}
+				b[name] = ojson.Object{{"value", nil}}
 				continue
 			}
 			if start < 0 {
 				start = 0
 			}
 			for j := start; j <= end && j < len(buckets); j++ {
-				d, _ := toFloat(buckets[j]["doc_count"])
+				d, _ := jsonv.ToFloat(buckets[j]["doc_count"])
 				if d == 0 {
 					vals = append(vals, 0)
 					continue
 				}
 				if v, ok := metricAtPath(buckets[j], path); ok {
-					if f, ok := toFloat(v); ok {
+					if f, ok := jsonv.ToFloat(v); ok {
 						vals = append(vals, f)
 					}
 				}
@@ -1328,13 +1332,13 @@ func applyMovingFn(name string, body map[string]any, buckets []map[string]any) *
 		}
 		res, ok := movingFnResult(src, params, vals)
 		if !ok {
-			b[name] = orderedJSON{{"value", nil}}
+			b[name] = ojson.Object{{"value", nil}}
 			continue
 		}
 		if res == nil {
-			b[name] = orderedJSON{{"value", nil}}
+			b[name] = ojson.Object{{"value", nil}}
 		} else {
-			b[name] = orderedJSON{{"value", rawFloat(*res)}}
+			b[name] = ojson.Object{{"value", jsonv.Float(*res)}}
 		}
 	}
 	return nil
@@ -1375,7 +1379,7 @@ func movingFnResult(src string, params map[string]any, vals []float64) (*float64
 			return nil, true
 		}
 		alpha := 0.5
-		if a, ok := toFloat(params["alpha"]); ok {
+		if a, ok := jsonv.ToFloat(params["alpha"]); ok {
 			alpha = a
 		} else if i := strings.Index(src, "ewma(values,"); i >= 0 {
 			rest := strings.TrimPrefix(src[i:], "ewma(values,")
@@ -1395,7 +1399,7 @@ func movingFnResult(src string, params map[string]any, vals []float64) (*float64
 			return nil, true
 		}
 		v := meanF(vals)
-		if k, ok := toFloat(params["k"]); ok {
+		if k, ok := jsonv.ToFloat(params["k"]); ok {
 			v *= k
 		}
 		return &v, true
@@ -1413,7 +1417,7 @@ func movingFnResult(src string, params map[string]any, vals []float64) (*float64
 		return &v, true
 	case strings.Contains(src, "MovingFunctions.sum(values)"):
 		v := sumOf(vals)
-		if k, ok := toFloat(params["k"]); ok {
+		if k, ok := jsonv.ToFloat(params["k"]); ok {
 			v *= k
 		}
 		return &v, true
@@ -1424,7 +1428,7 @@ func movingFnResult(src string, params map[string]any, vals []float64) (*float64
 	return nil, false
 }
 
-func applyMovingAvg(name string, body map[string]any, buckets []map[string]any) *apiError {
+func applyMovingAvg(name string, body map[string]any, buckets []map[string]any) *apierr.Error {
 	path, _ := toString(body["buckets_path"])
 	model, _ := toString(body["model"])
 	if model == "" {
@@ -1437,17 +1441,17 @@ func applyMovingAvg(name string, body map[string]any, buckets []map[string]any) 
 	}
 	settings, _ := body["settings"].(map[string]any)
 	alpha := 0.5
-	if a, ok := toFloat(settings["alpha"]); ok {
+	if a, ok := jsonv.ToFloat(settings["alpha"]); ok {
 		alpha = a
 	}
 	hist := []float64{}
 	pos := []float64{}
 	for i, b := range buckets {
-		dc, _ := toFloat(b["doc_count"])
+		dc, _ := jsonv.ToFloat(b["doc_count"])
 		if i == 0 {
 			if dc > 0 {
 				if v, ok := metricAtPath(b, path); ok {
-					if f, ok := toFloat(v); ok {
+					if f, ok := jsonv.ToFloat(v); ok {
 						hist = append(hist, f)
 						pos = append(pos, f)
 					}
@@ -1462,7 +1466,7 @@ func applyMovingAvg(name string, body map[string]any, buckets []map[string]any) 
 		switch model {
 		case "linear":
 			if len(hist) == 0 {
-				b[name] = orderedJSON{{"value", nil}}
+				b[name] = ojson.Object{{"value", nil}}
 				break
 			}
 			src := hist
@@ -1476,10 +1480,10 @@ func applyMovingAvg(name string, body map[string]any, buckets []map[string]any) 
 				den += w
 			}
 			v = num / den
-			b[name] = orderedJSON{{"value", rawFloat(v)}}
+			b[name] = ojson.Object{{"value", jsonv.Float(v)}}
 		case "ewma":
 			if len(hist) == 0 {
-				b[name] = orderedJSON{{"value", nil}}
+				b[name] = ojson.Object{{"value", nil}}
 				break
 			}
 			start := 0
@@ -1490,26 +1494,26 @@ func applyMovingAvg(name string, body map[string]any, buckets []map[string]any) 
 			for _, x := range hist[start+1:] {
 				v = alpha*x + (1-alpha)*v
 			}
-			b[name] = orderedJSON{{"value", rawFloat(v)}}
+			b[name] = ojson.Object{{"value", jsonv.Float(v)}}
 		default:
 			src := hist
 			if gap == "insert_zeros" {
 				src = pos
 			}
 			if len(src) == 0 {
-				b[name] = orderedJSON{{"value", nil}}
+				b[name] = ojson.Object{{"value", nil}}
 				break
 			}
 			if len(src) > window {
 				src = src[len(src)-window:]
 			}
 			v = meanF(src)
-			b[name] = orderedJSON{{"value", rawFloat(v)}}
+			b[name] = ojson.Object{{"value", jsonv.Float(v)}}
 		}
 		if dc == 0 {
 			pos = append(pos, 0)
 		} else if v, ok := metricAtPath(b, path); ok {
-			if f, ok := toFloat(v); ok {
+			if f, ok := jsonv.ToFloat(v); ok {
 				pos = append(pos, f)
 				hist = append(hist, f)
 			}

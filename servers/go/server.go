@@ -14,7 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/respfmt"
 )
@@ -43,11 +45,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(status)
 	switch t := v.(type) {
-	case orderedJSON:
+	case ojson.Object:
 		b, _ := t.MarshalJSON()
 		w.Write(b)
 		return
-	case verbatimJSON:
+	case ojson.Verbatim:
 		w.Write(t)
 		return
 	}
@@ -58,7 +60,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Write(bytes.TrimRight(buf.Bytes(), "\n"))
 }
 
-func writeError(w http.ResponseWriter, e *apiError) {
+func writeError(w http.ResponseWriter, e *apierr.Error) {
 	if e.Shard != nil {
 		writeJSON(w, e.Shard.StatusCode(), e.Shard.ResponseBody())
 		return
@@ -99,31 +101,31 @@ func writeError(w http.ResponseWriter, e *apiError) {
 		fields["shard"] = e.Extra
 	}
 	meta := errorMetadata(fields)
-	rootCause := append(orderedJSON{{"type", rcType}, {"reason", rcReason}}, meta...)
-	err := orderedJSON{{"root_cause", []any{rootCause}}, {"type", errType}, {"reason", errReason}}
+	rootCause := append(ojson.Object{{"type", rcType}, {"reason", rcReason}}, meta...)
+	err := ojson.Object{{"root_cause", []any{rootCause}}, {"type", errType}, {"reason", errReason}}
 	err = append(err, meta...)
 	if e.Phase != "" {
-		err = append(err, orderedKV{"phase", e.Phase})
+		err = append(err, ojson.KV{"phase", e.Phase})
 	}
 	if e.CausedBy != nil {
-		err = append(err, orderedKV{"caused_by", causedByObject(e.CausedBy)})
+		err = append(err, ojson.KV{"caused_by", causedByObject(e.CausedBy)})
 	}
 	if len(e.Suppressed) > 0 {
 		sup := make([]any, 0, len(e.Suppressed))
 		for _, s := range e.Suppressed {
 			sup = append(sup, causedByObject(s))
 		}
-		err = append(err, orderedKV{"suppressed", sup})
+		err = append(err, ojson.KV{"suppressed", sup})
 	}
-	writeJSON(w, e.Status, orderedJSON{{"error", err}, {"status", e.Status}})
+	writeJSON(w, e.Status, ojson.Object{{"error", err}, {"status", e.Status}})
 }
 
 // errorMetadata orders exception metadata the way OpenSearch prints it.
-func errorMetadata(fields map[string]any) orderedJSON {
-	out := orderedJSON{}
+func errorMetadata(fields map[string]any) ojson.Object {
+	out := ojson.Object{}
 	for _, k := range []string{"index", "resource.id", "resource.type", "index_uuid", "shard"} {
 		if v, ok := fields[k]; ok {
-			out = append(out, orderedKV{k, v})
+			out = append(out, ojson.KV{k, v})
 		}
 	}
 	for _, k := range jsonv.SortedKeys(fields) {
@@ -131,12 +133,12 @@ func errorMetadata(fields map[string]any) orderedJSON {
 		case "index", "resource.id", "resource.type", "index_uuid", "shard":
 			continue
 		}
-		out = append(out, orderedKV{k, fields[k]})
+		out = append(out, ojson.KV{k, fields[k]})
 	}
 	return out
 }
 
-func causedByObject(e *apiError) map[string]any {
+func causedByObject(e *apierr.Error) map[string]any {
 	m := map[string]any{"type": e.Type, "reason": e.Reason}
 	for k, v := range e.Fields {
 		m[k] = v
@@ -151,15 +153,15 @@ func writeSimpleError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]any{"error": msg, "status": status})
 }
 
-func readJSON(r *http.Request) (map[string]any, *apiError) {
+func readJSON(r *http.Request) (map[string]any, *apierr.Error) {
 	out, _, apiErr := readJSONRaw(r)
 	return out, apiErr
 }
 
-func readJSONRaw(r *http.Request) (map[string]any, []byte, *apiError) {
+func readJSONRaw(r *http.Request) (map[string]any, []byte, *apierr.Error) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		return nil, nil, errBad("failed to read body")
+		return nil, nil, apierr.BadRequest("failed to read body")
 	}
 	if len(strings.TrimSpace(string(body))) == 0 {
 		if src := r.URL.Query().Get("source"); src != "" {
@@ -169,16 +171,16 @@ func readJSONRaw(r *http.Request) (map[string]any, []byte, *apiError) {
 		}
 	}
 	if err := checkDuplicateJSONKeys(body); err != nil {
-		return nil, body, &apiError{Type: "json_parse_exception", Status: 400, Reason: err.Error()}
+		return nil, body, &apierr.Error{Type: "json_parse_exception", Status: 400, Reason: err.Error()}
 	}
 	trimmed := strings.TrimSpace(string(body))
 	if strings.HasPrefix(trimmed, "[") {
-		return nil, body, &apiError{Type: "parsing_exception", Status: 400,
+		return nil, body, &apierr.Error{Type: "parsing_exception", Status: 400,
 			Reason: "Expected [START_OBJECT] but found [START_ARRAY]"}
 	}
 	var out map[string]any
 	if err := jsonv.Unmarshal(body, &out); err != nil {
-		return nil, body, &apiError{Type: "json_parse_exception", Status: 400,
+		return nil, body, &apierr.Error{Type: "json_parse_exception", Status: 400,
 			Reason: "Failed to parse request body: " + err.Error()}
 	}
 	return out, body, nil
@@ -228,7 +230,7 @@ func checkDuplicateJSONKeys(body []byte) error {
 	return walk()
 }
 
-func (s *Server) getIndex(name string) (*Index, *apiError) {
+func (s *Server) getIndex(name string) (*model.Index, *apierr.Error) {
 	idx, ok := s.indices[name]
 	if !ok {
 		return nil, errNotFound(name)
@@ -313,8 +315,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeFinal(w, r, status, body)
 }
 
-func jsonMustMarshal(v any) []byte { return ojson.Marshal(v) }
-
 func methodNotAllowed(w http.ResponseWriter, r *http.Request, allowed ...string) {
 	allow := strings.Join(allowed, ",")
 	w.Header().Set("Allow", allow)
@@ -369,9 +369,9 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if segs[0] == "_script_context" {
-			writeJSON(w, 200, verbatimJSON(scriptContextListing))
+			writeJSON(w, 200, ojson.Verbatim(scriptContextListing))
 		} else {
-			writeJSON(w, 200, verbatimJSON(scriptLanguageListing))
+			writeJSON(w, 200, ojson.Verbatim(scriptLanguageListing))
 		}
 		return
 	}
@@ -570,7 +570,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 			s.createIndex(w, r, segs[0])
 			return
 		}
-		writeError(w, &apiError{
+		writeError(w, &apierr.Error{
 			Type:   "invalid_index_name_exception",
 			Reason: "Invalid index name [" + segs[0] + "], must not start with '_'.",
 			Status: 400,
@@ -820,7 +820,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 	case http.MethodDelete:
-		writeError(w, &apiError{Type: "action_request_validation_exception",
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception",
 			Reason: "Validation Failed: 1: index / indices is missing;", Status: 400})
 		return
 	case http.MethodOptions:
@@ -916,7 +916,7 @@ func writeCompact(buf *bytes.Buffer, v any) {
 		}
 		buf.WriteByte(']')
 	default:
-		buf.WriteString(string(jsonMustMarshal(v)))
+		buf.WriteString(string(ojson.Marshal(v)))
 	}
 }
 
@@ -929,7 +929,7 @@ func (s *Server) handleCreateIndex(w http.ResponseWriter, r *http.Request, name 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.indices[name]; exists {
-		writeError(w, &apiError{
+		writeError(w, &apierr.Error{
 			Type:   "resource_already_exists_exception",
 			Reason: "index [" + name + "]", Status: 400,
 		})
@@ -940,14 +940,14 @@ func (s *Server) handleCreateIndex(w http.ResponseWriter, r *http.Request, name 
 		mappings = m
 	}
 	if err := validateMapping(mappings); err != nil {
-		writeError(w, &apiError{Type: "mapper_parsing_exception", Reason: err.Error(), Status: 400})
+		writeError(w, &apierr.Error{Type: "mapper_parsing_exception", Reason: err.Error(), Status: 400})
 		return
 	}
 	settings := map[string]any{}
 	if st, ok := body["settings"].(map[string]any); ok {
 		settings = st
 	}
-	idx := &Index{
+	idx := &model.Index{
 		Name:         name,
 		UUID:         randomUUID(),
 		CreationDate: nowMillis(),
@@ -1031,7 +1031,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request, name 
 	writeJSON(w, 200, map[string]any{name: map[string]any{"settings": normalizeSettings(idx.Settings)}})
 }
 
-func writeBlockError(idx *Index) *apiError {
+func writeBlockError(idx *model.Index) *apierr.Error {
 	if err := indexBlockError(idx, "write", 8, 403); err != nil {
 		return err
 	}
@@ -1039,13 +1039,13 @@ func writeBlockError(idx *Index) *apiError {
 		return err
 	}
 	if blockOn(idx, "read_only_allow_delete") {
-		return &apiError{Type: "cluster_block_exception", Status: 429,
+		return &apierr.Error{Type: "cluster_block_exception", Status: 429,
 			Reason: fmt.Sprintf("index [%s] blocked by: [TOO_MANY_REQUESTS/12/disk usage exceeded flood-stage watermark, index has read-only-allow-delete block];", idx.Name)}
 	}
 	return nil
 }
 
-func readBlockError(idx *Index) *apiError {
+func readBlockError(idx *model.Index) *apierr.Error {
 	return indexBlockError(idx, "read", 7, 403)
 }
 
@@ -1080,7 +1080,7 @@ func (s *Server) handleIndexDoc(w http.ResponseWriter, r *http.Request, name, id
 	}
 	if idx.DataStream != "" {
 		if opType != "create" && id != "" {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "only write ops with an op_type of create are allowed in data streams"})
 			return
 		}
@@ -1263,7 +1263,7 @@ func (s *Server) handleUpdateDoc(w http.ResponseWriter, r *http.Request, name, i
 	}
 	doc, ok := idx.Docs[id]
 	if !ok {
-		writeError(w, &apiError{
+		writeError(w, &apierr.Error{
 			Type: "document_missing_exception", Status: 404,
 			Reason: "[" + id + "]: document missing",
 		})
@@ -1298,12 +1298,12 @@ func (s *Server) handleUpdateDoc(w http.ResponseWriter, r *http.Request, name, i
 
 // resolveReadTarget resolves a name to a concrete index for read operations,
 // following aliases when necessary.
-func (s *Server) resolveReadTarget(name string) (*Index, *apiError) {
+func (s *Server) resolveReadTarget(name string) (*model.Index, *apierr.Error) {
 	if idx, ok := s.indices[name]; ok {
 		return idx, nil
 	}
-	var withAlias []*Index
-	var writeIdx *Index
+	var withAlias []*model.Index
+	var writeIdx *model.Index
 	for _, idx := range s.indices {
 		if def, ok := idx.Aliases[name]; ok {
 			withAlias = append(withAlias, idx)
@@ -1335,9 +1335,9 @@ func parseQParam(q string) map[string]any {
 	return m
 }
 
-func parseQParamOpts(q, df, op string) (map[string]any, *apiError) {
+func parseQParamOpts(q, df, op string) (map[string]any, *apierr.Error) {
 	if op != "" && !strings.EqualFold(op, "and") && !strings.EqualFold(op, "or") {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "No enum constant org.opensearch.index.query.Operator." + strings.ToUpper(op)}
 	}
 	if q == "" {
@@ -1363,12 +1363,12 @@ func (s *Server) handleCount(w http.ResponseWriter, r *http.Request, name string
 		return
 	}
 	if _, hasSize := body["size"]; hasSize {
-		writeError(w, &apiError{Type: "parsing_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "parsing_exception", Status: 400,
 			Reason: "request does not support [size]"})
 		return
 	}
 	if _, has := body["suggest"]; has {
-		writeError(w, &apiError{Type: "parsing_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "parsing_exception", Status: 400,
 			Reason: "request does not support [suggest]"})
 		return
 	}
@@ -1392,11 +1392,11 @@ func (s *Server) handleCount(w http.ResponseWriter, r *http.Request, name string
 	query, _ := body["query"].(map[string]any)
 	if vals, has := r.URL.Query()["q"]; has {
 		if query != nil {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "request [/" + name + "/_count] contains unrecognized parameter: [q]"})
 			return
 		}
-		var qerr *apiError
+		var qerr *apierr.Error
 		query, qerr = parseQParamOpts(vals[0], r.URL.Query().Get("df"), r.URL.Query().Get("default_operator"))
 		if qerr != nil {
 			writeError(w, qerr)
@@ -1484,7 +1484,7 @@ func (s *Server) handleCount(w http.ResponseWriter, r *http.Request, name string
 func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, name string) {
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeError(w, errBad("failed to read bulk body"))
+		writeError(w, apierr.BadRequest("failed to read bulk body"))
 		return
 	}
 	s.mu.Lock()
@@ -1705,7 +1705,7 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, name string)
 	writeJSON(w, 200, map[string]any{"took": 1, "errors": hasErrors, "items": items})
 }
 
-func bulkErrAPI(op, index, id string, e *apiError) map[string]any {
+func bulkErrAPI(op, index, id string, e *apierr.Error) map[string]any {
 	return map[string]any{op: map[string]any{
 		"_index": index, "_id": id, "status": e.Status,
 		"error": map[string]any{"type": e.Type, "reason": e.Reason},
@@ -1713,7 +1713,7 @@ func bulkErrAPI(op, index, id string, e *apiError) map[string]any {
 }
 
 // checkDynamicStrict enforces a mapping-level "dynamic":"strict" setting.
-func checkDynamicStrict(idx *Index, props map[string]any, source map[string]any) *apiError {
+func checkDynamicStrict(idx *model.Index, props map[string]any, source map[string]any) *apierr.Error {
 	dyn := rootDynamicString(idx)
 	if dyn != "strict" && dyn != "strict_allow_templates" {
 		return nil
@@ -1730,7 +1730,7 @@ func checkDynamicStrict(idx *Index, props map[string]any, source map[string]any)
 				continue
 			}
 		}
-		return &apiError{Type: "strict_dynamic_mapping_exception", Status: 400,
+		return &apierr.Error{Type: "strict_dynamic_mapping_exception", Status: 400,
 			Reason: "mapping set to " + dyn + ", dynamic introduction of [" + k + "] within [_doc] is not allowed"}
 	}
 	return nil

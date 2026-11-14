@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
 	"slopensearch/internal/wildcard"
 )
 
@@ -126,14 +128,14 @@ func (s *Server) handleCat(w http.ResponseWriter, r *http.Request, rest []string
 			val = v[0]
 		}
 		if val != "" && val != "true" && val != "false" {
-			writeError(w, &apiError{Type: "options_parse_exception",
+			writeError(w, &apierr.Error{Type: "options_parse_exception",
 				Reason: "Failed to parse value [" + val + "] as only [true] or [false] are allowed.", Status: 400})
 			return
 		}
 	}
 	if paramBool(r, "help") {
 		if spec != "" {
-			writeError(w, errBad("request ["+r.URL.Path+"] contains unrecognized parameter: [index]"))
+			writeError(w, apierr.BadRequest("request ["+r.URL.Path+"] contains unrecognized parameter: [index]"))
 			return
 		}
 		s.writeCatHelp(w, r, endpoint)
@@ -141,13 +143,13 @@ func (s *Server) handleCat(w http.ResponseWriter, r *http.Request, rest []string
 	}
 	for name := range r.URL.Query() {
 		if !known[name] {
-			writeError(w, errBad("request ["+r.URL.Path+"] contains unrecognized parameter: ["+name+"]"))
+			writeError(w, apierr.BadRequest("request ["+r.URL.Path+"] contains unrecognized parameter: ["+name+"]"))
 			return
 		}
 	}
 	var cols []catCol
 	var rows []catRow
-	var apiErr *apiError
+	var apiErr *apierr.Error
 	switch endpoint {
 	case "indices":
 		cols, rows, apiErr = s.catIndices(r, spec, endpoint)
@@ -208,7 +210,7 @@ func (s *Server) handleCat(w http.ResponseWriter, r *http.Request, rest []string
 	renderCat(w, r, requested, rows, paramBool(r, "v"))
 }
 
-func filterCatHealth(r *http.Request, endpoint string, rows *[]catRow) *apiError {
+func filterCatHealth(r *http.Request, endpoint string, rows *[]catRow) *apierr.Error {
 	if endpoint != "indices" {
 		return nil
 	}
@@ -217,7 +219,7 @@ func filterCatHealth(r *http.Request, endpoint string, rows *[]catRow) *apiError
 		return nil
 	}
 	if health != "green" && health != "yellow" && health != "red" {
-		return &apiError{Type: "illegal_argument_exception", Reason: "unknown cluster health status [" + health + "]", Status: 400}
+		return &apierr.Error{Type: "illegal_argument_exception", Reason: "unknown cluster health status [" + health + "]", Status: 400}
 	}
 	out := []catRow{}
 	for _, row := range *rows {
@@ -296,7 +298,7 @@ func catAliasToKey(token string, cols []catCol) string {
 	return ""
 }
 
-func sortCatRows(s string, requested []catRequestedCol, cols []catCol, rows *[]catRow) *apiError {
+func sortCatRows(s string, requested []catRequestedCol, cols []catCol, rows *[]catRow) *apierr.Error {
 	if s == "" {
 		return nil
 	}
@@ -315,7 +317,7 @@ func sortCatRows(s string, requested []catRequestedCol, cols []catCol, rows *[]c
 		if i := strings.LastIndex(token, ":"); i >= 0 {
 			dir := token[i+1:]
 			if dir != "asc" && dir != "desc" {
-				return &apiError{Type: "unsupported_operation_exception",
+				return &apierr.Error{Type: "unsupported_operation_exception",
 					Reason: "Unable to sort by unknown sort key `" + token + "`", Status: 500}
 			}
 			desc = dir == "desc"
@@ -323,7 +325,7 @@ func sortCatRows(s string, requested []catRequestedCol, cols []catCol, rows *[]c
 		}
 		canonical := catAliasToKey(key, cols)
 		if canonical == "" {
-			return &apiError{Type: "unsupported_operation_exception",
+			return &apierr.Error{Type: "unsupported_operation_exception",
 				Reason: "Unable to sort by unknown sort key `" + token + "`", Status: 500}
 		}
 		keys = append(keys, sortKey{key: canonical, desc: desc})
@@ -347,8 +349,8 @@ func sortCatRows(s string, requested []catRequestedCol, cols []catCol, rows *[]c
 			}
 			var less bool
 			if numericCols[k.key] {
-				af, aok := toFloat(a)
-				bf, bok := toFloat(b)
+				af, aok := jsonv.ToFloat(a)
+				bf, bok := jsonv.ToFloat(b)
 				if aok && bok {
 					less = af < bf
 				} else {
@@ -591,7 +593,7 @@ func catIndicesColumns() []catCol {
 	}
 }
 
-func (s *Server) catIndices(r *http.Request, spec, endpoint string) ([]catCol, []catRow, *apiError) {
+func (s *Server) catIndices(r *http.Request, spec, endpoint string) ([]catCol, []catRow, *apierr.Error) {
 	all := catIndicesColumns()
 	expandRaw := r.URL.Query().Get("expand_wildcards")
 	expand := map[string]bool{"open": true, "closed": true}
@@ -646,7 +648,7 @@ func (s *Server) catIndices(r *http.Request, spec, endpoint string) ([]catCol, [
 	return all, rows, nil
 }
 
-func storeBytes(idx *Index) int64 {
+func storeBytes(idx *model.Index) int64 {
 	if len(idx.Docs) == 0 {
 		return 0
 	}
@@ -744,7 +746,7 @@ func (s *Server) catHealth(r *http.Request) ([]catCol, []catRow) {
 
 // ------------------------------------------------------------------ count
 
-func (s *Server) catCount(r *http.Request, spec string) ([]catCol, []catRow, *apiError) {
+func (s *Server) catCount(r *http.Request, spec string) ([]catCol, []catRow, *apierr.Error) {
 	cols := []catCol{
 		{key: "epoch", aliases: []string{"e"}, desc: "seconds since 1970", numeric: true},
 		{key: "timestamp", aliases: []string{"ts"}, desc: "time of day"},
@@ -759,7 +761,7 @@ func (s *Server) catCount(r *http.Request, spec string) ([]catCol, []catRow, *ap
 	count := 0
 	for _, idx := range indices {
 		if idx.Closed {
-			return nil, nil, &apiError{Type: "index_closed_exception", Reason: "closed", Status: 400}
+			return nil, nil, &apierr.Error{Type: "index_closed_exception", Reason: "closed", Status: 400}
 		}
 	}
 	for _, idx := range indices {
@@ -882,7 +884,7 @@ func catShardsColumns() []catCol {
 	}
 }
 
-func (s *Server) catShards(r *http.Request, spec string) ([]catCol, []catRow, *apiError) {
+func (s *Server) catShards(r *http.Request, spec string) ([]catCol, []catRow, *apierr.Error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	indices, apiErr := s.resolveIndices(spec, resolveOpts{missing404: !paramBool(r, "ignore_unavailable")})
@@ -891,7 +893,7 @@ func (s *Server) catShards(r *http.Request, spec string) ([]catCol, []catRow, *a
 	}
 	for _, idx := range indices {
 		if idx.Closed {
-			return nil, nil, &apiError{Type: "index_closed_exception", Reason: "closed (" + idx.Name + ")", Status: 400}
+			return nil, nil, &apierr.Error{Type: "index_closed_exception", Reason: "closed (" + idx.Name + ")", Status: 400}
 		}
 	}
 	rows := []catRow{}
@@ -1109,7 +1111,7 @@ func catFielddata(r *http.Request) ([]catCol, []catRow) {
 	return cols, nil
 }
 
-func (s *Server) catAllocation(r *http.Request) ([]catCol, []catRow, *apiError) {
+func (s *Server) catAllocation(r *http.Request) ([]catCol, []catRow, *apierr.Error) {
 	cols := []catCol{
 		{key: "shards", aliases: []string{"s"}, desc: "number of shards", numeric: true},
 		{key: "disk.indices", aliases: []string{"di"}, desc: "disk used by indices", numeric: true},
@@ -1135,7 +1137,7 @@ func (s *Server) catAllocation(r *http.Request) ([]catCol, []catRow, *apiError) 
 		assignedBytes += storeBytes(idx)
 	}
 	bytesParam := r.URL.Query().Get("bytes")
-	var unusedAPIErr *apiError
+	var unusedAPIErr *apierr.Error
 	_ = unusedAPIErr
 	diskTotal := int64(500107862016)
 	row := catRow{values: map[string]any{
@@ -1167,7 +1169,7 @@ func (s *Server) catAllocation(r *http.Request) ([]catCol, []catRow, *apiError) 
 	return cols, rows, nil
 }
 
-func (s *Server) catRecovery(r *http.Request, spec string) ([]catCol, []catRow, *apiError) {
+func (s *Server) catRecovery(r *http.Request, spec string) ([]catCol, []catRow, *apierr.Error) {
 	cols := []catCol{
 		{key: "index", aliases: []string{"i", "idx"}, desc: "index name"},
 		{key: "shard", aliases: []string{"s", "sh"}, desc: "shard name", numeric: true},
@@ -1222,7 +1224,7 @@ func (s *Server) catRecovery(r *http.Request, spec string) ([]catCol, []catRow, 
 	return cols, rows, nil
 }
 
-func (s *Server) catSegments(r *http.Request, spec string) ([]catCol, []catRow, *apiError) {
+func (s *Server) catSegments(r *http.Request, spec string) ([]catCol, []catRow, *apierr.Error) {
 	cols := []catCol{
 		{key: "index", aliases: []string{"i", "idx"}, desc: "index name"},
 		{key: "shard", aliases: []string{"s", "sh"}, desc: "shard name", numeric: true},
@@ -1369,7 +1371,7 @@ func intOrDefault(v any, def int) int {
 	if v == nil {
 		return def
 	}
-	if f, ok := toFloat(v); ok {
+	if f, ok := jsonv.ToFloat(v); ok {
 		return int(f)
 	}
 	return def
@@ -1379,7 +1381,7 @@ func intOrNil(v any) any {
 	if v == nil {
 		return nil
 	}
-	if f, ok := toFloat(v); ok {
+	if f, ok := jsonv.ToFloat(v); ok {
 		return strconv.Itoa(int(f))
 	}
 	return nil

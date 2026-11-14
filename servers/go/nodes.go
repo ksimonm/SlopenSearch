@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/wildcard"
 )
 
@@ -359,18 +360,18 @@ func (s *Server) handleNodeStats(w http.ResponseWriter, r *http.Request, selecto
 		for _, m := range strings.Split(metric, ",") {
 			if !nodeStatsMetrics[m] {
 				if m == "breakers" {
-					writeError(w, &apiError{Type: "illegal_argument_exception",
+					writeError(w, &apierr.Error{Type: "illegal_argument_exception",
 						Reason: "request [" + r.URL.Path + "] contains unrecognized metric: [" + m + "] -> did you mean [breaker]?", Status: 400})
 					return
 				}
-				writeError(w, &apiError{Type: "illegal_argument_exception",
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception",
 					Reason: "request [" + r.URL.Path + "] contains unrecognized metric: [" + m + "]", Status: 400})
 				return
 			}
 		}
 		if metric == "_all" || metric == "all" {
 			if indexMetric != "" {
-				writeError(w, &apiError{Type: "illegal_argument_exception",
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception",
 					Reason: "request [" + r.URL.Path + "] contains index metrics [" + indexMetric + "] but all stats requested", Status: 400})
 				return
 			}
@@ -391,7 +392,7 @@ func (s *Server) handleNodeStats(w http.ResponseWriter, r *http.Request, selecto
 		} else {
 			for _, m := range strings.Split(indexMetric, ",") {
 				if !nodeIndexStatsMetrics[m] {
-					writeError(w, &apiError{Type: "illegal_argument_exception",
+					writeError(w, &apierr.Error{Type: "illegal_argument_exception",
 						Reason: "request [" + r.URL.Path + "] contains unrecognized index metric: [" + m + "]", Status: 400})
 					return
 				}
@@ -669,16 +670,16 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request, rest []stri
 	if len(rest) == 1 {
 		id := rest[0]
 		if !strings.Contains(id, ":") {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Reason: "malformed task id " + id, Status: 400})
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Reason: "malformed task id " + id, Status: 400})
 			return
 		}
 		parts := strings.SplitN(id, ":", 2)
 		if parts[0] != nodeID {
-			writeError(w, &apiError{Type: "resource_not_found_exception",
+			writeError(w, &apierr.Error{Type: "resource_not_found_exception",
 				Reason: "task [" + id + "] belongs to the node [" + parts[0] + "] which is not part of the cluster", Status: 404})
 			return
 		}
-		writeError(w, &apiError{Type: "resource_not_found_exception",
+		writeError(w, &apierr.Error{Type: "resource_not_found_exception",
 			Reason: "task [" + id + "] isn't running and hasn't stored its results", Status: 404})
 		return
 	}
@@ -687,7 +688,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request, rest []stri
 		groupBy = "nodes"
 	}
 	if groupBy != "nodes" && groupBy != "parents" && groupBy != "none" {
-		writeError(w, &apiError{Type: "illegal_argument_exception",
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception",
 			Reason: "[group_by] must be one of [nodes], [parents] or [none] but was [" + groupBy + "]", Status: 400})
 		return
 	}

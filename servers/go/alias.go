@@ -5,11 +5,13 @@ import (
 	"sort"
 	"strings"
 
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/model"
 	"slopensearch/internal/wildcard"
 )
 
 // indexAliasesView renders the indexed alias form: {index: {"aliases": {...}}}
-func indexAliasesView(indices []*Index, nameSpec string, includeAll bool) map[string]any {
+func indexAliasesView(indices []*model.Index, nameSpec string, includeAll bool) map[string]any {
 	out := map[string]any{}
 	for _, idx := range indices {
 		aliases := map[string]any{}
@@ -160,7 +162,7 @@ func (s *Server) headAliasesGlobal(w http.ResponseWriter, r *http.Request, alias
 	w.WriteHeader(404)
 }
 
-func (s *Server) aliasHiddenConflict(aliasName string, def map[string]any) *apiError {
+func (s *Server) aliasHiddenConflict(aliasName string, def map[string]any) *apierr.Error {
 	newHidden, hasNew := def["is_hidden"]
 	for _, idx := range s.indices {
 		existing, ok := idx.Aliases[aliasName]
@@ -169,22 +171,22 @@ func (s *Server) aliasHiddenConflict(aliasName string, def map[string]any) *apiE
 		}
 		oldHidden, hasOld := existing["is_hidden"]
 		if hasNew != hasOld || (hasNew && oldHidden != newHidden) {
-			return &apiError{Type: "illegal_state_exception", Status: 500,
+			return &apierr.Error{Type: "illegal_state_exception", Status: 500,
 				Reason: "alias must have the same is_hidden setting on all indices"}
 		}
 	}
 	return nil
 }
 
-func multipleWriteIndicesErr(alias string, indices []string) *apiError {
+func multipleWriteIndicesErr(alias string, indices []string) *apierr.Error {
 	sorted := append([]string{}, indices...)
 	sort.Strings(sorted)
-	return &apiError{Type: "illegal_state_exception", Status: 500,
+	return &apierr.Error{Type: "illegal_state_exception", Status: 500,
 		Reason: "alias [" + alias + "] has more than one write index [" + strings.Join(sorted, ",") + "]"}
 }
 
-func errNoWriteIndex(alias string) *apiError {
-	return errBad("no write index is defined for alias [" + alias + "]. The write index may be explicitly disabled using is_write_index=false or the alias points to multiple indices without one being designated as a write index")
+func errNoWriteIndex(alias string) *apierr.Error {
+	return apierr.BadRequest("no write index is defined for alias [" + alias + "]. The write index may be explicitly disabled using is_write_index=false or the alias points to multiple indices without one being designated as a write index")
 }
 
 // putAliasAPI handles PUT/POST /{idx}/_alias/{name} and /{idx}/_aliases/{name}
@@ -195,7 +197,7 @@ func (s *Server) putAliasAPI(w http.ResponseWriter, r *http.Request, indexSpec, 
 	}
 	for _, an := range strings.Split(aliasName, ",") {
 		if _, clash := s.indices[an]; clash {
-			writeError(w, &apiError{Type: "invalid_alias_name_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "invalid_alias_name_exception", Status: 400,
 				Reason: "Invalid alias name [" + an + "], an index exists with the same name as the alias"})
 			return
 		}
@@ -216,10 +218,10 @@ func (s *Server) putAliasAPI(w http.ResponseWriter, r *http.Request, indexSpec, 
 	def := normalizeAliasDef(body)
 	if filt, ok := def["filter"]; ok && filt != nil {
 		if fq, ok := filt.(map[string]any); ok {
-			if err := validateQuery(&Index{FieldTypes: map[string]string{}}, fq); err != nil {
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			if err := validateQuery(&model.Index{FieldTypes: map[string]string{}}, fq); err != nil {
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason:   "failed to parse filter for alias [" + aliasName + "]",
-					CausedBy: &apiError{Type: "parsing_exception", Reason: err.Reason}})
+					CausedBy: &apierr.Error{Type: "parsing_exception", Reason: err.Reason}})
 				return
 			}
 		}
@@ -298,7 +300,7 @@ func (s *Server) deleteAliasAPI(w http.ResponseWriter, r *http.Request, indexSpe
 		}
 	}
 	if !anyDeleted && len(missing) > 0 {
-		writeError(w, &apiError{Type: "aliases_not_found_exception", Status: 404,
+		writeError(w, &apierr.Error{Type: "aliases_not_found_exception", Status: 404,
 			Reason: "aliases [" + strings.Join(missing, ",") + "] missing",
 			Fields: map[string]any{"resource.type": "aliases", "resource.id": strings.Join(missing, ",")}})
 		return
@@ -322,7 +324,7 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 	}
 	rawActions, ok := body["actions"].([]any)
 	if !ok || len(rawActions) == 0 {
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "No action specified"})
 		return
 	}
@@ -330,7 +332,7 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 	for _, raw := range rawActions {
 		m, ok := raw.(map[string]any)
 		if !ok || len(m) != 1 {
-			writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "Failed to parse alias action"})
 			return
 		}
@@ -345,13 +347,13 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 			switch kind {
 			case "add", "remove", "remove_index":
 			default:
-				writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 					Reason: "unknown alias action [" + kind + "]"})
 				return
 			}
 			if _, hasIndex := def["index"]; !hasIndex {
 				if _, hasIndices := def["indices"]; !hasIndices {
-					writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400,
+					writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 						Reason: "Failed to parse alias action"})
 					return
 				}
@@ -360,7 +362,7 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 				_, hasAlias := def["alias"]
 				_, hasAliases := def["aliases"]
 				if !hasAlias && !hasAliases {
-					writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400,
+					writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 						Reason: "Failed to parse alias action"})
 					return
 				}
@@ -373,13 +375,13 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 
 	type pendingChange struct {
-		idx    *Index
+		idx    *model.Index
 		alias  string
 		def    map[string]any
 		delete bool
 	}
 	var changes []pendingChange
-	var removeIndexes []*Index
+	var removeIndexes []*model.Index
 	aliasMissing := ""
 	applied := false
 
@@ -429,8 +431,8 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 		return indicesNames, aliasNames
 	}
 
-	resolveForAction := func(name string, requireExisting bool) ([]*Index, *apiError) {
-		var matched []*Index
+	resolveForAction := func(name string, requireExisting bool) ([]*model.Index, *apierr.Error) {
+		var matched []*model.Index
 		direct, exists := s.indices[name]
 		if exists {
 			matched = append(matched, direct)
@@ -472,7 +474,7 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
-			var targetIndices []*Index
+			var targetIndices []*model.Index
 			for _, in := range indexNames {
 				matched, err := resolveForAction(in, true)
 				if err != nil {
@@ -492,10 +494,10 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 			def = normalizeAliasDef(def)
 			if filt, ok := def["filter"]; ok && filt != nil {
 				if fq, ok := filt.(map[string]any); ok {
-					if err := validateQuery(&Index{FieldTypes: map[string]string{}}, fq); err != nil {
-						writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+					if err := validateQuery(&model.Index{FieldTypes: map[string]string{}}, fq); err != nil {
+						writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 							Reason:   "failed to parse filter for alias [" + strings.Join(aliasNames, ",") + "]",
-							CausedBy: &apiError{Type: "parsing_exception", Reason: err.Reason}})
+							CausedBy: &apierr.Error{Type: "parsing_exception", Reason: err.Reason}})
 						return
 					}
 				}
@@ -543,7 +545,7 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 			if v, ok := a.def["must_exist"].(bool); ok {
 				requireExisting = v
 			}
-			var targetIndices []*Index
+			var targetIndices []*model.Index
 			for _, in := range indexNames {
 				matched, err := resolveForAction(in, true)
 				if err != nil {
@@ -585,7 +587,7 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 				if aliasHit {
-					writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+					writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 						Reason: "The provided expression [" + in + "] matches an alias, specify the corresponding concrete indices instead."})
 					return
 				}
@@ -599,7 +601,7 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(changes) == 0 && len(removeIndexes) == 0 {
 		if aliasMissing != "" {
-			writeError(w, &apiError{Type: "aliases_not_found_exception", Status: 404,
+			writeError(w, &apierr.Error{Type: "aliases_not_found_exception", Status: 404,
 				Reason: "aliases [" + aliasMissing + "] missing",
 				Fields: map[string]any{"resource.type": "aliases", "resource.id": aliasMissing}})
 			return
@@ -635,12 +637,12 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveWriteTarget finds the concrete index a write operation targets.
-func (s *Server) resolveWriteTarget(name string) (*Index, *apiError) {
+func (s *Server) resolveWriteTarget(name string) (*model.Index, *apierr.Error) {
 	if idx, ok := s.indices[name]; ok {
 		return idx, nil
 	}
-	var withAlias []*Index
-	var writeIdx *Index
+	var withAlias []*model.Index
+	var writeIdx *model.Index
 	for _, idx := range s.indices {
 		if def, ok := idx.Aliases[name]; ok {
 			withAlias = append(withAlias, idx)
@@ -674,7 +676,7 @@ func (s *Server) resolveWriteTarget(name string) (*Index, *apiError) {
 }
 
 // aliasRoutingFor returns the index_routing configured for name-as-alias on idx.
-func aliasRoutingFor(idx *Index, aliasName string) string {
+func aliasRoutingFor(idx *model.Index, aliasName string) string {
 	if idx.Name == aliasName {
 		return ""
 	}
@@ -689,7 +691,7 @@ func aliasRoutingFor(idx *Index, aliasName string) string {
 }
 
 // searchAliasFilter returns the filter configured on the alias name for idx.
-func searchAliasFilter(idx *Index, aliasName string) map[string]any {
+func searchAliasFilter(idx *model.Index, aliasName string) map[string]any {
 	if idx.Name == aliasName {
 		return nil
 	}

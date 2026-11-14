@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/apierr"
 )
 
 type scrollContext struct {
@@ -67,43 +69,43 @@ func parseKeepAlive(v string) (time.Duration, bool) {
 	return time.Duration(n) * mult, true
 }
 
-func validateScrollParams(r *http.Request, body map[string]any, from, size int) *apiError {
+func validateScrollParams(r *http.Request, body map[string]any, from, size int) *apierr.Error {
 	keep := r.URL.Query().Get("scroll")
 	d, ok := parseKeepAlive(keep)
 	if !ok {
-		return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "failed to parse [" + keep + "]"}
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "failed to parse [" + keep + "]"}
 	}
 	if d > 24*time.Hour {
 		reason := fmt.Sprintf("Keep alive for request (%s) is too large. It must be less than (1d).", keep)
-		return &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: reason,
-			RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason}}
+		return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: reason,
+			RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 	}
 	if from != 0 {
-		return &apiError{Type: "action_request_validation_exception", Status: 400,
+		return &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: using [from] is not allowed in a scroll context;"}
 	}
 	if _, has := r.URL.Query()["request_cache"]; has {
-		return &apiError{Type: "action_request_validation_exception", Status: 400,
+		return &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: [request_cache] cannot be used in a scroll context;"}
 	}
 	if size == 0 {
-		return &apiError{Type: "action_request_validation_exception", Status: 400,
+		return &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: [size] cannot be [0] in a scroll context;"}
 	}
 	if tv, has := body["track_total_hits"]; has {
 		if b, ok := tv.(bool); !ok || !b {
-			return &apiError{Type: "action_request_validation_exception", Status: 400,
+			return &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: disabling [track_total_hits] is not allowed in a scroll context;"}
 		}
 	}
 	if _, has := r.URL.Query()["track_total_hits"]; has {
-		return &apiError{Type: "action_request_validation_exception", Status: 400,
+		return &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: disabling [track_total_hits] is not allowed in a scroll context;"}
 	}
 	if body["collapse"] != nil {
 		reason := "cannot use `collapse` in a scroll context"
-		return &apiError{Type: "search_phase_execution_exception", Status: 500, Reason: reason,
-			RootCause: &apiError{Type: "search_exception", Reason: reason}}
+		return &apierr.Error{Type: "search_phase_execution_exception", Status: 500, Reason: reason,
+			RootCause: &apierr.Error{Type: "search_exception", Reason: reason}}
 	}
 	return nil
 }
@@ -133,12 +135,12 @@ func (s *Server) handleScroll(w http.ResponseWriter, r *http.Request, rest []str
 		}
 	}
 	if sid == "" {
-		writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: scrollId is missing;"})
 		return
 	}
 	if !strings.HasPrefix(sid, "slopensearch-scroll-") {
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "Cannot parse scroll id"})
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "Cannot parse scroll id"})
 		return
 	}
 	keep := r.URL.Query().Get("scroll")
@@ -147,15 +149,15 @@ func (s *Server) handleScroll(w http.ResponseWriter, r *http.Request, rest []str
 	}
 	if keep != "" {
 		if d, ok := parseKeepAlive(keep); !ok {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "failed to parse [" + keep + "]"})
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "failed to parse [" + keep + "]"})
 			return
 		} else if d > 24*time.Hour {
 			s.scrollMu.Lock()
 			delete(s.scrolls, sid)
 			s.scrollMu.Unlock()
 			reason := fmt.Sprintf("Keep alive for request (%s) is too large. It must be less than (1d).", keep)
-			writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: reason,
-				RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason}})
+			writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: reason,
+				RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason}})
 			return
 		}
 	}
@@ -164,8 +166,8 @@ func (s *Server) handleScroll(w http.ResponseWriter, r *http.Request, rest []str
 	if !ok {
 		s.scrollMu.Unlock()
 		reason := "No search context found for id [" + sid + "]"
-		writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 404, Reason: reason,
-			RootCause: &apiError{Type: "search_context_missing_exception", Reason: reason}})
+		writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 404, Reason: reason,
+			RootCause: &apierr.Error{Type: "search_context_missing_exception", Reason: reason}})
 		return
 	}
 	start := ctx.pos
@@ -225,13 +227,13 @@ func (s *Server) clearScroll(w http.ResponseWriter, r *http.Request, rest []stri
 		}
 	}
 	if len(ids) == 0 {
-		writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: no scroll ids specified;"})
 		return
 	}
 	for _, id := range ids {
 		if !strings.HasPrefix(id, "slopensearch-scroll-") {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "Cannot parse scroll id"})
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "Cannot parse scroll id"})
 			return
 		}
 	}

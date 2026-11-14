@@ -8,7 +8,10 @@ import (
 	"strconv"
 	"strings"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/ojson"
 )
 
 type bulkAction struct {
@@ -19,25 +22,25 @@ type bulkAction struct {
 	id         string
 	idGiven    bool
 	source     map[string]any
-	sourceErr  *apiError
+	sourceErr  *apierr.Error
 	updateBody map[string]any
-	updateErr  *apiError
+	updateErr  *apierr.Error
 }
 
 func (s *Server) handleBulkV2(w http.ResponseWriter, r *http.Request, pathIndex string) {
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeError(w, errBad("failed to read bulk body"))
+		writeError(w, apierr.BadRequest("failed to read bulk body"))
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(raw) == 0 {
-		writeError(w, &apiError{Type: "parse_exception", Status: 400, Reason: "request body is required"})
+		writeError(w, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "request body is required"})
 		return
 	}
 	if !strings.HasSuffix(string(raw), "\n") {
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "The bulk request must be terminated by a newline [\\n]"})
 		return
 	}
@@ -62,7 +65,7 @@ func (s *Server) handleBulkV2(w http.ResponseWriter, r *http.Request, pathIndex 
 					found = "VALUE_NUMBER"
 				}
 			}
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: fmt.Sprintf("Malformed action/metadata line [%d], expected START_OBJECT but found [%s]", lineNo, found)})
 			return
 		}
@@ -75,7 +78,7 @@ func (s *Server) handleBulkV2(w http.ResponseWriter, r *http.Request, pathIndex 
 		switch op {
 		case "index", "create", "delete", "update":
 		default:
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: fmt.Sprintf("Malformed action/metadata line [%d], expected one of [create, delete, index, update] but found [%s]", lineNo, op)})
 			return
 		}
@@ -84,7 +87,7 @@ func (s *Server) handleBulkV2(w http.ResponseWriter, r *http.Request, pathIndex 
 			"require_alias": true, "retry_on_conflict": true, "_source": true}
 		for k := range meta {
 			if !allowed[k] {
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: fmt.Sprintf("Action/metadata line [%d] contains an unknown parameter [%s]", lineNo, k)})
 				return
 			}
@@ -92,11 +95,11 @@ func (s *Server) handleBulkV2(w http.ResponseWriter, r *http.Request, pathIndex 
 		if v, ok := meta["_source"]; ok {
 			switch v.(type) {
 			case []any:
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "expected a simple value for field [_source] but found [START_ARRAY]"})
 				return
 			case map[string]any:
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "expected a simple value for field [_source] but found [START_OBJECT]"})
 				return
 			}
@@ -106,7 +109,7 @@ func (s *Server) handleBulkV2(w http.ResponseWriter, r *http.Request, pathIndex 
 			idxName = v
 		}
 		if idxName == "" {
-			writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: index is missing;"})
 			return
 		}
@@ -117,14 +120,14 @@ func (s *Server) handleBulkV2(w http.ResponseWriter, r *http.Request, pathIndex 
 			id, _ = valueToScriptString(v)
 		}
 		if (op == "delete" || op == "update") && !idGiven {
-			writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: id is missing;"})
 			return
 		}
 		a := bulkAction{line: lineNo, op: op, meta: meta, indexName: idxName, id: id, idGiven: idGiven}
 		if op != "delete" {
 			if i+1 >= len(lines) || strings.TrimSpace(strings.TrimSuffix(lines[i+1], "\r")) == "" {
-				writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 					Reason: "Validation Failed: 1: no requests added;"})
 				return
 			}
@@ -132,13 +135,13 @@ func (s *Server) handleBulkV2(w http.ResponseWriter, r *http.Request, pathIndex 
 			srcLine := strings.TrimSpace(strings.TrimSuffix(lines[i], "\r"))
 			var srcAny any
 			if err := jsonv.Unmarshal([]byte(srcLine), &srcAny); err != nil {
-				a.sourceErr = &apiError{Type: "mapper_parsing_exception", Status: 400,
+				a.sourceErr = &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 					Reason:   "Failed to parse request body",
-					CausedBy: &apiError{Type: "json_parse_exception", Reason: err.Error()}}
+					CausedBy: &apierr.Error{Type: "json_parse_exception", Reason: err.Error()}}
 			} else {
 				src, ok := srcAny.(map[string]any)
 				if !ok {
-					a.sourceErr = &apiError{Type: "mapper_parsing_exception", Status: 400,
+					a.sourceErr = &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 						Reason: "Failed to parse request body"}
 				} else if op == "update" {
 					a.updateBody = src
@@ -147,14 +150,14 @@ func (s *Server) handleBulkV2(w http.ResponseWriter, r *http.Request, pathIndex 
 						"_source": true, "retry_on_conflict": true}
 					for k := range src {
 						if !allowedUp[k] {
-							writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400,
+							writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 								Reason: "[UpdateRequest] unknown field [" + k + "]"})
 							return
 						}
 					}
 					if _, ok := src["doc"].(map[string]any); !ok {
 						if _, has := src["doc"]; has {
-							a.updateErr = &apiError{Type: "mapper_parsing_exception", Status: 400,
+							a.updateErr = &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 								Reason: "[doc] must be an object"}
 						}
 					}
@@ -166,7 +169,7 @@ func (s *Server) handleBulkV2(w http.ResponseWriter, r *http.Request, pathIndex 
 		actions = append(actions, a)
 	}
 	if len(actions) == 0 {
-		writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: no requests added;"})
 		return
 	}
@@ -190,31 +193,31 @@ func (s *Server) handleBulkV2(w http.ResponseWriter, r *http.Request, pathIndex 
 		}
 		items = append(items, item)
 	}
-	resp := orderedJSON{{"took", int64(1)}, {"errors", hasErrors}, {"items", items}}
+	resp := ojson.Object{{"took", int64(1)}, {"errors", hasErrors}, {"items", items}}
 	if usedPipeline {
-		resp = append(resp, orderedKV{"ingest_took", int64(0)})
+		resp = append(resp, ojson.KV{"ingest_took", int64(0)})
 	}
 	writeJSON(w, 200, resp)
 }
 
-func parseBulkActionLine(line string) (string, map[string]any, *apiError) {
+func parseBulkActionLine(line string) (string, map[string]any, *apierr.Error) {
 	dec := json.NewDecoder(strings.NewReader(line))
 	dec.UseNumber()
 	tok, err := dec.Token()
 	if err != nil {
-		return "", nil, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
+		return "", nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
 	}
 	if d, ok := tok.(json.Delim); !ok || d != '{' {
-		return "", nil, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "expected START_OBJECT"}
+		return "", nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "expected START_OBJECT"}
 	}
 	kt, err := dec.Token()
 	if err != nil {
-		return "", nil, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "expected action name"}
+		return "", nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "expected action name"}
 	}
 	op, _ := kt.(string)
 	var all map[string]any
 	if err := jsonv.Unmarshal([]byte(line), &all); err != nil {
-		return "", nil, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
+		return "", nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
 	}
 	meta, _ := all[op].(map[string]any)
 	if meta == nil {
@@ -223,10 +226,10 @@ func parseBulkActionLine(line string) (string, map[string]any, *apiError) {
 	return op, meta, nil
 }
 
-func (s *Server) bulkResolve(name string, requireAlias bool) (*Index, *apiError) {
+func (s *Server) bulkResolve(name string, requireAlias bool) (*model.Index, *apierr.Error) {
 	if requireAlias {
 		if _, concrete := s.indices[name]; concrete {
-			return nil, &apiError{Type: "index_not_found_exception", Status: 404,
+			return nil, &apierr.Error{Type: "index_not_found_exception", Status: 404,
 				Reason: "no such index [" + name + "] and [require_alias] request flag is [true] and is not an alias",
 				Fields: map[string]any{"index": name, "resource.type": "index_or_alias", "resource.id": name, "index_uuid": "_na_"}}
 		}
@@ -263,33 +266,33 @@ func metaInt(meta map[string]any, key string) (int64, bool) {
 	if n, ok := integerOf(v); ok {
 		return n, true
 	}
-	if f, ok := toFloat(v); ok {
+	if f, ok := jsonv.ToFloat(v); ok {
 		return int64(f), true
 	}
 	return 0, false
 }
 
-func bulkVersion(idx *Index, id string, meta map[string]any, exists bool) (int64, *apiError) {
+func bulkVersion(idx *model.Index, id string, meta map[string]any, exists bool) (int64, *apierr.Error) {
 	old := currentVersion(idx, id)
 	v, has := metaInt(meta, "version")
 	vt := metaString(meta, "version_type")
 	if !has {
 		if vt == "external" || vt == "external_gte" {
-			return 0, &apiError{Type: "action_request_validation_exception", Status: 400,
+			return 0, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: illegal version value [null];"}
 		}
 		if vt != "" && vt != "internal" {
-			return 0, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "No version type match [" + vt + "]"}
+			return 0, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "No version type match [" + vt + "]"}
 		}
 		return old + 1, nil
 	}
 	switch vt {
 	case "internal":
-		return 0, &apiError{Type: "action_request_validation_exception", Status: 400,
+		return 0, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: internal versioning can not be used for optimistic concurrency control. Please use `if_seq_no` and `if_primary_term` instead;"}
 	case "external":
 		if v < 0 {
-			return 0, &apiError{Type: "action_request_validation_exception", Status: 400,
+			return 0, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: illegal version value [" + strconv.FormatInt(v, 10) + "];"}
 		}
 		if exists && old >= v {
@@ -302,18 +305,18 @@ func bulkVersion(idx *Index, id string, meta map[string]any, exists bool) (int64
 		}
 		return v, nil
 	default:
-		return 0, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "No version type match [" + vt + "]"}
+		return 0, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "No version type match [" + vt + "]"}
 	}
 }
 
-func bulkIfSeq(idx *Index, id string, meta map[string]any) *apiError {
+func bulkIfSeq(idx *model.Index, id string, meta map[string]any) *apierr.Error {
 	seq, hasSeq := metaInt(meta, "if_seq_no")
 	term, hasTerm := metaInt(meta, "if_primary_term")
 	if !hasSeq && !hasTerm {
 		return nil
 	}
 	if hasSeq != hasTerm {
-		return &apiError{Type: "action_request_validation_exception", Status: 400,
+		return &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: ifSeqNo and ifPrimaryTerm must be set together;"}
 	}
 	curSeq, ok := idx.SeqNos[id]
@@ -330,24 +333,24 @@ func bulkIfSeq(idx *Index, id string, meta map[string]any) *apiError {
 	return nil
 }
 
-func bulkItem(op, index, id string, version, seq, term int64, result string, status int, forced bool) orderedJSON {
-	it := orderedJSON{{"_index", index}, {"_id", id}, {"_version", version}, {"result", result}}
+func bulkItem(op, index, id string, version, seq, term int64, result string, status int, forced bool) ojson.Object {
+	it := ojson.Object{{"_index", index}, {"_id", id}, {"_version", version}, {"result", result}}
 	if forced {
-		it = append(it, orderedKV{"forced_refresh", true})
+		it = append(it, ojson.KV{"forced_refresh", true})
 	}
 	it = append(it,
-		orderedKV{"_shards", map[string]any{"total": 1, "successful": 1, "failed": 0}},
-		orderedKV{"_seq_no", seq}, orderedKV{"_primary_term", term}, orderedKV{"status", status})
+		ojson.KV{"_shards", map[string]any{"total": 1, "successful": 1, "failed": 0}},
+		ojson.KV{"_seq_no", seq}, ojson.KV{"_primary_term", term}, ojson.KV{"status", status})
 	return it
 }
 
-func bulkErrItem(op, index string, id any, e *apiError) orderedJSON {
-	return orderedJSON{{op, orderedJSON{
+func bulkErrItem(op, index string, id any, e *apierr.Error) ojson.Object {
+	return ojson.Object{{op, ojson.Object{
 		{"_index", index}, {"_id", id}, {"status", e.Status}, {"error", bulkCause(e)},
 	}}}
 }
 
-func bulkCause(e *apiError) map[string]any {
+func bulkCause(e *apierr.Error) map[string]any {
 	m := map[string]any{"type": e.Type, "reason": e.Reason}
 	for k, v := range e.Fields {
 		m[k] = v
@@ -358,8 +361,8 @@ func bulkCause(e *apiError) map[string]any {
 	return m
 }
 
-func bulkOKItem(op string, body orderedJSON) orderedJSON {
-	return orderedJSON{{op, body}}
+func bulkOKItem(op string, body ojson.Object) ojson.Object {
+	return ojson.Object{{op, body}}
 }
 
 func (s *Server) runBulkAction(a bulkAction, rv string, requireAliasURL bool, urlRouting, urlPipeline, urlSource string) (any, bool) {
@@ -370,7 +373,7 @@ func (s *Server) runBulkAction(a bulkAction, rv string, requireAliasURL bool, ur
 		return bulkErrItem("update", a.indexName, a.id, a.updateErr), true
 	}
 	if a.idGiven && a.id == "" && a.op != "delete" && a.op != "update" {
-		return bulkErrItem(a.op, a.indexName, "", &apiError{Type: "illegal_argument_exception", Status: 400,
+		return bulkErrItem(a.op, a.indexName, "", &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "if _id is specified it must not be empty"}), true
 	}
 	requireAlias := metaBool(a.meta, "require_alias") || requireAliasURL
@@ -436,7 +439,7 @@ func (s *Server) runBulkAction(a bulkAction, rv string, requireAliasURL bool, ur
 	}
 }
 
-func (s *Server) runBulkIndex(idx *Index, a bulkAction, id, routing, rv, urlPipeline string) (any, bool) {
+func (s *Server) runBulkIndex(idx *model.Index, a bulkAction, id, routing, rv, urlPipeline string) (any, bool) {
 	_, exists := idx.Docs[id]
 	if a.op == "create" && exists {
 		return bulkErrItem("create", idx.Name, id, versionConflict(idx, id,
@@ -455,7 +458,7 @@ func (s *Server) runBulkIndex(idx *Index, a bulkAction, id, routing, rv, urlPipe
 	}
 	if pipeline != "" && pipeline != "_none" {
 		if _, ok := s.ingestPipelines[pipeline]; !ok {
-			return bulkErrItem(a.op, idx.Name, id, &apiError{Type: "illegal_argument_exception", Status: 400,
+			return bulkErrItem(a.op, idx.Name, id, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "pipeline with id [" + pipeline + "] does not exist"}), true
 		}
 	}
@@ -520,7 +523,7 @@ func (s *Server) runBulkIndex(idx *Index, a bulkAction, id, routing, rv, urlPipe
 	return bulkOKItem(a.op, bulkItem(a.op, idx.Name, id, ver, seq, 1, result, status, rv == "true")), false
 }
 
-func (s *Server) runBulkUpdate(idx *Index, a bulkAction, id, routing, rv, urlSource string) (any, bool) {
+func (s *Server) runBulkUpdate(idx *model.Index, a bulkAction, id, routing, rv, urlSource string) (any, bool) {
 	body := a.updateBody
 	docPatch, _ := body["doc"].(map[string]any)
 	script, hasScript := body["script"]
@@ -537,7 +540,7 @@ func (s *Server) runBulkUpdate(idx *Index, a bulkAction, id, routing, rv, urlSou
 	}
 	if !exists {
 		if !hasUpsert && !docAsUpsert {
-			return bulkErrItem("update", idx.Name, id, &apiError{Type: "document_missing_exception", Status: 404,
+			return bulkErrItem("update", idx.Name, id, &apierr.Error{Type: "document_missing_exception", Status: 404,
 				Reason: "[" + id + "]: document missing", Fields: map[string]any{"index": idx.Name, "shard": "0"}}), true
 		}
 		var src map[string]any
@@ -587,7 +590,7 @@ func (s *Server) runBulkUpdate(idx *Index, a bulkAction, id, routing, rv, urlSou
 		}
 		it := bulkItem("update", idx.Name, id, 1, seq, 1, "created", 201, rv == "true")
 		if get, ok := bulkGetObject(idx, id, src, seq, a.meta, body, urlSource); ok {
-			it = append(it, orderedKV{"get", get})
+			it = append(it, ojson.KV{"get", get})
 		}
 		return bulkOKItem("update", it), false
 	}
@@ -617,7 +620,7 @@ func (s *Server) runBulkUpdate(idx *Index, a bulkAction, id, routing, rv, urlSou
 	if op == "none" || op == "noop" || (detectNoop && reflectDeepEqual(old, newDoc)) {
 		it := bulkItem("update", idx.Name, id, currentVersion(idx, id), idx.SeqNos[id], 1, "noop", 200, false)
 		if get, ok := bulkGetObject(idx, id, old, idx.SeqNos[id], a.meta, body, urlSource); ok {
-			it = append(it, orderedKV{"get", get})
+			it = append(it, ojson.KV{"get", get})
 		}
 		return bulkOKItem("update", it), false
 	}
@@ -647,12 +650,12 @@ func (s *Server) runBulkUpdate(idx *Index, a bulkAction, id, routing, rv, urlSou
 	}
 	it := bulkItem("update", idx.Name, id, ver, seq, 1, "updated", 200, rv == "true")
 	if get, ok := bulkGetObject(idx, id, newDoc, seq, a.meta, body, urlSource); ok {
-		it = append(it, orderedKV{"get", get})
+		it = append(it, ojson.KV{"get", get})
 	}
 	return bulkOKItem("update", it), false
 }
 
-func bulkGetObject(idx *Index, id string, src map[string]any, seq int64, meta, body map[string]any, urlSource string) (orderedJSON, bool) {
+func bulkGetObject(idx *model.Index, id string, src map[string]any, seq int64, meta, body map[string]any, urlSource string) (ojson.Object, bool) {
 	requested := false
 	if v, ok := meta["_source"]; ok {
 		if b, isBool := v.(bool); isBool && b {
@@ -674,9 +677,9 @@ func bulkGetObject(idx *Index, id string, src map[string]any, seq int64, meta, b
 	if urlSource != "" {
 		includes = splitSourceList(urlSource)
 	}
-	out := orderedJSON{{"_seq_no", seq}, {"_primary_term", int64(1)}, {"found", true}}
+	out := ojson.Object{{"_seq_no", seq}, {"_primary_term", int64(1)}, {"found", true}}
 	if mappingSourceEnabled(idx) {
-		out = append(out, orderedKV{"_source", filterSourceDoc(src, includes, excludes)})
+		out = append(out, ojson.KV{"_source", filterSourceDoc(src, includes, excludes)})
 	}
 	return out, true
 }

@@ -4,18 +4,20 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/model"
 )
 
 type shardFilter struct {
 	active  bool
-	allowed map[*Index]map[int]bool
+	allowed map[*model.Index]map[int]bool
 	total   int
 }
 
-func newShardFilter(r *http.Request, indices []*Index) *shardFilter {
+func newShardFilter(r *http.Request, indices []*model.Index) *shardFilter {
 	routing := r.URL.Query().Get("routing")
 	pref := r.URL.Query().Get("preference")
-	f := &shardFilter{active: false, allowed: map[*Index]map[int]bool{}}
+	f := &shardFilter{active: false, allowed: map[*model.Index]map[int]bool{}}
 	if routing != "" {
 		f.active = true
 		for _, idx := range indices {
@@ -51,14 +53,14 @@ func newShardFilter(r *http.Request, indices []*Index) *shardFilter {
 	return f
 }
 
-func (f *shardFilter) allowsShard(idx *Index, shard int) bool {
+func (f *shardFilter) allowsShard(idx *model.Index, shard int) bool {
 	if f == nil {
 		return true
 	}
 	return f.allowed[idx][shard]
 }
 
-func (f *shardFilter) allows(idx *Index, id string) bool {
+func (f *shardFilter) allows(idx *model.Index, id string) bool {
 	if f == nil {
 		return true
 	}
@@ -69,7 +71,7 @@ func (f *shardFilter) allows(idx *Index, id string) bool {
 	return f.allowsShard(idx, shardOf(routing, numShards(idx)))
 }
 
-func searchShardMultiplier(idx *Index, id string, query map[string]any, dfs bool) float64 {
+func searchShardMultiplier(idx *model.Index, id string, query map[string]any, dfs bool) float64 {
 	if numShards(idx) <= 1 {
 		return 1
 	}

@@ -13,7 +13,10 @@ import (
 	"time"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/settings"
 )
 
 // ---------------------------------------------------------------------------
@@ -25,7 +28,7 @@ import (
 // ---------------------------------------------------------------------------
 
 type indexCtx struct {
-	idx            *Index
+	idx            *model.Index
 	indexCoerce    bool
 	indexIgnoreMal bool
 	docID          string
@@ -38,7 +41,7 @@ type indexCtx struct {
 	dyn            string
 }
 
-func newIndexCtx(idx *Index, docID string) *indexCtx {
+func newIndexCtx(idx *model.Index, docID string) *indexCtx {
 	c := &indexCtx{
 		idx:        idx,
 		docID:      docID,
@@ -46,18 +49,18 @@ func newIndexCtx(idx *Index, docID string) *indexCtx {
 		values:     map[string][]any{},
 	}
 	c.indexCoerce = true
-	if v, ok := findSetting(idx.Settings, "mapping.coerce"); ok {
+	if v, ok := settings.Find(idx.Settings, "mapping.coerce"); ok {
 		c.indexCoerce = settingsValueString(v) != "false"
 	}
-	if v, ok := findSetting(idx.Settings, "mapping.ignore_malformed"); ok {
+	if v, ok := settings.Find(idx.Settings, "mapping.ignore_malformed"); ok {
 		c.indexIgnoreMal = settingsValueString(v) == "true"
 	}
 	c.totalFields = 1000
-	if v, ok := settingInt(idx.Settings, "mapping.total_fields.limit"); ok {
+	if v, ok := settings.Int(idx.Settings, "mapping.total_fields.limit"); ok {
 		c.totalFields = v
 	}
 	c.fieldNameLimit = 1000
-	if v, ok := settingInt(idx.Settings, "mapping.field_name_length.limit"); ok {
+	if v, ok := settings.Int(idx.Settings, "mapping.field_name_length.limit"); ok {
 		c.fieldNameLimit = v
 	}
 	c.dyn = rootDynamicString(idx)
@@ -67,19 +70,19 @@ func newIndexCtx(idx *Index, docID string) *indexCtx {
 	return c
 }
 
-func mapperErr(typ, reason string, causedType, causedReason string) *apiError {
-	e := &apiError{Type: "mapper_parsing_exception", Reason: reason, Status: 400}
+func mapperErr(typ, reason string, causedType, causedReason string) *apierr.Error {
+	e := &apierr.Error{Type: "mapper_parsing_exception", Reason: reason, Status: 400}
 	if causedType != "" {
-		e.CausedBy = &apiError{Type: causedType, Reason: causedReason}
+		e.CausedBy = &apierr.Error{Type: causedType, Reason: causedReason}
 	} else if causedReason != "" {
-		e.CausedBy = &apiError{Type: "illegal_argument_exception", Reason: causedReason}
+		e.CausedBy = &apierr.Error{Type: "illegal_argument_exception", Reason: causedReason}
 	}
 	return e
 }
 
 // fieldValueError builds the standard "failed to parse field [f] of type [t] in
 // document with id 'x'" wrapper.
-func (c *indexCtx) fieldValueError(name, typ string, v any, causeType, causeReason string) *apiError {
+func (c *indexCtx) fieldValueError(name, typ string, v any, causeType, causeReason string) *apierr.Error {
 	preview := previewValue(v)
 	reason := fmt.Sprintf("failed to parse field [%s] of type [%s] in document with id '%s'. Preview of field's value: '%s'", name, typ, c.docID, preview)
 	return mapperErr("mapper_parsing_exception", reason, causeType, causeReason)
@@ -111,7 +114,7 @@ func ignoreAboveOf(def map[string]any) (int, bool) {
 	if !ok {
 		return 0, false
 	}
-	n, ok := toFloat(v)
+	n, ok := jsonv.ToFloat(v)
 	if !ok || n < 0 {
 		return 0, false
 	}
@@ -177,7 +180,7 @@ func typeDisplayName(t string) string {
 
 // parseIntValue converts a raw JSON number/string into an int64 value subject
 // to OpenSearch coercion rules.
-func (c *indexCtx) parseIntValue(name, typ string, def map[string]any, v any) (any, *apiError) {
+func (c *indexCtx) parseIntValue(name, typ string, def map[string]any, v any) (any, *apierr.Error) {
 	coerce := c.indexCoerce
 	if b, ok := def["coerce"].(bool); ok {
 		coerce = b
@@ -209,7 +212,7 @@ func (c *indexCtx) parseIntValue(name, typ string, def map[string]any, v any) (a
 	return nil, c.fieldValueError(name, typ, v, "input_coercion_exception", "For input string: \""+previewValue(v)+"\"")
 }
 
-func (c *indexCtx) parseIntFloat(name, typ string, def map[string]any, f float64, coerce bool) (any, *apiError) {
+func (c *indexCtx) parseIntFloat(name, typ string, def map[string]any, f float64, coerce bool) (any, *apierr.Error) {
 	if !coerce {
 		if f != math.Trunc(f) {
 			return nil, c.fieldValueError(name, typ, jsonv.FormatNumber(f), "illegal_argument_exception",
@@ -220,7 +223,7 @@ func (c *indexCtx) parseIntFloat(name, typ string, def map[string]any, f float64
 	return c.checkIntRange(name, typ, iv, f, true)
 }
 
-func (c *indexCtx) checkIntRange(name, typ string, iv int64, orig float64, fromJSON bool) (any, *apiError) {
+func (c *indexCtx) checkIntRange(name, typ string, iv int64, orig float64, fromJSON bool) (any, *apierr.Error) {
 	maxI, _, bounded := intBounds(typ)
 	switch {
 	case typ == "byte":
@@ -266,7 +269,7 @@ func (c *indexCtx) checkIntRange(name, typ string, iv int64, orig float64, fromJ
 	return iv, nil
 }
 
-func (c *indexCtx) parseIntString(name, typ string, def map[string]any, s string, coerce, trim bool) (any, *apiError) {
+func (c *indexCtx) parseIntString(name, typ string, def map[string]any, s string, coerce, trim bool) (any, *apierr.Error) {
 	coerceFalse := !coerce
 	if b, ok := def["coerce"].(bool); ok {
 		coerceFalse = !b
@@ -327,7 +330,7 @@ func (c *indexCtx) parseIntString(name, typ string, def map[string]any, s string
 }
 
 // parseFloatValue implements float/double/half_float/scaled_float coercion.
-func (c *indexCtx) parseFloatValue(name, typ string, def map[string]any, v any) (any, *apiError) {
+func (c *indexCtx) parseFloatValue(name, typ string, def map[string]any, v any) (any, *apierr.Error) {
 	coerceFalse := !c.indexCoerce
 	if b, ok := def["coerce"].(bool); ok {
 		coerceFalse = !b
@@ -395,7 +398,7 @@ func (c *indexCtx) parseFloatValue(name, typ string, def map[string]any, v any) 
 		return float64(float32FromHalf(float32Half(f))), nil
 	case "scaled_float":
 		scale := 1.0
-		if s, ok := toFloat(def["scaling_factor"]); ok {
+		if s, ok := jsonv.ToFloat(def["scaling_factor"]); ok {
 			scale = s
 		}
 		return math.Round(f*scale) / scale, nil
@@ -459,7 +462,7 @@ func float32FromHalf(h uint16) float32 {
 }
 
 // parseBooleanValue implements boolean coercion.
-func (c *indexCtx) parseBooleanValue(name string, def map[string]any, v any) (any, *apiError) {
+func (c *indexCtx) parseBooleanValue(name string, def map[string]any, v any) (any, *apierr.Error) {
 	switch raw := v.(type) {
 	case bool:
 		return raw, nil
@@ -486,7 +489,7 @@ func (c *indexCtx) parseBooleanValue(name string, def map[string]any, v any) (an
 }
 
 // parseDateValue stores epoch millis (date) or epoch nanos (date_nanos).
-func (c *indexCtx) parseDateValue(name, typ string, def map[string]any, v any) (any, *apiError) {
+func (c *indexCtx) parseDateValue(name, typ string, def map[string]any, v any) (any, *apierr.Error) {
 	s, isStr := v.(string)
 	if isStr && s == "" {
 		return nil, c.fieldValueError(name, typ, v, "illegal_argument_exception", "cannot parse empty date")
@@ -514,7 +517,7 @@ func (c *indexCtx) parseDateValue(name, typ string, def map[string]any, v any) (
 	}
 	reason := fmt.Sprintf("failed to parse date field [%s] with format [%s]", s, dateFormatOf(def))
 	e := c.fieldValueError(name, typ, v, "illegal_argument_exception", reason)
-	e.CausedBy.CausedBy = &apiError{Type: "date_time_parse_exception", Status: 400,
+	e.CausedBy.CausedBy = &apierr.Error{Type: "date_time_parse_exception", Status: 400,
 		Reason: "Failed to parse with all enclosed parsers"}
 	return nil, e
 }
@@ -807,7 +810,7 @@ func parseDateNanosAny(def map[string]any, s string) (int64, string, bool) {
 }
 
 // parseIPValue canonicalizes an IPv4/IPv6 string or CIDR.
-func (c *indexCtx) parseIPValue(name string, v any) (any, *apiError) {
+func (c *indexCtx) parseIPValue(name string, v any) (any, *apierr.Error) {
 	s, ok := toString(v)
 	if !ok {
 		return nil, c.fieldValueError(name, "ip", v, "illegal_argument_exception", "failed to parse ip")
@@ -829,7 +832,7 @@ func (c *indexCtx) parseIPValue(name string, v any) (any, *apiError) {
 
 // parseIPRangeString expands a CIDR (e.g. 192.168.0.0/24) into the network
 // and broadcast addresses, canonicalized for storage.
-func (c *indexCtx) parseIPRangeString(name, s string) (string, string, *apiError) {
+func (c *indexCtx) parseIPRangeString(name, s string) (string, string, *apierr.Error) {
 	_, ipnet, err := net.ParseCIDR(s)
 	if err != nil {
 		ones := 0
@@ -855,7 +858,7 @@ func (c *indexCtx) parseIPRangeString(name, s string) (string, string, *apiError
 }
 
 // indexRawField handles a single declared field definition with raw values.
-func (c *indexCtx) indexRawField(path string, def map[string]any, raw any) *apiError {
+func (c *indexCtx) indexRawField(path string, def map[string]any, raw any) *apierr.Error {
 	typ, _ := def["type"].(string)
 	if typ == "" {
 		if _, hasProps := def["properties"].(map[string]any); hasProps {
@@ -915,7 +918,7 @@ func (c *indexCtx) indexRawField(path string, def map[string]any, raw any) *apiE
 				"[rank_features] fields must be json objects, expected a START_OBJECT but got: "+jsonValueKind(raw))
 		}
 		for k, fv := range m {
-			f, ok := toFloat(fv)
+			f, ok := jsonv.ToFloat(fv)
 			if !ok {
 				if s, ok := valueScalarString(fv); ok {
 					if fv2, err := strconv.ParseFloat(s, 64); err == nil {
@@ -951,15 +954,15 @@ func (c *indexCtx) indexRawField(path string, def map[string]any, raw any) *apiE
 	}
 	if typ == "geo_point" {
 		if arr, ok := raw.([]any); ok && len(arr) >= 2 {
-			if _, ok1 := toFloat(arr[0]); ok1 {
-				if _, ok2 := toFloat(arr[1]); ok2 {
+			if _, ok1 := jsonv.ToFloat(arr[0]); ok1 {
+				if _, ok2 := jsonv.ToFloat(arr[1]); ok2 {
 					values = []any{raw}
 				}
 			}
 		}
 	}
 	if values == nil {
-		var err *apiError
+		var err *apierr.Error
 		values, err = c.flattenScalars(path, raw)
 		if err != nil {
 			return err
@@ -1011,11 +1014,11 @@ func (c *indexCtx) indexRawField(path string, def map[string]any, raw any) *apiE
 		var prefixes []any
 		if ip, ok := def["index_prefixes"].(map[string]any); ok {
 			minChars := 2
-			if n, ok := toFloat(ip["min_chars"]); ok {
+			if n, ok := jsonv.ToFloat(ip["min_chars"]); ok {
 				minChars = int(n)
 			}
 			maxChars := 5
-			if n, ok := toFloat(ip["max_chars"]); ok {
+			if n, ok := jsonv.ToFloat(ip["max_chars"]); ok {
 				maxChars = int(n)
 			}
 			for _, v := range out {
@@ -1057,7 +1060,7 @@ func (c *indexCtx) indexRawField(path string, def map[string]any, raw any) *apiE
 	}
 	if typ == "search_as_you_type" {
 		maxShingle := 3
-		if n, ok := toFloat(def["max_shingle_size"]); ok {
+		if n, ok := jsonv.ToFloat(def["max_shingle_size"]); ok {
 			maxShingle = int(n)
 		}
 		if maxShingle < 2 {
@@ -1143,7 +1146,7 @@ func (c *indexCtx) indexRawField(path string, def map[string]any, raw any) *apiE
 	return nil
 }
 
-func (c *indexCtx) copyToField(target string, vals []any) *apiError {
+func (c *indexCtx) copyToField(target string, vals []any) *apierr.Error {
 	tdef, mapped := mappingFieldDef(c.idx, target)
 	ttype := ""
 	if mapped {
@@ -1176,7 +1179,7 @@ func (c *indexCtx) addIgnored(path string) {
 	}
 }
 
-func (c *indexCtx) coerce(path string, def map[string]any, typ string, v any) (any, *apiError) {
+func (c *indexCtx) coerce(path string, def map[string]any, typ string, v any) (any, *apierr.Error) {
 	switch typ {
 	case "text", "match_only_text", "search_as_you_type", "wildcard":
 		if _, isMap := v.(map[string]any); isMap {
@@ -1308,7 +1311,7 @@ func base64DecodeLenient(s string) ([]byte, error) {
 
 // flattenScalars flattens arrays into individual scalar values. An empty array
 // yields no values; nested arrays are flattened recursively.
-func (c *indexCtx) flattenScalars(path string, raw any) ([]any, *apiError) {
+func (c *indexCtx) flattenScalars(path string, raw any) ([]any, *apierr.Error) {
 	switch t := raw.(type) {
 	case []any:
 		out := []any{}
@@ -1327,7 +1330,7 @@ func (c *indexCtx) flattenScalars(path string, raw any) ([]any, *apiError) {
 	}
 }
 
-func (c *indexCtx) indexObject(path string, def map[string]any, raw any) *apiError {
+func (c *indexCtx) indexObject(path string, def map[string]any, raw any) *apierr.Error {
 	props, _ := def["properties"].(map[string]any)
 	attachProps := false
 	if props == nil {
@@ -1370,7 +1373,7 @@ func (c *indexCtx) indexObject(path string, def map[string]any, raw any) *apiErr
 	}
 }
 
-func (c *indexCtx) indexObjectMap(path string, props map[string]any, src map[string]any) *apiError {
+func (c *indexCtx) indexObjectMap(path string, props map[string]any, src map[string]any) *apierr.Error {
 	for rawK, v := range src {
 		k := strings.TrimRight(rawK, ".")
 		if k == "" {
@@ -1407,7 +1410,7 @@ func (c *indexCtx) indexObjectMap(path string, props map[string]any, src map[str
 				if path != "" {
 					name = path
 				}
-				return &apiError{Type: "strict_dynamic_mapping_exception", Status: 400,
+				return &apierr.Error{Type: "strict_dynamic_mapping_exception", Status: 400,
 					Reason: fmt.Sprintf("mapping set to %s, dynamic introduction of [%s] within [%s] is not allowed", c.dyn, k, name)}
 			}
 			if nd == nil {
@@ -1437,7 +1440,7 @@ func (c *indexCtx) indexObjectMap(path string, props map[string]any, src map[str
 					continue
 				}
 				if c.dyn == "strict" || c.dyn == "strict_allow_templates" {
-					return &apiError{Type: "strict_dynamic_mapping_exception", Status: 400,
+					return &apierr.Error{Type: "strict_dynamic_mapping_exception", Status: 400,
 						Reason: "mapping set to strict, dynamic introduction of [" + target + "] within [_doc] is not allowed"}
 				}
 				props[target] = map[string]any{"type": "text"}
@@ -1456,7 +1459,7 @@ func isDocumentMetadataField(name string) bool {
 	return false
 }
 
-func (c *indexCtx) rejectMetadataField(name string) *apiError {
+func (c *indexCtx) rejectMetadataField(name string) *apierr.Error {
 	return mapperErr("mapper_parsing_exception",
 		fmt.Sprintf("Field [%s] is a metadata field and cannot be added inside a document. Use the index API request parameters.", name),
 		"mapper_parsing_exception",
@@ -1483,7 +1486,7 @@ func (c *indexCtx) fillConstants(props map[string]any, src map[string]any) {
 }
 
 // buildDocValues computes indexed values for a document.
-func (c *indexCtx) buildDocValues() *apiError {
+func (c *indexCtx) buildDocValues() *apierr.Error {
 	props, _ := c.idx.Mappings["properties"].(map[string]any)
 	if props == nil {
 		props = map[string]any{}
@@ -1603,7 +1606,7 @@ func evalDerived(def map[string]any, doc map[string]any) (any, bool) {
 			if op == '*' || op == '+' || op == '-' || op == '/' {
 				rhs, ok := strconv.ParseFloat(strings.TrimSpace(rest[1:]), 64)
 				if ok == nil {
-					lhs, lok := toFloat(base)
+					lhs, lok := jsonv.ToFloat(base)
 					if !lok {
 						if s, sok := base.(string); sok {
 							if f, ferr := strconv.ParseFloat(s, 64); ferr == nil {
@@ -1635,7 +1638,7 @@ func evalDerived(def map[string]any, doc map[string]any) (any, bool) {
 	return base, true
 }
 
-func addDerivedValues(idx *Index, c *indexCtx) {
+func addDerivedValues(idx *model.Index, c *indexCtx) {
 	defs, _ := idx.Mappings["derived"].(map[string]any)
 	for name, raw := range defs {
 		def, ok := raw.(map[string]any)
@@ -1671,10 +1674,10 @@ func normalizeDerivedMappings(mappings map[string]any) {
 }
 
 // applyRequestDerived installs request-level derived field definitions.
-func applyRequestDerived(idx *Index, defs any) *apiError {
+func applyRequestDerived(idx *model.Index, defs any) *apierr.Error {
 	src, ok := defs.(map[string]any)
 	if !ok {
-		return &apiError{Type: "parsing_exception", Status: 400, Reason: "expected derived to be an object"}
+		return &apierr.Error{Type: "parsing_exception", Status: 400, Reason: "expected derived to be an object"}
 	}
 	norm := map[string]any{}
 	for name, raw := range src {
@@ -1699,7 +1702,7 @@ func applyRequestDerived(idx *Index, defs any) *apiError {
 
 // computeDocValues validates and indexes a document, storing normalized field
 // values used by search, sort, aggregations and docvalue_fields.
-func computeDocValues(idx *Index, id string, doc map[string]any) *apiError {
+func computeDocValues(idx *model.Index, id string, doc map[string]any) *apierr.Error {
 	if reason := invalidDocFieldName(doc); reason != "" {
 		return mapperErr("mapper_parsing_exception", reason, "illegal_argument_exception", reason)
 	}
@@ -1751,7 +1754,7 @@ func ignoredValues(fields []string) []any {
 	return out
 }
 
-func removeDocValues(idx *Index, id string) {
+func removeDocValues(idx *model.Index, id string) {
 	delete(idx.DocValues, id)
 	delete(idx.DocIgnored, id)
 	idx.DVGen++
@@ -1759,7 +1762,7 @@ func removeDocValues(idx *Index, id string) {
 
 // recomputeAllDocValues rebuilds doc values for every document (used when
 // mappings change).
-func recomputeAllDocValues(idx *Index) {
+func recomputeAllDocValues(idx *model.Index) {
 	idx.DVGen++
 	idx.DocValues = map[string]map[string][]any{}
 	idx.DocIgnored = map[string][]string{}
@@ -1790,9 +1793,9 @@ func asciiLower(s string) string {
 	return string(b)
 }
 
-func applyNormalizerWithIndex(idx *Index, name, s string) string {
+func applyNormalizerWithIndex(idx *model.Index, name, s string) string {
 	if idx != nil {
-		if rawFilters, ok := findSetting(idx.Settings, "analysis.normalizer."+name+".filter"); ok {
+		if rawFilters, ok := settings.Find(idx.Settings, "analysis.normalizer."+name+".filter"); ok {
 			for _, f := range analysis.FilterNames(rawFilters) {
 				switch f {
 				case "lowercase":
@@ -1809,7 +1812,7 @@ func applyNormalizerWithIndex(idx *Index, name, s string) string {
 	return applyNormalizer(name, s)
 }
 
-func normalizeQueryValue(idx *Index, field, s string) string {
+func normalizeQueryValue(idx *model.Index, field, s string) string {
 	def, ok := mappingFieldDef(idx, field)
 	if !ok {
 		return s
@@ -1821,7 +1824,7 @@ func normalizeQueryValue(idx *Index, field, s string) string {
 	return applyNormalizerWithIndex(idx, norm, s)
 }
 
-func (c *indexCtx) parseTokenCount(path string, def map[string]any, v any) (any, *apiError) {
+func (c *indexCtx) parseTokenCount(path string, def map[string]any, v any) (any, *apierr.Error) {
 	s, ok := valueScalarString(v)
 	if !ok {
 		return nil, c.fieldValueError(path, "token_count", v, "illegal_argument_exception", "malformed")
@@ -1879,7 +1882,7 @@ func decodeGeohash(s string) (float64, float64, bool) {
 	return (latMin + latMax) / 2, (lonMin + lonMax) / 2, true
 }
 
-func (c *indexCtx) parseGeoPoint(path string, def map[string]any, v any) (any, *apiError) {
+func (c *indexCtx) parseGeoPoint(path string, def map[string]any, v any) (any, *apierr.Error) {
 	ignoreZ := true
 	if b, ok := def["ignore_z_value"].(bool); ok {
 		ignoreZ = b
@@ -1888,7 +1891,7 @@ func (c *indexCtx) parseGeoPoint(path string, def map[string]any, v any) (any, *
 	if b, ok := def["ignore_malformed"].(bool); ok {
 		ignoreMal = b
 	}
-	errf := func(cause, reason string) *apiError {
+	errf := func(cause, reason string) *apierr.Error {
 		return mapperErr("mapper_parsing_exception", "failed to parse field ["+path+"] of type [geo_point]", cause, reason)
 	}
 	normalize := func(lat, lon float64) (float64, float64) {
@@ -1912,7 +1915,7 @@ func (c *indexCtx) parseGeoPoint(path string, def map[string]any, v any) (any, *
 		}
 		return la, lo
 	}
-	check := func(lat, lon float64) (any, *apiError) {
+	check := func(lat, lon float64) (any, *apierr.Error) {
 		lat, lon = normalize(lat, lon)
 		if !ignoreMal && (lat > 90 || lat < -90) {
 			return nil, errf("illegal_argument_exception", fmt.Sprintf("illegal latitude value [%.1f] for %s", lat, path))
@@ -1988,11 +1991,11 @@ func (c *indexCtx) parseGeoPoint(path string, def map[string]any, v any) (any, *
 					return nil, errf("parse_exception", "field must be either [lon|lat], [type|coordinates], or [geohash]")
 				}
 			}
-			lat, ok := toFloat(t["lat"])
+			lat, ok := jsonv.ToFloat(t["lat"])
 			if !ok {
 				return nil, errf("parse_exception", "field [lat] missing")
 			}
-			lon, ok := toFloat(t["lon"])
+			lon, ok := jsonv.ToFloat(t["lon"])
 			if !ok {
 				return nil, errf("parse_exception", "field [lon] missing")
 			}
@@ -2001,8 +2004,8 @@ func (c *indexCtx) parseGeoPoint(path string, def map[string]any, v any) (any, *
 		typ, _ := t["type"].(string)
 		if strings.EqualFold(typ, "point") {
 			if coords, ok := t["coordinates"].([]any); ok && len(coords) >= 2 {
-				lon, ok1 := toFloat(coords[0])
-				lat, ok2 := toFloat(coords[1])
+				lon, ok1 := jsonv.ToFloat(coords[0])
+				lat, ok2 := jsonv.ToFloat(coords[1])
 				if ok1 && ok2 {
 					return check(lat, lon)
 				}
@@ -2011,12 +2014,12 @@ func (c *indexCtx) parseGeoPoint(path string, def map[string]any, v any) (any, *
 		return nil, errf("parse_exception", "field must be either [lon|lat], [type|coordinates], or [geohash]")
 	case []any:
 		if len(t) >= 3 && !ignoreZ {
-			z, _ := toFloat(t[2])
+			z, _ := jsonv.ToFloat(t[2])
 			return nil, errf("parse_exception", fmt.Sprintf("Exception parsing coordinates: found Z value [%.1f] but [ignore_z_value] parameter is [false]", z))
 		}
 		if len(t) >= 2 {
-			lon, ok1 := toFloat(t[0])
-			lat, ok2 := toFloat(t[1])
+			lon, ok1 := jsonv.ToFloat(t[0])
+			lat, ok2 := jsonv.ToFloat(t[1])
 			if ok1 && ok2 {
 				return check(lat, lon)
 			}
@@ -2026,8 +2029,8 @@ func (c *indexCtx) parseGeoPoint(path string, def map[string]any, v any) (any, *
 	return nil, errf("parse_exception", "failed to parse geo_point")
 }
 
-func (c *indexCtx) parseGeoShape(path string, v any) (any, *apiError) {
-	errf := func(cause, reason string) *apiError {
+func (c *indexCtx) parseGeoShape(path string, v any) (any, *apierr.Error) {
+	errf := func(cause, reason string) *apierr.Error {
 		return mapperErr("mapper_parsing_exception", "failed to parse field ["+path+"] of type [geo_shape]", cause, reason)
 	}
 	knownTypes := map[string]bool{
@@ -2085,8 +2088,8 @@ func (c *indexCtx) parseGeoShape(path string, v any) (any, *apiError) {
 	}
 }
 
-func (c *indexCtx) parseCompletion(path string, def map[string]any, v any) (any, *apiError) {
-	checkReserved := func(s string) *apiError {
+func (c *indexCtx) parseCompletion(path string, def map[string]any, v any) (any, *apierr.Error) {
+	checkReserved := func(s string) *apierr.Error {
 		pos := 0
 		for _, ch := range s {
 			cp := int(ch)
@@ -2103,8 +2106,8 @@ func (c *indexCtx) parseCompletion(path string, def map[string]any, v any) (any,
 		return nil
 	}
 	var out []any
-	var parseOne func(v any) *apiError
-	parseOne = func(v any) *apiError {
+	var parseOne func(v any) *apierr.Error
+	parseOne = func(v any) *apierr.Error {
 		switch t := v.(type) {
 		case string:
 			if err := checkReserved(t); err != nil {
@@ -2218,8 +2221,8 @@ func (c *indexCtx) parseCompletion(path string, def map[string]any, v any) (any,
 	return out, nil
 }
 
-func (c *indexCtx) parseRankFeature(path string, v any) (any, *apiError) {
-	f, ok := toFloat(v)
+func (c *indexCtx) parseRankFeature(path string, v any) (any, *apierr.Error) {
+	f, ok := jsonv.ToFloat(v)
 	if !ok {
 		if s, ok := valueScalarString(v); ok {
 			if fv, err := strconv.ParseFloat(s, 64); err == nil {
@@ -2258,7 +2261,7 @@ func jsonValueKind(v any) string {
 	}
 }
 
-func (c *indexCtx) parseJoin(path string, def map[string]any, v any) (any, *apiError) {
+func (c *indexCtx) parseJoin(path string, def map[string]any, v any) (any, *apierr.Error) {
 	relations, _ := def["relations"].(map[string]any)
 	switch t := v.(type) {
 	case string:
@@ -2308,7 +2311,7 @@ func (c *indexCtx) parseJoin(path string, def map[string]any, v any) (any, *apiE
 // Range field types
 // ---------------------------------------------------------------------------
 
-func (c *indexCtx) parseRangeValue(path, typ string, def map[string]any, v any) (any, *apiError) {
+func (c *indexCtx) parseRangeValue(path, typ string, def map[string]any, v any) (any, *apierr.Error) {
 	if s, ok := v.(string); ok {
 		if typ == "ip_range" {
 			if strings.Contains(s, "/") {
@@ -2342,7 +2345,7 @@ func (c *indexCtx) parseRangeValue(path, typ string, def map[string]any, v any) 
 		return nil, c.fieldValueError(path, typ, v, "mapper_parsing_exception",
 			fmt.Sprintf("error parsing field [%s], invalid upper bound (lt/lte)", path))
 	}
-	parse := func(raw any) (any, bool, *apiError) {
+	parse := func(raw any) (any, bool, *apierr.Error) {
 		switch typ {
 		case "date_range":
 			rv, err := c.parseDateValue(path, "date", def, raw)
@@ -2434,8 +2437,8 @@ func compareValuesForType(typ string, a, b any) int {
 	case "ip_range":
 		return compareIPs(a.(string), b.(string))
 	default:
-		af, _ := toFloat(a)
-		bf, _ := toFloat(b)
+		af, _ := jsonv.ToFloat(a)
+		bf, _ := jsonv.ToFloat(b)
 		switch {
 		case af < bf:
 			return -1

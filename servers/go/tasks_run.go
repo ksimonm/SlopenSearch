@@ -12,7 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/ojson"
 )
 
 // Background execution of tasks started with wait_for_completion=false.
@@ -48,74 +51,74 @@ func rpsInternal(f float64) float64 {
 
 // liveStatus renders the BulkByScrollTask status of a running or finished
 // throttled task; the caller holds taskReg.
-func (t *storedTask) liveStatus(now time.Time, asResponse bool) orderedJSON {
+func (t *storedTask) liveStatus(now time.Time, asResponse bool) ojson.Object {
 	c := t.ctr
-	o := orderedJSON{}
+	o := ojson.Object{}
 	if asResponse {
-		o = append(o, orderedKV{"took", now.Sub(t.start).Milliseconds()}, orderedKV{"timed_out", false})
+		o = append(o, ojson.KV{"took", now.Sub(t.start).Milliseconds()}, ojson.KV{"timed_out", false})
 	}
-	o = append(o, orderedKV{"total", c.total}, orderedKV{"updated", c.updated},
-		orderedKV{"created", c.created}, orderedKV{"deleted", c.deleted},
-		orderedKV{"batches", c.batches}, orderedKV{"version_conflicts", c.conflicts},
-		orderedKV{"noops", c.noops}, orderedKV{"retries", orderedJSON{{"bulk", 0}, {"search", 0}}})
+	o = append(o, ojson.KV{"total", c.total}, ojson.KV{"updated", c.updated},
+		ojson.KV{"created", c.created}, ojson.KV{"deleted", c.deleted},
+		ojson.KV{"batches", c.batches}, ojson.KV{"version_conflicts", c.conflicts},
+		ojson.KV{"noops", c.noops}, ojson.KV{"retries", ojson.Object{{"bulk", 0}, {"search", 0}}})
 	if asResponse {
-		o = append(o, orderedKV{"throttled", "0s"})
+		o = append(o, ojson.KV{"throttled", "0s"})
 	}
-	o = append(o, orderedKV{"throttled_millis", t.throttledNanos / 1e6}, orderedKV{"requests_per_second", rpsJSON(t.rps)})
+	o = append(o, ojson.KV{"throttled_millis", t.throttledNanos / 1e6}, ojson.KV{"requests_per_second", rpsJSON(t.rps)})
 	if t.canceled != "" {
-		o = append(o, orderedKV{"canceled", t.canceled})
+		o = append(o, ojson.KV{"canceled", t.canceled})
 	}
 	until := int64(0)
 	if !t.delayEnd.IsZero() && t.delayEnd.After(now) {
 		until = t.delayEnd.Sub(now).Milliseconds()
 	}
 	if asResponse {
-		o = append(o, orderedKV{"throttled_until", "0s"})
+		o = append(o, ojson.KV{"throttled_until", "0s"})
 	}
-	o = append(o, orderedKV{"throttled_until_millis", until})
+	o = append(o, ojson.KV{"throttled_until_millis", until})
 	if asResponse {
 		f := t.failures
 		if f == nil {
 			f = []any{}
 		}
-		o = append(o, orderedKV{"failures", f})
+		o = append(o, ojson.KV{"failures", f})
 	}
 	return o
 }
 
 // taskEntry renders a running task as the task list, cancel and rethrottle
 // APIs show it; the caller holds taskReg.
-func (t *storedTask) taskEntry(now time.Time, detailed bool) orderedJSON {
-	e := orderedJSON{{"node", nodeID}, {"id", t.id}, {"type", "transport"}, {"action", t.action}}
+func (t *storedTask) taskEntry(now time.Time, detailed bool) ojson.Object {
+	e := ojson.Object{{"node", nodeID}, {"id", t.id}, {"type", "transport"}, {"action", t.action}}
 	if detailed {
 		if t.bulk {
-			e = append(e, orderedKV{"status", t.liveStatus(now, false)})
+			e = append(e, ojson.KV{"status", t.liveStatus(now, false)})
 		}
-		e = append(e, orderedKV{"description", t.description})
+		e = append(e, ojson.KV{"description", t.description})
 	}
-	e = append(e, orderedKV{"start_time_in_millis", t.start.UnixMilli()},
-		orderedKV{"running_time_in_nanos", now.Sub(t.start).Nanoseconds()},
-		orderedKV{"cancellable", t.cancellable}, orderedKV{"cancelled", t.cancelled},
-		orderedKV{"headers", t.headers})
+	e = append(e, ojson.KV{"start_time_in_millis", t.start.UnixMilli()},
+		ojson.KV{"running_time_in_nanos", now.Sub(t.start).Nanoseconds()},
+		ojson.KV{"cancellable", t.cancellable}, ojson.KV{"cancelled", t.cancelled},
+		ojson.KV{"headers", t.headers})
 	if t.cancelled {
-		e = append(e, orderedKV{"cancellation_time_millis", t.cancelAt.UnixMilli()})
+		e = append(e, ojson.KV{"cancellation_time_millis", t.cancelAt.UnixMilli()})
 	}
 	if detailed {
-		e = append(e, orderedKV{"resource_stats", resourceStatsJSON()})
+		e = append(e, ojson.KV{"resource_stats", resourceStatsJSON()})
 	}
 	return e
 }
 
-func resourceStatsJSON() orderedJSON {
-	z := func() orderedJSON { return orderedJSON{{"cpu_time_in_nanos", 0}, {"memory_in_bytes", 0}} }
-	return orderedJSON{{"average", z()}, {"total", z()}, {"min", z()}, {"max", z()},
-		{"thread_info", orderedJSON{{"thread_executions", 0}, {"active_threads", 0}}}}
+func resourceStatsJSON() ojson.Object {
+	z := func() ojson.Object { return ojson.Object{{"cpu_time_in_nanos", 0}, {"memory_in_bytes", 0}} }
+	return ojson.Object{{"average", z()}, {"total", z()}, {"min", z()}, {"max", z()},
+		{"thread_info", ojson.Object{{"thread_executions", 0}, {"active_threads", 0}}}}
 }
 
 // taskNodeJSON wraps task entries in the node object of task list answers.
-func taskNodeJSON(tasks orderedJSON) orderedJSON {
-	return orderedJSON{
-		{"nodes", orderedJSON{{nodeID, orderedJSON{
+func taskNodeJSON(tasks ojson.Object) ojson.Object {
+	return ojson.Object{
+		{"nodes", ojson.Object{{nodeID, ojson.Object{
 			{"name", nodeName}, {"transport_address", nodeTransport}, {"host", nodeHost},
 			{"ip", nodeTransport}, {"roles", nodeRoles()}, {"attributes", nodeAttributes()},
 			{"tasks", tasks},
@@ -124,7 +127,7 @@ func taskNodeJSON(tasks orderedJSON) orderedJSON {
 }
 
 // runningTasks lists the tasks still running whose action matches.
-func runningTasks(actions string, detailed bool) orderedJSON {
+func runningTasks(actions string, detailed bool) ojson.Object {
 	now := time.Now()
 	taskReg.Lock()
 	defer taskReg.Unlock()
@@ -135,10 +138,10 @@ func runningTasks(actions string, detailed bool) orderedJSON {
 		}
 	}
 	sortInt64s(ids)
-	out := orderedJSON{}
+	out := ojson.Object{}
 	for _, id := range ids {
 		t := taskReg.tasks[id]
-		out = append(out, orderedKV{nodeID + ":" + strconv.FormatInt(id, 10), t.taskEntry(now, detailed)})
+		out = append(out, ojson.KV{nodeID + ":" + strconv.FormatInt(id, 10), t.taskEntry(now, detailed)})
 	}
 	return out
 }
@@ -170,7 +173,7 @@ func (t *storedTask) poke() {
 
 // cancelTask marks a running task cancelled and answers like
 // POST _tasks/{id}/_cancel.
-func cancelTask(t *storedTask, tid string) orderedJSON {
+func cancelTask(t *storedTask, tid string) ojson.Object {
 	taskReg.Lock()
 	if !t.cancelled {
 		t.cancelled = true
@@ -179,13 +182,13 @@ func cancelTask(t *storedTask, tid string) orderedJSON {
 	entry := t.taskEntry(time.Now(), false)
 	taskReg.Unlock()
 	t.poke()
-	return taskNodeJSON(orderedJSON{{tid, entry}})
+	return taskNodeJSON(ojson.Object{{tid, entry}})
 }
 
 // rethrottleTask changes a running task's requests_per_second the way
 // WorkerBulkByScrollTaskState.rethrottle does: a slower rate applies from
 // the next batch on, a faster one reschedules the pending wait.
-func rethrottleTask(t *storedTask, tid string, rps float64) orderedJSON {
+func rethrottleTask(t *storedTask, tid string, rps float64) ojson.Object {
 	newRPS := rpsInternal(rps)
 	taskReg.Lock()
 	old := t.rps
@@ -205,7 +208,7 @@ func rethrottleTask(t *storedTask, tid string, rps float64) orderedJSON {
 	entry := t.taskEntry(time.Now(), true)
 	taskReg.Unlock()
 	t.poke()
-	return taskNodeJSON(orderedJSON{{tid, entry}})
+	return taskNodeJSON(ojson.Object{{tid, entry}})
 }
 
 // waitTask blocks until the task completes or the timeout elapses.
@@ -218,12 +221,12 @@ func waitTask(t *storedTask, timeout time.Duration) bool {
 	}
 }
 
-func taskTimeoutError(t *storedTask) *apiError {
+func taskTimeoutError(t *storedTask) *apierr.Error {
 	class := "org.opensearch.tasks.Task"
 	if t.bulk {
 		class = "org.opensearch.index.reindex.BulkByScrollTask"
 	}
-	return &apiError{Type: "timeout_exception", Status: 504,
+	return &apierr.Error{Type: "timeout_exception", Status: 504,
 		Reason: fmt.Sprintf("Timed out waiting for completion of [%s@%x]", class, uint32(t.id*2654435761))}
 }
 
@@ -257,7 +260,7 @@ func (s *Server) bbsMatches(action string, segs []string, q url.Values, body map
 	defer s.mu.Unlock()
 	var refs []bbsRef
 	maxDocs := int64(-1)
-	if v, ok := toFloat(body["max_docs"]); ok {
+	if v, ok := jsonv.ToFloat(body["max_docs"]); ok {
 		maxDocs = int64(v)
 	}
 	if v := q.Get("max_docs"); v != "" {
@@ -267,7 +270,7 @@ func (s *Server) bbsMatches(action string, segs []string, q url.Values, body map
 		}
 		maxDocs = n
 	}
-	collect := func(idx *Index, query map[string]any, skipPending bool) bool {
+	collect := func(idx *model.Index, query map[string]any, skipPending bool) bool {
 		for _, id := range idx.Order {
 			if maxDocs >= 0 && int64(len(refs)) >= maxDocs {
 				return true

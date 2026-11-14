@@ -14,17 +14,22 @@ import (
 	"time"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
+	"slopensearch/internal/settings"
 )
 
 type multiHit struct {
-	idx   *Index
+	idx   *model.Index
 	id    string
 	doc   map[string]any
 	score float64
 }
 
-func checkDocValuesLoadable(idx *Index, field string) *apiError {
+func checkDocValuesLoadable(idx *model.Index, field string) *apierr.Error {
 	def, ok := mappingFieldDef(idx, field)
 	if !ok {
 		return nil
@@ -32,24 +37,24 @@ func checkDocValuesLoadable(idx *Index, field string) *apiError {
 	ftype, _ := def["type"].(string)
 	if dv, ok := def["doc_values"].(bool); ok && !dv {
 		reason := "Can't load fielddata on [" + field + "] because fielddata is unsupported on fields of type [" + ftype + "]. Use doc values instead."
-		return &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
-			RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
-			CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}}
+		return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
+			RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason},
+			CausedBy:  &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 	}
 	if ftype == "binary" {
 		if dv, ok := def["doc_values"].(bool); !ok || !dv {
 			reason := "Can't load fielddata on [" + field + "] because fielddata is unsupported on fields of type [binary]. Use doc values instead."
-			return &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
-				RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
-				CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}}
+			return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
+				RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason},
+				CausedBy:  &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 		}
 	}
 	if ftype == "text" {
 		if fd, ok := def["fielddata"].(bool); !ok || !fd {
 			reason := "Fielddata is disabled on text fields by default. Set fielddata=true on [" + field + "] in order to load field data by uninverting the inverted index. Note that this can use significant memory."
-			return &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
-				RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
-				CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}}
+			return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
+				RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason},
+				CausedBy:  &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 		}
 	}
 	return nil
@@ -88,7 +93,7 @@ var textLikeTypes = map[string]bool{
 }
 
 // docValuesOutput returns the values to render for docvalue_fields / fields.
-func docValuesOutput(idx *Index, id, field string, spec fieldSpec, fallbackSource bool) ([]any, bool, *apiError) {
+func docValuesOutput(idx *model.Index, id, field string, spec fieldSpec, fallbackSource bool) ([]any, bool, *apierr.Error) {
 	field = resolveAliasField(idx, field)
 	if i := strings.Index(field, "#"); i > 0 {
 		base := field[:i]
@@ -127,9 +132,9 @@ func docValuesOutput(idx *Index, id, field string, spec fieldSpec, fallbackSourc
 		switch ftype {
 		case "integer", "long", "short", "byte", "unsigned_long":
 			reason := "Field [" + field + "] of type [" + ftype + "] doesn't support formats."
-			return nil, false, &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
-				RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
-				CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}}
+			return nil, false, &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
+				RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason},
+				CausedBy:  &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 		}
 	}
 	var vals []any
@@ -164,15 +169,15 @@ func docValuesOutput(idx *Index, id, field string, spec fieldSpec, fallbackSourc
 		if !fallbackSource {
 			if textLikeTypes[ftype] {
 				reason := "Text fields are not optimised for operations that require per-document field data like aggregations and sorting, so these operations are disabled by default. Please use a keyword field instead. Alternatively, set fielddata=true on [" + field + "] in order to load field data by uninverting the inverted index. Note that this can use significant memory."
-				return nil, false, &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
-					RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
-					CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}}
+				return nil, false, &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
+					RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason},
+					CausedBy:  &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 			}
 			if !hasDV && (len(vals) > 0 || ftype == "binary") {
 				reason := "Can't load fielddata on [" + field + "] because fielddata is unsupported on fields of type [" + ftype + "]. Use doc values instead."
-				return nil, false, &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
-					RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
-					CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}}
+				return nil, false, &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
+					RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason},
+					CausedBy:  &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 			}
 			return nil, false, nil
 		}
@@ -190,8 +195,8 @@ func docValuesOutput(idx *Index, id, field string, spec fieldSpec, fallbackSourc
 	if ftype == "geo_point" && spec.format == "" {
 		for i, v := range res {
 			if m, ok := v.(map[string]any); ok {
-				lat, _ := toFloat(m["lat"])
-				lon, _ := toFloat(m["lon"])
+				lat, _ := jsonv.ToFloat(m["lat"])
+				lon, _ := jsonv.ToFloat(m["lon"])
 				if fallbackSource {
 					res[i] = map[string]any{"type": "Point", "coordinates": []any{lon, lat}}
 				} else {
@@ -218,11 +223,11 @@ func flattenAny(v any) []any {
 	}
 }
 
-func formatDocValue(idx *Index, field, ftype string, v any, format string) any {
+func formatDocValue(idx *model.Index, field, ftype string, v any, format string) any {
 	if ftype == "geo_point" && format == "wkt" {
 		if m, ok := v.(map[string]any); ok {
-			lat, _ := toFloat(m["lat"])
-			lon, _ := toFloat(m["lon"])
+			lat, _ := jsonv.ToFloat(m["lat"])
+			lon, _ := jsonv.ToFloat(m["lon"])
 			return "POINT (" + strconv.FormatFloat(lon, 'f', 1, 64) + " " + strconv.FormatFloat(lat, 'f', 1, 64) + ")"
 		}
 	}
@@ -277,7 +282,7 @@ func formatDocValue(idx *Index, field, ftype string, v any, format string) any {
 		}
 	}
 	if format != "" && strings.Contains(format, ".") {
-		if n, ok := toFloat(v); ok {
+		if n, ok := jsonv.ToFloat(v); ok {
 			dec := len(format) - strings.Index(format, ".") - 1
 			if dec < 0 {
 				dec = 0
@@ -386,8 +391,8 @@ func compareSortValues(a, b any) int {
 		}
 		return strings.Compare(as, bs)
 	}
-	if af, ok := toFloat(a); ok {
-		if bf, ok := toFloat(b); ok {
+	if af, ok := jsonv.ToFloat(a); ok {
+		if bf, ok := jsonv.ToFloat(b); ok {
 			switch {
 			case af < bf:
 				return -1
@@ -437,10 +442,10 @@ func searchValueType(v any) string {
 	return "VALUE_NULL"
 }
 
-func validateSearchBody(body map[string]any) *apiError {
+func validateSearchBody(body map[string]any) *apierr.Error {
 	for k, v := range body {
 		if !searchBodyKeys[k] {
-			return &apiError{Type: "parsing_exception", Status: 400,
+			return &apierr.Error{Type: "parsing_exception", Status: 400,
 				Reason: "Unknown key for a " + searchValueType(v) + " in [" + k + "]."}
 		}
 	}
@@ -451,11 +456,11 @@ func validateSearchBody(body map[string]any) *apiError {
 	}
 	if q, ok := body["query"]; ok {
 		if q == nil {
-			return &apiError{Type: "parsing_exception", Status: 400,
+			return &apierr.Error{Type: "parsing_exception", Status: 400,
 				Reason: "Unknown key for a VALUE_NULL in [query]."}
 		}
 		if qm, ok := q.(map[string]any); ok && len(qm) == 0 {
-			return &apiError{Type: "illegal_argument_exception", Status: 400,
+			return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "query malformed, empty clause found at [1:9]"}
 		}
 	}
@@ -483,10 +488,10 @@ var searchURLParams = map[string]bool{
 	"pretty": true, "human": true, "error_trace": true, "filter_path": true,
 }
 
-func validateSearchURLParams(r *http.Request) *apiError {
+func validateSearchURLParams(r *http.Request) *apierr.Error {
 	for k := range r.URL.Query() {
 		if !searchURLParams[k] {
-			return &apiError{Type: "illegal_argument_exception", Status: 400,
+			return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "request [" + r.URL.Path + "] contains unrecognized parameter: [" + k + "]"}
 		}
 	}
@@ -495,7 +500,7 @@ func validateSearchURLParams(r *http.Request) *apiError {
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name string) {
 	if _, has := r.URL.Query()["source"]; has && r.URL.Query().Get("source_content_type") == "" {
-		writeError(w, &apiError{Type: "illegal_state_exception", Status: 500,
+		writeError(w, &apierr.Error{Type: "illegal_state_exception", Status: 500,
 			Reason: "source and source_content_type parameters are required"})
 		return
 	}
@@ -510,19 +515,19 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		pm, _ := rawPit.(map[string]any)
 		pitID, _ = pm["id"].(string)
 		if name != "" {
-			writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: [indices] cannot be used with point in time;"})
 			return
 		}
 		if !strings.HasPrefix(pitID, "slopensearch-pit-") {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "invalid id: [" + pitID + "]"})
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "invalid id: [" + pitID + "]"})
 			return
 		}
 		ctx, ok := s.getPit(pitID)
 		if !ok {
 			reason := "No search context found for id [" + pitID + "]"
-			writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 404,
-				Reason: reason, RootCause: &apiError{Type: "search_context_missing_exception", Reason: reason}})
+			writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 404,
+				Reason: reason, RootCause: &apierr.Error{Type: "search_context_missing_exception", Reason: reason}})
 			return
 		}
 		pitCtx = ctx
@@ -538,11 +543,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	o := s.parseResolveParams(r, resolveOpts2{closedError: true})
-	var indices []*Index
+	var indices []*model.Index
 	if pitCtx != nil {
-		indices = []*Index{pitCtx.idx}
+		indices = []*model.Index{pitCtx.idx}
 	} else {
-		var apiErr2 *apiError
+		var apiErr2 *apierr.Error
 		indices, apiErr2 = s.resolveSpec2(name, o)
 		if apiErr2 != nil {
 			writeError(w, apiErr2)
@@ -559,7 +564,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	var verboseResults []any
 	verbosePipeline := queryBool(r, "verbose_pipeline")
 	if pipe != nil {
-		var perr *apiError
+		var perr *apierr.Error
 		pipeState, verboseResults, perr = applySearchRequestProcessors(body, pipe, verbosePipeline)
 		if perr != nil {
 			writeError(w, perr)
@@ -571,17 +576,17 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		switch st {
 		case "query_then_fetch", "dfs_query_then_fetch":
 		case "query_and_fetch", "fetch_by_query":
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "Unsupported search type [" + st + "]"})
 			return
 		default:
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "No search type for [" + st + "]"})
 			return
 		}
 	}
 	if rc := r.URL.Query().Get("request_cache"); rc != "" && rc != "true" && rc != "false" {
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "Failed to parse value [" + rc + "] as only [true] or [false] are allowed."})
 		return
 	}
@@ -597,7 +602,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		if v := r.URL.Query().Get(spec.key); v != "" {
 			n, err := strconv.Atoi(v)
 			if err != nil || n < spec.min {
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: spec.msg})
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: spec.msg})
 				return
 			}
 		}
@@ -607,17 +612,17 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			continue
 		}
 		if !validTimeoutString(tv) {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "failed to parse [" + tv + "]"})
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "failed to parse [" + tv + "]"})
 			return
 		}
 	}
 	if bt, ok := body["timeout"].(string); ok && bt != "" && !validTimeoutString(bt) {
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "failed to parse [" + bt + "]"})
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "failed to parse [" + bt + "]"})
 		return
 	}
 	query, _ := body["query"].(map[string]any)
 	if vals, has := r.URL.Query()["q"]; has {
-		var qerr *apiError
+		var qerr *apierr.Error
 		query, qerr = parseQParamOpts(vals[0], r.URL.Query().Get("df"), r.URL.Query().Get("default_operator"))
 		if qerr != nil {
 			writeError(w, qerr)
@@ -627,7 +632,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	if query == nil {
 		query = map[string]any{"match_all": map[string]any{}}
 	}
-	var vidx *Index
+	var vidx *model.Index
 	if pitCtx != nil {
 		vidx = pitCtx.idx
 	} else if len(indices) > 0 {
@@ -684,7 +689,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	if v := r.URL.Query().Get("from"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "Failed to parse int parameter [from] with value [" + v + "]"})
 			return
 		}
@@ -693,18 +698,18 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	if v := r.URL.Query().Get("size"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "Failed to parse int parameter [size] with value [" + v + "]"})
 			return
 		}
 		size = n
 	}
 	if from < 0 {
-		writeError(w, errBad(fmt.Sprintf("[from] parameter cannot be negative, found [%d]", from)))
+		writeError(w, apierr.BadRequest(fmt.Sprintf("[from] parameter cannot be negative, found [%d]", from)))
 		return
 	}
 	if size < 0 {
-		writeError(w, errBad(fmt.Sprintf("[size] parameter cannot be negative, found [%d]", size)))
+		writeError(w, apierr.BadRequest(fmt.Sprintf("[size] parameter cannot be negative, found [%d]", size)))
 		return
 	}
 	scrollParam := r.URL.Query().Get("scroll")
@@ -720,33 +725,33 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	if rawSlice, ok := body["slice"].(map[string]any); ok {
 		if scrollParam == "" && body["pit"] == nil {
 			reason := "`slice` cannot be used outside of a scroll context or PIT context"
-			writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 500,
+			writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 500,
 				Reason: reason, Phase: "query",
-				RootCause: &apiError{Type: "search_exception", Reason: reason}})
+				RootCause: &apierr.Error{Type: "search_exception", Reason: reason}})
 			return
 		}
-		if f, ok := toFloat(rawSlice["id"]); ok {
+		if f, ok := jsonv.ToFloat(rawSlice["id"]); ok {
 			sliceID = int(f)
 		}
-		if f, ok := toFloat(rawSlice["max"]); ok {
+		if f, ok := jsonv.ToFloat(rawSlice["max"]); ok {
 			sliceMax = int(f)
 		}
 		if sliceMax <= 1 {
-			writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason:   "max must be greater than 1",
-				CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "max must be greater than 1"}})
+				CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "max must be greater than 1"}})
 			return
 		}
 		if sliceID >= sliceMax {
-			writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason:   "max must be greater than id",
-				CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "max must be greater than id"}})
+				CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "max must be greater than id"}})
 			return
 		}
 	}
 	for _, idx := range indices {
 		window := 10000
-		if v, ok := findSetting(idx.Settings, "max_result_window"); ok {
+		if v, ok := settings.Find(idx.Settings, "max_result_window"); ok {
 			if n, ok := settingsValueInt(v); ok {
 				window = n
 			}
@@ -756,13 +761,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			if r.URL.Query().Get("scroll") != "" {
 				reason = fmt.Sprintf("Batch size is too large, size must be less than or equal to: [%d] but was [%d].", window, size)
 			}
-			writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 400,
-				Reason: reason, Phase: "query", RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason}})
+			writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
+				Reason: reason, Phase: "query", RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason}})
 			return
 		}
 	}
 
-	boostMap := map[*Index]float64{}
+	boostMap := map[*model.Index]float64{}
 	if rawBoost, ok := body["indices_boost"]; ok && rawBoost != nil {
 		var entries []any
 		if arr, isArr := rawBoost.([]any); isArr {
@@ -773,7 +778,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		for _, ent := range entries {
 			obj, _ := ent.(map[string]any)
 			for pat, val := range obj {
-				f, _ := toFloat(val)
+				f, _ := jsonv.ToFloat(val)
 				boosted, berr := s.resolveSpec2(pat, o)
 				if berr != nil {
 					writeError(w, berr)
@@ -856,7 +861,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		}
 	}
 	if ms, ok := body["min_score"]; ok {
-		if f, ok := toFloat(ms); ok {
+		if f, ok := jsonv.ToFloat(ms); ok {
 			kept := matched[:0]
 			for _, h := range matched {
 				if h.score >= f {
@@ -901,7 +906,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	sortedByField := len(searchSortSpecs) > 0 && !allScoreSort
 	for _, sp := range searchSortSpecs {
 		if sp.field == "_shard_doc" && pitCtx == nil {
-			writeError(w, &apiError{Type: "action_request_validation_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: _shard_doc is only supported with point-in-time (PIT). Add a PIT or remove _shard_doc.;"})
 			return
 		}
@@ -909,23 +914,23 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	if after, ok := body["search_after"].([]any); ok {
 		if len(searchSortSpecs) == 0 {
 			reason := "Sort must contain at least one field."
-			writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 				Reason: reason, Phase: "query",
-				RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason}})
+				RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason}})
 			return
 		}
 		if len(after) != len(searchSortSpecs) {
 			reason := fmt.Sprintf("search_after has %d value(s) but sort has %d.", len(after), len(searchSortSpecs))
-			writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 				Reason: reason, Phase: "query",
-				RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason}})
+				RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason}})
 			return
 		}
 		if r.URL.Query().Get("scroll") != "" {
 			reason := "`search_after` cannot be used in a scroll context."
-			writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 500,
+			writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 500,
 				Reason: reason, Phase: "query",
-				RootCause: &apiError{Type: "search_exception", Reason: reason}})
+				RootCause: &apierr.Error{Type: "search_exception", Reason: reason}})
 			return
 		}
 		if len(indices) > 0 {
@@ -936,11 +941,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				}
 				ft, _ := def["type"].(string)
 				if isNumericType(ft) && ft != "date" && ft != "date_nanos" {
-					if _, conv := toFloat(after[i]); !conv {
+					if _, conv := jsonv.ToFloat(after[i]); !conv {
 						reason := "Failed to parse search_after value for field [" + sp.field + "]."
-						writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 400,
+						writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 							Reason: reason, Phase: "query",
-							RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason}})
+							RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason}})
 						return
 					}
 				}
@@ -948,9 +953,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		}
 		if from != 0 {
 			reason := "`from` parameter must be set to 0 when `search_after` is used."
-			writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 500,
+			writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 500,
 				Reason: reason, Phase: "query",
-				RootCause: &apiError{Type: "search_exception", Reason: reason}})
+				RootCause: &apierr.Error{Type: "search_exception", Reason: reason}})
 			return
 		}
 	}
@@ -975,9 +980,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			}
 			if !anyMapped && sp.unmapped == "" {
 				reason := "No mapping found for [" + sp.field + "] in order to sort on"
-				writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 					Reason: reason, Phase: "query",
-					RootCause: &apiError{Type: "query_shard_exception", Reason: reason}})
+					RootCause: &apierr.Error{Type: "query_shard_exception", Reason: reason}})
 				return
 			}
 			if !anyMapped || sp.unmapped != "" {
@@ -1013,9 +1018,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			allowPartial = vals[0] != "false"
 		}
 		if !allowPartial {
-			writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 400,
+			writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 				Reason: partialReason, Phase: "query",
-				RootCause: &apiError{Type: "query_shard_exception", Reason: partialReason}})
+				RootCause: &apierr.Error{Type: "query_shard_exception", Reason: partialReason}})
 			return
 		}
 	}
@@ -1033,7 +1038,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		matched = kept
 	}
 	terminateAfter := 0
-	if n, ok := toFloat(body["terminate_after"]); ok {
+	if n, ok := jsonv.ToFloat(body["terminate_after"]); ok {
 		terminateAfter = int(n)
 	}
 	if v := r.URL.Query().Get("terminate_after"); v != "" {
@@ -1076,9 +1081,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 					t, _ := def["type"].(string)
 					if (!ok || t != "geo_point") && !sp.geoIgnore {
 						reason := "failed to find mapper for [" + sp.geoField + "] for geo distance based sort"
-						writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 400,
+						writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 							Reason: reason, Phase: "query",
-							RootCause: &apiError{Type: "query_shard_exception", Reason: reason}})
+							RootCause: &apierr.Error{Type: "query_shard_exception", Reason: reason}})
 						return
 					}
 					continue
@@ -1088,9 +1093,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 					t, _ := def["type"].(string)
 					if !ok || t != "nested" {
 						reason := "[nested] failed to find nested object under path [" + sp.nestedPath + "]"
-						writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 400,
+						writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 							Reason: reason, Phase: "query",
-							RootCause: &apiError{Type: "query_shard_exception", Reason: reason}})
+							RootCause: &apierr.Error{Type: "query_shard_exception", Reason: reason}})
 						return
 					}
 				}
@@ -1099,9 +1104,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 						t, _ := def["type"].(string)
 						if !isNumericType(t) && t != "date" {
 							reason := "we only support AVG, MEDIAN and SUM on number based fields"
-							writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 400,
+							writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 								Reason: reason, Phase: "query",
-								RootCause: &apiError{Type: "query_shard_exception", Reason: reason}})
+								RootCause: &apierr.Error{Type: "query_shard_exception", Reason: reason}})
 							return
 						}
 					}
@@ -1111,26 +1116,26 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 					fd, _ := def["fielddata"].(bool)
 					if (t == "text" || t == "match_only_text") && !fd {
 						reason := "Text fields are not optimised for operations that require per-document field data like aggregations and sorting, so these operations are disabled by default. Please use a keyword field instead. Alternatively, set fielddata=true on [" + sp.field + "] in order to load field data by uninverting the inverted index. Note that this can use significant memory."
-						writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 400,
+						writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 							Reason: "all shards failed", Phase: "query",
-							RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
-							CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}})
+							RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason},
+							CausedBy:  &apierr.Error{Type: "illegal_argument_exception", Reason: reason}})
 						return
 					}
 					if t == "geo_shape" {
 						reason := "can't sort on geo_shape field without using specific sorting feature, like geo_distance"
-						writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 400,
+						writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 							Reason: "all shards failed", Phase: "query",
-							RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
-							CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}})
+							RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason},
+							CausedBy:  &apierr.Error{Type: "illegal_argument_exception", Reason: reason}})
 						return
 					}
 					if t == "rank_feature" || t == "rank_features" {
 						reason := "[rank_feature] fields do not support sorting, scripting or aggregating"
-						writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 400,
+						writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 							Reason: "all shards failed", Phase: "query",
-							RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason},
-							CausedBy:  &apiError{Type: "illegal_argument_exception", Reason: reason}})
+							RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason},
+							CausedBy:  &apierr.Error{Type: "illegal_argument_exception", Reason: reason}})
 						return
 					}
 				}
@@ -1184,7 +1189,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	collapseFields := map[string]map[string]any{}
 	collapseInner := map[string]map[string]any{}
 	if body["collapse"] != nil {
-		var cerr *apiError
+		var cerr *apierr.Error
 		matched, collapseFields, collapseInner, cerr = applyCollapse(matched, body)
 		if cerr != nil {
 			writeError(w, cerr)
@@ -1255,8 +1260,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			srcTrue = true
 		}
 		if srcTrue {
-			writeError(w, &apiError{Type: "search_phase_execution_exception", Status: 500, Reason: "all shards failed",
-				RootCause: &apiError{Type: "search_exception", Reason: "[stored_fields] cannot be disabled if [_source] is requested"}})
+			writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 500, Reason: "all shards failed",
+				RootCause: &apierr.Error{Type: "search_exception", Reason: "[stored_fields] cannot be disabled if [_source] is requested"}})
 			return
 		}
 	}
@@ -1270,8 +1275,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			if m, ok := e.(map[string]any); ok {
 				if _, has := m["include_unmapped"]; has {
 					reason := "[docvalues_field] unknown field [include_unmapped]"
-					writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400, Reason: reason,
-						RootCause: &apiError{Type: "parsing_exception", Reason: reason}})
+					writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400, Reason: reason,
+						RootCause: &apierr.Error{Type: "parsing_exception", Reason: reason}})
 					return
 				}
 			}
@@ -1345,7 +1350,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		case float64:
 			n := int(t)
 			if n < 0 {
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: fmt.Sprintf("value must be >= 0, got %d", n)})
 				return
 			}
@@ -1354,13 +1359,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		case json.Number:
 			n64, err := t.Int64()
 			if err != nil {
-				writeError(w, &apiError{Type: "number_format_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "number_format_exception", Status: 400,
 					Reason: "For input string: \"" + t.String() + "\""})
 				return
 			}
 			n := int(n64)
 			if n < 0 {
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: fmt.Sprintf("value must be >= 0, got %d", n)})
 				return
 			}
@@ -1369,12 +1374,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		case string:
 			n, err := strconv.Atoi(t)
 			if err != nil {
-				writeError(w, &apiError{Type: "number_format_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "number_format_exception", Status: 400,
 					Reason: "For input string: \"" + t + "\""})
 				return
 			}
 			if n < 0 {
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: fmt.Sprintf("value must be >= 0, got %d", n)})
 				return
 			}
@@ -1389,12 +1394,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		} else if v != "true" {
 			n, err := strconv.Atoi(v)
 			if err != nil {
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "Failed to parse int parameter [track_total_hits] with value [" + v + "]"})
 				return
 			}
 			if n < 0 {
-				writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: fmt.Sprintf("value must be >= 0, got %d", n)})
 				return
 			}
@@ -1404,7 +1409,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	}
 	restInt = r.URL.Query().Get("rest_total_hits_as_int") == "true"
 	if restInt && trackExplicit && trackTotalVal >= 0 && trackTotalVal < total {
-		writeError(w, &apiError{Type: "illegal_argument_exception", Status: 400,
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: fmt.Sprintf("[rest_total_hits_as_int] cannot be used if the tracking of total hits is not accurate, got %d", trackTotalVal)})
 		return
 	}
@@ -1532,7 +1537,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		}
 		if len(dvFields) > 0 || len(paramFields) > 0 || len(storedNames) > 0 {
 			out := map[string]any{}
-			collect := func(specs []fieldSpec, fallback bool) *apiError {
+			collect := func(specs []fieldSpec, fallback bool) *apierr.Error {
 				for _, spec := range specs {
 					names := []string{spec.name}
 					if strings.ContainsAny(spec.name, "*?") {
@@ -1668,7 +1673,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	if isSuggestOnlySearch(body) {
 		resp["hits"] = map[string]any{"total": map[string]any{"value": 0, "relation": "eq"}, "max_score": nil, "hits": []any{}}
 	}
-	var aggIdx *Index
+	var aggIdx *model.Index
 	if len(indices) > 0 {
 		aggIdx = indices[0]
 	}
@@ -1735,21 +1740,21 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		resp["_scroll_id"] = scrollID
 	}
 	if pitID != "" {
-		ordered := orderedJSON{{K: "pit_id", V: pitID}}
+		ordered := ojson.Object{{K: "pit_id", V: pitID}}
 		for k, v := range resp {
-			ordered = append(ordered, orderedKV{K: k, V: v})
+			ordered = append(ordered, ojson.KV{K: k, V: v})
 		}
 		writeJSON(w, 200, ordered)
 		return
 	}
 
 	if terminateAfter > 0 {
-		ordered := orderedJSON{{K: "took", V: resp["took"]}, {K: "timed_out", V: resp["timed_out"]}, {K: "terminated_early", V: terminatedEarly}}
+		ordered := ojson.Object{{K: "took", V: resp["took"]}, {K: "timed_out", V: resp["timed_out"]}, {K: "terminated_early", V: terminatedEarly}}
 		for k, v := range resp {
 			if k == "took" || k == "timed_out" || k == "terminated_early" {
 				continue
 			}
-			ordered = append(ordered, orderedKV{K: k, V: v})
+			ordered = append(ordered, ojson.KV{K: k, V: v})
 		}
 		writeJSON(w, 200, ordered)
 		return
@@ -1890,7 +1895,7 @@ func matchedDocs(matched []hit) []map[string]any {
 
 func intField(body map[string]any, key string, def int) int {
 	if v, ok := body[key]; ok {
-		if f, ok := toFloat(v); ok {
+		if f, ok := jsonv.ToFloat(v); ok {
 			return int(f)
 		}
 	}
@@ -1920,9 +1925,9 @@ type searchSortSpec struct {
 	geoIgnore    bool
 }
 
-func parseSortSpecs(bodySort any, uriSort string) ([]searchSortSpec, *apiError) {
+func parseSortSpecs(bodySort any, uriSort string) ([]searchSortSpec, *apierr.Error) {
 	var out []searchSortSpec
-	add := func(raw any, uri bool) *apiError {
+	add := func(raw any, uri bool) *apierr.Error {
 		switch t := raw.(type) {
 		case string:
 			if t == "" {
@@ -1938,7 +1943,7 @@ func parseSortSpecs(bodySort any, uriSort string) ([]searchSortSpec, *apiError) 
 						if uri {
 							return nil
 						}
-						return &apiError{Type: "illegal_argument_exception", Status: 400,
+						return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 							Reason: "No enum constant org.opensearch.search.sort.SortOrder." + strings.ToUpper(ov)}
 					}
 					sp.desc = strings.EqualFold(ov, "desc")
@@ -1948,7 +1953,7 @@ func parseSortSpecs(bodySort any, uriSort string) ([]searchSortSpec, *apiError) 
 							if uri {
 								return nil
 							}
-							return &apiError{Type: "illegal_argument_exception", Status: 400,
+							return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 								Reason: "No enum constant org.opensearch.search.sort.SortOrder." + strings.ToUpper(o)}
 						}
 						sp.desc = strings.EqualFold(o, "desc")
@@ -1962,9 +1967,9 @@ func parseSortSpecs(bodySort any, uriSort string) ([]searchSortSpec, *apiError) 
 						case "min", "max", "avg", "sum", "median":
 							sp.mode = m
 						default:
-							return &apiError{Type: "x_content_parse_exception", Status: 400,
+							return &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 								Reason: "Failed to parse sort mode [" + m + "]",
-								CausedBy: &apiError{Type: "illegal_argument_exception",
+								CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 									Reason: "Unknown SortMode [" + m + "]"}}
 						}
 					}
@@ -1972,7 +1977,7 @@ func parseSortSpecs(bodySort any, uriSort string) ([]searchSortSpec, *apiError) 
 						sp.unmapped = m
 					}
 					if _, ok := ov["format"]; ok {
-						return &apiError{Type: "x_content_parse_exception", Status: 400,
+						return &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 							Reason: "Failed to parse sort [field_sort] unknown field [format]"}
 					}
 					if nt, ok := ov["numeric_type"].(string); ok {
@@ -2001,7 +2006,7 @@ func parseSortSpecs(bodySort any, uriSort string) ([]searchSortSpec, *apiError) 
 						}
 						if sp.geoUnit != "" {
 							if _, ok := geoUnitMeters(sp.geoUnit); !ok {
-								return &apiError{Type: "illegal_argument_exception", Status: 400,
+								return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 									Reason: "No distance unit match [" + sp.geoUnit + "]"}
 							}
 						}
@@ -2010,12 +2015,12 @@ func parseSortSpecs(bodySort any, uriSort string) ([]searchSortSpec, *apiError) 
 						sp.scriptRaw = ov["script"]
 						st, hasType := ov["type"].(string)
 						if !hasType {
-							return errBad("Required [type]")
+							return apierr.BadRequest("Required [type]")
 						}
 						if st != "number" && st != "string" && st != "version" {
-							return &apiError{Type: "x_content_parse_exception", Status: 400,
+							return &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 								Reason:   "[_script] failed to parse field [type]",
-								CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "Unknown ScriptSortType [" + st + "]"}}
+								CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "Unknown ScriptSortType [" + st + "]"}}
 						}
 					}
 					switch sc := ov["script"].(type) {
@@ -2104,7 +2109,7 @@ func searchSortSpecValue(h multiHit, sp searchSortSpec) (any, bool, bool) {
 }
 
 func convertSortNumeric(v any, numericType string) any {
-	f, ok := toFloat(v)
+	f, ok := jsonv.ToFloat(v)
 	if !ok {
 		return v
 	}
@@ -2337,8 +2342,8 @@ func parseSort(spec any) (string, bool) {
 }
 
 func compareValues(a, b any) int {
-	af, aok := toFloat(a)
-	bf, bok := toFloat(b)
+	af, aok := jsonv.ToFloat(a)
+	bf, bok := jsonv.ToFloat(b)
 	if aok && bok {
 		switch {
 		case af < bf:
@@ -2354,7 +2359,7 @@ func compareValues(a, b any) int {
 	return strings.Compare(as, bs)
 }
 
-func fieldType(idx *Index, field string) string {
+func fieldType(idx *model.Index, field string) string {
 	if t, ok := idx.FieldTypes[field]; ok {
 		return t
 	}
@@ -2406,10 +2411,10 @@ var knownClauses = map[string]bool{
 	"random_score": true, "knn": true,
 }
 
-func validateQuery(idx *Index, query map[string]any) *apiError {
+func validateQuery(idx *model.Index, query map[string]any) *apierr.Error {
 	for clause, raw := range query {
 		if !knownClauses[clause] {
-			return &apiError{Type: "parsing_exception", Status: 400,
+			return &apierr.Error{Type: "parsing_exception", Status: 400,
 				Reason: "unknown query [" + clause + "]", Clause: clause}
 		}
 		switch clause {
@@ -2452,7 +2457,7 @@ func validateQuery(idx *Index, query map[string]any) *apiError {
 			if bm, ok := raw.(map[string]any); ok {
 				queries := asQueryList(bm["queries"])
 				if len(queries) == 0 {
-					return &apiError{Type: "parsing_exception", Status: 400, Clause: "queries",
+					return &apierr.Error{Type: "parsing_exception", Status: 400, Clause: "queries",
 						NoCausedBy: true,
 						Reason:     "[_na] query malformed, must start with start_object"}
 				}
@@ -2465,7 +2470,7 @@ func validateQuery(idx *Index, query map[string]any) *apiError {
 		case "boosting":
 			if bm, ok := raw.(map[string]any); ok {
 				if _, has := bm["negative_boost"]; !has {
-					return &apiError{Type: "parsing_exception", Status: 400, Clause: "boosting",
+					return &apierr.Error{Type: "parsing_exception", Status: 400, Clause: "boosting",
 						NoCausedBy: true,
 						Reason:     "[boosting] query requires 'negative_boost' to be set to be a positive value'"}
 				}
@@ -2478,7 +2483,7 @@ func validateQuery(idx *Index, query map[string]any) *apiError {
 		case "more_like_this":
 			if bm, ok := raw.(map[string]any); ok {
 				if _, has := bm["like"]; !has {
-					return &apiError{Type: "parsing_exception", Status: 400,
+					return &apierr.Error{Type: "parsing_exception", Status: 400,
 						Reason: "more_like_this requires 'like' to be specified",
 						Clause: "more_like_this", ClauseEnd: true, NoCausedBy: true}
 				}
@@ -2544,14 +2549,14 @@ func validateQuery(idx *Index, query map[string]any) *apiError {
 	return nil
 }
 
-func validateNestedQuery(idx *Index, raw any) *apiError {
+func validateNestedQuery(idx *model.Index, raw any) *apierr.Error {
 	if qm, ok := raw.(map[string]any); ok {
 		return validateQuery(idx, qm)
 	}
 	return nil
 }
 
-func validateFunctionScore(idx *Index, raw any) *apiError {
+func validateFunctionScore(idx *model.Index, raw any) *apierr.Error {
 	bm, ok := raw.(map[string]any)
 	if !ok {
 		return nil
@@ -2560,7 +2565,7 @@ func validateFunctionScore(idx *Index, raw any) *apiError {
 		switch sm {
 		case "multiply", "sum", "avg", "max", "min", "first":
 		default:
-			return &apiError{Type: "illegal_argument_exception", Status: 400, ForceTop: true,
+			return &apierr.Error{Type: "illegal_argument_exception", Status: 400, ForceTop: true,
 				Reason: "No enum constant org.opensearch.common.lucene.search.function.FunctionScoreQuery.ScoreMode." +
 					strings.ToUpper(sm)}
 		}
@@ -2569,7 +2574,7 @@ func validateFunctionScore(idx *Index, raw any) *apiError {
 		switch bmMode {
 		case "multiply", "replace", "sum", "avg", "max", "min":
 		default:
-			return &apiError{Type: "illegal_argument_exception", Status: 400, ForceTop: true,
+			return &apierr.Error{Type: "illegal_argument_exception", Status: 400, ForceTop: true,
 				Reason: "No enum constant org.opensearch.common.lucene.search.function.FunctionScoreQuery.BoostMode." +
 					strings.ToUpper(bmMode)}
 		}
@@ -2588,8 +2593,8 @@ func validateFunctionScore(idx *Index, raw any) *apiError {
 			continue
 		}
 		if w, ok := fn["weight"]; ok {
-			if f, ok := toFloat(w); ok && f < 0 {
-				return &apiError{Type: "illegal_argument_exception", Status: 400, ForceTop: true,
+			if f, ok := jsonv.ToFloat(w); ok && f < 0 {
+				return &apierr.Error{Type: "illegal_argument_exception", Status: 400, ForceTop: true,
 					Reason: "[weight] cannot be negative for a filtering function"}
 			}
 		}
@@ -2611,13 +2616,13 @@ func validateFunctionScore(idx *Index, raw any) *apiError {
 	return nil
 }
 
-func validateTermsQuery(raw any) *apiError {
+func validateTermsQuery(raw any) *apierr.Error {
 	m, ok := raw.(map[string]any)
 	if !ok {
 		return nil
 	}
 	if _, ok := m["case_insensitive"]; ok {
-		return &apiError{Type: "parsing_exception", Status: 400,
+		return &apierr.Error{Type: "parsing_exception", Status: 400,
 			Reason: "[terms] query does not support [case_insensitive]",
 			Clause: "case_insensitive", NoCausedBy: true}
 	}
@@ -2635,7 +2640,7 @@ func validateTermsQuery(raw any) *apiError {
 	}
 	if _, isArr := val.([]any); !isArr {
 		if _, isObj := val.(map[string]any); !isObj {
-			return &apiError{Type: "parsing_exception", Status: 400,
+			return &apierr.Error{Type: "parsing_exception", Status: 400,
 				Reason: "[terms] query does not support [" + field + "]",
 				Clause: field, NoCausedBy: true}
 		}
@@ -2643,7 +2648,7 @@ func validateTermsQuery(raw any) *apiError {
 	return nil
 }
 
-func validateTermQuery(idx *Index, raw any) *apiError {
+func validateTermQuery(idx *model.Index, raw any) *apierr.Error {
 	m, ok := raw.(map[string]any)
 	if !ok {
 		return nil
@@ -2657,14 +2662,14 @@ func validateTermQuery(idx *Index, raw any) *apiError {
 			switch k {
 			case "value", "boost", "case_insensitive", "_name", "rewrite":
 			default:
-				return &apiError{Type: "parsing_exception", Status: 400,
+				return &apierr.Error{Type: "parsing_exception", Status: 400,
 					Reason: "[term] query does not support [" + k + "]",
 					Clause: k, NoCausedBy: true}
 			}
 		}
 		if ci, has := vm["case_insensitive"]; has {
 			if _, isBool := ci.(bool); !isBool {
-				return &apiError{Type: "illegal_argument_exception", Status: 400,
+				return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason:   "Failed to parse value [" + previewValue(ci) + "] as only [true] or [false] are allowed.",
 					ForceTop: true}
 			}
@@ -2693,9 +2698,9 @@ func validateTermQuery(idx *Index, raw any) *apiError {
 			s, isStr := valueScalarString(val)
 			if !isStr || (s != "true" && s != "false") {
 				reason := fmt.Sprintf("Failed to parse value [%s] as only [true] or [false] are allowed.", previewValue(val))
-				return &apiError{Type: "mapper_parsing_exception", Status: 400,
+				return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 					Reason:   reason,
-					CausedBy: &apiError{Type: "illegal_argument_exception", Status: 400, Reason: reason}}
+					CausedBy: &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: reason}}
 			}
 		}
 	}
@@ -2706,7 +2711,7 @@ func validateTermQuery(idx *Index, raw any) *apiError {
 	return err
 }
 
-func validateRangeQuery(idx *Index, raw any) *apiError {
+func validateRangeQuery(idx *model.Index, raw any) *apierr.Error {
 	m, ok := raw.(map[string]any)
 	if !ok {
 		return nil
@@ -2739,7 +2744,7 @@ func validateRangeQuery(idx *Index, raw any) *apiError {
 			continue
 		}
 		bound := b.spec.value
-		var err *apiError
+		var err *apierr.Error
 		switch ftype {
 		case "date", "date_nanos", "date_range":
 			_, err = parseRangeDateBound(def, bound, tz, format, b.roundUp)
@@ -2777,7 +2782,7 @@ func validateRangeQuery(idx *Index, raw any) *apiError {
 	return nil
 }
 
-func isQueryShardCause(e *apiError) bool {
+func isQueryShardCause(e *apierr.Error) bool {
 	return e.Type == "mapper_parsing_exception" || e.Type == "query_shard_exception" || e.SearchFailure != ""
 }
 
@@ -2809,7 +2814,7 @@ func jsonKeyValuePos(body []byte, key string) (int, int) {
 	return line, col
 }
 
-func annotateQueryClause(err *apiError, raw []byte) {
+func annotateQueryClause(err *apierr.Error, raw []byte) {
 	if err.Clause == "" {
 		return
 	}
@@ -2823,7 +2828,7 @@ func annotateQueryClause(err *apiError, raw []byte) {
 	}
 	err.Fields = map[string]any{"line": line, "col": col}
 	if !err.NoCausedBy {
-		err.CausedBy = &apiError{Type: "named_object_not_found_exception",
+		err.CausedBy = &apierr.Error{Type: "named_object_not_found_exception",
 			Reason: fmt.Sprintf("[%d:%d] unknown field [%s]", line, col, err.Clause)}
 	}
 }
@@ -2886,7 +2891,7 @@ func jsonClauseEndPos(body []byte, key string) (int, int) {
 	return jsonKeyValuePos(body, key)
 }
 
-func writeQueryShardError(w http.ResponseWriter, idx *Index, cause *apiError) {
+func writeQueryShardError(w http.ResponseWriter, idx *model.Index, cause *apierr.Error) {
 	if cause.Shard != nil {
 		writeJSON(w, cause.Shard.StatusCode(), cause.Shard.ResponseBody())
 		return
@@ -2914,10 +2919,10 @@ func writeQueryShardError(w http.ResponseWriter, idx *Index, cause *apiError) {
 	}
 	shardType := "query_shard_exception"
 	shardReasonText := rootReason
-	shardCaused := orderedJSON{{"type", innerType}, {"reason", innerReason}}
-	rootExtra := orderedJSON{{"index", idx.Name}, {"index_uuid", idx.UUID}}
-	shardExtra := orderedJSON{{"index", idx.Name}, {"index_uuid", idx.UUID}}
-	var topCaused orderedJSON
+	shardCaused := ojson.Object{{"type", innerType}, {"reason", innerReason}}
+	rootExtra := ojson.Object{{"index", idx.Name}, {"index_uuid", idx.UUID}}
+	shardExtra := ojson.Object{{"index", idx.Name}, {"index_uuid", idx.UUID}}
+	var topCaused ojson.Object
 	if cause.Type == "parse_exception" {
 		parseReason := cause.Reason
 		parseInner := cause.Reason
@@ -2926,15 +2931,15 @@ func writeQueryShardError(w http.ResponseWriter, idx *Index, cause *apiError) {
 		} else if !strings.Contains(parseReason, ": [") {
 			parseReason = parseReason + ": [" + parseReason + "]"
 		}
-		innerCaused := orderedJSON{
+		innerCaused := ojson.Object{
 			{"type", "illegal_argument_exception"},
 			{"reason", parseInner},
-			{"caused_by", orderedJSON{
+			{"caused_by", ojson.Object{
 				{"type", "date_time_parse_exception"},
 				{"reason", "Failed to parse with all enclosed parsers"},
 			}},
 		}
-		parseCaused := orderedJSON{
+		parseCaused := ojson.Object{
 			{"type", "parse_exception"},
 			{"reason", parseReason},
 			{"caused_by", innerCaused},
@@ -2957,21 +2962,21 @@ func writeQueryShardError(w http.ResponseWriter, idx *Index, cause *apiError) {
 			shardExtra = nil
 		}
 	}
-	rootCauseObj := orderedJSON{{"type", rootType}, {"reason", rootReason}}
+	rootCauseObj := ojson.Object{{"type", rootType}, {"reason", rootReason}}
 	rootCauseObj = append(rootCauseObj, rootExtra...)
-	shardReasonObj := orderedJSON{{"type", shardType}, {"reason", shardReasonText}}
+	shardReasonObj := ojson.Object{{"type", shardType}, {"reason", shardReasonText}}
 	shardReasonObj = append(shardReasonObj, shardExtra...)
-	shardReasonObj = append(shardReasonObj, orderedKV{"caused_by", shardCaused})
+	shardReasonObj = append(shardReasonObj, ojson.KV{"caused_by", shardCaused})
 	if topCaused == nil {
 		topCaused = shardReasonObj
 	}
-	errObj := orderedJSON{
+	errObj := ojson.Object{
 		{"root_cause", []any{rootCauseObj}},
 		{"type", "search_phase_execution_exception"},
 		{"reason", "all shards failed"},
 		{"phase", "query"},
 		{"grouped", true},
-		{"failed_shards", []any{orderedJSON{
+		{"failed_shards", []any{ojson.Object{
 			{"shard", 0},
 			{"index", idx.Name},
 			{"node", nodeID},
@@ -2979,46 +2984,46 @@ func writeQueryShardError(w http.ResponseWriter, idx *Index, cause *apiError) {
 		}}},
 		{"caused_by", topCaused},
 	}
-	writeJSON(w, 400, orderedJSON{{"error", errObj}, {"status", 400}})
+	writeJSON(w, 400, ojson.Object{{"error", errObj}, {"status", 400}})
 }
 
-func writeCustomSearchFailure(w http.ResponseWriter, idx *Index, e *apiError) {
+func writeCustomSearchFailure(w http.ResponseWriter, idx *model.Index, e *apierr.Error) {
 	reason := e.Reason
 	status := 400
 	rootType := "exception"
 	shardType := "exception"
 	shardReason := reason
-	var topCaused orderedJSON
+	var topCaused ojson.Object
 	switch e.SearchFailure {
 	case "fvf_unmapped":
 		rootType = "exception"
 		shardType = "query_shard_exception"
 		shardReason = "failed to create query: " + reason
-		topCaused = orderedJSON{{"type", "exception"}, {"reason", reason}}
+		topCaused = ojson.Object{{"type", "exception"}, {"reason", reason}}
 	case "fvf_log":
 		rootType = "illegal_argument_exception"
 		shardType = "illegal_argument_exception"
-		topCaused = orderedJSON{{"type", "illegal_argument_exception"}, {"reason", reason},
-			{"caused_by", orderedJSON{{"type", "illegal_argument_exception"}, {"reason", reason}}}}
+		topCaused = ojson.Object{{"type", "illegal_argument_exception"}, {"reason", reason},
+			{"caused_by", ojson.Object{{"type", "illegal_argument_exception"}, {"reason", reason}}}}
 	case "fvf_missing":
 		status = 500
-		topCaused = orderedJSON{{"type", "exception"}, {"reason", reason}}
+		topCaused = ojson.Object{{"type", "exception"}, {"reason", reason}}
 	default:
-		topCaused = orderedJSON{{"type", e.Type}, {"reason", reason}}
+		topCaused = ojson.Object{{"type", e.Type}, {"reason", reason}}
 	}
-	failedReason := orderedJSON{{"type", shardType}, {"reason", shardReason}}
+	failedReason := ojson.Object{{"type", shardType}, {"reason", shardReason}}
 	if e.SearchFailure == "fvf_unmapped" {
 		failedReason = append(failedReason,
-			orderedKV{"index", idx.Name}, orderedKV{"index_uuid", idx.UUID},
-			orderedKV{"caused_by", orderedJSON{{"type", "exception"}, {"reason", reason}}})
+			ojson.KV{"index", idx.Name}, ojson.KV{"index_uuid", idx.UUID},
+			ojson.KV{"caused_by", ojson.Object{{"type", "exception"}, {"reason", reason}}})
 	}
-	errObj := orderedJSON{
-		{"root_cause", []any{orderedJSON{{"type", rootType}, {"reason", reason}}}},
+	errObj := ojson.Object{
+		{"root_cause", []any{ojson.Object{{"type", rootType}, {"reason", reason}}}},
 		{"type", "search_phase_execution_exception"},
 		{"reason", "all shards failed"},
 		{"phase", "query"},
 		{"grouped", true},
-		{"failed_shards", []any{orderedJSON{
+		{"failed_shards", []any{ojson.Object{
 			{"shard", 0},
 			{"index", idx.Name},
 			{"node", nodeID},
@@ -3026,10 +3031,10 @@ func writeCustomSearchFailure(w http.ResponseWriter, idx *Index, e *apiError) {
 		}}},
 		{"caused_by", topCaused},
 	}
-	writeJSON(w, status, orderedJSON{{"error", errObj}, {"status", status}})
+	writeJSON(w, status, ojson.Object{{"error", errObj}, {"status", status}})
 }
 
-func evalQuery(idx *Index, query map[string]any, doc map[string]any) (bool, float64, *apiError) {
+func evalQuery(idx *model.Index, query map[string]any, doc map[string]any) (bool, float64, *apierr.Error) {
 	if len(query) == 0 {
 		return true, 1, nil
 	}
@@ -3089,7 +3094,7 @@ func queryText(raw any) (string, any) {
 	return s, nil
 }
 
-func evalMatch(idx *Index, raw any, doc map[string]any) (bool, float64, *apiError) {
+func evalMatch(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
 	field, val, ok := singleEntry(raw.(map[string]any))
 	if !ok {
 		return false, 0, errParsing("empty match")
@@ -3134,7 +3139,7 @@ func evalMatch(idx *Index, raw any, doc map[string]any) (bool, float64, *apiErro
 	return score > 0, score, nil
 }
 
-func evalPrefix(idx *Index, raw any, doc map[string]any) (bool, float64, *apiError) {
+func evalPrefix(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
 	field, val, ok := singleEntry(raw.(map[string]any))
 	if !ok {
 		return false, 0, errParsing("empty prefix")
@@ -3164,7 +3169,7 @@ func evalPrefix(idx *Index, raw any, doc map[string]any) (bool, float64, *apiErr
 	return false, 0, nil
 }
 
-func evalTerm(idx *Index, raw any, doc map[string]any, fuzz int) (bool, float64, *apiError) {
+func evalTerm(idx *model.Index, raw any, doc map[string]any, fuzz int) (bool, float64, *apierr.Error) {
 	field, val, ok := singleEntry(raw.(map[string]any))
 	if !ok {
 		return false, 0, errParsing("empty term")
@@ -3174,7 +3179,7 @@ func evalTerm(idx *Index, raw any, doc map[string]any, fuzz int) (bool, float64,
 			val = v
 		}
 		if f, ok := m["fuzziness"]; ok {
-			if n, ok := toFloat(f); ok {
+			if n, ok := jsonv.ToFloat(f); ok {
 				fuzz = int(n)
 			}
 		}
@@ -3202,7 +3207,7 @@ func evalTerm(idx *Index, raw any, doc map[string]any, fuzz int) (bool, float64,
 	return false, 0, nil
 }
 
-func evalFuzzy(idx *Index, raw any, doc map[string]any) (bool, float64, *apiError) {
+func evalFuzzy(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
 	field, val, _ := singleEntry(raw.(map[string]any))
 	fuzz := autoFuzziness(field)
 	if m, ok := val.(map[string]any); ok {
@@ -3214,7 +3219,7 @@ func evalFuzzy(idx *Index, raw any, doc map[string]any) (bool, float64, *apiErro
 	return evalTerm(idx, raw, doc, fuzz)
 }
 
-func evalTerms(idx *Index, raw any, doc map[string]any) (bool, float64, *apiError) {
+func evalTerms(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
 	field, val, ok := singleEntry(raw.(map[string]any))
 	if !ok {
 		return false, 0, errParsing("empty terms")
@@ -3245,7 +3250,7 @@ func evalTerms(idx *Index, raw any, doc map[string]any) (bool, float64, *apiErro
 	return false, 0, nil
 }
 
-func compareRange(dv float64, cond map[string]any, field string, parse func(any) (float64, bool)) (bool, float64, *apiError) {
+func compareRange(dv float64, cond map[string]any, field string, parse func(any) (float64, bool)) (bool, float64, *apierr.Error) {
 	for op, bound := range cond {
 		bv, ok := parse(bound)
 		if !ok {
@@ -3273,7 +3278,7 @@ func compareRange(dv float64, cond map[string]any, field string, parse func(any)
 	return true, 1, nil
 }
 
-func evalRange(idx *Index, raw any, doc map[string]any) (bool, float64, *apiError) {
+func evalRange(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
 	m, ok := raw.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("bad range")
@@ -3299,11 +3304,11 @@ func evalRange(idx *Index, raw any, doc map[string]any) (bool, float64, *apiErro
 		return compareRange(dv, cond, field, parseDate)
 	}
 	if isNumericType(ft) {
-		dv, ok := toFloat(v)
+		dv, ok := jsonv.ToFloat(v)
 		if !ok {
 			return false, 0, nil
 		}
-		return compareRange(dv, cond, field, toFloat)
+		return compareRange(dv, cond, field, jsonv.ToFloat)
 	}
 	ds, _ := toString(v)
 	for op, bound := range cond {
@@ -3341,7 +3346,7 @@ func asQueryList(v any) []any {
 	return nil
 }
 
-func evalBool(idx *Index, raw any, doc map[string]any) (bool, float64, *apiError) {
+func evalBool(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
 	m, ok := raw.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("bad bool")
@@ -3393,7 +3398,7 @@ func evalBool(idx *Index, raw any, doc map[string]any) (bool, float64, *apiError
 	return true, score, nil
 }
 
-func evalMatchPhrase(idx *Index, raw any, doc map[string]any) (bool, float64, *apiError) {
+func evalMatchPhrase(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
 	field, val, ok := singleEntry(raw.(map[string]any))
 	if !ok {
 		return false, 0, errParsing("empty match_phrase")
@@ -3432,7 +3437,7 @@ func containsSubsequence(hay, needle []string) bool {
 	return false
 }
 
-func evalMultiMatch(idx *Index, raw any, doc map[string]any) (bool, float64, *apiError) {
+func evalMultiMatch(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
 	m, ok := raw.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("bad multi_match")
@@ -3485,7 +3490,7 @@ func wildcardRegex(pattern string) *regexp.Regexp {
 	return re
 }
 
-func evalWildcard(idx *Index, raw any, doc map[string]any) (bool, float64, *apiError) {
+func evalWildcard(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
 	field, val, ok := singleEntry(raw.(map[string]any))
 	if !ok {
 		return false, 0, errParsing("empty wildcard")
@@ -3515,7 +3520,7 @@ func evalWildcard(idx *Index, raw any, doc map[string]any) (bool, float64, *apiE
 	return false, 0, nil
 }
 
-func evalExists(raw any, doc map[string]any) (bool, float64, *apiError) {
+func evalExists(raw any, doc map[string]any) (bool, float64, *apierr.Error) {
 	m, ok := raw.(map[string]any)
 	if !ok {
 		return false, 0, errParsing("bad exists")
@@ -3689,7 +3694,7 @@ func reduceSortValues(list []any, desc bool, mode string) any {
 	case "avg", "sum", "median":
 		floats := make([]float64, 0, len(sorted))
 		for _, v := range sorted {
-			if f, ok := toFloat(v); ok {
+			if f, ok := jsonv.ToFloat(v); ok {
 				floats = append(floats, f)
 			}
 		}
@@ -3851,8 +3856,8 @@ func geoDistanceMeters(lat1, lon1, lat2, lon2 float64) float64 {
 func parseGeoOrigins(v any) [][2]float64 {
 	if arr, isArr := v.([]any); isArr {
 		if len(arr) == 2 {
-			if _, ok1 := toFloat(arr[0]); ok1 {
-				if _, ok2 := toFloat(arr[1]); ok2 {
+			if _, ok1 := jsonv.ToFloat(arr[0]); ok1 {
+				if _, ok2 := jsonv.ToFloat(arr[1]); ok2 {
 					if lat, lon, ok := parseGeoPoint(arr); ok {
 						return [][2]float64{{lat, lon}}
 					}
@@ -3885,8 +3890,8 @@ func geoSortDistance(h multiHit, sp searchSortSpec) any {
 	var candidates []any
 	if arr, isArr := raw.([]any); isArr {
 		if len(arr) == 2 {
-			if _, ok1 := toFloat(arr[0]); ok1 {
-				if _, ok2 := toFloat(arr[1]); ok2 {
+			if _, ok1 := jsonv.ToFloat(arr[0]); ok1 {
+				if _, ok2 := jsonv.ToFloat(arr[1]); ok2 {
 					candidates = []any{raw}
 				}
 			}
@@ -3968,8 +3973,8 @@ func compareSearchAfterValue(h multiHit, sp searchSortSpec, av, bv any) int {
 		}
 	}
 	if sp.numericType == "long" || sp.numericType == "date_nanos" {
-		af, _ := toFloat(av)
-		bf, _ := toFloat(bv)
+		af, _ := jsonv.ToFloat(av)
+		bf, _ := jsonv.ToFloat(bv)
 		switch {
 		case af < bf:
 			return -1
@@ -4060,7 +4065,7 @@ func walkNamedClause(cm map[string]any, qc *queryCtx, out map[string]float64) {
 	}
 }
 
-func mappedLeafFields(idx *Index) []string {
+func mappedLeafFields(idx *model.Index) []string {
 	out := []string{}
 	var walk func(prefix string, props map[string]any)
 	walk = func(prefix string, props map[string]any) {
@@ -4119,14 +4124,14 @@ func explainDescription(query map[string]any) string {
 	return "sum of:"
 }
 
-func applyCollapse(matched []multiHit, body map[string]any) ([]multiHit, map[string]map[string]any, map[string]map[string]any, *apiError) {
+func applyCollapse(matched []multiHit, body map[string]any) ([]multiHit, map[string]map[string]any, map[string]map[string]any, *apierr.Error) {
 	collapse, ok := body["collapse"].(map[string]any)
 	if !ok {
 		return matched, nil, nil, nil
 	}
 	if _, has := body["rescore"]; has {
-		return nil, nil, nil, &apiError{Type: "search_phase_execution_exception", Status: 500, Reason: "all shards failed",
-			RootCause: &apiError{Type: "search_exception", Reason: "cannot use `collapse` in conjunction with `rescore`"}}
+		return nil, nil, nil, &apierr.Error{Type: "search_phase_execution_exception", Status: 500, Reason: "all shards failed",
+			RootCause: &apierr.Error{Type: "search_exception", Reason: "cannot use `collapse` in conjunction with `rescore`"}}
 	}
 	field, _ := collapse["field"].(string)
 	var def map[string]any
@@ -4140,21 +4145,21 @@ func applyCollapse(matched []multiHit, body map[string]any) ([]multiHit, map[str
 	}
 	if !found {
 		reason := "no mapping found for `" + field + "` in order to collapse on"
-		return nil, nil, nil, &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: reason,
-			RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason}}
+		return nil, nil, nil, &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: reason,
+			RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 	}
 	ftype, _ := def["type"].(string)
 	if ftype == "text" || ftype == "match_only_text" || ftype == "search_as_you_type" {
 		reason := "unknown type for collapse field `" + field + "`, only keywords and numbers are accepted"
-		return nil, nil, nil, &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: reason,
-			RootCause: &apiError{Type: "illegal_argument_exception", Reason: reason}}
+		return nil, nil, nil, &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: reason,
+			RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 	}
 	for _, h := range matched {
 		if vals := h.idx.DocValues[h.id]; vals != nil && len(vals[field]) > 1 {
 			reason := "the collapse field must be single valued"
-			return nil, nil, nil, &apiError{Type: "search_phase_execution_exception", Status: 500, Reason: "all shards failed",
-				RootCause: &apiError{Type: "illegal_state_exception", Reason: reason},
-				CausedBy:  &apiError{Type: "illegal_state_exception", Reason: reason}}
+			return nil, nil, nil, &apierr.Error{Type: "search_phase_execution_exception", Status: 500, Reason: "all shards failed",
+				RootCause: &apierr.Error{Type: "illegal_state_exception", Reason: reason},
+				CausedBy:  &apierr.Error{Type: "illegal_state_exception", Reason: reason}}
 		}
 	}
 	groups := map[string][]multiHit{}
@@ -4204,10 +4209,10 @@ func applyCollapse(matched []multiHit, body map[string]any) ([]multiHit, map[str
 		for _, spec := range specs {
 			name, _ := spec["name"].(string)
 			if name == "" {
-				return nil, nil, nil, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "Field name cannot be null"}
+				return nil, nil, nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "Field name cannot be null"}
 			}
 			size := 3
-			if n, ok := toFloat(spec["size"]); ok {
+			if n, ok := jsonv.ToFloat(spec["size"]); ok {
 				size = int(n)
 			}
 			srcFalse := false
@@ -4216,7 +4221,7 @@ func applyCollapse(matched []multiHit, body map[string]any) ([]multiHit, map[str
 			}
 			var specs2 []searchSortSpec
 			if rawSort, has := spec["sort"]; has {
-				var serr *apiError
+				var serr *apierr.Error
 				specs2, serr = parseSortSpecs(rawSort, "")
 				if serr != nil {
 					return nil, nil, nil, serr
@@ -4272,14 +4277,14 @@ func applyCollapse(matched []multiHit, body map[string]any) ([]multiHit, map[str
 	return collapsed, fieldsByID, innerByID, nil
 }
 
-func applyRescore(matched []multiHit, body map[string]any) *apiError {
+func applyRescore(matched []multiHit, body map[string]any) *apierr.Error {
 	raw, has := body["rescore"]
 	if !has || raw == nil {
 		return nil
 	}
 	if s, ok := body["sort"].([]any); ok && len(s) > 0 {
-		return &apiError{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
-			RootCause: &apiError{Type: "illegal_argument_exception", Reason: "Cannot use [sort] option in conjunction with [rescore]."}}
+		return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
+			RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: "Cannot use [sort] option in conjunction with [rescore]."}}
 	}
 	specs := []map[string]any{}
 	switch t := raw.(type) {
@@ -4294,7 +4299,7 @@ func applyRescore(matched []multiHit, body map[string]any) *apiError {
 	}
 	for _, spec := range specs {
 		window := 10
-		if n, ok := toFloat(spec["window_size"]); ok {
+		if n, ok := jsonv.ToFloat(spec["window_size"]); ok {
 			window = int(n)
 		}
 		qm, _ := spec["query"].(map[string]any)
@@ -4310,11 +4315,11 @@ func applyRescore(matched []multiHit, body map[string]any) *apiError {
 			mode = m
 		}
 		qw := 1.0
-		if v, ok := toFloat(qm["query_weight"]); ok {
+		if v, ok := jsonv.ToFloat(qm["query_weight"]); ok {
 			qw = v
 		}
 		rw := 1.0
-		if v, ok := toFloat(qm["rescore_query_weight"]); ok {
+		if v, ok := jsonv.ToFloat(qm["rescore_query_weight"]); ok {
 			rw = v
 		}
 		order := make([]int, len(matched))

@@ -5,6 +5,9 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/model"
 )
 
 type sigTerm struct {
@@ -14,7 +17,7 @@ type sigTerm struct {
 	docs  []map[string]any
 }
 
-func sigTermBuckets(docs []map[string]any, field string, idx *Index, pathPrefix, valueType, format string) (map[string]*sigTerm, *apiError) {
+func sigTermBuckets(docs []map[string]any, field string, idx *model.Index, pathPrefix, valueType, format string) (map[string]*sigTerm, *apierr.Error) {
 	resolved := resolveField(field, pathPrefix)
 	ft, _ := idx.FieldTypes[resolved]
 	out := map[string]*sigTerm{}
@@ -48,7 +51,7 @@ func sigTermBuckets(docs []map[string]any, field string, idx *Index, pathPrefix,
 	return out, nil
 }
 
-func sigTextBuckets(docs []map[string]any, field string, idx *Index, pathPrefix string, dedupe bool) map[string]*sigTerm {
+func sigTextBuckets(docs []map[string]any, field string, idx *model.Index, pathPrefix string, dedupe bool) map[string]*sigTerm {
 	out := map[string]*sigTerm{}
 	for _, d := range docs {
 		v, ok := aggFieldValue(d, field, pathPrefix)
@@ -176,7 +179,7 @@ func sigScore(heuristic string, fg, bg int, fgTotal, bgTotal int) float64 {
 	return (f - b) * (f / b)
 }
 
-func significantAgg(name string, spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool, text bool) (any, *apiError) {
+func significantAgg(name string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool, text bool) (any, *apierr.Error) {
 	field, _ := toString(spec["field"])
 	resolved := resolveField(field, pathPrefix)
 	ft, _ := idx.FieldTypes[resolved]
@@ -217,7 +220,7 @@ func significantAgg(name string, spec map[string]any, docs []map[string]any, idx
 		fgTerms = sigTextBuckets(docs, field, idx, pathPrefix, dedupe)
 		bgTerms = sigTextBuckets(background, field, idx, pathPrefix, dedupe)
 	} else {
-		var err *apiError
+		var err *apierr.Error
 		fgTerms, err = sigTermBuckets(docs, field, idx, pathPrefix, valueType, format)
 		if err != nil {
 			return nil, err
@@ -276,12 +279,12 @@ func significantAgg(name string, spec map[string]any, docs []map[string]any, idx
 	return map[string]any{"doc_count": len(docs), "bg_count": len(background), "buckets": buckets}, nil
 }
 
-func rareTermsAgg(name string, spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string, sub map[string]any, typed bool) (any, *apiError) {
+func rareTermsAgg(name string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	maxDoc := intField(spec, "max_doc_count", 1)
 	if maxDoc > 100 {
-		return nil, &apiError{Type: "illegal_argument_exception", Status: 400,
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "max_doc_count must be less than or equal to 100",
-			CausedBy: &apiError{Type: "illegal_argument_exception",
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception",
 				Reason: "[max_doc_count] must be smallerthan 100in [" + name + "]"}}
 	}
 	if maxDoc < 1 {
