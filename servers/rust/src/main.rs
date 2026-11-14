@@ -6,6 +6,7 @@ mod cat;
 mod knn;
 mod knn_index;
 mod knn_query;
+mod knn_api;
 mod cluster;
 mod datastreams;
 mod docs;
@@ -568,6 +569,7 @@ pub fn dispatch(store: &mut Store, req: &Req) -> axum::response::Response {
 
     match segs[0].as_str() {
         "_bulk" => return docs::handle_bulk(store, req, ""),
+        "_plugins" if segs.len() >= 2 && segs[1] == "_knn" => return knn_api::handle(store, req, &segs[2..]),
         "_mget" => return docs::handle_mget(store, req, ""),
         "_analyze" => return analysis::api::handle_analyze(store, req, ""),
         "_search" => {

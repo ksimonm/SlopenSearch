@@ -47,10 +47,35 @@ fn space_of(def: &Map<String, Value>) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Base64 decoding like java.util.Base64's basic decoder: padding is
+/// optional and the unused bits of a final partial group are ignored.
+fn lenient_base64(s: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut acc: u32 = 0;
+    let mut bits = 0;
+    for c in s.trim_end_matches('=').bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        } as u32;
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
 /// Decodes a base64 vector of little-endian floats.
 pub fn base64_floats(path: &str, s: &str) -> Result<Vec<f64>, VecErr> {
-    let trimmed = s.trim_end_matches('=');
-    let bytes = base64::decode_config(trimmed, base64::STANDARD_NO_PAD).map_err(|_| {
+    let bytes = lenient_base64(s).ok_or_else(|| {
         verr("illegal_argument_exception", &format!("Failed to decode Base64 vector for field [{}]", path), s)
     })?;
     if bytes.len() % 4 != 0 {

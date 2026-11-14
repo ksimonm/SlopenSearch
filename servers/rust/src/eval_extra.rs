@@ -468,6 +468,7 @@ impl<'a> QueryCtx<'a> {
             score_mode = "avg".to_string();
         }
         let mut count = 0usize;
+        let mut sum32 = 0.0f32;
         let mut best = 0.0f64;
         let mut worst = f64::INFINITY;
         let mut sum = 0.0f64;
@@ -490,6 +491,7 @@ impl<'a> QueryCtx<'a> {
                     worst = sc;
                 }
                 sum += sc;
+                sum32 += sc as f32;
             }
         }
         if count == 0 {
@@ -500,7 +502,7 @@ impl<'a> QueryCtx<'a> {
             "max" => best,
             "min" => worst,
             "sum" => sum,
-            "avg" => sum / count as f64,
+            "avg" => (sum32 / count as f32) as f64,
             _ => sum / count as f64,
         };
         Ok((true, score))
