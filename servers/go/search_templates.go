@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/painless"
 )
 
 // resolveTemplate finds the template text of a render / search template
@@ -41,12 +43,12 @@ func (s *Server) resolveTemplate(body map[string]any) (text string, rendered boo
 				return "", false, &apiError{Type: "script_exception", Status: 400, Reason: "compile error",
 					Shard: &shardFailure{raw: se.errorBody(), status: 400}}
 			}
-			v, se := script.exec(plBindings{vars: map[string]any{"params": scriptParams(templateParams(body))}}, id)
+			v, se := script.exec(painless.Bindings{Vars: map[string]any{"params": scriptParams(templateParams(body))}}, id)
 			if se != nil {
 				return "", false, &apiError{Type: "script_exception", Status: 400, Reason: "runtime error",
 					Shard: &shardFailure{raw: se.errorBody(), status: 400}}
 			}
-			return plToString(v), true, nil
+			return painless.ToString(v), true, nil
 		}
 		return "", false, errBad(lang + " engine does not know how to handle context [template]")
 	}

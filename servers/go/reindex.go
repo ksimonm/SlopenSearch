@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/painless"
 )
 
 type reindexFailure struct {
@@ -227,9 +229,9 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 			if res.id == nil {
 				id = s.nextID()
 			} else {
-				id = plToString(res.id)
+				id = painless.ToString(res.id)
 			}
-			if n := plToString(res.index); n != it.idx.Name && res.index != nil {
+			if n := painless.ToString(res.index); n != it.idx.Name && res.index != nil {
 				targetName = n
 			}
 		}

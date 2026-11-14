@@ -5,6 +5,8 @@ import (
 	"math"
 	"math/bits"
 	"strings"
+
+	"slopensearch/internal/painless"
 )
 
 // ---------------------------------------------------------------------------
@@ -93,58 +95,58 @@ func (c *queryCtx) knnScriptScore(sm map[string]any) (float64, *apiError) {
 
 // plKnnDocValues builds doc['field'] for a knn_vector field: one float[]
 // value holding the vector.
-func plKnnDocValues(field string, vals []any) *plDocValues {
-	dv := &plDocValues{kind: "KNNVector", field: field}
+func plKnnDocValues(field string, vals []any) *painless.DocValues {
+	dv := &painless.DocValues{Kind: "KNNVector", Field: field}
 	if len(vals) == 0 {
 		return dv
 	}
-	arr := &plArray{elem: "float"}
+	arr := &painless.Array{Elem: "float"}
 	for _, v := range vals {
 		f, _ := toFloat(v)
-		arr.a = append(arr.a, float32(f))
+		arr.Items = append(arr.Items, float32(f))
 	}
-	dv.vals = []any{arr}
+	dv.Values = []any{arr}
 	return dv
 }
 
-var plKnnFuncs = plParseSigs(
+var plKnnFuncs = painless.ParseSigs(
 	"l2Squared:float(def,def)", "l1Norm:float(def,def)", "lInfNorm:float(def,def)",
 	"cosineSimilarity:float(def,def)", "innerProduct:float(def,def)", "hamming:float(def,def)",
 )
 
 func init() {
 	for k, v := range plKnnFuncs {
-		plScoreFuncs[k] = v
+		painless.ScoreFuncs[k] = v
 	}
 }
 
-func plKnnRtErr(off int, typ, reason string) *plRtErr {
-	return &plRtErr{typ: typ, offset: off, reason: reason}
+func plKnnRtErr(off int, typ, reason string) *painless.RuntimeError {
+	return &painless.RuntimeError{Type: typ, Offset: off, Reason: reason}
 }
 
 // plKnnArgs extracts the query vector and the document vector.
-func plKnnArgs(a []any, off int) ([]float64, []float64, *plRtErr) {
-	items, ok := plToItems(a[0])
+func plKnnArgs(a []any, off int) ([]float64, []float64, *painless.RuntimeError) {
+	items, ok := painless.ToItems(a[0])
 	if !ok {
 		return nil, nil, plKnnRtErr(off, "class_cast_exception", "Cannot cast query vector to java.util.List")
 	}
 	q := make([]float64, 0, len(items))
 	for _, it := range items {
-		q = append(q, plF64(it))
+		q = append(q, painless.F64(it))
 	}
-	dv, ok := a[1].(*plDocValues)
-	if !ok || dv.kind != "KNNVector" {
+	dv, ok := a[1].(*painless.DocValues)
+	if !ok || dv.Kind != "KNNVector" {
 		return nil, nil, plKnnRtErr(off, "class_cast_exception",
 			"class org.opensearch.index.fielddata.ScriptDocValues cannot be cast to class org.opensearch.knn.index.KNNVectorScriptDocValues")
 	}
-	if len(dv.vals) == 0 {
+	if len(dv.Values) == 0 {
 		return nil, nil, plKnnRtErr(off, "illegal_state_exception",
-			"No value found for the field ["+dv.field+"] in the document")
+			"No value found for the field ["+dv.Field+"] in the document")
 	}
-	arr := dv.vals[0].(*plArray)
-	d := make([]float64, 0, len(arr.a))
-	for _, v := range arr.a {
-		d = append(d, plF64(v))
+	arr := dv.Values[0].(*painless.Array)
+	d := make([]float64, 0, len(arr.Items))
+	for _, v := range arr.Items {
+		d = append(d, painless.F64(v))
 	}
 	if len(q) != len(d) {
 		return nil, nil, plKnnRtErr(off, "illegal_argument_exception",
@@ -153,9 +155,9 @@ func plKnnArgs(a []any, off int) ([]float64, []float64, *plRtErr) {
 	return q, d, nil
 }
 
-func plKnnBindings() map[string]func(args []any, off int) (any, *plRtErr) {
-	wrap := func(fn func(q, d []float64) float64) func(a []any, off int) (any, *plRtErr) {
-		return func(a []any, off int) (any, *plRtErr) {
+func plKnnBindings() map[string]func(args []any, off int) (any, *painless.RuntimeError) {
+	wrap := func(fn func(q, d []float64) float64) func(a []any, off int) (any, *painless.RuntimeError) {
+		return func(a []any, off int) (any, *painless.RuntimeError) {
 			q, d, err := plKnnArgs(a, off)
 			if err != nil {
 				return nil, err
@@ -163,7 +165,7 @@ func plKnnBindings() map[string]func(args []any, off int) (any, *plRtErr) {
 			return float32(fn(q, d)), nil
 		}
 	}
-	return map[string]func(args []any, off int) (any, *plRtErr){
+	return map[string]func(args []any, off int) (any, *painless.RuntimeError){
 		"l2Squared": wrap(func(q, d []float64) float64 {
 			s := float32(0)
 			for i := range q {

@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/painless"
 )
 
 func metricParamError(name, key string) *apiError {
@@ -141,8 +143,8 @@ func scriptNumericValuesErr(docs []map[string]any, idx *Index, script any, field
 			return nil, err
 		}
 		for _, r := range res {
-			if plIsNumber(r) {
-				out = append(out, plF64(r))
+			if painless.IsNumber(r) {
+				out = append(out, painless.F64(r))
 			} else if f, ok := toFloat(r); ok {
 				out = append(out, f)
 			}

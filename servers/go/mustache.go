@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/painless"
 )
 
 // Mustache templates with the semantics of OpenSearch's mustache.java
@@ -199,13 +201,13 @@ func mustacheString(v any) string {
 	case json.Number:
 		return t.String()
 	case []any:
-		m := newPlMap(plLinked)
+		m := painless.NewMap(painless.Linked)
 		for i, e := range t {
-			m.put(itoa(i), plFromJSON(e, plLinked))
+			m.Put(itoa(i), painless.FromJSON(e, painless.Linked))
 		}
-		return plToString(m)
+		return painless.ToString(m)
 	}
-	return plToString(plFromJSON(v, plHash))
+	return painless.ToString(painless.FromJSON(v, painless.Hash))
 }
 
 func mustacheJSONEscape(s string) string {

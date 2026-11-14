@@ -4,6 +4,8 @@ import (
 	"math"
 	"sort"
 	"strings"
+
+	"slopensearch/internal/painless"
 )
 
 func osaDistance(a, b []rune) int {
@@ -214,7 +216,7 @@ func termSuggester(spec, body map[string]any, indices []*Index, globalText any) 
 		}
 		opts := make([]any, 0, len(options))
 		for _, c := range options {
-			opts = append(opts, orderedJSON{{"text", c.text}, {"score", plJSONFloat32(float32(c.score))}, {"freq", c.freq}})
+			opts = append(opts, orderedJSON{{"text", c.text}, {"score", painless.JSONFloat32(float32(c.score))}, {"freq", c.freq}})
 		}
 		entries = append(entries, orderedJSON{{"text", tok.term}, {"offset", tok.start}, {"length", tok.end - tok.start}, {"options", opts}})
 	}

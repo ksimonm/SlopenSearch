@@ -1,5 +1,7 @@
 package main
 
+import "slopensearch/internal/painless"
+
 // Glue between the scripting engines and the APIs that run scripts
 // (search, aggregations, update, ingest): script specs, stored-script
 // resolution, language checks and the shard-failure envelopes.
@@ -109,11 +111,11 @@ func compilePainless(spec *scriptSpec, ctxName string) (*plScript, *plScriptErr)
 }
 
 // scriptParams converts request params into a painless params map.
-func scriptParams(p map[string]any) *plMap {
+func scriptParams(p map[string]any) *painless.Map {
 	if p == nil {
-		return newPlMap(plHash)
+		return painless.NewMap(painless.Hash)
 	}
-	return plFromJSON(p, plHash).(*plMap)
+	return painless.FromJSON(p, painless.Hash).(*painless.Map)
 }
 
 // ---- shard failure envelopes ----
@@ -216,14 +218,14 @@ func fieldScriptValues(v any) ([]any, bool) {
 	switch t := v.(type) {
 	case nil:
 		return []any{nil}, true
-	case *plList, *plDocValues, *plArray, *plSet:
-		vals := plToJSON(t).([]any)
+	case *painless.List, *painless.DocValues, *painless.Array, *painless.Set:
+		vals := painless.ToJSON(t).([]any)
 		if len(vals) == 0 {
 			return nil, false
 		}
 		return vals, true
 	}
-	return []any{plToJSON(v)}, true
+	return []any{painless.ToJSON(v)}, true
 }
 
 // ---- compiled scripts ----
@@ -276,10 +278,10 @@ func prepareSpec(spec *scriptSpec, ctxName string) (*compiledScript, *plScriptEr
 type runOpts struct {
 	score    float64
 	value    any
-	source   *plMap         // params._source
+	source   *painless.Map  // params._source
 	vars     map[string]any // extra context variables (ctx, state, states, ...)
 	params   map[string]any // extra params (bucket paths, num_terms, ...)
-	plParams *plMap         // reuse this params map (shared state)
+	plParams *painless.Map  // reuse this params map (shared state)
 }
 
 // link binds an expression to an index (cached).
@@ -335,19 +337,19 @@ func (cs *compiledScript) run(qc *queryCtx, o runOpts) (any, *plScriptErr) {
 		params = scriptParams(cs.spec.params)
 	}
 	for k, v := range o.params {
-		params.put(k, plFromJSON(v, plHash))
+		params.Put(k, painless.FromJSON(v, painless.Hash))
 	}
 	if o.source != nil {
-		params.put("_source", o.source)
+		params.Put("_source", o.source)
 	}
-	b := plBindings{vars: map[string]any{"params": params, "_score": o.score, "_value": plFromJSON(o.value, plHash)}}
+	b := painless.Bindings{Vars: map[string]any{"params": params, "_score": o.score, "_value": painless.FromJSON(o.value, painless.Hash)}}
 	for k, v := range o.vars {
-		b.vars[k] = v
+		b.Vars[k] = v
 	}
 	if qc != nil {
-		b.vars["doc"] = plDocLookup(qc)
+		b.Vars["doc"] = plDocLookup(qc)
 		if cs.ctx == "score" {
-			b.funcs = plScoreBindings(qc)
+			b.Funcs = plScoreBindings(qc)
 		}
 	}
 	return cs.pl.exec(b, cs.spec.errName())
@@ -359,7 +361,7 @@ func scriptToString(raw any) string {
 	if err != nil {
 		return ""
 	}
-	params := plToString(scriptParams(spec.params))
+	params := painless.ToString(scriptParams(spec.params))
 	if spec.id != "" {
 		return "Script{type=stored, lang='null', idOrCode='" + spec.id + "', options=null, params=" + params + "}"
 	}
@@ -389,7 +391,7 @@ func aggScriptRun(cs *compiledScript, idx *Index, doc map[string]any, fieldVals 
 	if se != nil {
 		return nil, scriptShardError(idx, se)
 	}
-	if items, ok := plToItems(r); ok {
+	if items, ok := painless.ToItems(r); ok {
 		return append(out, items...), nil
 	}
 	if r == nil {
@@ -461,7 +463,7 @@ func scriptedMetric(name string, spec map[string]any, docs []map[string]any, idx
 	}
 	aggParams, _ := spec["params"].(map[string]any)
 	params := scriptParams(aggParams)
-	state := newPlMap(plHash)
+	state := painless.NewMap(painless.Hash)
 	prep := func(key, ctxName string) (*compiledScript, *apiError) {
 		cs, se, ae := prepareScript(spec[key], ctxName)
 		if se != nil || ae != nil {
@@ -502,11 +504,11 @@ func scriptedMetric(name string, spec map[string]any, docs []map[string]any, idx
 	if err != nil {
 		return nil, err
 	}
-	res, se := redCS.run(nil, runOpts{plParams: params, vars: map[string]any{"states": newPlList(combined)}})
+	res, se := redCS.run(nil, runOpts{plParams: params, vars: map[string]any{"states": painless.NewList(combined)}})
 	if se != nil {
 		return nil, pipelineScriptError(se)
 	}
-	return orderedJSON{{"value", plToJSON(res)}}, nil
+	return orderedJSON{{"value", painless.ToJSON(res)}}, nil
 }
 
 // scriptValueDocs evaluates the script of a numeric bucket aggregation
@@ -530,8 +532,8 @@ func scriptValueDocs(spec map[string]any, docs []map[string]any, idx *Index, fie
 		}
 		vals := []any{}
 		for _, r := range res {
-			if plIsNumber(r) {
-				vals = append(vals, plF64(r))
+			if painless.IsNumber(r) {
+				vals = append(vals, painless.F64(r))
 			}
 		}
 		cp := make(map[string]any, len(d)+1)
@@ -564,7 +566,7 @@ func scriptSortValue(sp searchSortSpec, h multiHit) any {
 		return nil
 	}
 	if ctxName == "number_sort" {
-		return plF64(v)
+		return painless.F64(v)
 	}
 	return v
 }

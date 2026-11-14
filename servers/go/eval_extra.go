@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"slopensearch/internal/painless"
 )
 
 // ---------------------------------------------------------------------------
@@ -4255,9 +4257,9 @@ func (c *queryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 		if rerr != nil {
 			return 0, scriptShardError(c.idx, rerr)
 		}
-		score := plF64(v)
+		score := painless.F64(v)
 		if score < 0 {
-			return 0, plainShardError(c.idx, errBad("script score function must not produce negative scores, but got: ["+plFmtDouble(score)+"]"))
+			return 0, plainShardError(c.idx, errBad("script score function must not produce negative scores, but got: ["+painless.FormatDouble(score)+"]"))
 		}
 		return float64(float32(score)), nil
 	}

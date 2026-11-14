@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/painless"
 )
 
 type multiHit struct {
@@ -192,7 +194,7 @@ func docValuesOutput(idx *Index, id, field string, spec fieldSpec, fallbackSourc
 				if fallbackSource {
 					res[i] = map[string]any{"type": "Point", "coordinates": []any{lon, lat}}
 				} else {
-					res[i] = plFmtDouble(lat) + ", " + plFmtDouble(lon)
+					res[i] = painless.FormatDouble(lat) + ", " + painless.FormatDouble(lon)
 				}
 			}
 		}
@@ -1159,7 +1161,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 					return
 				}
 				if ctxName == "number_sort" {
-					v = plF64(v)
+					v = painless.F64(v)
 				}
 				sp.scriptVals[h.idx.Name+"\x00"+h.id] = v
 			}

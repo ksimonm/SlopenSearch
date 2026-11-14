@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/painless"
 )
 
 // Lucene expressions ("lang": "expression"): a JavaScript-like numeric
@@ -52,7 +54,7 @@ func (e *exErr) scriptErr(src string) *plScriptErr {
 		se.linkErr = true
 	}
 	if e.eof {
-		se.inner = &plCompileErr{typ: "no_viable_alt_exception", nilReason: true}
+		se.inner = &painless.CompileError{Type: "no_viable_alt_exception", NilReason: true}
 	}
 	off := e.offset
 	if off > len(src) {
@@ -505,17 +507,17 @@ func exDocBinding(field, kind, member string, pos int) (exBinding, *exErr) {
 			part = strings.ToLower(part[:1]) + part[1:]
 		}
 		extract := map[string]func(ms int64) float64{
-			"year":           func(ms int64) float64 { return float64(plTimeFromMillis(ms).Year()) },
-			"month":          func(ms int64) float64 { return float64(plTimeFromMillis(ms).Month()) - 1 },
-			"monthOfYear":    func(ms int64) float64 { return float64(plTimeFromMillis(ms).Month()) },
-			"dayOfMonth":     func(ms int64) float64 { return float64(plTimeFromMillis(ms).Day()) },
-			"dayOfYear":      func(ms int64) float64 { return float64(plTimeFromMillis(ms).YearDay()) },
-			"dayOfWeek":      func(ms int64) float64 { return float64((int(plTimeFromMillis(ms).Weekday())+6)%7 + 1) },
-			"hourOfDay":      func(ms int64) float64 { return float64(plTimeFromMillis(ms).Hour()) },
-			"minutes":        func(ms int64) float64 { return float64(plTimeFromMillis(ms).Minute()) },
-			"minuteOfHour":   func(ms int64) float64 { return float64(plTimeFromMillis(ms).Minute()) },
-			"seconds":        func(ms int64) float64 { return float64(plTimeFromMillis(ms).Second()) },
-			"secondOfMinute": func(ms int64) float64 { return float64(plTimeFromMillis(ms).Second()) },
+			"year":           func(ms int64) float64 { return float64(painless.TimeFromMillis(ms).Year()) },
+			"month":          func(ms int64) float64 { return float64(painless.TimeFromMillis(ms).Month()) - 1 },
+			"monthOfYear":    func(ms int64) float64 { return float64(painless.TimeFromMillis(ms).Month()) },
+			"dayOfMonth":     func(ms int64) float64 { return float64(painless.TimeFromMillis(ms).Day()) },
+			"dayOfYear":      func(ms int64) float64 { return float64(painless.TimeFromMillis(ms).YearDay()) },
+			"dayOfWeek":      func(ms int64) float64 { return float64((int(painless.TimeFromMillis(ms).Weekday())+6)%7 + 1) },
+			"hourOfDay":      func(ms int64) float64 { return float64(painless.TimeFromMillis(ms).Hour()) },
+			"minutes":        func(ms int64) float64 { return float64(painless.TimeFromMillis(ms).Minute()) },
+			"minuteOfHour":   func(ms int64) float64 { return float64(painless.TimeFromMillis(ms).Minute()) },
+			"seconds":        func(ms int64) float64 { return float64(painless.TimeFromMillis(ms).Second()) },
+			"secondOfMinute": func(ms int64) float64 { return float64(painless.TimeFromMillis(ms).Second()) },
 			"millis":         func(ms int64) float64 { return float64(ms) },
 		}
 		if strings.HasPrefix(member, "date.") || strings.HasPrefix(member, "get") {
@@ -723,4 +725,8 @@ func exPrepare(src, ctxName string) (*exScript, *plScriptErr, *apiError) {
 		return nil, nil, errBad("expression engine does not know how to handle script context [" + ctxName + "]")
 	}
 	return s, nil, nil
+}
+
+func isHexByte(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }

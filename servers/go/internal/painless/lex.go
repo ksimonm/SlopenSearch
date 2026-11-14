@@ -1,4 +1,4 @@
-package main
+package painless
 
 import (
 	"strings"
@@ -66,7 +66,7 @@ var plOps = []string{
 	";", ",", ".", "(", ")", "[", "]", "{", "}",
 }
 
-func plLex(src string) ([]plTok, *plCompileErr) {
+func plLex(src string) ([]plTok, *CompileError) {
 	toks := []plTok{}
 	i := 0
 	n := len(src)
@@ -124,10 +124,10 @@ func plLex(src string) ([]plTok, *plCompileErr) {
 						end = n
 					}
 					qs := string(q)
-					return nil, &plCompileErr{typ: "illegal_argument_exception", offset: start,
-						reason: "unexpected character [" + src[start:end] + "]. The only valid escape sequences in strings starting with [" +
+					return nil, &CompileError{Type: "illegal_argument_exception", Offset: start,
+						Reason: "unexpected character [" + src[start:end] + "]. The only valid escape sequences in strings starting with [" +
 							qs + "] are [\\\\] and [\\" + qs + "].",
-						cause: &plCompileErr{typ: "lexer_no_viable_alt_exception", nilReason: true}}
+						Cause: &CompileError{Type: "lexer_no_viable_alt_exception", NilReason: true}}
 				}
 				if ch == q {
 					closed = true
@@ -138,9 +138,9 @@ func plLex(src string) ([]plTok, *plCompileErr) {
 				j++
 			}
 			if !closed {
-				return nil, &plCompileErr{typ: "illegal_argument_exception", offset: start,
-					reason: "unexpected character [" + src[start:] + "].",
-					cause:  &plCompileErr{typ: "lexer_no_viable_alt_exception", nilReason: true}}
+				return nil, &CompileError{Type: "illegal_argument_exception", Offset: start,
+					Reason: "unexpected character [" + src[start:] + "].",
+					Cause:  &CompileError{Type: "lexer_no_viable_alt_exception", NilReason: true}}
 			}
 			toks = append(toks, plTok{kind: plTString, text: sb.String(), pos: start, end: j})
 			i = j
@@ -229,9 +229,9 @@ func plLex(src string) ([]plTok, *plCompileErr) {
 				j++
 			}
 			if j >= n || src[j] != '/' {
-				return nil, &plCompileErr{typ: "illegal_argument_exception", offset: start,
-					reason: "unexpected character [" + src[start:] + "].",
-					cause:  &plCompileErr{typ: "lexer_no_viable_alt_exception", nilReason: true}}
+				return nil, &CompileError{Type: "illegal_argument_exception", Offset: start,
+					Reason: "unexpected character [" + src[start:] + "].",
+					Cause:  &CompileError{Type: "lexer_no_viable_alt_exception", NilReason: true}}
 			}
 			j++
 			fs := j
@@ -249,9 +249,9 @@ func plLex(src string) ([]plTok, *plCompileErr) {
 				}
 			}
 			if matched == "" {
-				return nil, &plCompileErr{typ: "illegal_argument_exception", offset: start,
-					reason: "unexpected character [" + string(c) + "].",
-					cause:  &plCompileErr{typ: "lexer_no_viable_alt_exception", nilReason: true}}
+				return nil, &CompileError{Type: "illegal_argument_exception", Offset: start,
+					Reason: "unexpected character [" + string(c) + "].",
+					Cause:  &CompileError{Type: "lexer_no_viable_alt_exception", NilReason: true}}
 			}
 			toks = append(toks, plTok{kind: plTOp, text: matched, pos: start, end: i + len(matched)})
 			i += len(matched)
@@ -263,4 +263,8 @@ func plLex(src string) ([]plTok, *plCompileErr) {
 
 func isHexByte(c byte) bool {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+func isAlphaByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }

@@ -1,4 +1,4 @@
-package main
+package painless
 
 import (
 	"strings"
@@ -216,7 +216,7 @@ type plProgram struct {
 	stmts []int
 }
 
-func plParse(src string) (*plProgram, *plCompileErr) {
+func plParse(src string) (*plProgram, *CompileError) {
 	toks, lerr := plLex(src)
 	if lerr != nil {
 		return nil, lerr
@@ -277,11 +277,11 @@ func (p *plParser) tokText(t plTok) string {
 	return p.src[t.pos:t.end]
 }
 
-func (p *plParser) errUnexpected(expecting string) *plCompileErr {
+func (p *plParser) errUnexpected(expecting string) *CompileError {
 	t := p.peek()
 	if t.kind == plTEOF {
-		return &plCompileErr{typ: "illegal_argument_exception", reason: "unexpected end of script.",
-			offset: t.pos, cause: &plCompileErr{typ: "no_viable_alt_exception", nilReason: true}}
+		return &CompileError{Type: "illegal_argument_exception", Reason: "unexpected end of script.",
+			Offset: t.pos, Cause: &CompileError{Type: "no_viable_alt_exception", NilReason: true}}
 	}
 	reason := "unexpected token ['" + p.tokText(t) + "']"
 	if expecting != "" {
@@ -289,10 +289,10 @@ func (p *plParser) errUnexpected(expecting string) *plCompileErr {
 	} else {
 		reason += "."
 	}
-	return &plCompileErr{typ: "illegal_argument_exception", reason: reason, offset: t.pos}
+	return &CompileError{Type: "illegal_argument_exception", Reason: reason, Offset: t.pos}
 }
 
-func (p *plParser) expectOp(s string) *plCompileErr {
+func (p *plParser) expectOp(s string) *CompileError {
 	if p.acceptOp(s) {
 		return nil
 	}
@@ -326,7 +326,7 @@ func (p *plParser) parseTypeName() string {
 	return name
 }
 
-func (p *plParser) parseFunc() (*plFunc, *plCompileErr) {
+func (p *plParser) parseFunc() (*plFunc, *CompileError) {
 	pos := p.peek().pos
 	ret := p.parseTypeName()
 	name := p.next().text
@@ -362,7 +362,7 @@ func (p *plParser) parseFunc() (*plFunc, *plCompileErr) {
 	return f, nil
 }
 
-func (p *plParser) parseBlock() (*plSBlock, *plCompileErr) {
+func (p *plParser) parseBlock() (*plSBlock, *CompileError) {
 	pos := p.next().pos // {
 	b := &plSBlock{plBase: plBase{pos}}
 	for !p.isOp("}") {
@@ -381,7 +381,7 @@ func (p *plParser) parseBlock() (*plSBlock, *plCompileErr) {
 
 // endStatement consumes the terminator of a simple statement: ';', or
 // nothing before '}' / EOF.
-func (p *plParser) endStatement(top bool) *plCompileErr {
+func (p *plParser) endStatement(top bool) *CompileError {
 	if p.acceptOp(";") {
 		return nil
 	}
@@ -399,7 +399,7 @@ func (p *plParser) endStatement(top bool) *plCompileErr {
 }
 
 // parseTrailer parses the body of if/while/for: a block or one statement.
-func (p *plParser) parseTrailer() (plNode, *plCompileErr) {
+func (p *plParser) parseTrailer() (plNode, *CompileError) {
 	if p.isOp("{") {
 		return p.parseBlock()
 	}
@@ -418,7 +418,7 @@ func (p *plParser) isDeclStart() bool {
 	return p.peekAt(k).kind == plTIdent
 }
 
-func (p *plParser) parseStatement(top bool) (plNode, *plCompileErr) {
+func (p *plParser) parseStatement(top bool) (plNode, *CompileError) {
 	t := p.peek()
 	p.stmts = append(p.stmts, t.pos)
 	if t.kind == plTIdent {
@@ -590,7 +590,7 @@ func (p *plParser) parseStatement(top bool) (plNode, *plCompileErr) {
 	return &plSExpr{plBase: plBase{t.pos}, x: x}, nil
 }
 
-func (p *plParser) parseDecl() (*plSDecl, *plCompileErr) {
+func (p *plParser) parseDecl() (*plSDecl, *CompileError) {
 	pos := p.peek().pos
 	typ := p.parseTypeName()
 	d := &plSDecl{plBase: plBase{pos}, typ: typ}
@@ -618,7 +618,7 @@ func (p *plParser) parseDecl() (*plSDecl, *plCompileErr) {
 	return d, nil
 }
 
-func (p *plParser) parseFor(t plTok) (plNode, *plCompileErr) {
+func (p *plParser) parseFor(t plTok) (plNode, *CompileError) {
 	p.next()
 	if err := p.expectOp("("); err != nil {
 		return nil, err
@@ -724,7 +724,7 @@ var plAssignOps = map[string]string{
 	"&=": "&", "|=": "|", "^=": "^", "<<=": "<<", ">>=": ">>", ">>>=": ">>>",
 }
 
-func (p *plParser) parseExpr() (plNode, *plCompileErr) {
+func (p *plParser) parseExpr() (plNode, *CompileError) {
 	pos := p.peek().pos
 	lhs, err := p.parseBinary(0)
 	if err != nil {
@@ -775,7 +775,7 @@ var plBinLevels = [][]string{
 	{"*", "/", "%"},
 }
 
-func (p *plParser) parseBinary(level int) (plNode, *plCompileErr) {
+func (p *plParser) parseBinary(level int) (plNode, *CompileError) {
 	if level >= len(plBinLevels) {
 		return p.parseUnary()
 	}
@@ -822,8 +822,8 @@ func (p *plParser) parseBinary(level int) (plNode, *plCompileErr) {
 		if op == "instanceof" {
 			if p.peek().kind != plTType {
 				if p.peek().kind == plTIdent {
-					return nil, &plCompileErr{typ: "illegal_argument_exception", offset: p.peek().pos,
-						reason: "Not a type [" + p.peek().text + "]."}
+					return nil, &CompileError{Type: "illegal_argument_exception", Offset: p.peek().pos,
+						Reason: "Not a type [" + p.peek().text + "]."}
 				}
 				return nil, p.errUnexpected("")
 			}
@@ -859,7 +859,7 @@ func (p *plParser) isCastAhead() bool {
 	return nt.kind != plTEOF
 }
 
-func (p *plParser) parseUnary() (plNode, *plCompileErr) {
+func (p *plParser) parseUnary() (plNode, *CompileError) {
 	t := p.peek()
 	if t.kind == plTOp {
 		switch t.text {
@@ -906,7 +906,7 @@ func (p *plParser) parseUnary() (plNode, *plCompileErr) {
 	return p.parsePostfix()
 }
 
-func (p *plParser) parsePostfix() (plNode, *plCompileErr) {
+func (p *plParser) parsePostfix() (plNode, *CompileError) {
 	x, err := p.parsePrimary()
 	if err != nil {
 		return nil, err
@@ -952,7 +952,7 @@ func (p *plParser) parsePostfix() (plNode, *plCompileErr) {
 	}
 }
 
-func (p *plParser) parseArgs() ([]plNode, *plCompileErr) {
+func (p *plParser) parseArgs() ([]plNode, *CompileError) {
 	p.next() // (
 	args := []plNode{}
 	if p.acceptOp(")") {
@@ -975,7 +975,7 @@ func (p *plParser) parseArgs() ([]plNode, *plCompileErr) {
 }
 
 // parseArg parses a call argument, which may be a lambda or a function reference.
-func (p *plParser) parseArg() (plNode, *plCompileErr) {
+func (p *plParser) parseArg() (plNode, *CompileError) {
 	t := p.peek()
 	// x -> ...
 	if t.kind == plTIdent && p.peekAt(1).kind == plTOp && p.peekAt(1).text == "->" {
@@ -1047,22 +1047,22 @@ func (p *plParser) parseArg() (plNode, *plCompileErr) {
 	return p.parseExpr()
 }
 
-func (p *plParser) parseLambdaBody() (plNode, *plCompileErr) {
+func (p *plParser) parseLambdaBody() (plNode, *CompileError) {
 	if p.isOp("{") {
 		return p.parseBlock()
 	}
 	return p.parseExpr()
 }
 
-func plNumLit(t plTok, neg bool, pos int) (plNode, *plCompileErr) {
+func plNumLit(t plTok, neg bool, pos int) (plNode, *CompileError) {
 	v, typ, err := plParseNumber(t.text, t.kind == plTFloat, neg)
 	if err != nil {
-		return nil, &plCompileErr{typ: "illegal_argument_exception", offset: pos, reason: err.Error()}
+		return nil, &CompileError{Type: "illegal_argument_exception", Offset: pos, Reason: err.Error()}
 	}
 	return &plELit{plBase: plBase{pos}, val: v, typ: typ}, nil
 }
 
-func (p *plParser) parsePrimary() (plNode, *plCompileErr) {
+func (p *plParser) parsePrimary() (plNode, *CompileError) {
 	t := p.peek()
 	switch t.kind {
 	case plTEOF:
@@ -1118,7 +1118,7 @@ func (p *plParser) parsePrimary() (plNode, *plCompileErr) {
 	return nil, p.errUnexpected("")
 }
 
-func (p *plParser) parseListOrMap() (plNode, *plCompileErr) {
+func (p *plParser) parseListOrMap() (plNode, *CompileError) {
 	t := p.next() // [
 	if p.isOp(":") && p.peekAt(1).kind == plTOp && p.peekAt(1).text == "]" {
 		p.next()
@@ -1174,11 +1174,11 @@ func (p *plParser) parseListOrMap() (plNode, *plCompileErr) {
 	return l, nil
 }
 
-func (p *plParser) parseNew() (plNode, *plCompileErr) {
+func (p *plParser) parseNew() (plNode, *CompileError) {
 	t := p.next() // new
 	nt := p.peek()
 	if nt.kind == plTIdent {
-		return nil, &plCompileErr{typ: "illegal_argument_exception", offset: t.pos, reason: "Not a type [" + nt.text + "]."}
+		return nil, &CompileError{Type: "illegal_argument_exception", Offset: t.pos, Reason: "Not a type [" + nt.text + "]."}
 	}
 	if nt.kind != plTType {
 		return nil, p.errUnexpected("")

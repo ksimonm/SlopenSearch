@@ -1,4 +1,4 @@
-package main
+package painless
 
 import (
 	"math"
@@ -8,25 +8,31 @@ import (
 
 // Painless engine: tree-walking interpreter.
 
-// plRtErr is a runtime exception raised inside a script.
-type plRtErr struct {
-	typ       string
-	reason    string
-	nilReason bool
-	offset    int
-	frames    []string // Java frames printed before the script frame
-	extra     orderedJSON
-	isError   bool // java.lang.Error: not catchable by catch (Exception e)
-	thrown    any  // the exception object for catch blocks
+// RuntimeError is a runtime exception raised inside a script.
+type RuntimeError struct {
+	Type      string
+	Reason    string
+	NilReason bool
+	Offset    int
+	Frames    []string     // Java frames printed before the script frame
+	Extra     []plErrField // extra members of the script_exception
+	isError   bool         // java.lang.Error: not catchable by catch (Exception e)
+	thrown    any          // the exception object for catch blocks
 }
 
-func plNPE(off int) *plRtErr {
-	return &plRtErr{typ: "null_pointer_exception", offset: off,
-		reason: `Cannot invoke "Object.getClass()" because "callArgs[0]" is null`}
+// plErrField is an extra member of the script_exception of a runtime error.
+type plErrField struct {
+	Name  string
+	Value any
 }
 
-func plIAE(off int, reason string) *plRtErr {
-	return &plRtErr{typ: "illegal_argument_exception", reason: reason, offset: off}
+func plNPE(off int) *RuntimeError {
+	return &RuntimeError{Type: "null_pointer_exception", Offset: off,
+		Reason: `Cannot invoke "Object.getClass()" because "callArgs[0]" is null`}
+}
+
+func plIAE(off int, reason string) *RuntimeError {
+	return &RuntimeError{Type: "illegal_argument_exception", Reason: reason, Offset: off}
 }
 
 type plEnv struct {
@@ -57,7 +63,7 @@ type plFn struct {
 	body   plNode
 	env    *plEnv
 	in     *plInterp
-	native func(args []any, off int) (any, *plRtErr)
+	native func(args []any, off int) (any, *RuntimeError)
 	name   string
 }
 
@@ -76,7 +82,7 @@ type plInterp struct {
 	prog       *plProgram
 	info       *plInfo
 	loops      int
-	funcs      map[string]func(args []any, off int) (any, *plRtErr)
+	funcs      map[string]func(args []any, off int) (any, *RuntimeError)
 	regexLimit int
 	depth      int
 }
@@ -85,25 +91,25 @@ type plInterp struct {
 // throw StackOverflowError; Go would crash the whole process instead.
 const plMaxDepth = 2000
 
-func (in *plInterp) enter(off int) *plRtErr {
+func (in *plInterp) enter(off int) *RuntimeError {
 	in.depth++
 	if in.depth > plMaxDepth {
-		return &plRtErr{typ: "stack_overflow_error", nilReason: true, isError: true, offset: off}
+		return &RuntimeError{Type: "stack_overflow_error", NilReason: true, isError: true, Offset: off}
 	}
 	return nil
 }
 
-func (in *plInterp) loopTick(off int) *plRtErr {
+func (in *plInterp) loopTick(off int) *RuntimeError {
 	in.loops++
 	if in.loops > plMaxLoop {
-		return &plRtErr{typ: "painless_error", isError: true, offset: off,
-			reason: "The maximum number of statements that can be executed in a loop has been reached."}
+		return &RuntimeError{Type: "painless_error", isError: true, Offset: off,
+			Reason: "The maximum number of statements that can be executed in a loop has been reached."}
 	}
 	return nil
 }
 
 // run executes the program body, returning the script's value.
-func (in *plInterp) run(env *plEnv) (any, *plRtErr) {
+func (in *plInterp) run(env *plEnv) (any, *RuntimeError) {
 	ctl, v, err := in.block(in.prog.body.stmts, env, true)
 	if err != nil {
 		return nil, err
@@ -114,7 +120,7 @@ func (in *plInterp) run(env *plEnv) (any, *plRtErr) {
 	return v, nil
 }
 
-func (in *plInterp) block(stmts []plNode, env *plEnv, last bool) (plCtl, any, *plRtErr) {
+func (in *plInterp) block(stmts []plNode, env *plEnv, last bool) (plCtl, any, *RuntimeError) {
 	var lastVal any
 	for i, s := range stmts {
 		isLast := last && i == len(stmts)-1
@@ -132,7 +138,7 @@ func (in *plInterp) block(stmts []plNode, env *plEnv, last bool) (plCtl, any, *p
 	return plNormal, lastVal, nil
 }
 
-func (in *plInterp) stmt(s plNode, env *plEnv, last bool) (plCtl, any, *plRtErr) {
+func (in *plInterp) stmt(s plNode, env *plEnv, last bool) (plCtl, any, *RuntimeError) {
 	switch n := s.(type) {
 	case *plSBlock:
 		return in.block(n.stmts, env.child(), last)
@@ -312,12 +318,12 @@ func (in *plInterp) stmt(s plNode, env *plEnv, last bool) (plCtl, any, *plRtErr)
 		ex, ok := v.(*plException)
 		if !ok {
 			if v == nil {
-				return plNormal, nil, &plRtErr{typ: "null_pointer_exception", offset: n.x.nodePos(), nilReason: true}
+				return plNormal, nil, &RuntimeError{Type: "null_pointer_exception", Offset: n.x.nodePos(), NilReason: true}
 			}
-			return plNormal, nil, &plRtErr{typ: "class_cast_exception", offset: n.x.nodePos(),
-				reason: "Cannot cast " + plClassName(v) + " to java.lang.Throwable"}
+			return plNormal, nil, &RuntimeError{Type: "class_cast_exception", Offset: n.x.nodePos(),
+				Reason: "Cannot cast " + plClassName(v) + " to java.lang.Throwable"}
 		}
-		return plNormal, nil, &plRtErr{typ: ex.typ, reason: ex.msg, nilReason: ex.nilMsg, offset: n.x.nodePos(), thrown: ex}
+		return plNormal, nil, &RuntimeError{Type: ex.typ, Reason: ex.msg, NilReason: ex.nilMsg, Offset: n.x.nodePos(), thrown: ex}
 	case *plSTry:
 		ctl, v, err := in.stmt(n.body, env, last)
 		if err == nil {
@@ -327,11 +333,11 @@ func (in *plInterp) stmt(s plNode, env *plEnv, last bool) (plCtl, any, *plRtErr)
 			return plNormal, nil, err
 		}
 		for _, ct := range n.catches {
-			if plCatchMatches(ct.typ, err.typ) {
+			if plCatchMatches(ct.typ, err.Type) {
 				cenv := env.child()
 				ex, _ := err.thrown.(*plException)
 				if ex == nil {
-					ex = &plException{typ: err.typ, msg: err.reason, nilMsg: err.nilReason}
+					ex = &plException{typ: err.Type, msg: err.Reason, nilMsg: err.NilReason}
 				}
 				cenv.vars[ct.name] = &plVar{v: ex, typ: ct.typ}
 				return in.stmt(ct.body, cenv, last)
@@ -396,7 +402,7 @@ func plZero(typ string) any {
 }
 
 // store converts a value for storage into a variable of the given static type.
-func (in *plInterp) store(v any, typ string, off int) (any, *plRtErr) {
+func (in *plInterp) store(v any, typ string, off int) (any, *RuntimeError) {
 	switch typ {
 	case "", "def", "Object":
 		return v, nil
@@ -404,11 +410,11 @@ func (in *plInterp) store(v any, typ string, off int) (any, *plRtErr) {
 		if v == nil {
 			return nil, plNPE(off)
 		}
-		if plIsNumber(v) {
+		if IsNumber(v) {
 			return plCastNum(v, typ), nil
 		}
-		return nil, &plRtErr{typ: "class_cast_exception", offset: off,
-			reason: "Cannot cast " + plClassName(v) + " to java.lang." + plBoxOf[typ]}
+		return nil, &RuntimeError{Type: "class_cast_exception", Offset: off,
+			Reason: "Cannot cast " + plClassName(v) + " to java.lang." + plBoxOf[typ]}
 	case "boolean":
 		if b, ok := v.(bool); ok {
 			return b, nil
@@ -416,8 +422,8 @@ func (in *plInterp) store(v any, typ string, off int) (any, *plRtErr) {
 		if v == nil {
 			return nil, plNPE(off)
 		}
-		return nil, &plRtErr{typ: "class_cast_exception", offset: off,
-			reason: "Cannot cast " + plClassName(v) + " to java.lang.Boolean"}
+		return nil, &RuntimeError{Type: "class_cast_exception", Offset: off,
+			Reason: "Cannot cast " + plClassName(v) + " to java.lang.Boolean"}
 	case "String":
 		if v == nil {
 			return nil, nil
@@ -425,8 +431,8 @@ func (in *plInterp) store(v any, typ string, off int) (any, *plRtErr) {
 		if _, ok := v.(string); ok {
 			return v, nil
 		}
-		return nil, &plRtErr{typ: "class_cast_exception", offset: off,
-			reason: "Cannot cast " + plClassName(v) + " to java.lang.String"}
+		return nil, &RuntimeError{Type: "class_cast_exception", Offset: off,
+			Reason: "Cannot cast " + plClassName(v) + " to java.lang.String"}
 	}
 	return v, nil
 }
@@ -436,7 +442,7 @@ func plClassName(v any) string {
 	return n
 }
 
-func (in *plInterp) evalBool(x plNode, env *plEnv) (bool, *plRtErr) {
+func (in *plInterp) evalBool(x plNode, env *plEnv) (bool, *RuntimeError) {
 	v, err := in.eval(x, env)
 	if err != nil {
 		return false, err
@@ -446,13 +452,13 @@ func (in *plInterp) evalBool(x plNode, env *plEnv) (bool, *plRtErr) {
 		if v == nil {
 			return false, plNPE(x.nodePos())
 		}
-		return false, &plRtErr{typ: "class_cast_exception", offset: x.nodePos(),
-			reason: "Cannot cast " + plClassName(v) + " to java.lang.Boolean"}
+		return false, &RuntimeError{Type: "class_cast_exception", Offset: x.nodePos(),
+			Reason: "Cannot cast " + plClassName(v) + " to java.lang.Boolean"}
 	}
 	return b, nil
 }
 
-func (in *plInterp) eval(x plNode, env *plEnv) (any, *plRtErr) {
+func (in *plInterp) eval(x plNode, env *plEnv) (any, *RuntimeError) {
 	if cv, ok := in.info.consts[x]; ok {
 		switch x.(type) {
 		case *plELit, *plEField, *plEBinary, *plEUnary, *plECast:
@@ -510,7 +516,7 @@ func (in *plInterp) eval(x plNode, env *plEnv) (any, *plRtErr) {
 		return plNew(n.typ, args, n.pos)
 	case *plENewArray:
 		if n.hasInit {
-			a := &plArray{elem: n.elem}
+			a := &Array{Elem: n.elem}
 			for _, e := range n.init {
 				v, err := in.eval(e, env)
 				if err != nil {
@@ -520,7 +526,7 @@ func (in *plInterp) eval(x plNode, env *plEnv) (any, *plRtErr) {
 				if err != nil {
 					return nil, err
 				}
-				a.a = append(a.a, v)
+				a.Items = append(a.Items, v)
 			}
 			return a, nil
 		}
@@ -530,11 +536,11 @@ func (in *plInterp) eval(x plNode, env *plEnv) (any, *plRtErr) {
 			if err != nil {
 				return nil, err
 			}
-			dims = append(dims, int(plI64(v)))
+			dims = append(dims, int(I64(v)))
 		}
 		return plMakeArray(n.elem, n.rank, dims), nil
 	case *plEList:
-		l := &plList{}
+		l := &List{}
 		for _, e := range n.elems {
 			v, err := in.eval(e, env)
 			if err != nil {
@@ -544,7 +550,7 @@ func (in *plInterp) eval(x plNode, env *plEnv) (any, *plRtErr) {
 		}
 		return l, nil
 	case *plEMap:
-		m := newPlMap(plHash)
+		m := NewMap(Hash)
 		for i := range n.keys {
 			k, err := in.eval(n.keys[i], env)
 			if err != nil {
@@ -554,7 +560,7 @@ func (in *plInterp) eval(x plNode, env *plEnv) (any, *plRtErr) {
 			if err != nil {
 				return nil, err
 			}
-			m.put(k, v)
+			m.Put(k, v)
 		}
 		return m, nil
 	case *plEUnary:
@@ -591,7 +597,7 @@ func (in *plInterp) eval(x plNode, env *plEnv) (any, *plRtErr) {
 		if err != nil {
 			return nil, err
 		}
-		if t := in.info.types[n]; plIsNumericType(t) && plIsNumber(v) {
+		if t := in.info.types[n]; plIsNumericType(t) && IsNumber(v) {
 			return plCastNum(v, t), nil
 		}
 		return v, nil
@@ -613,10 +619,10 @@ func (in *plInterp) eval(x plNode, env *plEnv) (any, *plRtErr) {
 	case *plEFuncRef:
 		return in.funcRef(n, env)
 	}
-	return nil, &plRtErr{typ: "illegal_state_exception", reason: "unsupported expression", offset: x.nodePos()}
+	return nil, &RuntimeError{Type: "illegal_state_exception", Reason: "unsupported expression", Offset: x.nodePos()}
 }
 
-func (in *plInterp) evalArgs(args []plNode, env *plEnv) ([]any, *plRtErr) {
+func (in *plInterp) evalArgs(args []plNode, env *plEnv) ([]any, *RuntimeError) {
 	out := make([]any, len(args))
 	for i, a := range args {
 		v, err := in.eval(a, env)
@@ -630,14 +636,14 @@ func (in *plInterp) evalArgs(args []plNode, env *plEnv) ([]any, *plRtErr) {
 
 type plStaticRef struct{ name string }
 
-func (in *plInterp) evalCall(n *plECall, env *plEnv) (any, *plRtErr) {
+func (in *plInterp) evalCall(n *plECall, env *plEnv) (any, *RuntimeError) {
 	args, err := in.evalArgs(n.args, env)
 	if err != nil {
 		return nil, err
 	}
 	if sig, ok := in.info.sigs[n]; ok {
 		for i, p := range sig.params {
-			if i < len(args) && plIsPrimitive(p) && plIsNumber(args[i]) {
+			if i < len(args) && plIsPrimitive(p) && IsNumber(args[i]) {
 				args[i] = plCastNum(args[i], p)
 			}
 		}
@@ -667,7 +673,7 @@ func (in *plInterp) evalCall(n *plECall, env *plEnv) (any, *plRtErr) {
 	return in.callMethod(recv, n.name, args, n.pos)
 }
 
-func (in *plInterp) callUserFunc(f *plFunc, args []any, off int) (any, *plRtErr) {
+func (in *plInterp) callUserFunc(f *plFunc, args []any, off int) (any, *RuntimeError) {
 	if err := in.enter(off); err != nil {
 		return nil, err
 	}
@@ -688,7 +694,7 @@ func (in *plInterp) callUserFunc(f *plFunc, args []any, off int) (any, *plRtErr)
 }
 
 // callFn invokes a lambda, function reference or native function.
-func (in *plInterp) callFn(fnv any, args []any, off int) (any, *plRtErr) {
+func (in *plInterp) callFn(fnv any, args []any, off int) (any, *RuntimeError) {
 	if err := in.enter(off); err != nil {
 		return nil, err
 	}
@@ -698,8 +704,8 @@ func (in *plInterp) callFn(fnv any, args []any, off int) (any, *plRtErr) {
 		if fnv == nil {
 			return nil, plNPE(off)
 		}
-		return nil, &plRtErr{typ: "class_cast_exception", offset: off,
-			reason: "Cannot cast " + plClassName(fnv) + " to a functional interface"}
+		return nil, &RuntimeError{Type: "class_cast_exception", Offset: off,
+			Reason: "Cannot cast " + plClassName(fnv) + " to a functional interface"}
 	}
 	if fn.native != nil {
 		return fn.native(args, off)
@@ -722,13 +728,13 @@ func (in *plInterp) callFn(fnv any, args []any, off int) (any, *plRtErr) {
 	return fn.in.eval(fn.body, env)
 }
 
-func (in *plInterp) funcRef(n *plEFuncRef, env *plEnv) (any, *plRtErr) {
+func (in *plInterp) funcRef(n *plEFuncRef, env *plEnv) (any, *RuntimeError) {
 	if n.typ == "this" {
 		f, ok := in.prog.funcs[n.method]
 		if !ok {
 			return nil, plIAE(n.pos, "Unknown reference [this::"+n.method+"]")
 		}
-		return &plFn{name: n.method, native: func(args []any, off int) (any, *plRtErr) {
+		return &plFn{name: n.method, native: func(args []any, off int) (any, *RuntimeError) {
 			return in.callUserFunc(f, args, off)
 		}}, nil
 	}
@@ -740,14 +746,14 @@ func (in *plInterp) funcRef(n *plEFuncRef, env *plEnv) (any, *plRtErr) {
 			return nil, plIAE(n.pos, "cannot resolve symbol ["+typ+"]")
 		}
 		recv := v.v
-		return &plFn{native: func(args []any, off int) (any, *plRtErr) {
+		return &plFn{native: func(args []any, off int) (any, *RuntimeError) {
 			return in.callMethod(recv, method, args, off)
 		}}, nil
 	}
 	if method == "new" {
-		return &plFn{native: func(args []any, off int) (any, *plRtErr) { return plNew(typ, args, off) }}, nil
+		return &plFn{native: func(args []any, off int) (any, *RuntimeError) { return plNew(typ, args, off) }}, nil
 	}
-	return &plFn{native: func(args []any, off int) (any, *plRtErr) {
+	return &plFn{native: func(args []any, off int) (any, *RuntimeError) {
 		key := method + "/" + itoa(len(args))
 		if _, ok := plStaticMethods[typ][key]; ok {
 			return in.callStatic(typ, method, args, &plECall{plBase: plBase{off}})
@@ -761,20 +767,20 @@ func (in *plInterp) funcRef(n *plEFuncRef, env *plEnv) (any, *plRtErr) {
 
 // ---- operators ----
 
-func plUnary(op string, v any, off int) (any, *plRtErr) {
+func plUnary(op string, v any, off int) (any, *RuntimeError) {
 	switch op {
 	case "!":
 		b, ok := v.(bool)
 		if !ok {
-			return nil, &plRtErr{typ: "class_cast_exception", offset: off, reason: "Cannot cast " + plClassName(v) + " to java.lang.Boolean"}
+			return nil, &RuntimeError{Type: "class_cast_exception", Offset: off, Reason: "Cannot cast " + plClassName(v) + " to java.lang.Boolean"}
 		}
 		return !b, nil
 	case "-", "+", "~":
 		if v == nil {
 			return nil, plNPE(off)
 		}
-		if !plIsNumber(v) {
-			return nil, &plRtErr{typ: "class_cast_exception", offset: off, reason: "Cannot apply [" + op + "] operation to type [" + plClassName(v) + "]."}
+		if !IsNumber(v) {
+			return nil, &RuntimeError{Type: "class_cast_exception", Offset: off, Reason: "Cannot apply [" + op + "] operation to type [" + plClassName(v) + "]."}
 		}
 		t := plPromote(v, int32(0))
 		v = plCastNum(v, t)
@@ -799,20 +805,20 @@ func plUnary(op string, v any, off int) (any, *plRtErr) {
 			case int64:
 				return ^x, nil
 			}
-			return nil, &plRtErr{typ: "class_cast_exception", offset: off, reason: "Cannot apply [~] operation to type [" + plClassName(v) + "]."}
+			return nil, &RuntimeError{Type: "class_cast_exception", Offset: off, Reason: "Cannot apply [~] operation to type [" + plClassName(v) + "]."}
 		}
 	}
 	return v, nil
 }
 
 // plArith applies a numeric binary operator with Java promotion rules.
-func plArith(op string, a, b any) (any, *plRtErr) {
+func plArith(op string, a, b any) (any, *RuntimeError) {
 	switch op {
 	case "<<", ">>", ">>>":
 		lt := plPromote(a, int32(0))
-		n := plI64(b)
+		n := I64(b)
 		if lt == "long" {
-			x := plI64(a)
+			x := I64(a)
 			s := uint(n & 63)
 			switch op {
 			case "<<":
@@ -822,7 +828,7 @@ func plArith(op string, a, b any) (any, *plRtErr) {
 			}
 			return int64(uint64(x) >> s), nil
 		}
-		x := int32(plI64(a))
+		x := int32(I64(a))
 		s := uint(n & 31)
 		switch op {
 		case "<<":
@@ -835,7 +841,7 @@ func plArith(op string, a, b any) (any, *plRtErr) {
 	t := plPromote(a, b)
 	switch t {
 	case "double", "float":
-		x, y := plF64(a), plF64(b)
+		x, y := F64(a), F64(b)
 		if t == "float" {
 			fx, fy := float32(x), float32(y)
 			var r float32
@@ -851,7 +857,7 @@ func plArith(op string, a, b any) (any, *plRtErr) {
 			case "%":
 				r = float32(math.Mod(float64(fx), float64(fy)))
 			default:
-				return nil, &plRtErr{typ: "class_cast_exception", reason: "Cannot apply [" + op + "] operation to types [java.lang.Float] and [java.lang.Float]."}
+				return nil, &RuntimeError{Type: "class_cast_exception", Reason: "Cannot apply [" + op + "] operation to types [java.lang.Float] and [java.lang.Float]."}
 			}
 			return r, nil
 		}
@@ -867,9 +873,9 @@ func plArith(op string, a, b any) (any, *plRtErr) {
 		case "%":
 			return math.Mod(x, y), nil
 		}
-		return nil, &plRtErr{typ: "class_cast_exception", reason: "Cannot apply [" + op + "] operation to types [java.lang.Double] and [java.lang.Double]."}
+		return nil, &RuntimeError{Type: "class_cast_exception", Reason: "Cannot apply [" + op + "] operation to types [java.lang.Double] and [java.lang.Double]."}
 	case "long":
-		x, y := plI64(a), plI64(b)
+		x, y := I64(a), I64(b)
 		switch op {
 		case "+":
 			return x + y, nil
@@ -879,7 +885,7 @@ func plArith(op string, a, b any) (any, *plRtErr) {
 			return x * y, nil
 		case "/":
 			if y == 0 {
-				return nil, &plRtErr{typ: "arithmetic_exception", reason: "/ by zero"}
+				return nil, &RuntimeError{Type: "arithmetic_exception", Reason: "/ by zero"}
 			}
 			if x == math.MinInt64 && y == -1 {
 				return x, nil
@@ -887,7 +893,7 @@ func plArith(op string, a, b any) (any, *plRtErr) {
 			return x / y, nil
 		case "%":
 			if y == 0 {
-				return nil, &plRtErr{typ: "arithmetic_exception", reason: "/ by zero"}
+				return nil, &RuntimeError{Type: "arithmetic_exception", Reason: "/ by zero"}
 			}
 			if y == -1 {
 				return int64(0), nil
@@ -901,7 +907,7 @@ func plArith(op string, a, b any) (any, *plRtErr) {
 			return x ^ y, nil
 		}
 	default:
-		x, y := int32(plI64(a)), int32(plI64(b))
+		x, y := int32(I64(a)), int32(I64(b))
 		switch op {
 		case "+":
 			return x + y, nil
@@ -911,7 +917,7 @@ func plArith(op string, a, b any) (any, *plRtErr) {
 			return x * y, nil
 		case "/":
 			if y == 0 {
-				return nil, &plRtErr{typ: "arithmetic_exception", reason: "/ by zero"}
+				return nil, &RuntimeError{Type: "arithmetic_exception", Reason: "/ by zero"}
 			}
 			if x == math.MinInt32 && y == -1 {
 				return x, nil
@@ -919,7 +925,7 @@ func plArith(op string, a, b any) (any, *plRtErr) {
 			return x / y, nil
 		case "%":
 			if y == 0 {
-				return nil, &plRtErr{typ: "arithmetic_exception", reason: "/ by zero"}
+				return nil, &RuntimeError{Type: "arithmetic_exception", Reason: "/ by zero"}
 			}
 			if y == -1 {
 				return int32(0), nil
@@ -933,10 +939,10 @@ func plArith(op string, a, b any) (any, *plRtErr) {
 			return x ^ y, nil
 		}
 	}
-	return nil, &plRtErr{typ: "class_cast_exception", reason: "Cannot apply [" + op + "] operation."}
+	return nil, &RuntimeError{Type: "class_cast_exception", Reason: "Cannot apply [" + op + "] operation."}
 }
 
-func (in *plInterp) evalBinary(n *plEBinary, env *plEnv) (any, *plRtErr) {
+func (in *plInterp) evalBinary(n *plEBinary, env *plEnv) (any, *RuntimeError) {
 	switch n.op {
 	case "&&":
 		l, err := in.evalBool(n.l, env)
@@ -965,7 +971,7 @@ func (in *plInterp) evalBinary(n *plEBinary, env *plEnv) (any, *plRtErr) {
 	return in.binaryOp(n.op, l, r, in.info.types[n.l], in.info.types[n.r], n.pos)
 }
 
-func (in *plInterp) binaryOp(op string, l, r any, tl, tr string, off int) (any, *plRtErr) {
+func (in *plInterp) binaryOp(op string, l, r any, tl, tr string, off int) (any, *RuntimeError) {
 	switch op {
 	case "==":
 		return plEquals(l, r), nil
@@ -984,14 +990,14 @@ func (in *plInterp) binaryOp(op string, l, r any, tl, tr string, off int) (any, 
 	case "=~", "==~":
 		p, ok := r.(*plPattern)
 		if !ok {
-			return nil, &plRtErr{typ: "class_cast_exception", offset: off, reason: "Cannot cast " + plClassName(r) + " to java.util.regex.Pattern"}
+			return nil, &RuntimeError{Type: "class_cast_exception", Offset: off, Reason: "Cannot cast " + plClassName(r) + " to java.util.regex.Pattern"}
 		}
 		s, ok := l.(string)
 		if !ok {
 			if l == nil {
 				return nil, plNPE(off)
 			}
-			s = plToString(l)
+			s = ToString(l)
 		}
 		m := p.matcher(s, in)
 		if op == "=~" {
@@ -1002,19 +1008,19 @@ func (in *plInterp) binaryOp(op string, l, r any, tl, tr string, off int) (any, 
 		_, ls := l.(string)
 		_, rs := r.(string)
 		if ls || rs || tl == "String" || tr == "String" {
-			return plToString(l) + plToString(r), nil
+			return ToString(l) + ToString(r), nil
 		}
 	case "<", "<=", ">", ">=":
-		if !plIsNumber(l) || !plIsNumber(r) {
+		if !IsNumber(l) || !IsNumber(r) {
 			if l == nil || r == nil {
 				return nil, plNPE(off)
 			}
-			return nil, &plRtErr{typ: "class_cast_exception", offset: off,
-				reason: "Cannot apply [" + op + "] operation to types [" + plClassName(l) + "] and [" + plClassName(r) + "]."}
+			return nil, &RuntimeError{Type: "class_cast_exception", Offset: off,
+				Reason: "Cannot apply [" + op + "] operation to types [" + plClassName(l) + "] and [" + plClassName(r) + "]."}
 		}
-		c, _ := plCompare(l, r)
+		c, _ := Compare(l, r)
 		if plPromote(l, r) == "double" || plPromote(l, r) == "float" {
-			x, y := plF64(l), plF64(r)
+			x, y := F64(l), F64(r)
 			if math.IsNaN(x) || math.IsNaN(y) {
 				return false, nil
 			}
@@ -1044,23 +1050,23 @@ func (in *plInterp) binaryOp(op string, l, r any, tl, tr string, off int) (any, 
 	if l == nil || r == nil {
 		return nil, plNPE(off)
 	}
-	if !plIsNumber(l) || !plIsNumber(r) {
+	if !IsNumber(l) || !IsNumber(r) {
 		bad, good, goodT := l, r, tr
-		if plIsNumber(l) {
+		if IsNumber(l) {
 			bad, good, goodT = r, l, tl
 		}
 		if goodT != "" && goodT != "def" && plIsPrimitive(goodT) {
-			return nil, &plRtErr{typ: "class_cast_exception", offset: off,
-				frames: []string{"java.base/java.lang.Class.cast(Class.java:3492)"},
-				reason: "Cannot cast " + plClassName(bad) + " to java.lang." + plBoxOf[plPromoteStatic(goodT)]}
+			return nil, &RuntimeError{Type: "class_cast_exception", Offset: off,
+				Frames: []string{"java.base/java.lang.Class.cast(Class.java:3492)"},
+				Reason: "Cannot cast " + plClassName(bad) + " to java.lang." + plBoxOf[plPromoteStatic(goodT)]}
 		}
 		_ = good
-		return nil, &plRtErr{typ: "class_cast_exception", offset: off,
-			reason: "Cannot apply [" + op + "] operation to types [" + plClassName(l) + "] and [" + plClassName(r) + "]."}
+		return nil, &RuntimeError{Type: "class_cast_exception", Offset: off,
+			Reason: "Cannot apply [" + op + "] operation to types [" + plClassName(l) + "] and [" + plClassName(r) + "]."}
 	}
 	v, err := plArith(op, l, r)
 	if err != nil {
-		err.offset = off
+		err.Offset = off
 		return nil, err
 	}
 	return v, nil
@@ -1076,7 +1082,7 @@ func plPromoteStatic(t string) string {
 
 // ---- assignment ----
 
-func (in *plInterp) evalAssign(n *plEAssign, env *plEnv) (any, *plRtErr) {
+func (in *plInterp) evalAssign(n *plEAssign, env *plEnv) (any, *RuntimeError) {
 	tt := in.info.types[n.target]
 	if n.op == "=" {
 		v, err := in.eval(n.val, env)
@@ -1111,16 +1117,16 @@ func (in *plInterp) evalAssign(n *plEAssign, env *plEnv) (any, *plRtErr) {
 // plCastBack casts a compound-assignment result to the target's type: the
 // static type, or for def targets the runtime type of the old value.
 func plCastBack(res, old any, tt string) any {
-	if plIsNumericType(tt) && plIsNumber(res) {
+	if plIsNumericType(tt) && IsNumber(res) {
 		return plCastNum(res, tt)
 	}
-	if (tt == "def" || tt == "" || tt == "Object") && plIsNumber(old) && plIsNumber(res) {
+	if (tt == "def" || tt == "" || tt == "Object") && IsNumber(old) && IsNumber(res) {
 		return plCastNum(res, plPrimName(old))
 	}
 	return res
 }
 
-func (in *plInterp) assignTo(target plNode, v any, tt string, env *plEnv, off int) (any, *plRtErr) {
+func (in *plInterp) assignTo(target plNode, v any, tt string, env *plEnv, off int) (any, *RuntimeError) {
 	switch t := target.(type) {
 	case *plEVar:
 		slot := env.lookup(t.name)
@@ -1151,8 +1157,8 @@ func (in *plInterp) assignTo(target plNode, v any, tt string, env *plEnv, off in
 		if err != nil {
 			return nil, err
 		}
-		if a, ok := obj.(*plArray); ok {
-			v, err = in.store(v, a.elem, off)
+		if a, ok := obj.(*Array); ok {
+			v, err = in.store(v, a.Elem, off)
 			if err != nil {
 				return nil, err
 			}
@@ -1163,15 +1169,15 @@ func (in *plInterp) assignTo(target plNode, v any, tt string, env *plEnv, off in
 }
 
 // lvalue returns getter and setter closures for a compound assignment target.
-func (in *plInterp) lvalue(target plNode, env *plEnv) (func() (any, *plRtErr), func(any) *plRtErr, *plRtErr) {
+func (in *plInterp) lvalue(target plNode, env *plEnv) (func() (any, *RuntimeError), func(any) *RuntimeError, *RuntimeError) {
 	switch t := target.(type) {
 	case *plEVar:
 		slot := env.lookup(t.name)
 		if slot == nil {
 			return nil, nil, plIAE(t.pos, "cannot resolve symbol ["+t.name+"]")
 		}
-		return func() (any, *plRtErr) { return slot.v, nil },
-			func(v any) *plRtErr {
+		return func() (any, *RuntimeError) { return slot.v, nil },
+			func(v any) *RuntimeError {
 				sv, err := in.store(v, slot.typ, t.pos)
 				if err != nil {
 					return err
@@ -1187,8 +1193,8 @@ func (in *plInterp) lvalue(target plNode, env *plEnv) (func() (any, *plRtErr), f
 		if obj == nil {
 			return nil, nil, plNPE(t.pos)
 		}
-		return func() (any, *plRtErr) { return plGetField(obj, t.name, t.pos) },
-			func(v any) *plRtErr { return plSetField(obj, t.name, v, t.pos) }, nil
+		return func() (any, *RuntimeError) { return plGetField(obj, t.name, t.pos) },
+			func(v any) *RuntimeError { return plSetField(obj, t.name, v, t.pos) }, nil
 	case *plEIndex:
 		obj, err := in.eval(t.obj, env)
 		if err != nil {
@@ -1198,10 +1204,10 @@ func (in *plInterp) lvalue(target plNode, env *plEnv) (func() (any, *plRtErr), f
 		if err != nil {
 			return nil, nil, err
 		}
-		return func() (any, *plRtErr) { return plIndexGet(obj, idx, t.pos) },
-			func(v any) *plRtErr {
-				if a, ok := obj.(*plArray); ok && plIsNumber(v) && plIsNumericType(a.elem) {
-					v = plCastNum(v, a.elem)
+		return func() (any, *RuntimeError) { return plIndexGet(obj, idx, t.pos) },
+			func(v any) *RuntimeError {
+				if a, ok := obj.(*Array); ok && IsNumber(v) && plIsNumericType(a.Elem) {
+					v = plCastNum(v, a.Elem)
 				}
 				return plIndexSet(obj, idx, v, t.pos)
 			}, nil
@@ -1209,7 +1215,7 @@ func (in *plInterp) lvalue(target plNode, env *plEnv) (func() (any, *plRtErr), f
 	return nil, nil, plIAE(target.nodePos(), "invalid assignment target")
 }
 
-func (in *plInterp) evalIncDec(n *plEIncDec, env *plEnv) (any, *plRtErr) {
+func (in *plInterp) evalIncDec(n *plEIncDec, env *plEnv) (any, *RuntimeError) {
 	get, set, err := in.lvalue(n.target, env)
 	if err != nil {
 		return nil, err
@@ -1241,7 +1247,7 @@ func (in *plInterp) evalIncDec(n *plEIncDec, env *plEnv) (any, *plRtErr) {
 
 // ---- casts / instanceof ----
 
-func plExplicitCast(v any, typ string, off int) (any, *plRtErr) {
+func plExplicitCast(v any, typ string, off int) (any, *RuntimeError) {
 	switch typ {
 	case "int", "long", "float", "double", "short", "byte", "char":
 		if s, ok := v.(string); ok && typ == "char" && len([]rune(s)) == 1 {
@@ -1250,9 +1256,9 @@ func plExplicitCast(v any, typ string, off int) (any, *plRtErr) {
 		if v == nil {
 			return nil, plNPE(off)
 		}
-		if !plIsNumber(v) {
-			return nil, &plRtErr{typ: "class_cast_exception", offset: off,
-				reason: "Cannot cast " + plClassName(v) + " to " + typ}
+		if !IsNumber(v) {
+			return nil, &RuntimeError{Type: "class_cast_exception", Offset: off,
+				Reason: "Cannot cast " + plClassName(v) + " to " + typ}
 		}
 		return plCastNum(v, typ), nil
 	case "boolean", "Boolean":
@@ -1269,7 +1275,7 @@ func plExplicitCast(v any, typ string, off int) (any, *plRtErr) {
 		if v == nil {
 			return nil, nil
 		}
-		if plIsNumber(v) {
+		if IsNumber(v) {
 			return plCastNum(v, plUnbox(typ)), nil
 		}
 	default:
@@ -1277,8 +1283,8 @@ func plExplicitCast(v any, typ string, off int) (any, *plRtErr) {
 			return v, nil
 		}
 	}
-	return nil, &plRtErr{typ: "class_cast_exception", offset: off,
-		reason: "Cannot cast " + plClassName(v) + " to " + plCanon(typ)}
+	return nil, &RuntimeError{Type: "class_cast_exception", Offset: off,
+		Reason: "Cannot cast " + plClassName(v) + " to " + plCanon(typ)}
 }
 
 func plInstanceOf(v any, typ, static string) bool {
@@ -1316,7 +1322,7 @@ func plInstanceOf(v any, typ, static string) bool {
 		_, ok := v.(bool)
 		return ok
 	case "Number":
-		return plIsNumber(v) && plPrimName(v) != "char"
+		return IsNumber(v) && plPrimName(v) != "char"
 	case "String", "CharSequence":
 		_, ok := v.(string)
 		return ok
@@ -1324,23 +1330,23 @@ func plInstanceOf(v any, typ, static string) bool {
 		return plPrimName(v) == typ
 	case "List", "ArrayList", "Collection", "Iterable":
 		switch v.(type) {
-		case *plList, *plDocValues:
+		case *List, *DocValues:
 			return true
-		case *plSet:
+		case *Set:
 			return typ == "Collection" || typ == "Iterable"
 		}
 		return false
 	case "Map", "HashMap":
-		m, ok := v.(*plMap)
+		m, ok := v.(*Map)
 		return ok && (typ == "Map" || m.kind != plTree)
 	case "TreeMap":
-		m, ok := v.(*plMap)
+		m, ok := v.(*Map)
 		return ok && m.kind == plTree
 	case "LinkedHashMap":
-		m, ok := v.(*plMap)
-		return ok && m.kind == plLinked
+		m, ok := v.(*Map)
+		return ok && m.kind == Linked
 	case "Set", "HashSet":
-		_, ok := v.(*plSet)
+		_, ok := v.(*Set)
 		return ok
 	case "StringBuilder":
 		_, ok := v.(*plStringBuilder)
@@ -1362,8 +1368,8 @@ func plInstanceOf(v any, typ, static string) bool {
 		return ok
 	}
 	if strings.HasSuffix(typ, "[]") {
-		a, ok := v.(*plArray)
-		return ok && a.elem+"[]" == typ
+		a, ok := v.(*Array)
+		return ok && a.Elem+"[]" == typ
 	}
 	if ex, ok := v.(*plException); ok {
 		return plExceptionType(typ) == ex.typ
@@ -1371,17 +1377,17 @@ func plInstanceOf(v any, typ, static string) bool {
 	return false
 }
 
-func plMakeArray(elem string, rank int, dims []int) *plArray {
+func plMakeArray(elem string, rank int, dims []int) *Array {
 	if len(dims) == 0 {
-		return &plArray{elem: elem + strings.Repeat("[]", rank-1)}
+		return &Array{Elem: elem + strings.Repeat("[]", rank-1)}
 	}
 	sub := elem + strings.Repeat("[]", rank-1)
-	a := &plArray{elem: sub, a: make([]any, dims[0])}
-	for i := range a.a {
+	a := &Array{Elem: sub, Items: make([]any, dims[0])}
+	for i := range a.Items {
 		if len(dims) > 1 {
-			a.a[i] = plMakeArray(elem, rank-1, dims[1:])
+			a.Items[i] = plMakeArray(elem, rank-1, dims[1:])
 		} else if rank == 1 {
-			a.a[i] = plZero(elem)
+			a.Items[i] = plZero(elem)
 		}
 	}
 	return a
@@ -1403,7 +1409,7 @@ type plMatcher struct {
 	pos   int
 }
 
-func plCompilePattern(src, flags string, off int) (any, *plRtErr) {
+func plCompilePattern(src, flags string, off int) (any, *RuntimeError) {
 	prefix := ""
 	for _, f := range flags {
 		switch f {
@@ -1421,7 +1427,7 @@ func plCompilePattern(src, flags string, off int) (any, *plRtErr) {
 	}
 	re, err := regexp.Compile(expr)
 	if err != nil {
-		return nil, &plRtErr{typ: "pattern_syntax_exception", offset: off, reason: err.Error()}
+		return nil, &RuntimeError{Type: "pattern_syntax_exception", Offset: off, Reason: err.Error()}
 	}
 	return &plPattern{src: src, flags: flags, re: re}, nil
 }
@@ -1431,20 +1437,20 @@ func (p *plPattern) matcher(s string, in *plInterp) *plMatcher {
 }
 
 // checkBudget enforces Painless' regex circuit breaker (limit factor 6).
-func (m *plMatcher) checkBudget(off int, full bool) *plRtErr {
+func (m *plMatcher) checkBudget(off int, full bool) *RuntimeError {
 	n := len([]rune(m.input))
 	limit := 6 * n
 	pos := len([]rune(m.input[:m.pos]))
 	if !plRegexExceeds(m.p.src, m.p.flags, m.input, full, pos, limit) {
 		return nil
 	}
-	return &plRtErr{typ: "circuit_breaking_exception", offset: off,
-		reason: "[scripting] Regular expression considered too many characters, pattern: [" + m.p.src +
+	return &RuntimeError{Type: "circuit_breaking_exception", Offset: off,
+		Reason: "[scripting] Regular expression considered too many characters, pattern: [" + m.p.src +
 			"], limit factor: [6], char limit: [" + itoa(limit) + "], count: [" + itoa(limit+1) +
 			"], wrapped: [" + m.input + "], this limit can be changed by changed by the [script.painless.regex.limit-factor] setting"}
 }
 
-func (m *plMatcher) find(off int) (bool, *plRtErr) {
+func (m *plMatcher) find(off int) (bool, *RuntimeError) {
 	if err := m.checkBudget(off, false); err != nil {
 		return false, err
 	}
@@ -1471,7 +1477,7 @@ func (m *plMatcher) find(off int) (bool, *plRtErr) {
 	return true, nil
 }
 
-func (m *plMatcher) matches(off int) (bool, *plRtErr) {
+func (m *plMatcher) matches(off int) (bool, *RuntimeError) {
 	if err := m.checkBudget(off, true); err != nil {
 		return false, err
 	}
@@ -1481,12 +1487,12 @@ func (m *plMatcher) matches(off int) (bool, *plRtErr) {
 	return loc != nil, nil
 }
 
-func (m *plMatcher) group(i int, off int) (any, *plRtErr) {
+func (m *plMatcher) group(i int, off int) (any, *RuntimeError) {
 	if m.loc == nil {
-		return nil, &plRtErr{typ: "illegal_state_exception", offset: off, reason: "No match found"}
+		return nil, &RuntimeError{Type: "illegal_state_exception", Offset: off, Reason: "No match found"}
 	}
 	if 2*i+1 >= len(m.loc) {
-		return nil, &plRtErr{typ: "index_out_of_bounds_exception", offset: off, reason: "No group " + itoa(i)}
+		return nil, &RuntimeError{Type: "index_out_of_bounds_exception", Offset: off, Reason: "No group " + itoa(i)}
 	}
 	if m.loc[2*i] < 0 {
 		return nil, nil

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"slopensearch/internal/painless"
 )
 
 // Stored scripts, _render and script fields.
@@ -103,7 +105,7 @@ func evalScriptFields(hit multiHit, specs map[string]any) (map[string]any, *apiE
 			src[k] = v
 		}
 	}
-	source := plFromJSON(deepCopySource(src), plLinked).(*plMap)
+	source := painless.FromJSON(deepCopySource(src), painless.Linked).(*painless.Map)
 	for _, name := range sortedKeys(specs) {
 		spec, _ := specs[name].(map[string]any)
 		ignore, _ := spec["ignore_failure"].(bool)
@@ -173,17 +175,17 @@ func buildStoredScript(body map[string]any) (map[string]any, *apiError) {
 			out["options"] = map[string]any{"content_type": "application/json; charset=UTF-8"}
 		}
 	default:
-		out["source"] = plToString(plFromJSON(srcRaw, plLinked))
+		out["source"] = painless.ToString(painless.FromJSON(srcRaw, painless.Linked))
 	}
 	if opts, ok := sc["options"].(map[string]any); ok {
-		extra := newPlMap(plHash)
+		extra := painless.NewMap(painless.Hash)
 		for k, v := range opts {
 			if k != "content_type" {
-				extra.put(k, plFromJSON(v, plLinked))
+				extra.Put(k, painless.FromJSON(v, painless.Linked))
 			}
 		}
-		if extra.size() > 0 {
-			return nil, errBad("illegal compiler options [" + plToString(extra) + "] specified")
+		if extra.Size() > 0 {
+			return nil, errBad("illegal compiler options [" + painless.ToString(extra) + "] specified")
 		}
 		if ct, ok := opts["content_type"]; ok {
 			out["options"] = map[string]any{"content_type": ct}

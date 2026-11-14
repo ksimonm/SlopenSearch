@@ -3,14 +3,12 @@ package main
 import (
 	"math"
 	"strconv"
+
+	"slopensearch/internal/painless"
 )
 
 // Script query and script_score query evaluation. The scripting engines
 // live in pl_*.go (Painless) and pl_expr.go (Lucene expressions).
-
-func isAlphaByte(c byte) bool {
-	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
-}
 
 func valueToScriptString(v any) (string, bool) {
 	switch t := v.(type) {
@@ -93,10 +91,10 @@ func (c *queryCtx) evalScriptScore(body any) (bool, float64, *apiError) {
 	if rerr != nil {
 		return false, 0, scriptShardError(c.idx, rerr)
 	}
-	score := plF64(v)
+	score := painless.F64(v)
 	if score < 0 || math.IsNaN(score) {
 		return false, 0, plainShardError(c.idx, errBad("script_score script returned an invalid score ["+
-			plFmtDouble(score)+"] for doc ["+itoa(luceneDocNum(c.idx, c.id))+"]. Must be a non-negative score!"))
+			painless.FormatDouble(score)+"] for doc ["+itoa(luceneDocNum(c.idx, c.id))+"]. Must be a non-negative score!"))
 	}
 	score = float64(float32(score))
 	if b, ok := toFloat(bm["boost"]); ok {

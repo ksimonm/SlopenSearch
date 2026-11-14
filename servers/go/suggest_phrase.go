@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"slopensearch/internal/painless"
 )
 
 // The phrase suggester, ported from OpenSearch's PhraseSuggester: a noisy
@@ -1362,7 +1364,7 @@ func phraseSuggest(spec, body map[string]any, indices []*Index, globalText any) 
 		if o.highlighted != nil {
 			oj = append(oj, orderedKV{"highlighted", *o.highlighted})
 		}
-		oj = append(oj, orderedKV{"score", plJSONFloat32(o.score)})
+		oj = append(oj, orderedKV{"score", painless.JSONFloat32(o.score)})
 		if o.collate != nil {
 			oj = append(oj, orderedKV{"collate_match", *o.collate})
 		}

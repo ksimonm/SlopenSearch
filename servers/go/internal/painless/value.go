@@ -1,4 +1,4 @@
-package main
+package painless
 
 import (
 	"encoding/json"
@@ -18,38 +18,38 @@ import (
 
 type plChar uint16
 
-type plList struct{ a []any }
+type List struct{ a []any }
 
 const (
-	plHash = iota
-	plLinked
+	Hash = iota
+	Linked
 	plTree
 )
 
 type plMapEntry struct {
-	k, v any
+	Key, Value any
 }
 
-// plMap is a java.util.Map: HashMap (hash iteration order), LinkedHashMap
+// Map is a java.util.Map: HashMap (hash iteration order), LinkedHashMap
 // (insertion order) or TreeMap (sorted keys).
-type plMap struct {
+type Map struct {
 	kind    int
 	entries []*plMapEntry
 	index   map[string]int
 	cap     int
 }
 
-type plSet struct{ m *plMap }
+type Set struct{ m *Map }
 
-type plArray struct {
-	elem string
-	a    []any
+type Array struct {
+	Elem  string
+	Items []any
 }
 
 type plStringBuilder struct{ s []rune }
 
 type plMapEntryRef struct {
-	m *plMap
+	m *Map
 	e *plMapEntry
 }
 
@@ -58,13 +58,13 @@ type plIterator struct {
 	i     int
 }
 
-func newPlList(items ...any) *plList { return &plList{a: append([]any{}, items...)} }
+func NewList(items ...any) *List { return &List{a: append([]any{}, items...)} }
 
-func newPlMap(kind int) *plMap {
-	return &plMap{kind: kind, index: map[string]int{}, cap: 16}
+func NewMap(kind int) *Map {
+	return &Map{kind: kind, index: map[string]int{}, cap: 16}
 }
 
-func newPlSet(kind int) *plSet { return &plSet{m: newPlMap(kind)} }
+func newPlSet(kind int) *Set { return &Set{m: NewMap(kind)} }
 
 // plKeyID is an identity for map keys following Java equals: Integer 1 and
 // Long 1 are different keys.
@@ -94,64 +94,67 @@ func plKeyID(k any) string {
 		}
 		return "zf"
 	}
-	return "o" + plToString(k)
+	return "o" + ToString(k)
 }
 
-func (m *plMap) get(k any) (any, bool) {
+func (m *Map) Get(k any) (any, bool) {
 	if i, ok := m.index[plKeyID(k)]; ok {
-		return m.entries[i].v, true
+		return m.entries[i].Value, true
 	}
 	return nil, false
 }
 
-func (m *plMap) put(k, v any) any {
+func (m *Map) Put(k, v any) any {
 	id := plKeyID(k)
 	if i, ok := m.index[id]; ok {
-		old := m.entries[i].v
-		m.entries[i].v = v
+		old := m.entries[i].Value
+		m.entries[i].Value = v
 		return old
 	}
 	m.index[id] = len(m.entries)
-	m.entries = append(m.entries, &plMapEntry{k: k, v: v})
+	m.entries = append(m.entries, &plMapEntry{Key: k, Value: v})
 	for float64(len(m.entries)) > float64(m.cap)*0.75 {
 		m.cap *= 2
 	}
 	return nil
 }
 
-func (m *plMap) remove(k any) (any, bool) {
+func (m *Map) remove(k any) (any, bool) {
 	id := plKeyID(k)
 	i, ok := m.index[id]
 	if !ok {
 		return nil, false
 	}
-	old := m.entries[i].v
+	old := m.entries[i].Value
 	m.entries = append(m.entries[:i], m.entries[i+1:]...)
 	m.reindex()
 	return old, true
 }
 
-func (m *plMap) reindex() {
+func (m *Map) reindex() {
 	m.index = map[string]int{}
 	for i, e := range m.entries {
-		m.index[plKeyID(e.k)] = i
+		m.index[plKeyID(e.Key)] = i
 	}
 }
 
-func (m *plMap) size() int { return len(m.entries) }
+func (m *Map) Size() int { return len(m.entries) }
+
+// Entries returns the entries in insertion order.
+func (m *Map) Entries() []*plMapEntry { return m.entries }
 
 // ordered returns the entries in Java iteration order.
-func (m *plMap) ordered() []*plMapEntry {
+func (m *Map) ordered() []*plMapEntry {
 	out := append([]*plMapEntry{}, m.entries...)
 	switch m.kind {
-	case plHash:
+	case Hash:
 		mask := int32(m.cap - 1)
 		sort.SliceStable(out, func(i, j int) bool {
-			return plSpread(plHashCode(out[i].k))&mask < plSpread(plHashCode(out[j].k))&mask
+			return plSpread(plHashCode(out[i].Key))&mask < plSpread(plHashCode(out[j].Key))&mask
 		})
 	case plTree:
 		sort.SliceStable(out, func(i, j int) bool {
-			c, _ := plCompare(out[i].k, out[j].k)
+			c, _ := Compare(out[i].Key, out[j].Key)
 			return c < 0
 		})
 	}
@@ -160,39 +163,39 @@ func (m *plMap) ordered() []*plMapEntry {
 
 func plSpread(h int32) int32 { return h ^ int32(uint32(h)>>16) }
 
-func (m *plMap) keys() []any {
+func (m *Map) keys() []any {
 	out := []any{}
 	for _, e := range m.ordered() {
-		out = append(out, e.k)
+		out = append(out, e.Key)
 	}
 	return out
 }
 
-func (m *plMap) values() []any {
+func (m *Map) values() []any {
 	out := []any{}
 	for _, e := range m.ordered() {
-		out = append(out, e.v)
+		out = append(out, e.Value)
 	}
 	return out
 }
 
-func (m *plMap) copyMap(kind int) *plMap {
-	n := newPlMap(kind)
+func (m *Map) copyMap(kind int) *Map {
+	n := NewMap(kind)
 	for _, e := range m.ordered() {
-		n.put(e.k, e.v)
+		n.Put(e.Key, e.Value)
 	}
 	return n
 }
 
-func (s *plSet) add(v any) bool {
-	if _, ok := s.m.get(v); ok {
+func (s *Set) add(v any) bool {
+	if _, ok := s.m.Get(v); ok {
 		return false
 	}
-	s.m.put(v, true)
+	s.m.Put(v, true)
 	return true
 }
 
-func (s *plSet) items() []any { return s.m.keys() }
+func (s *Set) items() []any { return s.m.keys() }
 
 // ---- hashing / equality / ordering ----
 
@@ -239,29 +242,29 @@ func plHashCode(v any) int32 {
 			return 1231
 		}
 		return 1237
-	case *plList:
+	case *List:
 		var h int32 = 1
 		for _, e := range t.a {
 			h = 31*h + plHashCode(e)
 		}
 		return h
-	case *plMap:
+	case *Map:
 		var h int32
 		for _, e := range t.entries {
-			h += plHashCode(e.k) ^ plHashCode(e.v)
+			h += plHashCode(e.Key) ^ plHashCode(e.Value)
 		}
 		return h
-	case *plSet:
+	case *Set:
 		var h int32
 		for _, e := range t.m.entries {
-			h += plHashCode(e.k)
+			h += plHashCode(e.Key)
 		}
 		return h
 	}
-	return plStringHash(plToString(v))
+	return plStringHash(ToString(v))
 }
 
-func plIsNumber(v any) bool {
+func IsNumber(v any) bool {
 	switch v.(type) {
 	case int32, int64, float32, float64, int8, int16, plChar:
 		return true
@@ -275,12 +278,12 @@ func plEquals(a, b any) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
-	if plIsNumber(a) && plIsNumber(b) {
+	if IsNumber(a) && IsNumber(b) {
 		switch plPromote(a, b) {
 		case "double", "float":
-			return plF64(a) == plF64(b)
+			return F64(a) == F64(b)
 		default:
-			return plI64(a) == plI64(b)
+			return I64(a) == I64(b)
 		}
 	}
 	return plJavaEquals(a, b)
@@ -292,11 +295,11 @@ func plJavaEquals(a, b any) bool {
 		return a == nil && b == nil
 	}
 	switch x := a.(type) {
-	case *plList:
-		y, ok := b.(*plList)
+	case *List:
+		y, ok := b.(*List)
 		if !ok {
-			if dv, ok := b.(*plDocValues); ok {
-				y = &plList{a: dv.vals}
+			if dv, ok := b.(*DocValues); ok {
+				y = &List{a: dv.Values}
 			} else {
 				return false
 			}
@@ -310,25 +313,25 @@ func plJavaEquals(a, b any) bool {
 			}
 		}
 		return true
-	case *plMap:
-		y, ok := b.(*plMap)
-		if !ok || x.size() != y.size() {
+	case *Map:
+		y, ok := b.(*Map)
+		if !ok || x.Size() != y.Size() {
 			return false
 		}
 		for _, e := range x.entries {
-			v, ok := y.get(e.k)
-			if !ok || !plJavaEquals(e.v, v) {
+			v, ok := y.Get(e.Key)
+			if !ok || !plJavaEquals(e.Value, v) {
 				return false
 			}
 		}
 		return true
-	case *plSet:
-		y, ok := b.(*plSet)
-		if !ok || x.m.size() != y.m.size() {
+	case *Set:
+		y, ok := b.(*Set)
+		if !ok || x.m.Size() != y.m.Size() {
 			return false
 		}
 		for _, e := range x.m.entries {
-			if _, ok := y.m.get(e.k); !ok {
+			if _, ok := y.m.Get(e.Key); !ok {
 				return false
 			}
 		}
@@ -340,8 +343,8 @@ func plJavaEquals(a, b any) bool {
 		y, ok := b.(float32)
 		return ok && x == y
 	}
-	if plIsNumber(a) || plIsNumber(b) {
-		return fmt.Sprintf("%T", a) == fmt.Sprintf("%T", b) && plI64(a) == plI64(b)
+	if IsNumber(a) || IsNumber(b) {
+		return fmt.Sprintf("%T", a) == fmt.Sprintf("%T", b) && I64(a) == I64(b)
 	}
 	switch x := a.(type) {
 	case string:
@@ -371,8 +374,8 @@ func plIdentical(a, b any) bool {
 		if fmt.Sprintf("%T", a) != fmt.Sprintf("%T", b) {
 			return false
 		}
-		v := plI64(x)
-		return v == plI64(b) && v >= -128 && v <= 127
+		v := I64(x)
+		return v == I64(b) && v >= -128 && v <= 127
 	case float32, float64:
 		return false
 	case bool:
@@ -385,12 +388,12 @@ func plIdentical(a, b any) bool {
 	return a == b
 }
 
-// plCompare implements Comparable.compareTo for naturally ordered values.
-func plCompare(a, b any) (int, bool) {
-	if plIsNumber(a) && plIsNumber(b) {
+// Compare implements Comparable.compareTo for naturally ordered values.
+func Compare(a, b any) (int, bool) {
+	if IsNumber(a) && IsNumber(b) {
 		switch plPromote(a, b) {
 		case "double", "float":
-			x, y := plF64(a), plF64(b)
+			x, y := F64(a), F64(b)
 			switch {
 			case x < y:
 				return -1, true
@@ -399,7 +402,7 @@ func plCompare(a, b any) (int, bool) {
 			}
 			return 0, true
 		default:
-			x, y := plI64(a), plI64(b)
+			x, y := I64(a), I64(b)
 			switch {
 			case x < y:
 				return -1, true
@@ -489,7 +492,7 @@ func plPrimName(v any) string {
 	return ""
 }
 
-func plI64(v any) int64 {
+func I64(v any) int64 {
 	switch t := v.(type) {
 	case int32:
 		return int64(t)
@@ -509,7 +512,7 @@ func plI64(v any) int64 {
 	return 0
 }
 
-func plF64(v any) float64 {
+func F64(v any) float64 {
 	switch t := v.(type) {
 	case int32:
 		return float64(t)
@@ -565,29 +568,29 @@ func plCastNum(v any, to string) any {
 	switch to {
 	case "int":
 		if isFloat {
-			return plF2I(plF64(v))
+			return plF2I(F64(v))
 		}
-		return int32(plI64(v))
+		return int32(I64(v))
 	case "long":
 		if isFloat {
-			return plF2L(plF64(v))
+			return plF2L(F64(v))
 		}
-		return plI64(v)
+		return I64(v)
 	case "short":
 		if isFloat {
-			return int16(plF2I(plF64(v)))
+			return int16(plF2I(F64(v)))
 		}
-		return int16(plI64(v))
+		return int16(I64(v))
 	case "byte":
 		if isFloat {
-			return int8(plF2I(plF64(v)))
+			return int8(plF2I(F64(v)))
 		}
-		return int8(plI64(v))
+		return int8(I64(v))
 	case "char":
 		if isFloat {
-			return plChar(uint16(plF2I(plF64(v))))
+			return plChar(uint16(plF2I(F64(v))))
 		}
-		return plChar(uint16(plI64(v)))
+		return plChar(uint16(I64(v)))
 	case "float":
 		if _, ok := v.(float64); ok {
 			return float32(v.(float64))
@@ -595,9 +598,9 @@ func plCastNum(v any, to string) any {
 		if l, ok := v.(int64); ok {
 			return float32(l)
 		}
-		return float32(plF64(v))
+		return float32(F64(v))
 	case "double":
-		return plF64(v)
+		return F64(v)
 	}
 	return v
 }
@@ -677,7 +680,7 @@ func plParseNumber(text string, isFloat, neg bool) (any, string, error) {
 
 // ---- string conversion ----
 
-func plFmtDouble(f float64) string {
+func FormatDouble(f float64) string {
 	switch {
 	case math.IsNaN(f):
 		return "NaN"
@@ -760,7 +763,7 @@ func plFmtShortest(e string, abs float64) string {
 	return out
 }
 
-func plToString(v any) string {
+func ToString(v any) string {
 	switch t := v.(type) {
 	case nil:
 		return "null"
@@ -782,43 +785,43 @@ func plToString(v any) string {
 	case plChar:
 		return string(utf16.Decode([]uint16{uint16(t)}))
 	case float64:
-		return plFmtDouble(t)
+		return FormatDouble(t)
 	case float32:
 		return plFmtFloat(t)
-	case *plList:
+	case *List:
 		return plJoinToString(t.a)
-	case *plDocValues:
-		return plJoinToString(t.vals)
-	case *plSet:
+	case *DocValues:
+		return plJoinToString(t.Values)
+	case *Set:
 		return plJoinToString(t.items())
-	case *plMap:
+	case *Map:
 		var sb strings.Builder
 		sb.WriteByte('{')
 		for i, e := range t.ordered() {
 			if i > 0 {
 				sb.WriteString(", ")
 			}
-			sb.WriteString(plToString(e.k))
+			sb.WriteString(ToString(e.Key))
 			sb.WriteByte('=')
-			sb.WriteString(plToString(e.v))
+			sb.WriteString(ToString(e.Value))
 		}
 		sb.WriteByte('}')
 		return sb.String()
 	case *plMapEntryRef:
-		return plToString(t.e.k) + "=" + plToString(t.e.v)
+		return ToString(t.e.Key) + "=" + ToString(t.e.Value)
 	case *plStringBuilder:
 		return string(t.s)
-	case *plArray:
-		return "[" + plArrayCode(t.elem) + "@" + fmt.Sprintf("%x", plHashCode(t.a))
+	case *Array:
+		return "[" + plArrayCode(t.Elem) + "@" + fmt.Sprintf("%x", plHashCode(t.Items))
 	case *plPattern:
 		return t.src
 	case *plOptional:
 		if !t.present {
 			return t.name + ".empty"
 		}
-		return t.name + "[" + plToString(t.v) + "]"
-	case *plGeoPoint:
-		return plFmtDouble(t.lat) + ", " + plFmtDouble(t.lon)
+		return t.name + "[" + ToString(t.v) + "]"
+	case *GeoPoint:
+		return FormatDouble(t.Lat) + ", " + FormatDouble(t.Lon)
 	case plStringer:
 		return t.javaString()
 	}
@@ -856,7 +859,7 @@ func plJoinToString(items []any) string {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		sb.WriteString(plToString(e))
+		sb.WriteString(ToString(e))
 	}
 	sb.WriteByte(']')
 	return sb.String()
@@ -935,29 +938,29 @@ func plRuntimeClass(v any) (string, string) {
 		return "java.lang.Boolean", "java.lang.Boolean"
 	case string:
 		return "java.lang.String", "java.lang.String"
-	case *plList:
+	case *List:
 		return "java.util.ArrayList", "java.util.ArrayList"
-	case *plMap:
+	case *Map:
 		switch t.kind {
-		case plLinked:
+		case Linked:
 			return "java.util.LinkedHashMap", "java.util.LinkedHashMap"
 		case plTree:
 			return "java.util.TreeMap", "java.util.TreeMap"
 		}
 		return "java.util.HashMap", "java.util.HashMap"
-	case *plSet:
+	case *Set:
 		return "java.util.HashSet", "java.util.HashSet"
-	case *plDocValues:
-		return "org.opensearch.index.fielddata.ScriptDocValues." + t.kind,
-			"org.opensearch.index.fielddata.ScriptDocValues$" + t.kind
+	case *DocValues:
+		return "org.opensearch.index.fielddata.ScriptDocValues." + t.Kind,
+			"org.opensearch.index.fielddata.ScriptDocValues$" + t.Kind
 	case *plStringBuilder:
 		return "java.lang.StringBuilder", "java.lang.StringBuilder"
 	case *plPattern:
 		return "java.util.regex.Pattern", "java.util.regex.Pattern"
 	case *plMatcher:
 		return "java.util.regex.Matcher", "java.util.regex.Matcher"
-	case *plArray:
-		return plCanon(t.elem) + "[]", plCanon(t.elem) + "[]"
+	case *Array:
+		return plCanon(t.Elem) + "[]", plCanon(t.Elem) + "[]"
 	case *plZDT:
 		return "java.time.ZonedDateTime", "java.time.ZonedDateTime"
 	case *plLocalDate:
@@ -966,7 +969,7 @@ func plRuntimeClass(v any) (string, string) {
 		return "java.time.Instant", "java.time.Instant"
 	case *plDuration:
 		return "java.time.Duration", "java.time.Duration"
-	case *plGeoPoint:
+	case *GeoPoint:
 		return "org.opensearch.common.geo.GeoPoint", "org.opensearch.common.geo.GeoPoint"
 	case *plMapEntryRef:
 		return "java.util.Map$Entry", "java.util.HashMap$Node"
@@ -992,9 +995,9 @@ func plDefTypeName(v any) string {
 
 // ---- JSON conversion ----
 
-// plFromJSON converts decoded JSON (json.Number, map, slice) to Painless
+// FromJSON converts decoded JSON (json.Number, map, slice) to Painless
 // values. Objects become maps of the given kind.
-func plFromJSON(v any, kind int) any {
+func FromJSON(v any, kind int) any {
 	switch t := v.(type) {
 	case json.Number:
 		s := t.String()
@@ -1027,29 +1030,29 @@ func plFromJSON(v any, kind int) any {
 		}
 		return t
 	case []any:
-		l := &plList{a: make([]any, len(t))}
+		l := &List{a: make([]any, len(t))}
 		for i, e := range t {
-			l.a[i] = plFromJSON(e, kind)
+			l.a[i] = FromJSON(e, kind)
 		}
 		return l
 	case map[string]any:
-		m := newPlMap(kind)
+		m := NewMap(kind)
 		keys := make([]string, 0, len(t))
 		for k := range t {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			m.put(k, plFromJSON(t[k], kind))
+			m.Put(k, FromJSON(t[k], kind))
 		}
 		return m
 	}
 	return v
 }
 
-// plToJSON converts a Painless value back to plain Go values for responses
+// ToJSON converts a Painless value back to plain Go values for responses
 // and documents.
-func plToJSON(v any) any {
+func ToJSON(v any) any {
 	switch t := v.(type) {
 	case nil, string, bool, int64, float64:
 		return t
@@ -1060,48 +1063,48 @@ func plToJSON(v any) any {
 	case int8:
 		return int64(t)
 	case plChar:
-		return plToString(t)
+		return ToString(t)
 	case float32:
-		return plJSONFloat32(t)
-	case *plList:
+		return JSONFloat32(t)
+	case *List:
 		out := make([]any, len(t.a))
 		for i, e := range t.a {
-			out[i] = plToJSON(e)
+			out[i] = ToJSON(e)
 		}
 		return out
-	case *plDocValues:
-		out := make([]any, len(t.vals))
-		for i, e := range t.vals {
-			out[i] = plToJSON(e)
+	case *DocValues:
+		out := make([]any, len(t.Values))
+		for i, e := range t.Values {
+			out[i] = ToJSON(e)
 		}
 		return out
-	case *plSet:
+	case *Set:
 		items := t.items()
 		out := make([]any, len(items))
 		for i, e := range items {
-			out[i] = plToJSON(e)
+			out[i] = ToJSON(e)
 		}
 		return out
-	case *plArray:
-		out := make([]any, len(t.a))
-		for i, e := range t.a {
-			out[i] = plToJSON(e)
+	case *Array:
+		out := make([]any, len(t.Items))
+		for i, e := range t.Items {
+			out[i] = ToJSON(e)
 		}
 		return out
-	case *plMap:
+	case *Map:
 		out := map[string]any{}
 		for _, e := range t.entries {
-			out[plToString(e.k)] = plToJSON(e.v)
+			out[ToString(e.Key)] = ToJSON(e.Value)
 		}
 		return out
 	}
-	return plToString(v)
+	return ToString(v)
 }
 
-// plJSONFloat32 renders a float the way Jackson prints a Java float.
-type plJSONFloat32 float32
+// JSONFloat32 renders a float the way Jackson prints a Java float.
+type JSONFloat32 float32
 
-func (f plJSONFloat32) MarshalJSON() ([]byte, error) {
+func (f JSONFloat32) MarshalJSON() ([]byte, error) {
 	d := float64(f)
 	if math.IsNaN(d) || math.IsInf(d, 0) {
 		return []byte(`"` + plFmtFloat(float32(f)) + `"`), nil

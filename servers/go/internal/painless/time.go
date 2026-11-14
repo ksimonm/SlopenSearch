@@ -1,4 +1,4 @@
-package main
+package painless
 
 import (
 	"fmt"
@@ -9,6 +9,10 @@ import (
 // Painless engine: the java.time subset.
 
 type plZDT struct{ t time.Time }
+
+// NewZDT returns a ZonedDateTime at t.
+func NewZDT(t time.Time) *plZDT { return &plZDT{t: t} }
+
 type plLocalDate struct{ t time.Time } // midnight UTC of the date
 type plInstant struct {
 	ms    int64
@@ -123,7 +127,7 @@ func plFmtDuration(d time.Duration) string {
 	return sb.String()
 }
 
-func plParseZDT(s string, off int) (*plZDT, *plRtErr) {
+func plParseZDT(s string, off int) (*plZDT, *RuntimeError) {
 	zone := ""
 	if i := strings.IndexByte(s, '['); i >= 0 && strings.HasSuffix(s, "]") {
 		zone = s[i+1 : len(s)-1]
@@ -134,8 +138,8 @@ func plParseZDT(s string, off int) (*plZDT, *plRtErr) {
 		t, err = time.Parse("2006-01-02T15:04Z07:00", s)
 	}
 	if err != nil {
-		return nil, &plRtErr{typ: "date_time_parse_exception", offset: off,
-			reason: "Text '" + s + "' could not be parsed at index 0"}
+		return nil, &RuntimeError{Type: "date_time_parse_exception", Offset: off,
+			Reason: "Text '" + s + "' could not be parsed at index 0"}
 	}
 	if zone != "" {
 		if loc, lerr := time.LoadLocation(zone); lerr == nil {
@@ -151,8 +155,8 @@ func plDateOf(y, m, d int) *plLocalDate {
 	return &plLocalDate{t: time.Date(y, time.Month(m), d, 0, 0, 0, 0, time.UTC)}
 }
 
-func (in *plInterp) callStaticTime(class, name string, args []any, off int) (any, *plRtErr, bool) {
-	i := func(k int) int64 { return plI64(args[k]) }
+func (in *plInterp) callStaticTime(class, name string, args []any, off int) (any, *RuntimeError, bool) {
+	i := func(k int) int64 { return I64(args[k]) }
 	switch class {
 	case "Instant":
 		switch name {
@@ -161,7 +165,7 @@ func (in *plInterp) callStaticTime(class, name string, args []any, off int) (any
 		case "ofEpochSecond":
 			return &plInstant{ms: i(0) * 1000}, nil, true
 		case "parse":
-			z, err := plParseZDT(plToString(args[0]), off)
+			z, err := plParseZDT(ToString(args[0]), off)
 			if err != nil {
 				return nil, err, true
 			}
@@ -170,7 +174,7 @@ func (in *plInterp) callStaticTime(class, name string, args []any, off int) (any
 	case "ZonedDateTime":
 		switch name {
 		case "parse":
-			z, err := plParseZDT(plToString(args[0]), off)
+			z, err := plParseZDT(ToString(args[0]), off)
 			return z, err, true
 		case "ofInstant":
 			inst, _ := args[0].(*plInstant)
@@ -193,10 +197,10 @@ func (in *plInterp) callStaticTime(class, name string, args []any, off int) (any
 		case "of":
 			return plDateOf(int(i(0)), int(i(1)), int(i(2))), nil, true
 		case "parse":
-			t, err := time.Parse("2006-01-02", plToString(args[0]))
+			t, err := time.Parse("2006-01-02", ToString(args[0]))
 			if err != nil {
-				return nil, &plRtErr{typ: "date_time_parse_exception", offset: off,
-					reason: "Text '" + plToString(args[0]) + "' could not be parsed at index 0"}, true
+				return nil, &RuntimeError{Type: "date_time_parse_exception", Offset: off,
+					Reason: "Text '" + ToString(args[0]) + "' could not be parsed at index 0"}, true
 			}
 			return &plLocalDate{t: t}, nil, true
 		case "ofEpochDay":
@@ -204,7 +208,7 @@ func (in *plInterp) callStaticTime(class, name string, args []any, off int) (any
 		}
 	case "ZoneId":
 		if name == "of" {
-			return plZoneID(plToString(args[0])), nil, true
+			return plZoneID(ToString(args[0])), nil, true
 		}
 	case "Duration":
 		unit := map[string]time.Duration{"ofDays": 24 * time.Hour, "ofHours": time.Hour, "ofMinutes": time.Minute,
@@ -226,14 +230,14 @@ func (in *plInterp) callStaticTime(class, name string, args []any, off int) (any
 		}
 		if name == "valueOf" {
 			for k, d := range plDayNames {
-				if d == plToString(args[0]) {
+				if d == ToString(args[0]) {
 					return plDayOfWeek(k + 1), nil, true
 				}
 			}
 		}
 	case "DateTimeFormatter":
 		if name == "ofPattern" {
-			return &plDTF{pattern: plToString(args[0])}, nil, true
+			return &plDTF{pattern: ToString(args[0])}, nil, true
 		}
 	}
 	return nil, nil, false
@@ -390,7 +394,7 @@ func plFormatPattern(p string, t time.Time) string {
 	return sb.String()
 }
 
-func (in *plInterp) timeMethod(recv any, name string, args []any, off int) (any, *plRtErr, bool) {
+func (in *plInterp) timeMethod(recv any, name string, args []any, off int) (any, *RuntimeError, bool) {
 	n := len(args)
 	switch t := recv.(type) {
 	case *plZDT:
@@ -463,7 +467,7 @@ func (in *plInterp) timeMethod(recv any, name string, args []any, off int) (any,
 				return &plZDT{t: tt.UTC()}, nil, true
 			}
 		case "plus/2", "minus/2":
-			k := plI64(args[0])
+			k := I64(args[0])
 			if name == "minus" {
 				k = -k
 			}
@@ -479,14 +483,14 @@ func (in *plInterp) timeMethod(recv any, name string, args []any, off int) (any,
 			o, _ := plTemporalTime(args[0])
 			return int32(tt.Compare(o)), nil, true
 		case "withDayOfMonth/1":
-			return &plZDT{t: time.Date(tt.Year(), tt.Month(), int(plI64(args[0])), tt.Hour(), tt.Minute(), tt.Second(), tt.Nanosecond(), tt.Location())}, nil, true
+			return &plZDT{t: time.Date(tt.Year(), tt.Month(), int(I64(args[0])), tt.Hour(), tt.Minute(), tt.Second(), tt.Nanosecond(), tt.Location())}, nil, true
 		case "withHour/1":
-			return &plZDT{t: time.Date(tt.Year(), tt.Month(), tt.Day(), int(plI64(args[0])), tt.Minute(), tt.Second(), tt.Nanosecond(), tt.Location())}, nil, true
+			return &plZDT{t: time.Date(tt.Year(), tt.Month(), tt.Day(), int(I64(args[0])), tt.Minute(), tt.Second(), tt.Nanosecond(), tt.Location())}, nil, true
 		}
 		if n == 1 && (strings.HasPrefix(name, "plus") || strings.HasPrefix(name, "minus")) {
 			unit := strings.ToUpper(strings.TrimPrefix(strings.TrimPrefix(name, "plus"), "minus"))
 			if _, ok := plChronoUnits[unit]; ok {
-				k := plI64(args[0])
+				k := I64(args[0])
 				if strings.HasPrefix(name, "minus") {
 					k = -k
 				}
@@ -537,7 +541,7 @@ func (in *plInterp) timeMethod(recv any, name string, args []any, off int) (any,
 		case "atStartOfDay/0", "atStartOfDay/1":
 			return &plZDT{t: tt}, nil, true
 		case "plus/2", "minus/2":
-			k := plI64(args[0])
+			k := I64(args[0])
 			if name == "minus" {
 				k = -k
 			}
@@ -550,7 +554,7 @@ func (in *plInterp) timeMethod(recv any, name string, args []any, off int) (any,
 			unit := strings.ToUpper(strings.TrimPrefix(strings.TrimPrefix(name, "plus"), "minus"))
 			switch unit {
 			case "DAYS", "WEEKS", "MONTHS", "YEARS":
-				k := plI64(args[0])
+				k := I64(args[0])
 				if strings.HasPrefix(name, "minus") {
 					k = -k
 				}
@@ -566,9 +570,9 @@ func (in *plInterp) timeMethod(recv any, name string, args []any, off int) (any,
 		case "getNano/0":
 			return int32((t.ms-floorDiv(t.ms, 1000)*1000)*1000000 + t.nanos), nil, true
 		case "plusMillis/1":
-			return &plInstant{ms: t.ms + plI64(args[0]), nanos: t.nanos}, nil, true
+			return &plInstant{ms: t.ms + I64(args[0]), nanos: t.nanos}, nil, true
 		case "plusSeconds/1":
-			return &plInstant{ms: t.ms + 1000*plI64(args[0]), nanos: t.nanos}, nil, true
+			return &plInstant{ms: t.ms + 1000*I64(args[0]), nanos: t.nanos}, nil, true
 		case "isBefore/1", "isAfter/1":
 			o, _ := args[0].(*plInstant)
 			if o == nil {
@@ -616,7 +620,7 @@ func (in *plInterp) timeMethod(recv any, name string, args []any, off int) (any,
 		case "name", "toString":
 			return t.javaString(), nil, true
 		case "plus":
-			return plDayOfWeek((int(t)-1+int(plI64(args[0]))%7+7)%7 + 1), nil, true
+			return plDayOfWeek((int(t)-1+int(I64(args[0]))%7+7)%7 + 1), nil, true
 		}
 	case plStringEnum:
 		switch name {
@@ -684,7 +688,7 @@ func plToChrono(v any) plChronoUnit {
 	if u, ok := v.(plChronoUnit); ok {
 		return u
 	}
-	return plChronoUnit(strings.ToUpper(plToString(v)))
+	return plChronoUnit(strings.ToUpper(ToString(v)))
 }
 
 func floorDiv(a, b int64) int64 {
@@ -695,4 +699,4 @@ func floorDiv(a, b int64) int64 {
 	return q
 }
 
-func plTimeFromMillis(ms int64) time.Time { return time.UnixMilli(ms).UTC() }
+func TimeFromMillis(ms int64) time.Time { return time.UnixMilli(ms).UTC() }

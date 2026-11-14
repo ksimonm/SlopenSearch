@@ -1,4 +1,4 @@
-package main
+package painless
 
 import (
 	"encoding/base64"
@@ -13,21 +13,21 @@ import (
 
 // Painless engine: the class library (whitelisted methods and fields).
 
-// plDocValues is org.opensearch.index.fielddata.ScriptDocValues: Longs,
+// DocValues is org.opensearch.index.fielddata.ScriptDocValues: Longs,
 // Doubles, Strings, Booleans, Dates or GeoPoints.
-type plDocValues struct {
-	kind  string
-	field string
-	vals  []any
+type DocValues struct {
+	Kind   string
+	Field  string
+	Values []any
 }
 
-// plDocMap is the doc variable (LeafDocLookup).
-type plDocMap struct {
-	get func(field string, off int) (any, *plRtErr)
-	has func(field string) bool
+// DocMap is the doc variable (LeafDocLookup).
+type DocMap struct {
+	Get func(field string, off int) (any, *RuntimeError)
+	Has func(field string) bool
 }
 
-type plGeoPoint struct{ lat, lon float64 }
+type GeoPoint struct{ Lat, Lon float64 }
 
 type plStream struct {
 	items []any
@@ -46,7 +46,7 @@ type plCollector struct {
 	f1, f2              any
 }
 
-func plDynMethodErr(recv any, name string, n int, off int) *plRtErr {
+func plDynMethodErr(recv any, name string, n int, off int) *RuntimeError {
 	cls, _ := plRuntimeClass(recv)
 	return plIAE(off, "dynamic method ["+cls+", "+name+"/"+itoa(n)+"] not found")
 }
@@ -57,18 +57,18 @@ func plFromUTF16(u []uint16) string { return string(utf16.Decode(u)) }
 
 // ---- fields / indexing ----
 
-func plGetField(obj any, name string, off int) (any, *plRtErr) {
+func plGetField(obj any, name string, off int) (any, *RuntimeError) {
 	switch t := obj.(type) {
-	case *plMap:
-		v, _ := t.get(name)
+	case *Map:
+		v, _ := t.Get(name)
 		return v, nil
-	case *plDocMap:
-		return t.get(name, off)
-	case *plArray:
+	case *DocMap:
+		return t.Get(name, off)
+	case *Array:
 		if name == "length" {
-			return int32(len(t.a)), nil
+			return int32(len(t.Items)), nil
 		}
-	case *plList:
+	case *List:
 		switch name {
 		case "length":
 			return int32(len(t.a)), nil
@@ -78,47 +78,47 @@ func plGetField(obj any, name string, off int) (any, *plRtErr) {
 		if i, err := strconv.Atoi(name); err == nil {
 			return plIndexGet(t, int32(i), off)
 		}
-	case *plDocValues:
+	case *DocValues:
 		switch name {
 		case "value":
 			return t.value(off)
 		case "length":
-			return int32(len(t.vals)), nil
+			return int32(len(t.Values)), nil
 		case "empty":
-			return len(t.vals) == 0, nil
+			return len(t.Values) == 0, nil
 		case "lat", "lon":
-			if t.kind == "GeoPoints" {
+			if t.Kind == "GeoPoints" {
 				v, err := t.value(off)
 				if err != nil {
 					return nil, err
 				}
-				g := v.(*plGeoPoint)
+				g := v.(*GeoPoint)
 				if name == "lat" {
-					return g.lat, nil
+					return g.Lat, nil
 				}
-				return g.lon, nil
+				return g.Lon, nil
 			}
 		}
-	case *plGeoPoint:
+	case *GeoPoint:
 		switch name {
 		case "lat":
-			return t.lat, nil
+			return t.Lat, nil
 		case "lon":
-			return t.lon, nil
+			return t.Lon, nil
 		}
 	case *plMapEntryRef:
 		switch name {
 		case "key":
-			return t.e.k, nil
+			return t.e.Key, nil
 		case "value":
-			return t.e.v, nil
+			return t.e.Value, nil
 		}
 	}
 	// getter shortcut: x.foo -> x.getFoo() / x.isFoo()
 	if name != "" {
 		capName := strings.ToUpper(name[:1]) + name[1:]
 		for _, m := range []string{"get" + capName, "is" + capName} {
-			if v, err := plCallKnown(obj, m, off); err == nil || err.typ != "_unknown" {
+			if v, err := plCallKnown(obj, m, off); err == nil || err.Type != "_unknown" {
 				return v, err
 			}
 		}
@@ -129,21 +129,21 @@ func plGetField(obj any, name string, off int) (any, *plRtErr) {
 
 // plCallKnown calls a zero-argument method, reporting unknown methods with
 // the internal "_unknown" error type.
-func plCallKnown(obj any, name string, off int) (any, *plRtErr) {
+func plCallKnown(obj any, name string, off int) (any, *RuntimeError) {
 	in := &plInterp{info: &plInfo{}}
 	v, err := in.callMethod(obj, name, nil, off)
-	if err != nil && strings.HasPrefix(err.reason, "dynamic method [") {
-		return nil, &plRtErr{typ: "_unknown"}
+	if err != nil && strings.HasPrefix(err.Reason, "dynamic method [") {
+		return nil, &RuntimeError{Type: "_unknown"}
 	}
 	return v, err
 }
 
-func plSetField(obj any, name string, v any, off int) *plRtErr {
+func plSetField(obj any, name string, v any, off int) *RuntimeError {
 	switch t := obj.(type) {
-	case *plMap:
-		t.put(name, v)
+	case *Map:
+		t.Put(name, v)
 		return nil
-	case *plList:
+	case *List:
 		if i, err := strconv.Atoi(name); err == nil {
 			return plIndexSet(t, int32(i), v, off)
 		}
@@ -152,11 +152,11 @@ func plSetField(obj any, name string, v any, off int) *plRtErr {
 	return plIAE(off, "dynamic setter ["+cls+", "+name+"] not found")
 }
 
-func plListIndex(idx any, n int, off int) (int, *plRtErr) {
-	if !plIsNumber(idx) {
-		return 0, &plRtErr{typ: "class_cast_exception", offset: off, reason: "Cannot cast " + plClassName(idx) + " to java.lang.Number"}
+func plListIndex(idx any, n int, off int) (int, *RuntimeError) {
+	if !IsNumber(idx) {
+		return 0, &RuntimeError{Type: "class_cast_exception", Offset: off, Reason: "Cannot cast " + plClassName(idx) + " to java.lang.Number"}
 	}
-	i := int(plI64(idx))
+	i := int(I64(idx))
 	if i < 0 {
 		i += n
 	}
@@ -171,45 +171,45 @@ var plArrayListGetFrames = []string{
 	"java.base/java.util.ArrayList.get(ArrayList.java:428)",
 }
 
-func plOOB(i, n, off int, frames []string) *plRtErr {
-	return &plRtErr{typ: "index_out_of_bounds_exception", offset: off, frames: frames,
-		reason: "Index " + itoa(i) + " out of bounds for length " + itoa(n)}
+func plOOB(i, n, off int, frames []string) *RuntimeError {
+	return &RuntimeError{Type: "index_out_of_bounds_exception", Offset: off, Frames: frames,
+		Reason: "Index " + itoa(i) + " out of bounds for length " + itoa(n)}
 }
 
-func plIndexGet(obj, idx any, off int) (any, *plRtErr) {
+func plIndexGet(obj, idx any, off int) (any, *RuntimeError) {
 	switch t := obj.(type) {
 	case nil:
 		return nil, plNPE(off)
-	case *plList:
+	case *List:
 		i, err := plListIndex(idx, len(t.a), off)
 		if err != nil {
 			return nil, err
 		}
 		if i < 0 || i >= len(t.a) {
-			return nil, plOOB(int(plI64(idx)), len(t.a), off, plArrayListGetFrames)
+			return nil, plOOB(int(I64(idx)), len(t.a), off, plArrayListGetFrames)
 		}
 		return t.a[i], nil
-	case *plArray:
-		i, err := plListIndex(idx, len(t.a), off)
+	case *Array:
+		i, err := plListIndex(idx, len(t.Items), off)
 		if err != nil {
 			return nil, err
 		}
-		if i < 0 || i >= len(t.a) {
-			return nil, &plRtErr{typ: "array_index_out_of_bounds_exception", offset: off,
-				reason: "Index " + itoa(int(plI64(idx))) + " out of bounds for length " + itoa(len(t.a))}
+		if i < 0 || i >= len(t.Items) {
+			return nil, &RuntimeError{Type: "array_index_out_of_bounds_exception", Offset: off,
+				Reason: "Index " + itoa(int(I64(idx))) + " out of bounds for length " + itoa(len(t.Items))}
 		}
-		return t.a[i], nil
-	case *plMap:
-		v, _ := t.get(idx)
+		return t.Items[i], nil
+	case *Map:
+		v, _ := t.Get(idx)
 		return v, nil
-	case *plDocMap:
+	case *DocMap:
 		s, ok := idx.(string)
 		if !ok {
-			s = plToString(idx)
+			s = ToString(idx)
 		}
-		return t.get(s, off+1)
-	case *plDocValues:
-		i, err := plListIndex(idx, len(t.vals), off)
+		return t.Get(s, off+1)
+	case *DocValues:
+		i, err := plListIndex(idx, len(t.Values), off)
 		if err != nil {
 			return nil, err
 		}
@@ -219,51 +219,51 @@ func plIndexGet(obj, idx any, off int) (any, *plRtErr) {
 	return nil, plIAE(off, "Attempting to address a non-array-like type ["+cls+"] as an array.")
 }
 
-func plIndexSet(obj, idx, v any, off int) *plRtErr {
+func plIndexSet(obj, idx, v any, off int) *RuntimeError {
 	switch t := obj.(type) {
 	case nil:
 		return plNPE(off)
-	case *plList:
+	case *List:
 		i, err := plListIndex(idx, len(t.a), off)
 		if err != nil {
 			return err
 		}
 		if i < 0 || i >= len(t.a) {
-			return plOOB(int(plI64(idx)), len(t.a), off, nil)
+			return plOOB(int(I64(idx)), len(t.a), off, nil)
 		}
 		t.a[i] = v
 		return nil
-	case *plArray:
-		i, err := plListIndex(idx, len(t.a), off)
+	case *Array:
+		i, err := plListIndex(idx, len(t.Items), off)
 		if err != nil {
 			return err
 		}
-		if i < 0 || i >= len(t.a) {
-			return &plRtErr{typ: "array_index_out_of_bounds_exception", offset: off,
-				reason: "Index " + itoa(int(plI64(idx))) + " out of bounds for length " + itoa(len(t.a))}
+		if i < 0 || i >= len(t.Items) {
+			return &RuntimeError{Type: "array_index_out_of_bounds_exception", Offset: off,
+				Reason: "Index " + itoa(int(I64(idx))) + " out of bounds for length " + itoa(len(t.Items))}
 		}
-		t.a[i] = v
+		t.Items[i] = v
 		return nil
-	case *plMap:
-		t.put(idx, v)
+	case *Map:
+		t.Put(idx, v)
 		return nil
 	}
 	cls, _ := plRuntimeClass(obj)
 	return plIAE(off, "Attempting to address a non-array-like type ["+cls+"] as an array.")
 }
 
-func plIterItems(v any, off int) ([]any, *plRtErr) {
+func plIterItems(v any, off int) ([]any, *RuntimeError) {
 	switch t := v.(type) {
 	case nil:
 		return nil, plNPE(off)
-	case *plList:
+	case *List:
 		return append([]any{}, t.a...), nil
-	case *plDocValues:
-		return append([]any{}, t.vals...), nil
-	case *plSet:
+	case *DocValues:
+		return append([]any{}, t.Values...), nil
+	case *Set:
 		return t.items(), nil
-	case *plArray:
-		return append([]any{}, t.a...), nil
+	case *Array:
+		return append([]any{}, t.Items...), nil
 	case *plStream:
 		return t.items, nil
 	case *plIterator:
@@ -275,17 +275,17 @@ func plIterItems(v any, off int) ([]any, *plRtErr) {
 	return nil, plIAE(off, "Cannot iterate over ["+cls+"]")
 }
 
-// plToItems returns the elements of any collection-like value.
-func plToItems(v any) ([]any, bool) {
+// ToItems returns the elements of any collection-like value.
+func ToItems(v any) ([]any, bool) {
 	switch t := v.(type) {
-	case *plList:
+	case *List:
 		return t.a, true
-	case *plDocValues:
-		return t.vals, true
-	case *plSet:
+	case *DocValues:
+		return t.Values, true
+	case *Set:
 		return t.items(), true
-	case *plArray:
-		return t.a, true
+	case *Array:
+		return t.Items, true
 	case *plStream:
 		return t.items, true
 	case *plEntrySet:
@@ -296,58 +296,58 @@ func plToItems(v any) ([]any, bool) {
 
 // ---- doc values ----
 
-func (d *plDocValues) missingErr(off int) *plRtErr {
-	return &plRtErr{typ: "illegal_state_exception", offset: off,
-		frames: []string{"org.opensearch.index.fielddata.ScriptDocValues$" + d.kind + ".get(ScriptDocValues.java:145)",
-			"org.opensearch.index.fielddata.ScriptDocValues$" + d.kind + ".getValue(ScriptDocValues.java:139)"},
-		reason: "A document doesn't have a value for a field! Use doc[<field>].size()==0 to check if a document is missing a field!"}
+func (d *DocValues) missingErr(off int) *RuntimeError {
+	return &RuntimeError{Type: "illegal_state_exception", Offset: off,
+		Frames: []string{"org.opensearch.index.fielddata.ScriptDocValues$" + d.Kind + ".get(ScriptDocValues.java:145)",
+			"org.opensearch.index.fielddata.ScriptDocValues$" + d.Kind + ".getValue(ScriptDocValues.java:139)"},
+		Reason: "A document doesn't have a value for a field! Use doc[<field>].size()==0 to check if a document is missing a field!"}
 }
 
-func (d *plDocValues) value(off int) (any, *plRtErr) {
-	if len(d.vals) == 0 {
+func (d *DocValues) value(off int) (any, *RuntimeError) {
+	if len(d.Values) == 0 {
 		return nil, d.missingErr(off)
 	}
-	return d.vals[0], nil
+	return d.Values[0], nil
 }
 
-func (d *plDocValues) get(i, off int) (any, *plRtErr) {
-	if len(d.vals) == 0 {
+func (d *DocValues) get(i, off int) (any, *RuntimeError) {
+	if len(d.Values) == 0 {
 		return nil, d.missingErr(off)
 	}
-	if i < 0 || i >= len(d.vals) {
-		return nil, plOOB(i, len(d.vals), off, nil)
+	if i < 0 || i >= len(d.Values) {
+		return nil, plOOB(i, len(d.Values), off, nil)
 	}
-	return d.vals[i], nil
+	return d.Values[i], nil
 }
 
 // ---- construction ----
 
-func plNew(typ string, args []any, off int) (any, *plRtErr) {
+func plNew(typ string, args []any, off int) (any, *RuntimeError) {
 	switch typ {
 	case "ArrayList", "LinkedList", "ArrayDeque":
-		l := &plList{}
+		l := &List{}
 		if len(args) == 1 {
-			if items, ok := plToItems(args[0]); ok {
+			if items, ok := ToItems(args[0]); ok {
 				l.a = append(l.a, items...)
 			}
 		}
 		return l, nil
 	case "HashMap", "TreeMap", "LinkedHashMap":
-		kind := map[string]int{"HashMap": plHash, "TreeMap": plTree, "LinkedHashMap": plLinked}[typ]
-		m := newPlMap(kind)
+		kind := map[string]int{"HashMap": Hash, "TreeMap": plTree, "LinkedHashMap": Linked}[typ]
+		m := NewMap(kind)
 		if len(args) == 1 {
-			if src, ok := args[0].(*plMap); ok {
+			if src, ok := args[0].(*Map); ok {
 				for _, e := range src.ordered() {
-					m.put(e.k, e.v)
+					m.Put(e.Key, e.Value)
 				}
 			}
 		}
 		return m, nil
 	case "HashSet", "TreeSet", "LinkedHashSet":
-		kind := map[string]int{"HashSet": plHash, "TreeSet": plTree, "LinkedHashSet": plLinked}[typ]
+		kind := map[string]int{"HashSet": Hash, "TreeSet": plTree, "LinkedHashSet": Linked}[typ]
 		s := newPlSet(kind)
 		if len(args) == 1 {
-			if items, ok := plToItems(args[0]); ok {
+			if items, ok := ToItems(args[0]); ok {
 				for _, it := range items {
 					s.add(it)
 				}
@@ -367,19 +367,19 @@ func plNew(typ string, args []any, off int) (any, *plRtErr) {
 		"IndexOutOfBoundsException", "NumberFormatException", "ClassCastException":
 		ex := &plException{typ: plExceptionType(typ), class: typ, nilMsg: true}
 		if len(args) >= 1 && args[0] != nil {
-			ex.msg = plToString(args[0])
+			ex.msg = ToString(args[0])
 			ex.nilMsg = false
 		}
 		return ex, nil
 	case "Object":
-		return &plMap{kind: -1}, nil
+		return &Map{kind: -1}, nil
 	case "Random":
 		return &plStaticRef{name: "Random"}, nil
 	}
 	return nil, plIAE(off, "constructor [["+plCanon(typ)+"], <init>/"+itoa(len(args))+"] not found")
 }
 
-func plStaticEnum(class, name string, off int) (any, *plRtErr) {
+func plStaticEnum(class, name string, off int) (any, *RuntimeError) {
 	switch class {
 	case "ChronoUnit":
 		if _, ok := plChronoUnits[name]; ok {
@@ -412,15 +412,15 @@ func plStaticEnum(class, name string, off int) (any, *plRtErr) {
 
 // ---- comparison helpers ----
 
-func (in *plInterp) compareWith(cmp any, a, b any, off int) (int, *plRtErr) {
+func (in *plInterp) compareWith(cmp any, a, b any, off int) (int, *RuntimeError) {
 	if cmp == nil {
-		c, ok := plCompare(a, b)
+		c, ok := Compare(a, b)
 		if !ok {
 			if a == nil || b == nil {
 				return 0, plNPE(off)
 			}
-			return 0, &plRtErr{typ: "class_cast_exception", offset: off,
-				reason: "class " + plClassName(a) + " cannot be cast to class java.lang.Comparable"}
+			return 0, &RuntimeError{Type: "class_cast_exception", Offset: off,
+				Reason: "class " + plClassName(a) + " cannot be cast to class java.lang.Comparable"}
 		}
 		return c, nil
 	}
@@ -428,11 +428,11 @@ func (in *plInterp) compareWith(cmp any, a, b any, off int) (int, *plRtErr) {
 	if err != nil {
 		return 0, err
 	}
-	return int(plI64(r)), nil
+	return int(I64(r)), nil
 }
 
-func (in *plInterp) sortItems(items []any, cmp any, off int) *plRtErr {
-	var ferr *plRtErr
+func (in *plInterp) sortItems(items []any, cmp any, off int) *RuntimeError {
+	var ferr *RuntimeError
 	sort.SliceStable(items, func(i, j int) bool {
 		if ferr != nil {
 			return false
@@ -447,22 +447,22 @@ func (in *plInterp) sortItems(items []any, cmp any, off int) *plRtErr {
 	return ferr
 }
 
-func plNativeFn(f func(args []any, off int) (any, *plRtErr)) *plFn { return &plFn{native: f} }
+func plNativeFn(f func(args []any, off int) (any, *RuntimeError)) *plFn { return &plFn{native: f} }
 
 func (in *plInterp) comparatorOf(spec string, key any, base any) *plFn {
 	switch spec {
 	case "natural":
-		return plNativeFn(func(args []any, off int) (any, *plRtErr) {
+		return plNativeFn(func(args []any, off int) (any, *RuntimeError) {
 			c, err := in.compareWith(nil, args[0], args[1], off)
 			return int32(c), err
 		})
 	case "reverse":
-		return plNativeFn(func(args []any, off int) (any, *plRtErr) {
+		return plNativeFn(func(args []any, off int) (any, *RuntimeError) {
 			c, err := in.compareWith(base, args[1], args[0], off)
 			return int32(c), err
 		})
 	case "comparing":
-		return plNativeFn(func(args []any, off int) (any, *plRtErr) {
+		return plNativeFn(func(args []any, off int) (any, *RuntimeError) {
 			ka, err := in.callFn(key, []any{args[0]}, off)
 			if err != nil {
 				return nil, err
@@ -480,14 +480,14 @@ func (in *plInterp) comparatorOf(spec string, key any, base any) *plFn {
 
 // ---- static methods ----
 
-func plParseIntStr(s string, radix int, bits int, off int) (int64, *plRtErr) {
+func plParseIntStr(s string, radix int, bits int, off int) (int64, *RuntimeError) {
 	n, err := strconv.ParseInt(s, radix, bits)
 	if err != nil {
 		msg := `For input string: "` + s + `"`
 		if radix != 10 {
 			msg += " under radix " + itoa(radix)
 		}
-		return 0, &plRtErr{typ: "number_format_exception", offset: off, reason: msg}
+		return 0, &RuntimeError{Type: "number_format_exception", Offset: off, Reason: msg}
 	}
 	return n, nil
 }
@@ -499,15 +499,15 @@ func plJavaRound(f float64) int64 {
 	return plF2L(math.Floor(f + 0.5))
 }
 
-func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any, *plRtErr) {
+func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any, *RuntimeError) {
 	off := n.pos
 	a := func(i int) any { return args[i] }
-	f := func(i int) float64 { return plF64(args[i]) }
+	f := func(i int) float64 { return F64(args[i]) }
 	str := func(i int) string {
 		if s, ok := args[i].(string); ok {
 			return s
 		}
-		return plToString(args[i])
+		return ToString(args[i])
 	}
 	key := name + "/" + itoa(len(args))
 	switch class {
@@ -590,7 +590,7 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 		case "parseInt", "parseLong", "parseShort", "parseByte", "parseUnsignedInt":
 			radix := 10
 			if len(args) == 2 {
-				radix = int(plI64(a(1)))
+				radix = int(I64(a(1)))
 			}
 			v, err := plParseIntStr(str(0), radix, bits, off)
 			if err != nil {
@@ -601,7 +601,7 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 			if s, ok := a(0).(string); ok {
 				radix := 10
 				if len(args) == 2 {
-					radix = int(plI64(a(1)))
+					radix = int(I64(a(1)))
 				}
 				v, err := plParseIntStr(s, radix, bits, off)
 				if err != nil {
@@ -613,18 +613,18 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 		case "toString":
 			radix := 10
 			if len(args) == 2 {
-				radix = int(plI64(a(1)))
+				radix = int(I64(a(1)))
 			}
-			return strconv.FormatInt(plI64(a(0)), radix), nil
+			return strconv.FormatInt(I64(a(0)), radix), nil
 		case "toBinaryString", "toHexString", "toOctalString":
 			radix := map[string]int{"toBinaryString": 2, "toHexString": 16, "toOctalString": 8}[name]
-			v := plI64(a(0))
+			v := I64(a(0))
 			if bits == 32 {
 				return strconv.FormatUint(uint64(uint32(int32(v))), radix), nil
 			}
 			return strconv.FormatUint(uint64(v), radix), nil
 		case "bitCount":
-			v := plI64(a(0))
+			v := I64(a(0))
 			c := 0
 			u := uint64(v)
 			if class == "Integer" {
@@ -636,7 +636,7 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 			}
 			return int32(c), nil
 		case "compare":
-			x, y := plI64(a(0)), plI64(a(1))
+			x, y := I64(a(0)), I64(a(1))
 			switch {
 			case x < y:
 				return int32(-1), nil
@@ -645,12 +645,12 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 			}
 			return int32(0), nil
 		case "max":
-			if plI64(a(0)) >= plI64(a(1)) {
+			if I64(a(0)) >= I64(a(1)) {
 				return a(0), nil
 			}
 			return a(1), nil
 		case "min":
-			if plI64(a(0)) <= plI64(a(1)) {
+			if I64(a(0)) <= I64(a(1)) {
 				return a(0), nil
 			}
 			return a(1), nil
@@ -658,7 +658,7 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 			v, _ := plArith("+", a(0), a(1))
 			return v, nil
 		case "signum":
-			v := plI64(a(0))
+			v := I64(a(0))
 			switch {
 			case v < 0:
 				return int32(-1), nil
@@ -669,9 +669,9 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 		case "hashCode":
 			return plHashCode(a(0)), nil
 		case "toUnsignedLong":
-			return int64(uint32(int32(plI64(a(0))))), nil
+			return int64(uint32(int32(I64(a(0))))), nil
 		case "numberOfLeadingZeros", "numberOfTrailingZeros", "highestOneBit", "lowestOneBit", "reverse":
-			v := uint64(plI64(a(0)))
+			v := uint64(I64(a(0)))
 			w := bits
 			if w == 32 {
 				v = uint64(uint32(v))
@@ -716,13 +716,13 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 				}
 				v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
 				if err != nil && !strings.Contains(err.Error(), "range") {
-					return nil, &plRtErr{typ: "number_format_exception", offset: off, reason: `For input string: "` + s + `"`}
+					return nil, &RuntimeError{Type: "number_format_exception", Offset: off, Reason: `For input string: "` + s + `"`}
 				}
 				return plCastNum(v, prim), nil
 			}
 			return plCastNum(a(0), prim), nil
 		case "toString":
-			return plToString(plCastNum(a(0), prim)), nil
+			return ToString(plCastNum(a(0), prim)), nil
 		case "isNaN":
 			return math.IsNaN(f(0)), nil
 		case "isInfinite":
@@ -758,11 +758,11 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 		case "doubleToLongBits":
 			return plJavaDoubleBits(f(0)), nil
 		case "longBitsToDouble":
-			return math.Float64frombits(uint64(plI64(a(0)))), nil
+			return math.Float64frombits(uint64(I64(a(0)))), nil
 		case "floatToIntBits":
 			return int32(math.Float32bits(float32(f(0)))), nil
 		case "intBitsToFloat":
-			return math.Float32frombits(uint32(plI64(a(0)))), nil
+			return math.Float32frombits(uint32(I64(a(0)))), nil
 		}
 	case "Boolean":
 		switch name {
@@ -774,9 +774,9 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 			}
 			return a(0), nil
 		case "toString":
-			return plToString(a(0)), nil
+			return ToString(a(0)), nil
 		case "compare":
-			c, _ := plCompare(a(0), a(1))
+			c, _ := Compare(a(0), a(1))
 			return int32(c), nil
 		case "logicalAnd":
 			return a(0).(bool) && a(1).(bool), nil
@@ -788,7 +788,7 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 			return plHashCode(a(0)), nil
 		}
 	case "Character":
-		r := rune(plI64(a(0)))
+		r := rune(I64(a(0)))
 		switch name {
 		case "isDigit":
 			return unicode.IsDigit(r), nil
@@ -818,31 +818,31 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 		case "valueOf":
 			return plCastNum(a(0), "char"), nil
 		case "toString":
-			return plToString(plCastNum(a(0), "char")), nil
+			return ToString(plCastNum(a(0), "char")), nil
 		case "compare":
-			return int32(plI64(a(0)) - plI64(a(1))), nil
+			return int32(I64(a(0)) - I64(a(1))), nil
 		case "hashCode":
-			return int32(plI64(a(0))), nil
+			return int32(I64(a(0))), nil
 		}
 	case "String":
 		switch name {
 		case "valueOf", "copyValueOf":
-			if arr, ok := a(0).(*plArray); ok && arr.elem == "char" {
+			if arr, ok := a(0).(*Array); ok && arr.Elem == "char" {
 				var sb strings.Builder
-				for _, c := range arr.a {
-					sb.WriteString(plToString(c))
+				for _, c := range arr.Items {
+					sb.WriteString(ToString(c))
 				}
 				return sb.String(), nil
 			}
-			return plToString(a(0)), nil
+			return ToString(a(0)), nil
 		case "join":
-			items, ok := plToItems(a(1))
+			items, ok := ToItems(a(1))
 			if !ok {
 				return nil, plNPE(off)
 			}
 			parts := make([]string, len(items))
 			for i, it := range items {
-				parts[i] = plToString(it)
+				parts[i] = ToString(it)
 			}
 			return strings.Join(parts, str(0)), nil
 		}
@@ -858,12 +858,12 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 			return a(0) != nil, nil
 		case "requireNonNull":
 			if a(0) == nil {
-				e := &plRtErr{typ: "null_pointer_exception", offset: off, nilReason: true,
-					frames: []string{"java.base/java.util.Objects.requireNonNull(Objects.java:220)"}}
+				e := &RuntimeError{Type: "null_pointer_exception", Offset: off, NilReason: true,
+					Frames: []string{"java.base/java.util.Objects.requireNonNull(Objects.java:220)"}}
 				if len(args) == 2 {
-					e.nilReason = false
-					e.reason = str(1)
-					e.frames = []string{"java.base/java.util.Objects.requireNonNull(Objects.java:246)"}
+					e.NilReason = false
+					e.Reason = str(1)
+					e.Frames = []string{"java.base/java.util.Objects.requireNonNull(Objects.java:246)"}
 				}
 				return nil, e
 			}
@@ -877,7 +877,7 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 			if a(0) == nil && len(args) == 2 {
 				return a(1), nil
 			}
-			return plToString(a(0)), nil
+			return ToString(a(0)), nil
 		case "compare":
 			if plIdentical(a(0), a(1)) {
 				return int32(0), nil
@@ -888,7 +888,7 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 	case "Collections":
 		switch name {
 		case "sort":
-			l, ok := a(0).(*plList)
+			l, ok := a(0).(*List)
 			if !ok {
 				return nil, plNPE(off)
 			}
@@ -898,21 +898,21 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 			}
 			return nil, in.sortItems(l.a, cmp, off)
 		case "reverse":
-			if l, ok := a(0).(*plList); ok {
+			if l, ok := a(0).(*List); ok {
 				for i, j := 0, len(l.a)-1; i < j; i, j = i+1, j-1 {
 					l.a[i], l.a[j] = l.a[j], l.a[i]
 				}
 			}
 			return nil, nil
 		case "shuffle":
-			if l, ok := a(0).(*plList); ok {
+			if l, ok := a(0).(*List); ok {
 				rand.Shuffle(len(l.a), func(i, j int) { l.a[i], l.a[j] = l.a[j], l.a[i] })
 			}
 			return nil, nil
 		case "max", "min":
-			items, ok := plToItems(a(0))
+			items, ok := ToItems(a(0))
 			if !ok || len(items) == 0 {
-				return nil, &plRtErr{typ: "no_such_element_exception", offset: off, nilReason: true}
+				return nil, &RuntimeError{Type: "no_such_element_exception", Offset: off, NilReason: true}
 			}
 			var cmp any
 			if len(args) == 2 {
@@ -930,25 +930,25 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 			}
 			return best, nil
 		case "emptyList":
-			return &plList{}, nil
+			return &List{}, nil
 		case "emptyMap":
-			return newPlMap(plHash), nil
+			return NewMap(Hash), nil
 		case "emptySet":
-			return newPlSet(plHash), nil
+			return newPlSet(Hash), nil
 		case "singletonList":
-			return newPlList(a(0)), nil
+			return NewList(a(0)), nil
 		case "singleton":
-			s := newPlSet(plHash)
+			s := newPlSet(Hash)
 			s.add(a(0))
 			return s, nil
 		case "singletonMap":
-			m := newPlMap(plHash)
-			m.put(a(0), a(1))
+			m := NewMap(Hash)
+			m.Put(a(0), a(1))
 			return m, nil
 		case "unmodifiableList", "unmodifiableMap", "unmodifiableSet":
 			return a(0), nil
 		case "frequency":
-			items, _ := plToItems(a(0))
+			items, _ := ToItems(a(0))
 			c := 0
 			for _, it := range items {
 				if plJavaEquals(it, a(1)) {
@@ -957,14 +957,14 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 			}
 			return int32(c), nil
 		case "swap":
-			if l, ok := a(0).(*plList); ok {
-				i, j := int(plI64(a(1))), int(plI64(a(2)))
+			if l, ok := a(0).(*List); ok {
+				i, j := int(I64(a(1))), int(I64(a(2)))
 				l.a[i], l.a[j] = l.a[j], l.a[i]
 			}
 			return nil, nil
 		case "nCopies":
-			l := &plList{}
-			for i := int64(0); i < plI64(a(0)); i++ {
+			l := &List{}
+			for i := int64(0); i < I64(a(0)); i++ {
 				l.a = append(l.a, a(1))
 			}
 			return l, nil
@@ -1005,7 +1005,7 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 		case "nullsFirst", "nullsLast":
 			base := a(0)
 			first := name == "nullsFirst"
-			return plNativeFn(func(xs []any, o int) (any, *plRtErr) {
+			return plNativeFn(func(xs []any, o int) (any, *RuntimeError) {
 				x, y := xs[0], xs[1]
 				switch {
 				case x == nil && y == nil:
@@ -1028,37 +1028,37 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 	case "Arrays":
 		switch name {
 		case "asList":
-			items, _ := plToItems(a(0))
-			return newPlList(items...), nil
+			items, _ := ToItems(a(0))
+			return NewList(items...), nil
 		case "toString":
-			items, ok := plToItems(a(0))
+			items, ok := ToItems(a(0))
 			if !ok {
 				return "null", nil
 			}
 			return plJoinToString(items), nil
 		case "sort":
-			if arr, ok := a(0).(*plArray); ok {
-				return nil, in.sortItems(arr.a, nil, off)
+			if arr, ok := a(0).(*Array); ok {
+				return nil, in.sortItems(arr.Items, nil, off)
 			}
 			return nil, nil
 		case "stream":
-			items, _ := plToItems(a(0))
+			items, _ := ToItems(a(0))
 			kind := "obj"
-			if arr, ok := a(0).(*plArray); ok {
-				switch arr.elem {
+			if arr, ok := a(0).(*Array); ok {
+				switch arr.Elem {
 				case "int", "long", "double":
-					kind = arr.elem
+					kind = arr.Elem
 				}
 			}
 			return &plStream{items: append([]any{}, items...), kind: kind}, nil
 		case "equals":
-			x, _ := plToItems(a(0))
-			y, _ := plToItems(a(1))
-			return plJavaEquals(newPlList(x...), newPlList(y...)), nil
+			x, _ := ToItems(a(0))
+			y, _ := ToItems(a(1))
+			return plJavaEquals(NewList(x...), NewList(y...)), nil
 		case "fill":
-			if arr, ok := a(0).(*plArray); ok {
-				for i := range arr.a {
-					arr.a[i] = a(1)
+			if arr, ok := a(0).(*Array); ok {
+				for i := range arr.Items {
+					arr.Items[i] = a(1)
 				}
 			}
 			return nil, nil
@@ -1066,16 +1066,16 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 	case "Debug":
 		if name == "explain" {
 			pc, jc := plRuntimeClass(a(0))
-			if dv, ok := a(0).(*plDocValues); ok {
-				pc = "org.opensearch.index.fielddata.ScriptDocValues." + dv.kind
-				jc = "org.opensearch.index.fielddata.ScriptDocValues$" + dv.kind
+			if dv, ok := a(0).(*DocValues); ok {
+				pc = "org.opensearch.index.fielddata.ScriptDocValues." + dv.Kind
+				jc = "org.opensearch.index.fielddata.ScriptDocValues$" + dv.Kind
 			}
 			eoff := off
 			if len(n.args) > 0 {
 				eoff = n.args[0].nodePos()
 			}
-			return nil, &plRtErr{typ: "painless_explain_error", nilReason: true, offset: eoff,
-				extra: orderedJSON{{"painless_class", pc}, {"to_string", plToString(a(0))}, {"java_class", jc}}}
+			return nil, &RuntimeError{Type: "painless_explain_error", NilReason: true, Offset: eoff,
+				Extra: []plErrField{{"painless_class", pc}, {"to_string", ToString(a(0))}, {"java_class", jc}}}
 		}
 	case "Pattern":
 		switch name {
@@ -1085,7 +1085,7 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 			return "\\Q" + str(0) + "\\E", nil
 		}
 	case "IntStream", "LongStream":
-		lo, hi := plI64(a(0)), plI64(a(1))
+		lo, hi := I64(a(0)), I64(a(1))
 		if name == "rangeClosed" {
 			hi++
 		}
@@ -1105,22 +1105,22 @@ func (in *plInterp) callStatic(class, name string, args []any, n *plECall) (any,
 		if name == "empty" {
 			return &plStream{kind: "obj"}, nil
 		}
-		items, _ := plToItems(a(0))
+		items, _ := ToItems(a(0))
 		return &plStream{kind: "obj", items: append([]any{}, items...)}, nil
 	case "List":
-		items, _ := plToItems(a(0))
-		return newPlList(items...), nil
+		items, _ := ToItems(a(0))
+		return NewList(items...), nil
 	case "Set":
-		s := newPlSet(plHash)
-		items, _ := plToItems(a(0))
+		s := newPlSet(Hash)
+		items, _ := ToItems(a(0))
 		for _, it := range items {
 			s.add(it)
 		}
 		return s, nil
 	case "Map":
-		m := newPlMap(plHash)
+		m := NewMap(Hash)
 		for i := 0; i+1 < len(args); i += 2 {
-			m.put(args[i], args[i+1])
+			m.Put(args[i], args[i+1])
 		}
 		return m, nil
 	case "Base64":
@@ -1141,16 +1141,16 @@ func plJavaDoubleBits(f float64) int64 {
 
 // ---- instance methods ----
 
-func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any, *plRtErr) {
+func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any, *RuntimeError) {
 	n := len(args)
 	switch t := recv.(type) {
 	case string:
 		return in.stringMethod(t, name, args, off)
-	case *plList:
+	case *List:
 		if v, err, ok := in.listMethod(t, name, args, off); ok {
 			return v, err
 		}
-	case *plDocValues:
+	case *DocValues:
 		switch name {
 		case "getValue":
 			if n == 0 {
@@ -1158,64 +1158,64 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 			}
 		case "get":
 			if n == 1 {
-				return t.get(int(plI64(args[0])), off)
+				return t.get(int(I64(args[0])), off)
 			}
 		case "size":
-			return int32(len(t.vals)), nil
+			return int32(len(t.Values)), nil
 		case "isEmpty":
-			return len(t.vals) == 0, nil
+			return len(t.Values) == 0, nil
 		case "getLength":
-			return int32(len(t.vals)), nil
+			return int32(len(t.Values)), nil
 		case "contains":
-			for _, v := range t.vals {
+			for _, v := range t.Values {
 				if plEquals(v, args[0]) {
 					return true, nil
 				}
 			}
 			return false, nil
 		case "stream":
-			return &plStream{kind: "obj", items: append([]any{}, t.vals...)}, nil
+			return &plStream{kind: "obj", items: append([]any{}, t.Values...)}, nil
 		case "iterator":
-			return &plIterator{items: append([]any{}, t.vals...)}, nil
+			return &plIterator{items: append([]any{}, t.Values...)}, nil
 		case "toString":
-			return plToString(t), nil
+			return ToString(t), nil
 		case "getLat", "getLon":
-			if t.kind == "GeoPoints" {
+			if t.Kind == "GeoPoints" {
 				v, err := t.value(off)
 				if err != nil {
 					return nil, err
 				}
 				if name == "getLat" {
-					return v.(*plGeoPoint).lat, nil
+					return v.(*GeoPoint).Lat, nil
 				}
-				return v.(*plGeoPoint).lon, nil
+				return v.(*GeoPoint).Lon, nil
 			}
 		case "getDate", "getDates":
 		case "indexOf":
-			for i, v := range t.vals {
+			for i, v := range t.Values {
 				if plEquals(v, args[0]) {
 					return int32(i), nil
 				}
 			}
 			return int32(-1), nil
 		}
-		if t.kind != "" {
-			if v, err, ok := in.collectionAugment(t.vals, name, args, off); ok {
+		if t.Kind != "" {
+			if v, err, ok := in.collectionAugment(t.Values, name, args, off); ok {
 				return v, err
 			}
 		}
-	case *plMap:
+	case *Map:
 		if v, err, ok := in.mapMethod(t, name, args, off); ok {
 			return v, err
 		}
-	case *plDocMap:
+	case *DocMap:
 		switch name {
 		case "containsKey":
-			return t.has(plToString(args[0])), nil
+			return t.Has(ToString(args[0])), nil
 		case "get":
-			return t.get(plToString(args[0]), off)
+			return t.Get(ToString(args[0]), off)
 		}
-	case *plSet:
+	case *Set:
 		if v, err, ok := in.setMethod(t, name, args, off); ok {
 			return v, err
 		}
@@ -1223,9 +1223,9 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 		if v, err, ok := in.listMethod(t.l, name, args, off); ok {
 			return v, err
 		}
-	case *plArray:
+	case *Array:
 		if name == "clone" {
-			return &plArray{elem: t.elem, a: append([]any{}, t.a...)}, nil
+			return &Array{Elem: t.Elem, Items: append([]any{}, t.Items...)}, nil
 		}
 	case *plStringBuilder:
 		if v, err, ok := plSBMethod(t, name, args, off); ok {
@@ -1234,23 +1234,23 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 	case *plPattern:
 		switch name {
 		case "matcher":
-			return t.matcher(plToString(args[0]), in), nil
+			return t.matcher(ToString(args[0]), in), nil
 		case "pattern", "toString":
 			return t.src, nil
 		case "split":
-			parts := t.re.Split(plToString(args[0]), -1)
+			parts := t.re.Split(ToString(args[0]), -1)
 			for len(parts) > 0 && parts[len(parts)-1] == "" {
 				parts = parts[:len(parts)-1]
 			}
-			arr := &plArray{elem: "String"}
+			arr := &Array{Elem: "String"}
 			for _, p := range parts {
-				arr.a = append(arr.a, p)
+				arr.Items = append(arr.Items, p)
 			}
 			return arr, nil
 		case "asPredicate":
 			p := t
-			return plNativeFn(func(xs []any, o int) (any, *plRtErr) {
-				return p.re.MatchString(plToString(xs[0])), nil
+			return plNativeFn(func(xs []any, o int) (any, *RuntimeError) {
+				return p.re.MatchString(ToString(xs[0])), nil
 			}), nil
 		}
 	case *plMatcher:
@@ -1277,16 +1277,16 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 				}
 				return t.group(idx, off)
 			}
-			return t.group(int(plI64(args[0])), off)
+			return t.group(int(I64(args[0])), off)
 		case "groupCount":
 			return int32(t.p.re.NumSubexp()), nil
 		case "start", "end":
 			if t.loc == nil {
-				return nil, &plRtErr{typ: "illegal_state_exception", offset: off, reason: "No match available"}
+				return nil, &RuntimeError{Type: "illegal_state_exception", Offset: off, Reason: "No match available"}
 			}
 			g := 0
 			if n == 1 {
-				g = int(plI64(args[0]))
+				g = int(I64(args[0]))
 			}
 			i := 2 * g
 			if name == "end" {
@@ -1294,7 +1294,7 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 			}
 			return int32(len(plUTF16(t.input[:t.loc[i]]))), nil
 		case "replaceAll", "replaceFirst":
-			repl := plJavaReplacement(plToString(args[0]))
+			repl := plJavaReplacement(ToString(args[0]))
 			if name == "replaceAll" {
 				return t.p.re.ReplaceAllString(t.input, repl), nil
 			}
@@ -1311,7 +1311,7 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 		case "hitEnd":
 			return t.pos >= len(t.input), nil
 		case "namedGroup":
-			idx := t.p.re.SubexpIndex(plToString(args[0]))
+			idx := t.p.re.SubexpIndex(ToString(args[0]))
 			if idx < 0 {
 				return nil, nil
 			}
@@ -1325,7 +1325,7 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 		switch name {
 		case "get", "getAsInt", "getAsDouble", "getAsLong", "orElseThrow":
 			if !t.present {
-				return nil, &plRtErr{typ: "no_such_element_exception", offset: off, reason: "No value present"}
+				return nil, &RuntimeError{Type: "no_such_element_exception", Offset: off, Reason: "No value present"}
 			}
 			return t.v, nil
 		case "isPresent":
@@ -1361,12 +1361,12 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 	case *plMapEntryRef:
 		switch name {
 		case "getKey":
-			return t.e.k, nil
+			return t.e.Key, nil
 		case "getValue":
-			return t.e.v, nil
+			return t.e.Value, nil
 		case "setValue":
-			old := t.e.v
-			t.e.v = args[0]
+			old := t.e.Value
+			t.e.Value = args[0]
 			return old, nil
 		}
 	case *plIterator:
@@ -1375,7 +1375,7 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 			return t.i < len(t.items), nil
 		case "next":
 			if t.i >= len(t.items) {
-				return nil, &plRtErr{typ: "no_such_element_exception", offset: off, nilReason: true}
+				return nil, &RuntimeError{Type: "no_such_element_exception", Offset: off, NilReason: true}
 			}
 			t.i++
 			return t.items[t.i-1], nil
@@ -1402,7 +1402,7 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 			if fn, ok := next.(*plFn); ok && fn.native == nil && len(fn.pnames) == 1 {
 				next = in.comparatorOf("comparing", fn, nil)
 			}
-			return plNativeFn(func(xs []any, o int) (any, *plRtErr) {
+			return plNativeFn(func(xs []any, o int) (any, *RuntimeError) {
 				c, err := in.compareWith(t, xs[0], xs[1], o)
 				if err != nil || c != 0 {
 					return int32(c), err
@@ -1411,7 +1411,7 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 				return int32(c), err
 			}), nil
 		case "negate":
-			return plNativeFn(func(xs []any, o int) (any, *plRtErr) {
+			return plNativeFn(func(xs []any, o int) (any, *RuntimeError) {
 				v, err := in.callFn(t, xs, o)
 				if err != nil {
 					return nil, err
@@ -1425,7 +1425,7 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 			if name == "compose" {
 				first, second = other, t
 			}
-			return plNativeFn(func(xs []any, o int) (any, *plRtErr) {
+			return plNativeFn(func(xs []any, o int) (any, *RuntimeError) {
 				v, err := in.callFn(first, xs, o)
 				if err != nil {
 					return nil, err
@@ -1438,10 +1438,10 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 		switch t.name {
 		case "Base64.getEncoder":
 			if name == "encodeToString" {
-				if arr, ok := args[0].(*plArray); ok {
-					b := make([]byte, len(arr.a))
-					for i, x := range arr.a {
-						b[i] = byte(plI64(x))
+				if arr, ok := args[0].(*Array); ok {
+					b := make([]byte, len(arr.Items))
+					for i, x := range arr.Items {
+						b[i] = byte(I64(x))
 					}
 					return base64.StdEncoding.EncodeToString(b), nil
 				}
@@ -1450,19 +1450,19 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 			switch name {
 			case "nextInt":
 				if n == 1 {
-					return int32(rand.Intn(int(plI64(args[0])))), nil
+					return int32(rand.Intn(int(I64(args[0])))), nil
 				}
 				return int32(rand.Uint32()), nil
 			case "nextDouble":
 				return rand.Float64(), nil
 			}
 		}
-	case *plGeoPoint:
+	case *GeoPoint:
 		switch name {
 		case "getLat":
-			return t.lat, nil
+			return t.Lat, nil
 		case "getLon":
-			return t.lon, nil
+			return t.Lon, nil
 		}
 	}
 	if v, err, ok := in.timeMethod(recv, name, args, off); ok {
@@ -1471,7 +1471,7 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 	switch name {
 	case "toString":
 		if n == 0 {
-			return plToString(recv), nil
+			return ToString(recv), nil
 		}
 	case "equals":
 		if n == 1 {
@@ -1483,7 +1483,7 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 		}
 	case "compareTo":
 		if n == 1 {
-			c, ok := plCompare(recv, args[0])
+			c, ok := Compare(recv, args[0])
 			if ok {
 				if c < 0 {
 					return int32(-1), nil
@@ -1494,7 +1494,7 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 			}
 		}
 	}
-	if plIsNumber(recv) {
+	if IsNumber(recv) {
 		switch name {
 		case "intValue":
 			return plCastNum(recv, "int"), nil
@@ -1509,9 +1509,9 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 		case "byteValue":
 			return plCastNum(recv, "byte"), nil
 		case "isNaN":
-			return math.IsNaN(plF64(recv)), nil
+			return math.IsNaN(F64(recv)), nil
 		case "isInfinite":
-			return math.IsInf(plF64(recv), 0), nil
+			return math.IsInf(F64(recv), 0), nil
 		}
 	}
 	if b, ok := recv.(bool); ok && name == "booleanValue" {
@@ -1560,16 +1560,16 @@ func plJavaReplacement(r string) string {
 	return sb.String()
 }
 
-func (in *plInterp) stringMethod(s, name string, args []any, off int) (any, *plRtErr) {
+func (in *plInterp) stringMethod(s, name string, args []any, off int) (any, *RuntimeError) {
 	n := len(args)
 	str := func(i int) string {
 		if v, ok := args[i].(string); ok {
 			return v
 		}
-		return plToString(args[i])
+		return ToString(args[i])
 	}
 	u := plUTF16(s)
-	idx := func(i int) int { return int(plI64(args[i])) }
+	idx := func(i int) int { return int(I64(args[i])) }
 	switch name + "/" + itoa(n) {
 	case "length/0":
 		return int32(len(u)), nil
@@ -1580,15 +1580,15 @@ func (in *plInterp) stringMethod(s, name string, args []any, off int) (any, *plR
 	case "charAt/1":
 		i := idx(0)
 		if i < 0 || i >= len(u) {
-			return nil, &plRtErr{typ: "string_index_out_of_bounds_exception", offset: off,
-				reason: "Index " + itoa(i) + " out of bounds for length " + itoa(len(u))}
+			return nil, &RuntimeError{Type: "string_index_out_of_bounds_exception", Offset: off,
+				Reason: "Index " + itoa(i) + " out of bounds for length " + itoa(len(u))}
 		}
 		return plChar(u[i]), nil
 	case "codePointAt/1":
 		i := idx(0)
 		if i < 0 || i >= len(u) {
-			return nil, &plRtErr{typ: "string_index_out_of_bounds_exception", offset: off,
-				reason: "Index " + itoa(i) + " out of bounds for length " + itoa(len(u))}
+			return nil, &RuntimeError{Type: "string_index_out_of_bounds_exception", Offset: off,
+				Reason: "Index " + itoa(i) + " out of bounds for length " + itoa(len(u))}
 		}
 		r := []rune(plFromUTF16(u[i:]))
 		return int32(r[0]), nil
@@ -1617,7 +1617,7 @@ func (in *plInterp) stringMethod(s, name string, args []any, off int) (any, *plR
 			if n == 1 {
 				reason = "begin " + itoa(b) + ", end " + itoa(e) + ", length " + itoa(len(u))
 			}
-			return nil, &plRtErr{typ: "string_index_out_of_bounds_exception", offset: off, frames: frames, reason: reason}
+			return nil, &RuntimeError{Type: "string_index_out_of_bounds_exception", Offset: off, Frames: frames, Reason: reason}
 		}
 		return plFromUTF16(u[b:e]), nil
 	case "indexOf/1", "indexOf/2", "lastIndexOf/1", "lastIndexOf/2":
@@ -1628,10 +1628,10 @@ func (in *plInterp) stringMethod(s, name string, args []any, off int) (any, *plR
 		case plChar:
 			needle = []uint16{uint16(a)}
 		default:
-			if plIsNumber(a) {
-				needle = plUTF16(string(rune(plI64(a))))
+			if IsNumber(a) {
+				needle = plUTF16(string(rune(I64(a))))
 			} else {
-				needle = plUTF16(plToString(a))
+				needle = plUTF16(ToString(a))
 			}
 		}
 		from := 0
@@ -1695,12 +1695,12 @@ func (in *plInterp) stringMethod(s, name string, args []any, off int) (any, *plR
 	case "replace/2":
 		a0, a1 := args[0], args[1]
 		if c, ok := a0.(plChar); ok {
-			a0 = plToString(c)
+			a0 = ToString(c)
 		}
 		if c, ok := a1.(plChar); ok {
-			a1 = plToString(c)
+			a1 = ToString(c)
 		}
-		return strings.ReplaceAll(s, plToString(a0), plToString(a1)), nil
+		return strings.ReplaceAll(s, ToString(a0), ToString(a1)), nil
 	case "trim/0":
 		return strings.TrimFunc(s, func(r rune) bool { return r <= ' ' }), nil
 	case "strip/0":
@@ -1726,9 +1726,9 @@ func (in *plInterp) stringMethod(s, name string, args []any, off int) (any, *plR
 		}
 		return st, nil
 	case "toCharArray/0":
-		arr := &plArray{elem: "char"}
+		arr := &Array{Elem: "char"}
 		for _, c := range u {
-			arr.a = append(arr.a, plChar(c))
+			arr.Items = append(arr.Items, plChar(c))
 		}
 		return arr, nil
 	case "encodeBase64/0":
@@ -1751,17 +1751,17 @@ func (in *plInterp) stringMethod(s, name string, args []any, off int) (any, *plR
 		} else {
 			parts = strings.Split(s, tok)
 		}
-		arr := &plArray{elem: "String"}
+		arr := &Array{Elem: "String"}
 		for _, p := range parts {
-			arr.a = append(arr.a, p)
+			arr.Items = append(arr.Items, p)
 		}
 		return arr, nil
 	case "replaceAll/2", "replaceFirst/2":
 		p, ok := args[0].(*plPattern)
 		if !ok {
-			return nil, &plRtErr{typ: "class_cast_exception", offset: off, reason: "Cannot cast " + plClassName(args[0]) + " to java.util.regex.Pattern"}
+			return nil, &RuntimeError{Type: "class_cast_exception", Offset: off, Reason: "Cannot cast " + plClassName(args[0]) + " to java.util.regex.Pattern"}
 		}
-		var ferr *plRtErr
+		var ferr *RuntimeError
 		var sb strings.Builder
 		last := 0
 		locs := p.re.FindAllStringSubmatchIndex(s, -1)
@@ -1776,7 +1776,7 @@ func (in *plInterp) stringMethod(s, name string, args []any, off int) (any, *plR
 				break
 			}
 			sb.WriteString(s[last:loc[0]])
-			sb.WriteString(plToString(r))
+			sb.WriteString(ToString(r))
 			last = loc[1]
 		}
 		if ferr != nil {
@@ -1793,7 +1793,7 @@ func (in *plInterp) stringMethod(s, name string, args []any, off int) (any, *plR
 			ignore, _ = args[0].(bool)
 			a = args[1:]
 		}
-		to, other, oo, ln := int(plI64(a[0])), plUTF16(plToString(a[1])), int(plI64(a[2])), int(plI64(a[3]))
+		to, other, oo, ln := int(I64(a[0])), plUTF16(ToString(a[1])), int(I64(a[2])), int(I64(a[3]))
 		if to < 0 || oo < 0 || to+ln > len(u) || oo+ln > len(other) {
 			return false, nil
 		}
@@ -1820,11 +1820,11 @@ func plU16Eq(a, b []uint16) bool {
 	return true
 }
 
-func plSBMethod(t *plStringBuilder, name string, args []any, off int) (any, *plRtErr, bool) {
+func plSBMethod(t *plStringBuilder, name string, args []any, off int) (any, *RuntimeError, bool) {
 	switch name {
 	case "append":
 		if len(args) == 1 {
-			t.s = append(t.s, []rune(plToString(args[0]))...)
+			t.s = append(t.s, []rune(ToString(args[0]))...)
 			return t, nil, true
 		}
 	case "toString":
@@ -1837,37 +1837,37 @@ func plSBMethod(t *plStringBuilder, name string, args []any, off int) (any, *plR
 	case "length":
 		return int32(len(plUTF16(string(t.s)))), nil, true
 	case "charAt":
-		i := int(plI64(args[0]))
+		i := int(I64(args[0]))
 		if i < 0 || i >= len(t.s) {
-			return nil, &plRtErr{typ: "string_index_out_of_bounds_exception", offset: off,
-				reason: "index " + itoa(i) + ",length " + itoa(len(t.s))}, true
+			return nil, &RuntimeError{Type: "string_index_out_of_bounds_exception", Offset: off,
+				Reason: "index " + itoa(i) + ",length " + itoa(len(t.s))}, true
 		}
 		return plChar(t.s[i]), nil, true
 	case "insert":
-		i := int(plI64(args[0]))
-		ins := []rune(plToString(args[1]))
+		i := int(I64(args[0]))
+		ins := []rune(ToString(args[1]))
 		t.s = append(t.s[:i], append(ins, t.s[i:]...)...)
 		return t, nil, true
 	case "deleteCharAt":
-		i := int(plI64(args[0]))
+		i := int(I64(args[0]))
 		t.s = append(t.s[:i], t.s[i+1:]...)
 		return t, nil, true
 	case "setLength":
-		l := int(plI64(args[0]))
+		l := int(I64(args[0]))
 		for len(t.s) < l {
 			t.s = append(t.s, 0)
 		}
 		t.s = t.s[:l]
 		return nil, nil, true
 	case "indexOf":
-		return int32(strings.Index(string(t.s), plToString(args[0]))), nil, true
+		return int32(strings.Index(string(t.s), ToString(args[0]))), nil, true
 	case "isEmpty":
 		return len(t.s) == 0, nil, true
 	}
 	return nil, nil, false
 }
 
-func (in *plInterp) collectionAugment(items []any, name string, args []any, off int) (any, *plRtErr, bool) {
+func (in *plInterp) collectionAugment(items []any, name string, args []any, off int) (any, *RuntimeError, bool) {
 	n := len(args)
 	switch name + "/" + itoa(n) {
 	case "sum/0", "sum/1":
@@ -1881,14 +1881,14 @@ func (in *plInterp) collectionAugment(items []any, name string, args []any, off 
 				}
 				v = r
 			}
-			if !plIsNumber(v) {
-				return nil, &plRtErr{typ: "class_cast_exception", offset: off, reason: "Cannot cast " + plClassName(v) + " to java.lang.Number"}, true
+			if !IsNumber(v) {
+				return nil, &RuntimeError{Type: "class_cast_exception", Offset: off, Reason: "Cannot cast " + plClassName(v) + " to java.lang.Number"}, true
 			}
-			s += plF64(v)
+			s += F64(v)
 		}
 		return s, nil, true
 	case "collect/1":
-		out := &plList{}
+		out := &List{}
 		for _, it := range items {
 			r, err := in.callFn(args[0], []any{it}, off)
 			if err != nil {
@@ -1898,7 +1898,7 @@ func (in *plInterp) collectionAugment(items []any, name string, args []any, off 
 		}
 		return out, nil, true
 	case "findAll/1":
-		out := &plList{}
+		out := &List{}
 		for _, it := range items {
 			r, err := in.callFn(args[0], []any{it}, off)
 			if err != nil {
@@ -1949,9 +1949,9 @@ func (in *plInterp) collectionAugment(items []any, name string, args []any, off 
 	case "join/1":
 		parts := make([]string, len(items))
 		for i, it := range items {
-			parts[i] = plToString(it)
+			parts[i] = ToString(it)
 		}
-		return strings.Join(parts, plToString(args[0])), nil, true
+		return strings.Join(parts, ToString(args[0])), nil, true
 	case "each/1", "forEach/1":
 		for _, it := range items {
 			if _, err := in.callFn(args[0], []any{it}, off); err != nil {
@@ -1967,18 +1967,18 @@ func (in *plInterp) collectionAugment(items []any, name string, args []any, off 
 		}
 		return nil, nil, true
 	case "groupBy/1":
-		m := newPlMap(plHash)
+		m := NewMap(Hash)
 		for _, it := range items {
 			k, err := in.callFn(args[0], []any{it}, off)
 			if err != nil {
 				return nil, err, true
 			}
-			cur, ok := m.get(k)
+			cur, ok := m.Get(k)
 			if !ok {
-				cur = &plList{}
-				m.put(k, cur)
+				cur = &List{}
+				m.Put(k, cur)
 			}
-			cur.(*plList).a = append(cur.(*plList).a, it)
+			cur.(*List).a = append(cur.(*List).a, it)
 		}
 		return m, nil, true
 	case "stream/0":
@@ -1986,39 +1986,39 @@ func (in *plInterp) collectionAugment(items []any, name string, args []any, off 
 	case "iterator/0":
 		return &plIterator{items: append([]any{}, items...)}, nil, true
 	case "asList/0":
-		return newPlList(items...), nil, true
+		return NewList(items...), nil, true
 	}
 	return nil, nil, false
 }
 
-func (in *plInterp) listMethod(l *plList, name string, args []any, off int) (any, *plRtErr, bool) {
+func (in *plInterp) listMethod(l *List, name string, args []any, off int) (any, *RuntimeError, bool) {
 	n := len(args)
 	switch name + "/" + itoa(n) {
 	case "add/1":
 		l.a = append(l.a, args[0])
 		return true, nil, true
 	case "add/2":
-		i := int(plI64(args[0]))
+		i := int(I64(args[0]))
 		if i < 0 || i > len(l.a) {
 			return nil, plOOB(i, len(l.a), off, nil), true
 		}
 		l.a = append(l.a[:i], append([]any{args[1]}, l.a[i:]...)...)
 		return nil, nil, true
 	case "addAll/1":
-		items, ok := plToItems(args[0])
+		items, ok := ToItems(args[0])
 		if !ok {
 			return nil, plNPE(off), true
 		}
 		l.a = append(l.a, items...)
 		return len(items) > 0, nil, true
 	case "get/1":
-		i := int(plI64(args[0]))
+		i := int(I64(args[0]))
 		if i < 0 || i >= len(l.a) {
 			return nil, plOOB(i, len(l.a), off, plArrayListGetFrames), true
 		}
 		return l.a[i], nil, true
 	case "set/2":
-		i := int(plI64(args[0]))
+		i := int(I64(args[0]))
 		if i < 0 || i >= len(l.a) {
 			return nil, plOOB(i, len(l.a), off, nil), true
 		}
@@ -2026,8 +2026,8 @@ func (in *plInterp) listMethod(l *plList, name string, args []any, off int) (any
 		l.a[i] = args[1]
 		return old, nil, true
 	case "remove/1":
-		if plIsNumber(args[0]) && plPrimName(args[0]) == "int" {
-			i := int(plI64(args[0]))
+		if IsNumber(args[0]) && plPrimName(args[0]) == "int" {
+			i := int(I64(args[0]))
 			if i < 0 || i >= len(l.a) {
 				return nil, plOOB(i, len(l.a), off, nil), true
 			}
@@ -2070,7 +2070,7 @@ func (in *plInterp) listMethod(l *plList, name string, args []any, off int) (any
 		}
 		return false, nil, true
 	case "containsAll/1":
-		items, _ := plToItems(args[0])
+		items, _ := ToItems(args[0])
 		for _, it := range items {
 			found := false
 			for _, v := range l.a {
@@ -2096,19 +2096,19 @@ func (in *plInterp) listMethod(l *plList, name string, args []any, off int) (any
 		}
 		return res, nil, true
 	case "subList/2":
-		b, e := int(plI64(args[0])), int(plI64(args[1]))
+		b, e := int(I64(args[0])), int(I64(args[1]))
 		if b < 0 || e > len(l.a) || b > e {
-			return nil, &plRtErr{typ: "index_out_of_bounds_exception", offset: off,
-				reason: "fromIndex: " + itoa(b) + ", toIndex: " + itoa(e) + ", size: " + itoa(len(l.a))}, true
+			return nil, &RuntimeError{Type: "index_out_of_bounds_exception", Offset: off,
+				Reason: "fromIndex: " + itoa(b) + ", toIndex: " + itoa(e) + ", size: " + itoa(len(l.a))}, true
 		}
-		return newPlList(l.a[b:e]...), nil, true
+		return NewList(l.a[b:e]...), nil, true
 	case "sort/1":
 		return nil, in.sortItems(l.a, args[0], off), true
 	case "clear/0":
 		l.a = nil
 		return nil, nil, true
 	case "toArray/0":
-		return &plArray{elem: "Object", a: append([]any{}, l.a...)}, nil, true
+		return &Array{Elem: "Object", Items: append([]any{}, l.a...)}, nil, true
 	case "replaceAll/1":
 		for i, v := range l.a {
 			r, err := in.callFn(args[0], []any{v}, off)
@@ -2119,7 +2119,7 @@ func (in *plInterp) listMethod(l *plList, name string, args []any, off int) (any
 		}
 		return nil, nil, true
 	case "removeAll/1", "retainAll/1":
-		items, _ := plToItems(args[0])
+		items, _ := ToItems(args[0])
 		out := []any{}
 		for _, v := range l.a {
 			found := false
@@ -2137,7 +2137,7 @@ func (in *plInterp) listMethod(l *plList, name string, args []any, off int) (any
 		return changed, nil, true
 	case "getFirst/0", "getLast/0":
 		if len(l.a) == 0 {
-			return nil, &plRtErr{typ: "no_such_element_exception", offset: off, nilReason: true}, true
+			return nil, &RuntimeError{Type: "no_such_element_exception", Offset: off, NilReason: true}, true
 		}
 		if name == "getFirst" {
 			return l.a[0], nil, true
@@ -2148,17 +2148,17 @@ func (in *plInterp) listMethod(l *plList, name string, args []any, off int) (any
 	case "hashCode/0":
 		return plHashCode(l), nil, true
 	case "toString/0":
-		return plToString(l), nil, true
+		return ToString(l), nil, true
 	}
 	return in.collectionAugment(l.a, name, args, off)
 }
 
-func (in *plInterp) setMethod(s *plSet, name string, args []any, off int) (any, *plRtErr, bool) {
+func (in *plInterp) setMethod(s *Set, name string, args []any, off int) (any, *RuntimeError, bool) {
 	switch name + "/" + itoa(len(args)) {
 	case "add/1":
 		return s.add(args[0]), nil, true
 	case "addAll/1":
-		items, _ := plToItems(args[0])
+		items, _ := ToItems(args[0])
 		changed := false
 		for _, it := range items {
 			if s.add(it) {
@@ -2167,17 +2167,17 @@ func (in *plInterp) setMethod(s *plSet, name string, args []any, off int) (any, 
 		}
 		return changed, nil, true
 	case "contains/1":
-		_, ok := s.m.get(args[0])
+		_, ok := s.m.Get(args[0])
 		return ok, nil, true
 	case "remove/1":
 		_, ok := s.m.remove(args[0])
 		return ok, nil, true
 	case "size/0":
-		return int32(s.m.size()), nil, true
+		return int32(s.m.Size()), nil, true
 	case "isEmpty/0":
-		return s.m.size() == 0, nil, true
+		return s.m.Size() == 0, nil, true
 	case "clear/0":
-		s.m = newPlMap(s.m.kind)
+		s.m = NewMap(s.m.kind)
 		return nil, nil, true
 	case "removeIf/1":
 		removed := false
@@ -2193,9 +2193,9 @@ func (in *plInterp) setMethod(s *plSet, name string, args []any, off int) (any, 
 		}
 		return removed, nil, true
 	case "containsAll/1":
-		items, _ := plToItems(args[0])
+		items, _ := ToItems(args[0])
 		for _, it := range items {
-			if _, ok := s.m.get(it); !ok {
+			if _, ok := s.m.Get(it); !ok {
 				return false, nil, true
 			}
 		}
@@ -2204,39 +2204,39 @@ func (in *plInterp) setMethod(s *plSet, name string, args []any, off int) (any, 
 	return in.collectionAugment(s.items(), name, args, off)
 }
 
-func (in *plInterp) mapMethod(m *plMap, name string, args []any, off int) (any, *plRtErr, bool) {
+func (in *plInterp) mapMethod(m *Map, name string, args []any, off int) (any, *RuntimeError, bool) {
 	n := len(args)
-	call2 := func(fn any, e *plMapEntry) (any, *plRtErr) {
+	call2 := func(fn any, e *plMapEntry) (any, *RuntimeError) {
 		if f, ok := fn.(*plFn); ok && f.native == nil && len(f.pnames) == 1 {
 			return in.callFn(fn, []any{&plMapEntryRef{m: m, e: e}}, off)
 		}
-		return in.callFn(fn, []any{e.k, e.v}, off)
+		return in.callFn(fn, []any{e.Key, e.Value}, off)
 	}
 	switch name + "/" + itoa(n) {
 	case "get/1":
-		v, _ := m.get(args[0])
+		v, _ := m.Get(args[0])
 		return v, nil, true
 	case "put/2":
-		return m.put(args[0], args[1]), nil, true
+		return m.Put(args[0], args[1]), nil, true
 	case "putAll/1":
-		if src, ok := args[0].(*plMap); ok {
+		if src, ok := args[0].(*Map); ok {
 			for _, e := range src.ordered() {
-				m.put(e.k, e.v)
+				m.Put(e.Key, e.Value)
 			}
 		}
 		return nil, nil, true
 	case "putIfAbsent/2":
-		if v, ok := m.get(args[0]); ok && v != nil {
+		if v, ok := m.Get(args[0]); ok && v != nil {
 			return v, nil, true
 		}
-		m.put(args[0], args[1])
+		m.Put(args[0], args[1])
 		return nil, nil, true
 	case "containsKey/1":
-		_, ok := m.get(args[0])
+		_, ok := m.Get(args[0])
 		return ok, nil, true
 	case "containsValue/1":
 		for _, e := range m.entries {
-			if plJavaEquals(e.v, args[0]) {
+			if plJavaEquals(e.Value, args[0]) {
 				return true, nil, true
 			}
 		}
@@ -2245,33 +2245,33 @@ func (in *plInterp) mapMethod(m *plMap, name string, args []any, off int) (any, 
 		v, _ := m.remove(args[0])
 		return v, nil, true
 	case "size/0":
-		return int32(m.size()), nil, true
+		return int32(m.Size()), nil, true
 	case "isEmpty/0":
-		return m.size() == 0, nil, true
+		return m.Size() == 0, nil, true
 	case "clear/0":
-		*m = *newPlMap(m.kind)
+		*m = *NewMap(m.kind)
 		return nil, nil, true
 	case "keySet/0":
-		s := newPlSet(plLinked)
+		s := newPlSet(Linked)
 		for _, k := range m.keys() {
 			s.add(k)
 		}
 		return s, nil, true
 	case "values/0":
-		return newPlList(m.values()...), nil, true
+		return NewList(m.values()...), nil, true
 	case "entrySet/0":
-		l := &plList{}
+		l := &List{}
 		for _, e := range m.ordered() {
 			l.a = append(l.a, &plMapEntryRef{m: m, e: e})
 		}
 		return &plEntrySet{l}, nil, true
 	case "getOrDefault/2":
-		if v, ok := m.get(args[0]); ok {
+		if v, ok := m.Get(args[0]); ok {
 			return v, nil, true
 		}
 		return args[1], nil, true
 	case "computeIfAbsent/2":
-		if v, ok := m.get(args[0]); ok && v != nil {
+		if v, ok := m.Get(args[0]); ok && v != nil {
 			return v, nil, true
 		}
 		v, err := in.callFn(args[1], []any{args[0]}, off)
@@ -2279,11 +2279,11 @@ func (in *plInterp) mapMethod(m *plMap, name string, args []any, off int) (any, 
 			return nil, err, true
 		}
 		if v != nil {
-			m.put(args[0], v)
+			m.Put(args[0], v)
 		}
 		return v, nil, true
 	case "computeIfPresent/2", "compute/2":
-		old, ok := m.get(args[0])
+		old, ok := m.Get(args[0])
 		if name == "computeIfPresent" && (!ok || old == nil) {
 			return nil, nil, true
 		}
@@ -2294,11 +2294,11 @@ func (in *plInterp) mapMethod(m *plMap, name string, args []any, off int) (any, 
 		if v == nil {
 			m.remove(args[0])
 		} else {
-			m.put(args[0], v)
+			m.Put(args[0], v)
 		}
 		return v, nil, true
 	case "merge/3":
-		old, ok := m.get(args[0])
+		old, ok := m.Get(args[0])
 		v := args[1]
 		if ok && old != nil {
 			r, err := in.callFn(args[2], []any{old, args[1]}, off)
@@ -2310,7 +2310,7 @@ func (in *plInterp) mapMethod(m *plMap, name string, args []any, off int) (any, 
 		if v == nil {
 			m.remove(args[0])
 		} else {
-			m.put(args[0], v)
+			m.Put(args[0], v)
 		}
 		return v, nil, true
 	case "forEach/1", "each/1":
@@ -2321,7 +2321,7 @@ func (in *plInterp) mapMethod(m *plMap, name string, args []any, off int) (any, 
 		}
 		return nil, nil, true
 	case "collect/1":
-		out := &plList{}
+		out := &List{}
 		for _, e := range m.ordered() {
 			r, err := call2(args[0], e)
 			if err != nil {
@@ -2331,14 +2331,14 @@ func (in *plInterp) mapMethod(m *plMap, name string, args []any, off int) (any, 
 		}
 		return out, nil, true
 	case "findAll/1":
-		out := newPlMap(m.kind)
+		out := NewMap(m.kind)
 		for _, e := range m.ordered() {
 			r, err := call2(args[0], e)
 			if err != nil {
 				return nil, err, true
 			}
 			if b, _ := r.(bool); b {
-				out.put(e.k, e.v)
+				out.Put(e.Key, e.Value)
 			}
 		}
 		return out, nil, true
@@ -2385,22 +2385,22 @@ func (in *plInterp) mapMethod(m *plMap, name string, args []any, off int) (any, 
 	case "hashCode/0":
 		return plHashCode(m), nil, true
 	case "toString/0":
-		return plToString(m), nil, true
+		return ToString(m), nil, true
 	}
 	return nil, nil, false
 }
 
 // plEntrySet is Map.entrySet(): a set view over the entries in map order.
-type plEntrySet struct{ l *plList }
+type plEntrySet struct{ l *List }
 
-func (s *plEntrySet) javaString() string { return plToString(s.l) }
+func (s *plEntrySet) javaString() string { return ToString(s.l) }
 
 // ---- streams ----
 
-func (in *plInterp) streamMethod(s *plStream, name string, args []any, off int) (any, *plRtErr, bool) {
+func (in *plInterp) streamMethod(s *plStream, name string, args []any, off int) (any, *RuntimeError, bool) {
 	n := len(args)
 	optName := map[string]string{"obj": "Optional", "int": "OptionalInt", "long": "OptionalLong", "double": "OptionalDouble"}[s.kind]
-	mapEach := func(kind string) (any, *plRtErr, bool) {
+	mapEach := func(kind string) (any, *RuntimeError, bool) {
 		out := &plStream{kind: kind}
 		for _, it := range s.items {
 			r, err := in.callFn(args[0], []any{it}, off)
@@ -2409,8 +2409,8 @@ func (in *plInterp) streamMethod(s *plStream, name string, args []any, off int) 
 			}
 			switch kind {
 			case "int", "long", "double":
-				if !plIsNumber(r) {
-					return nil, &plRtErr{typ: "class_cast_exception", offset: off, reason: "Cannot cast " + plClassName(r) + " to " + kind}, true
+				if !IsNumber(r) {
+					return nil, &RuntimeError{Type: "class_cast_exception", Offset: off, Reason: "Cannot cast " + plClassName(r) + " to " + kind}, true
 				}
 				r = plCastNum(r, kind)
 			}
@@ -2434,13 +2434,13 @@ func (in *plInterp) streamMethod(s *plStream, name string, args []any, off int) 
 	case "asDoubleStream/0":
 		out := &plStream{kind: "double"}
 		for _, it := range s.items {
-			out.items = append(out.items, plF64(it))
+			out.items = append(out.items, F64(it))
 		}
 		return out, nil, true
 	case "asLongStream/0":
 		out := &plStream{kind: "long"}
 		for _, it := range s.items {
-			out.items = append(out.items, plI64(it))
+			out.items = append(out.items, I64(it))
 		}
 		return out, nil, true
 	case "filter/1":
@@ -2462,7 +2462,7 @@ func (in *plInterp) streamMethod(s *plStream, name string, args []any, off int) 
 			if err != nil {
 				return nil, err, true
 			}
-			items, _ := plToItems(r)
+			items, _ := ToItems(r)
 			out.items = append(out.items, items...)
 		}
 		return out, nil, true
@@ -2477,19 +2477,19 @@ func (in *plInterp) streamMethod(s *plStream, name string, args []any, off int) 
 		}
 		return &plStream{kind: s.kind, items: items}, nil, true
 	case "distinct/0":
-		seen := newPlSet(plLinked)
+		seen := newPlSet(Linked)
 		for _, it := range s.items {
 			seen.add(it)
 		}
 		return &plStream{kind: s.kind, items: seen.items()}, nil, true
 	case "limit/1":
-		k := int(plI64(args[0]))
+		k := int(I64(args[0]))
 		if k > len(s.items) {
 			k = len(s.items)
 		}
 		return &plStream{kind: s.kind, items: s.items[:k]}, nil, true
 	case "skip/1":
-		k := int(plI64(args[0]))
+		k := int(I64(args[0]))
 		if k > len(s.items) {
 			k = len(s.items)
 		}
@@ -2511,19 +2511,19 @@ func (in *plInterp) streamMethod(s *plStream, name string, args []any, off int) 
 		case "int":
 			var t int32
 			for _, it := range s.items {
-				t += int32(plI64(it))
+				t += int32(I64(it))
 			}
 			return t, nil, true
 		case "long":
 			var t int64
 			for _, it := range s.items {
-				t += plI64(it)
+				t += I64(it)
 			}
 			return t, nil, true
 		}
 		t := 0.0
 		for _, it := range s.items {
-			t += plF64(it)
+			t += F64(it)
 		}
 		return t, nil, true
 	case "average/0":
@@ -2532,7 +2532,7 @@ func (in *plInterp) streamMethod(s *plStream, name string, args []any, off int) 
 		}
 		t := 0.0
 		for _, it := range s.items {
-			t += plF64(it)
+			t += F64(it)
 		}
 		return &plOptional{name: "OptionalDouble", v: t / float64(len(s.items)), present: true}, nil, true
 	case "max/0", "min/0", "max/1", "min/1":
@@ -2576,7 +2576,7 @@ func (in *plInterp) streamMethod(s *plStream, name string, args []any, off int) 
 			}
 			acc = r
 		}
-		if s.kind != "obj" && plIsNumber(acc) {
+		if s.kind != "obj" && IsNumber(acc) {
 			acc = plCastNum(acc, s.kind)
 		}
 		return acc, nil, true
@@ -2607,15 +2607,15 @@ func (in *plInterp) streamMethod(s *plStream, name string, args []any, off int) 
 		if s.kind != "obj" {
 			elem = s.kind
 		}
-		return &plArray{elem: elem, a: append([]any{}, s.items...)}, nil, true
+		return &Array{Elem: elem, Items: append([]any{}, s.items...)}, nil, true
 	case "toList/0":
-		return newPlList(s.items...), nil, true
+		return NewList(s.items...), nil, true
 	case "iterator/0":
 		return &plIterator{items: s.items}, nil, true
 	case "collect/1":
 		c, ok := args[0].(*plCollector)
 		if !ok {
-			return nil, &plRtErr{typ: "class_cast_exception", offset: off, reason: "Cannot cast " + plClassName(args[0]) + " to java.util.stream.Collector"}, true
+			return nil, &RuntimeError{Type: "class_cast_exception", Offset: off, Reason: "Cannot cast " + plClassName(args[0]) + " to java.util.stream.Collector"}, true
 		}
 		v, err := in.collect(c, s.items, off)
 		return v, err, true
@@ -2623,12 +2623,12 @@ func (in *plInterp) streamMethod(s *plStream, name string, args []any, off int) 
 	return nil, nil, false
 }
 
-func (in *plInterp) collect(c *plCollector, items []any, off int) (any, *plRtErr) {
+func (in *plInterp) collect(c *plCollector, items []any, off int) (any, *RuntimeError) {
 	switch c.kind {
 	case "toList":
-		return newPlList(items...), nil
+		return NewList(items...), nil
 	case "toSet":
-		s := newPlSet(plHash)
+		s := newPlSet(Hash)
 		for _, it := range items {
 			s.add(it)
 		}
@@ -2638,8 +2638,8 @@ func (in *plInterp) collect(c *plCollector, items []any, off int) (any, *plRtErr
 		for i, it := range items {
 			s, ok := it.(string)
 			if !ok {
-				return nil, &plRtErr{typ: "class_cast_exception", offset: off,
-					reason: "class " + plClassName(it) + " cannot be cast to class java.lang.CharSequence"}
+				return nil, &RuntimeError{Type: "class_cast_exception", Offset: off,
+					Reason: "class " + plClassName(it) + " cannot be cast to class java.lang.CharSequence"}
 			}
 			parts[i] = s
 		}
@@ -2647,31 +2647,31 @@ func (in *plInterp) collect(c *plCollector, items []any, off int) (any, *plRtErr
 	case "counting":
 		return int64(len(items)), nil
 	case "groupingBy":
-		m := newPlMap(plHash)
+		m := NewMap(Hash)
 		for _, it := range items {
 			k, err := in.callFn(c.f1, []any{it}, off)
 			if err != nil {
 				return nil, err
 			}
-			cur, ok := m.get(k)
+			cur, ok := m.Get(k)
 			if !ok {
-				cur = &plList{}
-				m.put(k, cur)
+				cur = &List{}
+				m.Put(k, cur)
 			}
-			cur.(*plList).a = append(cur.(*plList).a, it)
+			cur.(*List).a = append(cur.(*List).a, it)
 		}
 		if sub, ok := c.f2.(*plCollector); ok {
 			for _, e := range m.entries {
-				v, err := in.collect(sub, e.v.(*plList).a, off)
+				v, err := in.collect(sub, e.Value.(*List).a, off)
 				if err != nil {
 					return nil, err
 				}
-				e.v = v
+				e.Value = v
 			}
 		}
 		return m, nil
 	case "toMap":
-		m := newPlMap(plHash)
+		m := NewMap(Hash)
 		for _, it := range items {
 			k, err := in.callFn(c.f1, []any{it}, off)
 			if err != nil {
@@ -2681,10 +2681,10 @@ func (in *plInterp) collect(c *plCollector, items []any, off int) (any, *plRtErr
 			if err != nil {
 				return nil, err
 			}
-			if _, dup := m.get(k); dup {
-				return nil, &plRtErr{typ: "illegal_state_exception", offset: off, reason: "Duplicate key " + plToString(k)}
+			if _, dup := m.Get(k); dup {
+				return nil, &RuntimeError{Type: "illegal_state_exception", Offset: off, Reason: "Duplicate key " + ToString(k)}
 			}
-			m.put(k, v)
+			m.Put(k, v)
 		}
 		return m, nil
 	case "summingInt", "summingLong", "summingDouble", "averagingInt", "averagingDouble":
@@ -2695,8 +2695,8 @@ func (in *plInterp) collect(c *plCollector, items []any, off int) (any, *plRtErr
 			if err != nil {
 				return nil, err
 			}
-			total += plF64(v)
-			itotal += plI64(v)
+			total += F64(v)
+			itotal += I64(v)
 		}
 		switch c.kind {
 		case "summingInt":
@@ -2722,7 +2722,7 @@ func (in *plInterp) collect(c *plCollector, items []any, off int) (any, *plRtErr
 		if sub, ok := c.f2.(*plCollector); ok {
 			return in.collect(sub, mapped, off)
 		}
-		return newPlList(mapped...), nil
+		return NewList(mapped...), nil
 	}
 	return nil, plIAE(off, "unsupported collector ["+c.kind+"]")
 }

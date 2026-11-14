@@ -1,4 +1,4 @@
-package main
+package painless
 
 import (
 	"strconv"
@@ -13,13 +13,13 @@ import (
 // division by zero, ...) and records the types the interpreter needs for
 // conversions (declared variables, ternary promotion, method parameters).
 
-type plCompileErr struct {
-	typ       string
-	reason    string
-	offset    int
-	nilReason bool
-	noPos     bool
-	cause     *plCompileErr
+type CompileError struct {
+	Type      string
+	Reason    string
+	Offset    int
+	NilReason bool
+	NoPos     bool
+	Cause     *CompileError
 }
 
 type plSig struct {
@@ -27,9 +27,9 @@ type plSig struct {
 	ret    string
 }
 
-// plParseSigs reads "name/ret(p1,p2)" signatures; methods are looked up by
+// ParseSigs reads "name/ret(p1,p2)" signatures; methods are looked up by
 // name and arity, like the Painless whitelist.
-func plParseSigs(specs ...string) map[string]plSig {
+func ParseSigs(specs ...string) map[string]plSig {
 	out := map[string]plSig{}
 	for _, s := range specs {
 		name, rest, _ := strings.Cut(s, ":")
@@ -45,7 +45,7 @@ func plParseSigs(specs ...string) map[string]plSig {
 }
 
 var plStaticMethods = map[string]map[string]plSig{
-	"Math": plParseSigs(
+	"Math": ParseSigs(
 		"abs:double(double)", "acos:double(double)", "asin:double(double)", "atan:double(double)",
 		"cbrt:double(double)", "ceil:double(double)", "cos:double(double)", "cosh:double(double)",
 		"exp:double(double)", "expm1:double(double)", "floor:double(double)", "log:double(double)",
@@ -55,7 +55,7 @@ var plStaticMethods = map[string]map[string]plSig{
 		"atan2:double(double,double)", "hypot:double(double,double)", "IEEEremainder:double(double,double)",
 		"max:double(double,double)", "min:double(double,double)", "pow:double(double,double)",
 		"round:long(double)", "random:double()"),
-	"Integer": plParseSigs(
+	"Integer": ParseSigs(
 		"bitCount:int(int)", "compare:int(int,int)", "max:int(int,int)", "min:int(int,int)", "sum:int(int,int)",
 		"parseInt:int(String)", "parseInt:int(String,int)", "signum:int(int)", "reverse:int(int)",
 		"highestOneBit:int(int)", "lowestOneBit:int(int)", "numberOfLeadingZeros:int(int)",
@@ -63,84 +63,84 @@ var plStaticMethods = map[string]map[string]plSig{
 		"toOctalString:String(int)", "toString:String(int)", "toString:String(int,int)",
 		"valueOf:Integer(int)", "hashCode:int(int)", "rotateLeft:int(int,int)", "rotateRight:int(int,int)",
 		"toUnsignedLong:long(int)", "compareUnsigned:int(int,int)", "parseUnsignedInt:int(String)"),
-	"Long": plParseSigs(
+	"Long": ParseSigs(
 		"bitCount:int(long)", "compare:int(long,long)", "max:long(long,long)", "min:long(long,long)",
 		"sum:long(long,long)", "parseLong:long(String)", "parseLong:long(String,int)", "signum:int(long)",
 		"numberOfLeadingZeros:int(long)", "numberOfTrailingZeros:int(long)",
 		"toBinaryString:String(long)", "toHexString:String(long)", "toOctalString:String(long)",
 		"toString:String(long)", "toString:String(long,int)", "valueOf:Long(long)", "hashCode:int(long)"),
-	"Double": plParseSigs(
+	"Double": ParseSigs(
 		"compare:int(double,double)", "isFinite:boolean(double)", "isInfinite:boolean(double)",
 		"isNaN:boolean(double)", "max:double(double,double)", "min:double(double,double)",
 		"sum:double(double,double)", "parseDouble:double(String)", "toString:String(double)",
 		"valueOf:Double(double)", "hashCode:int(double)", "doubleToLongBits:long(double)",
 		"longBitsToDouble:double(long)", "toHexString:String(double)"),
-	"Float": plParseSigs(
+	"Float": ParseSigs(
 		"compare:int(float,float)", "isFinite:boolean(float)", "isInfinite:boolean(float)", "isNaN:boolean(float)",
 		"max:float(float,float)", "min:float(float,float)", "sum:float(float,float)",
 		"parseFloat:float(String)", "toString:String(float)", "valueOf:Float(float)", "hashCode:int(float)",
 		"floatToIntBits:int(float)", "intBitsToFloat:float(int)"),
-	"Short": plParseSigs("compare:int(short,short)", "parseShort:short(String)", "toString:String(short)",
+	"Short": ParseSigs("compare:int(short,short)", "parseShort:short(String)", "toString:String(short)",
 		"valueOf:Short(short)", "hashCode:int(short)"),
-	"Byte": plParseSigs("compare:int(byte,byte)", "parseByte:byte(String)", "toString:String(byte)",
+	"Byte": ParseSigs("compare:int(byte,byte)", "parseByte:byte(String)", "toString:String(byte)",
 		"valueOf:Byte(byte)", "hashCode:int(byte)"),
-	"Boolean": plParseSigs("compare:int(boolean,boolean)", "logicalAnd:boolean(boolean,boolean)",
+	"Boolean": ParseSigs("compare:int(boolean,boolean)", "logicalAnd:boolean(boolean,boolean)",
 		"logicalOr:boolean(boolean,boolean)", "logicalXor:boolean(boolean,boolean)",
 		"parseBoolean:boolean(String)", "toString:String(boolean)", "valueOf:Boolean(boolean)",
 		"hashCode:int(boolean)"),
-	"Character": plParseSigs("isDigit:boolean(int)", "isLetter:boolean(int)", "isLetterOrDigit:boolean(int)",
+	"Character": ParseSigs("isDigit:boolean(int)", "isLetter:boolean(int)", "isLetterOrDigit:boolean(int)",
 		"isLowerCase:boolean(int)", "isUpperCase:boolean(int)", "isWhitespace:boolean(int)",
 		"isAlphabetic:boolean(int)", "isSpaceChar:boolean(int)", "toLowerCase:char(char)",
 		"toUpperCase:char(char)", "getNumericValue:int(int)", "valueOf:Character(char)",
 		"compare:int(char,char)", "toString:String(char)", "digit:int(int,int)", "hashCode:int(char)",
 		"toChars:char[](int)"),
-	"String": plParseSigs("valueOf:String(def)", "join:String(CharSequence,Iterable)",
+	"String": ParseSigs("valueOf:String(def)", "join:String(CharSequence,Iterable)",
 		"format:String(String,def[])", "copyValueOf:String(char[])"),
-	"Objects": plParseSigs("equals:boolean(def,def)", "hashCode:int(def)", "isNull:boolean(def)",
+	"Objects": ParseSigs("equals:boolean(def,def)", "hashCode:int(def)", "isNull:boolean(def)",
 		"nonNull:boolean(def)", "requireNonNull:def(def)", "requireNonNull:def(def,String)",
 		"toString:String(def)", "toString:String(def,String)", "compare:int(def,def,Comparator)",
 		"deepEquals:boolean(def,def)", "hash:int(def[])", "requireNonNullElse:def(def,def)"),
-	"Arrays": plParseSigs("asList:List(def[])", "toString:String(def)", "equals:boolean(def,def)",
+	"Arrays": ParseSigs("asList:List(def[])", "toString:String(def)", "equals:boolean(def,def)",
 		"sort:void(def)", "stream:Stream(def)", "fill:void(def,def)", "hashCode:int(def)",
 		"deepToString:String(def)", "copyOf:def(def,int)"),
-	"Collections": plParseSigs("sort:void(List)", "sort:void(List,Comparator)", "reverse:void(List)",
+	"Collections": ParseSigs("sort:void(List)", "sort:void(List,Comparator)", "reverse:void(List)",
 		"max:def(Collection)", "min:def(Collection)", "max:def(Collection,Comparator)",
 		"min:def(Collection,Comparator)", "shuffle:void(List)", "emptyList:List()", "emptyMap:Map()",
 		"emptySet:Set()", "singletonList:List(def)", "singleton:Set(def)", "singletonMap:Map(def,def)",
 		"unmodifiableList:List(List)", "unmodifiableMap:Map(Map)", "unmodifiableSet:Set(Set)",
 		"frequency:int(Collection,def)", "swap:void(List,int,int)", "nCopies:List(int,def)",
 		"reverseOrder:Comparator()"),
-	"Collectors": plParseSigs("toList:def()", "toSet:def()", "joining:def()", "joining:def(CharSequence)",
+	"Collectors": ParseSigs("toList:def()", "toSet:def()", "joining:def()", "joining:def(CharSequence)",
 		"joining:def(CharSequence,CharSequence,CharSequence)", "counting:def()", "toMap:def(def,def)",
 		"groupingBy:def(def)", "groupingBy:def(def,def)", "summingInt:def(def)", "summingLong:def(def)",
 		"summingDouble:def(def)", "averagingInt:def(def)", "averagingDouble:def(def)", "mapping:def(def,def)"),
-	"Comparator": plParseSigs("naturalOrder:Comparator()", "reverseOrder:Comparator()",
+	"Comparator": ParseSigs("naturalOrder:Comparator()", "reverseOrder:Comparator()",
 		"comparing:Comparator(def)", "comparing:Comparator(def,Comparator)", "comparingInt:Comparator(def)",
 		"comparingLong:Comparator(def)", "comparingDouble:Comparator(def)",
 		"nullsFirst:Comparator(Comparator)", "nullsLast:Comparator(Comparator)"),
-	"Debug":   plParseSigs("explain:void(def)"),
-	"Instant": plParseSigs("ofEpochMilli:Instant(long)", "ofEpochSecond:Instant(long)", "parse:Instant(CharSequence)"),
-	"ZonedDateTime": plParseSigs("parse:ZonedDateTime(CharSequence)", "ofInstant:ZonedDateTime(Instant,ZoneId)",
+	"Debug":   ParseSigs("explain:void(def)"),
+	"Instant": ParseSigs("ofEpochMilli:Instant(long)", "ofEpochSecond:Instant(long)", "parse:Instant(CharSequence)"),
+	"ZonedDateTime": ParseSigs("parse:ZonedDateTime(CharSequence)", "ofInstant:ZonedDateTime(Instant,ZoneId)",
 		"of:ZonedDateTime(int,int,int,int,int,int,int,ZoneId)"),
-	"LocalDate":     plParseSigs("of:LocalDate(int,int,int)", "parse:LocalDate(CharSequence)", "ofEpochDay:LocalDate(long)"),
-	"LocalDateTime": plParseSigs("of:LocalDateTime(int,int,int,int,int)", "of:LocalDateTime(int,int,int,int,int,int)", "parse:LocalDateTime(CharSequence)"),
-	"ZoneId":        plParseSigs("of:ZoneId(String)"),
-	"Duration": plParseSigs("ofDays:Duration(long)", "ofHours:Duration(long)", "ofMinutes:Duration(long)",
+	"LocalDate":     ParseSigs("of:LocalDate(int,int,int)", "parse:LocalDate(CharSequence)", "ofEpochDay:LocalDate(long)"),
+	"LocalDateTime": ParseSigs("of:LocalDateTime(int,int,int,int,int)", "of:LocalDateTime(int,int,int,int,int,int)", "parse:LocalDateTime(CharSequence)"),
+	"ZoneId":        ParseSigs("of:ZoneId(String)"),
+	"Duration": ParseSigs("ofDays:Duration(long)", "ofHours:Duration(long)", "ofMinutes:Duration(long)",
 		"ofSeconds:Duration(long)", "ofMillis:Duration(long)", "ofNanos:Duration(long)",
 		"between:Duration(def,def)"),
-	"Period":            plParseSigs("ofDays:Period(int)", "ofMonths:Period(int)", "ofYears:Period(int)", "between:Period(LocalDate,LocalDate)"),
-	"DayOfWeek":         plParseSigs("of:DayOfWeek(int)", "valueOf:DayOfWeek(String)"),
-	"DateTimeFormatter": plParseSigs("ofPattern:DateTimeFormatter(String)"),
-	"Pattern":           plParseSigs("compile:Pattern(String)", "compile:Pattern(String,int)", "quote:String(String)"),
-	"Matcher":           plParseSigs("quoteReplacement:String(String)"),
-	"Base64":            plParseSigs("getEncoder:def()", "getDecoder:def()"),
-	"IntStream":         plParseSigs("range:IntStream(int,int)", "rangeClosed:IntStream(int,int)"),
-	"LongStream":        plParseSigs("range:LongStream(long,long)", "rangeClosed:LongStream(long,long)"),
-	"Stream":            plParseSigs("of:Stream(def[])", "empty:Stream()"),
-	"List":              plParseSigs("of:List(def[])", "copyOf:List(Collection)"),
-	"Map":               plParseSigs("of:Map()", "of:Map(def,def)", "of:Map(def,def,def,def)", "entry:def(def,def)"),
-	"Set":               plParseSigs("of:Set(def[])"),
-	"StrictMath":        plParseSigs("abs:double(double)", "sqrt:double(double)", "max:double(double,double)", "min:double(double,double)"),
+	"Period":            ParseSigs("ofDays:Period(int)", "ofMonths:Period(int)", "ofYears:Period(int)", "between:Period(LocalDate,LocalDate)"),
+	"DayOfWeek":         ParseSigs("of:DayOfWeek(int)", "valueOf:DayOfWeek(String)"),
+	"DateTimeFormatter": ParseSigs("ofPattern:DateTimeFormatter(String)"),
+	"Pattern":           ParseSigs("compile:Pattern(String)", "compile:Pattern(String,int)", "quote:String(String)"),
+	"Matcher":           ParseSigs("quoteReplacement:String(String)"),
+	"Base64":            ParseSigs("getEncoder:def()", "getDecoder:def()"),
+	"IntStream":         ParseSigs("range:IntStream(int,int)", "rangeClosed:IntStream(int,int)"),
+	"LongStream":        ParseSigs("range:LongStream(long,long)", "rangeClosed:LongStream(long,long)"),
+	"Stream":            ParseSigs("of:Stream(def[])", "empty:Stream()"),
+	"List":              ParseSigs("of:List(def[])", "copyOf:List(Collection)"),
+	"Map":               ParseSigs("of:Map()", "of:Map(def,def)", "of:Map(def,def,def,def)", "entry:def(def,def)"),
+	"Set":               ParseSigs("of:Set(def[])"),
+	"StrictMath":        ParseSigs("abs:double(double)", "sqrt:double(double)", "max:double(double,double)", "min:double(double,double)"),
 }
 
 type plConst struct {
@@ -169,7 +169,7 @@ var plStaticFields = map[string]map[string]plConst{
 
 // plStringMethods is the java.lang.String whitelist including Painless
 // augmentations.
-var plStringMethods = plParseSigs(
+var plStringMethods = ParseSigs(
 	"charAt:char(int)", "chars:IntStream()", "codePointAt:int(int)", "codePointBefore:int(int)",
 	"codePointCount:int(int,int)", "compareTo:int(String)", "compareToIgnoreCase:int(String)",
 	"concat:String(String)", "contains:boolean(CharSequence)", "contentEquals:boolean(CharSequence)",
@@ -291,9 +291,9 @@ func plCanExplicit(from, to string, constVal any) bool {
 	return false
 }
 
-func plCastErr(from, to string, off int) *plCompileErr {
-	return &plCompileErr{typ: "class_cast_exception", offset: off,
-		reason: "Cannot cast from [" + plCanon(from) + "] to [" + plCanon(to) + "]."}
+func plCastErr(from, to string, off int) *CompileError {
+	return &CompileError{Type: "class_cast_exception", Offset: off,
+		Reason: "Cannot cast from [" + plCanon(from) + "] to [" + plCanon(to) + "]."}
 }
 
 // ---- checker ----
@@ -319,7 +319,7 @@ type plChecker struct {
 	inLambda int
 }
 
-func plCheck(prog *plProgram, ctx *plCheckCtx) (*plInfo, *plCompileErr) {
+func plCheck(prog *plProgram, ctx *plCheckCtx) (*plInfo, *CompileError) {
 	c := &plChecker{prog: prog, ctx: ctx, info: &plInfo{types: map[plNode]string{}, sigs: map[plNode]plSig{}, consts: map[plNode]any{}}}
 	root := map[string]string{}
 	for k, v := range ctx.vars {
@@ -356,7 +356,7 @@ func plCheck(prog *plProgram, ctx *plCheckCtx) (*plInfo, *plCompileErr) {
 	return c.info, nil
 }
 
-func (c *plChecker) checkReturn(t string, x plNode) *plCompileErr {
+func (c *plChecker) checkReturn(t string, x plNode) *CompileError {
 	want := c.ctx.ret
 	if want == "" || want == "def" || want == "Object" || want == "void" || t == "" || t == "def" || t == "void" {
 		return nil
@@ -409,7 +409,7 @@ func (c *plChecker) lookup(name string) (string, bool) {
 	return "", false
 }
 
-func (c *plChecker) stmts(list []plNode) *plCompileErr {
+func (c *plChecker) stmts(list []plNode) *CompileError {
 	for _, s := range list {
 		if err := c.stmt(s); err != nil {
 			return err
@@ -418,15 +418,15 @@ func (c *plChecker) stmts(list []plNode) *plCompileErr {
 	return nil
 }
 
-func (c *plChecker) checkType(t string, off int) *plCompileErr {
+func (c *plChecker) checkType(t string, off int) *CompileError {
 	base := strings.TrimRight(t, "[]")
 	if !plTypeNames[base] {
-		return &plCompileErr{typ: "illegal_argument_exception", offset: off, reason: "Not a type [" + t + "]."}
+		return &CompileError{Type: "illegal_argument_exception", Offset: off, Reason: "Not a type [" + t + "]."}
 	}
 	return nil
 }
 
-func (c *plChecker) stmt(s plNode) *plCompileErr {
+func (c *plChecker) stmt(s plNode) *CompileError {
 	switch n := s.(type) {
 	case *plSBlock:
 		c.push()
@@ -543,7 +543,7 @@ func (c *plChecker) stmt(s plNode) *plCompileErr {
 	return nil
 }
 
-func (c *plChecker) cond(x plNode) *plCompileErr {
+func (c *plChecker) cond(x plNode) *CompileError {
 	t, err := c.expr(x)
 	if err != nil {
 		return err
@@ -554,7 +554,7 @@ func (c *plChecker) cond(x plNode) *plCompileErr {
 	return nil
 }
 
-func (c *plChecker) set(n plNode, t string) (string, *plCompileErr) {
+func (c *plChecker) set(n plNode, t string) (string, *CompileError) {
 	c.info.types[n] = t
 	return t, nil
 }
@@ -592,7 +592,7 @@ var plOpNames = map[string]string{
 	"^": "xor",
 }
 
-func (c *plChecker) expr(x plNode) (string, *plCompileErr) {
+func (c *plChecker) expr(x plNode) (string, *CompileError) {
 	switch n := x.(type) {
 	case *plELit:
 		c.info.consts[n] = n.val
@@ -603,7 +603,7 @@ func (c *plChecker) expr(x plNode) (string, *plCompileErr) {
 		if t, ok := c.lookup(n.name); ok {
 			return c.set(n, t)
 		}
-		return "", &plCompileErr{typ: "illegal_argument_exception", offset: n.pos, reason: "cannot resolve symbol [" + n.name + "]"}
+		return "", &CompileError{Type: "illegal_argument_exception", Offset: n.pos, Reason: "cannot resolve symbol [" + n.name + "]"}
 	case *plEType:
 		return c.set(n, "static:"+n.name)
 	case *plEField:
@@ -617,8 +617,8 @@ func (c *plChecker) expr(x plNode) (string, *plCompileErr) {
 				c.info.types[n.obj] = "static:" + et.name
 				return c.set(n, et.name)
 			}
-			return "", &plCompileErr{typ: "illegal_argument_exception", offset: n.pos,
-				reason: "static field [" + plCanon(et.name) + ", " + n.name + "] not found"}
+			return "", &CompileError{Type: "illegal_argument_exception", Offset: n.pos,
+				Reason: "static field [" + plCanon(et.name) + ", " + n.name + "] not found"}
 		}
 		ot, err := c.expr(n.obj)
 		if err != nil {
@@ -628,8 +628,8 @@ func (c *plChecker) expr(x plNode) (string, *plCompileErr) {
 			return c.set(n, "int")
 		}
 		if ot == "String" {
-			return "", &plCompileErr{typ: "illegal_argument_exception", offset: n.pos,
-				reason: "field [java.lang.String, " + n.name + "] not found"}
+			return "", &CompileError{Type: "illegal_argument_exception", Offset: n.pos,
+				Reason: "field [java.lang.String, " + n.name + "] not found"}
 		}
 		return c.set(n, "def")
 	case *plECall:
@@ -643,8 +643,8 @@ func (c *plChecker) expr(x plNode) (string, *plCompileErr) {
 			return "", err
 		}
 		if ot == "String" || (plIsPrimitive(ot) && ot != "def") {
-			return "", &plCompileErr{typ: "illegal_argument_exception", offset: n.pos,
-				reason: "Illegal array access on type [" + plCanon(ot) + "]."}
+			return "", &CompileError{Type: "illegal_argument_exception", Offset: n.pos,
+				Reason: "Illegal array access on type [" + plCanon(ot) + "]."}
 		}
 		if strings.HasSuffix(ot, "[]") {
 			return c.set(n, strings.TrimSuffix(ot, "[]"))
@@ -712,16 +712,16 @@ func (c *plChecker) expr(x plNode) (string, *plCompileErr) {
 		case "~":
 			p := plBinaryPromote(t, "int")
 			if p == "" || p == "float" || p == "double" {
-				return "", &plCompileErr{typ: "class_cast_exception", offset: n.pos,
-					reason: "cannot apply the bitwise not operator [~] to the type [" + plCanon(t) + "]"}
+				return "", &CompileError{Type: "class_cast_exception", Offset: n.pos,
+					Reason: "cannot apply the bitwise not operator [~] to the type [" + plCanon(t) + "]"}
 			}
 			c.foldUnary(n)
 			return c.set(n, p)
 		default:
 			p := plBinaryPromote(t, "int")
 			if p == "" {
-				return "", &plCompileErr{typ: "class_cast_exception", offset: n.pos,
-					reason: "cannot apply the " + map[string]string{"-": "negation", "+": "positive"}[n.op] + " operator [" + n.op + "] to the type [" + plCanon(t) + "]"}
+				return "", &CompileError{Type: "class_cast_exception", Offset: n.pos,
+					Reason: "cannot apply the " + map[string]string{"-": "negation", "+": "positive"}[n.op] + " operator [" + n.op + "] to the type [" + plCanon(t) + "]"}
 			}
 			c.foldUnary(n)
 			return c.set(n, p)
@@ -750,7 +750,7 @@ func (c *plChecker) expr(x plNode) (string, *plCompileErr) {
 		if cv, ok := c.info.consts[n.x]; ok && plIsPrimitive(n.typ) {
 			if s, ok := cv.(string); ok && n.typ == "char" {
 				c.info.consts[n] = plChar([]rune(s)[0])
-			} else if plIsNumber(cv) && plIsNumericType(n.typ) {
+			} else if IsNumber(cv) && plIsNumericType(n.typ) {
 				c.info.consts[n] = plCastNum(cv, n.typ)
 			}
 		}
@@ -778,8 +778,8 @@ func (c *plChecker) expr(x plNode) (string, *plCompileErr) {
 			return "", err
 		}
 		if plIsPrimitive(ta) {
-			return "", &plCompileErr{typ: "illegal_argument_exception", offset: n.pos, noPos: true,
-				reason: "Extraneous elvis operator. LHS is a primitive."}
+			return "", &CompileError{Type: "illegal_argument_exception", Offset: n.pos, NoPos: true,
+				Reason: "Extraneous elvis operator. LHS is a primitive."}
 		}
 		tb, err := c.expr(n.b)
 		if err != nil {
@@ -829,7 +829,7 @@ func (c *plChecker) expr(x plNode) (string, *plCompileErr) {
 		for i, name := range n.pnames {
 			c.declare(name, n.ptypes[i])
 		}
-		var err *plCompileErr
+		var err *CompileError
 		if b, ok := n.body.(*plSBlock); ok {
 			err = c.stmts(b.stmts)
 		} else {
@@ -856,21 +856,21 @@ func plIsEnumClass(name string) bool {
 }
 
 // target types an assignment target.
-func (c *plChecker) target(x plNode) (string, *plCompileErr) {
+func (c *plChecker) target(x plNode) (string, *CompileError) {
 	switch n := x.(type) {
 	case *plEVar:
 		if t, ok := c.lookup(n.name); ok {
 			c.info.types[n] = t
 			return t, nil
 		}
-		return "", &plCompileErr{typ: "illegal_argument_exception", offset: n.pos, reason: "cannot resolve symbol [" + n.name + "]"}
+		return "", &CompileError{Type: "illegal_argument_exception", Offset: n.pos, Reason: "cannot resolve symbol [" + n.name + "]"}
 	case *plEField, *plEIndex:
 		return c.expr(x)
 	}
-	return "", &plCompileErr{typ: "illegal_argument_exception", offset: x.nodePos(), reason: "invalid assignment: cannot assign a value to a non-variable expression"}
+	return "", &CompileError{Type: "illegal_argument_exception", Offset: x.nodePos(), Reason: "invalid assignment: cannot assign a value to a non-variable expression"}
 }
 
-func (c *plChecker) promoteCond(ta, tb string, n *plECond) (string, *plCompileErr) {
+func (c *plChecker) promoteCond(ta, tb string, n *plECond) (string, *CompileError) {
 	if ta == "def" || tb == "def" {
 		return "def", nil
 	}
@@ -907,24 +907,24 @@ func (c *plChecker) foldUnary(n *plEUnary) {
 			c.info.consts[n] = !b
 		}
 	case "-":
-		if plIsNumber(cv) {
+		if IsNumber(cv) {
 			v, err := plArith("-", plCastNum(int32(0), plPromote(cv, int32(0))), cv)
 			if err == nil {
 				c.info.consts[n] = v
 			}
 		}
 	case "~":
-		if plIsNumber(cv) {
+		if IsNumber(cv) {
 			if plPromote(cv, int32(0)) == "long" {
-				c.info.consts[n] = ^plI64(cv)
+				c.info.consts[n] = ^I64(cv)
 			} else {
-				c.info.consts[n] = ^int32(plI64(cv))
+				c.info.consts[n] = ^int32(I64(cv))
 			}
 		}
 	}
 }
 
-func (c *plChecker) binary(n *plEBinary) (string, *plCompileErr) {
+func (c *plChecker) binary(n *plEBinary) (string, *CompileError) {
 	tl, err := c.expr(n.l)
 	if err != nil {
 		return "", err
@@ -948,13 +948,13 @@ func (c *plChecker) binary(n *plEBinary) (string, *plCompileErr) {
 		return c.set(n, "boolean")
 	case "==", "!=", "===", "!==":
 		if tl == "null" && tr == "null" {
-			return "", &plCompileErr{typ: "illegal_argument_exception", offset: n.pos, reason: "extraneous comparison of [null] constants"}
+			return "", &CompileError{Type: "illegal_argument_exception", Offset: n.pos, Reason: "extraneous comparison of [null] constants"}
 		}
 		return c.set(n, "boolean")
 	case "<", "<=", ">", ">=":
 		if tl != "def" && tr != "def" && plBinaryPromote(tl, tr) == "" {
-			return "", &plCompileErr{typ: "class_cast_exception", offset: n.pos,
-				reason: "cannot apply the " + plOpNames[n.op] + " operator [" + n.op + "] to the types [" + plCanon(tl) + "] and [" + plCanon(tr) + "]"}
+			return "", &CompileError{Type: "class_cast_exception", Offset: n.pos,
+				Reason: "cannot apply the " + plOpNames[n.op] + " operator [" + n.op + "] to the types [" + plCanon(tl) + "] and [" + plCanon(tr) + "]"}
 		}
 		return c.set(n, "boolean")
 	case "=~", "==~":
@@ -962,7 +962,7 @@ func (c *plChecker) binary(n *plEBinary) (string, *plCompileErr) {
 	case "+":
 		if tl == "String" || tr == "String" {
 			if lok && rok {
-				c.info.consts[n] = plToString(cl) + plToString(cr)
+				c.info.consts[n] = ToString(cl) + ToString(cr)
 			}
 			return c.set(n, "String")
 		}
@@ -971,8 +971,8 @@ func (c *plChecker) binary(n *plEBinary) (string, *plCompileErr) {
 			if n.op == "^" {
 				return c.set(n, "boolean")
 			}
-			return "", &plCompileErr{typ: "class_cast_exception", offset: n.pos,
-				reason: "cannot apply the " + plOpNames[n.op] + " operator [" + n.op + "] to the types [" + plCanon(tl) + "] and [" + plCanon(tr) + "]"}
+			return "", &CompileError{Type: "class_cast_exception", Offset: n.pos,
+				Reason: "cannot apply the " + plOpNames[n.op] + " operator [" + n.op + "] to the types [" + plCanon(tl) + "] and [" + plCanon(tr) + "]"}
 		}
 	}
 	if tl == "def" || tr == "def" {
@@ -996,24 +996,24 @@ func (c *plChecker) binary(n *plEBinary) (string, *plCompileErr) {
 		if tr == "String" && tl != "String" {
 			return "", plCastErr(tr, plUnbox(tl), n.pos)
 		}
-		return "", &plCompileErr{typ: "class_cast_exception", offset: n.pos,
-			reason: "cannot apply the " + plOpNames[n.op] + " operator [" + n.op + "] to the types [" + plCanon(tl) + "] and [" + plCanon(tr) + "]"}
+		return "", &CompileError{Type: "class_cast_exception", Offset: n.pos,
+			Reason: "cannot apply the " + plOpNames[n.op] + " operator [" + n.op + "] to the types [" + plCanon(tl) + "] and [" + plCanon(tr) + "]"}
 	}
 	if (rt == "float" || rt == "double") && (n.op == "&" || n.op == "|" || n.op == "^" || n.op == "<<" || n.op == ">>" || n.op == ">>>") {
-		return "", &plCompileErr{typ: "class_cast_exception", offset: n.pos,
-			reason: "cannot apply the " + plOpNames[n.op] + " operator [" + n.op + "] to the types [" + plCanon(tl) + "] and [" + plCanon(tr) + "]"}
+		return "", &CompileError{Type: "class_cast_exception", Offset: n.pos,
+			Reason: "cannot apply the " + plOpNames[n.op] + " operator [" + n.op + "] to the types [" + plCanon(tl) + "] and [" + plCanon(tr) + "]"}
 	}
-	if lok && rok && cl != nil && cr != nil && plIsNumber(cl) && plIsNumber(cr) {
+	if lok && rok && cl != nil && cr != nil && IsNumber(cl) && IsNumber(cr) {
 		v, rerr := plArith(n.op, cl, cr)
 		if rerr != nil {
-			return "", &plCompileErr{typ: rerr.typ, reason: rerr.reason, offset: n.pos}
+			return "", &CompileError{Type: rerr.Type, Reason: rerr.Reason, Offset: n.pos}
 		}
 		c.info.consts[n] = v
 	}
 	return c.set(n, rt)
 }
 
-func (c *plChecker) call(n *plECall) (string, *plCompileErr) {
+func (c *plChecker) call(n *plECall) (string, *CompileError) {
 	argTypes := make([]string, len(n.args))
 	for i, a := range n.args {
 		t, err := c.expr(a)
@@ -1023,7 +1023,7 @@ func (c *plChecker) call(n *plECall) (string, *plCompileErr) {
 		argTypes[i] = t
 	}
 	key := n.name + "/" + strconv.Itoa(len(n.args))
-	checkArgs := func(sig plSig) *plCompileErr {
+	checkArgs := func(sig plSig) *CompileError {
 		for i, p := range sig.params {
 			if !plCanImplicit(argTypes[i], p) && !(plIsPrimitive(argTypes[i]) && (p == "Object" || p == "Number")) {
 				return plCastErr(argTypes[i], p, n.args[i].nodePos())
@@ -1034,8 +1034,8 @@ func (c *plChecker) call(n *plECall) (string, *plCompileErr) {
 	if n.obj == nil {
 		if f, ok := c.prog.funcs[n.name]; ok {
 			if len(f.pnames) != len(n.args) {
-				return "", &plCompileErr{typ: "illegal_argument_exception", offset: n.pos,
-					reason: "Unknown call [" + n.name + "] with [" + strconv.Itoa(len(n.args)) + "] arguments."}
+				return "", &CompileError{Type: "illegal_argument_exception", Offset: n.pos,
+					Reason: "Unknown call [" + n.name + "] with [" + strconv.Itoa(len(n.args)) + "] arguments."}
 			}
 			if err := checkArgs(plSig{params: f.ptypes}); err != nil {
 				return "", err
@@ -1050,15 +1050,15 @@ func (c *plChecker) call(n *plECall) (string, *plCompileErr) {
 			c.info.sigs[n] = sig
 			return c.set(n, sig.ret)
 		}
-		return "", &plCompileErr{typ: "illegal_argument_exception", offset: n.pos,
-			reason: "Unknown call [" + n.name + "] with [" + strconv.Itoa(len(n.args)) + "] arguments."}
+		return "", &CompileError{Type: "illegal_argument_exception", Offset: n.pos,
+			Reason: "Unknown call [" + n.name + "] with [" + strconv.Itoa(len(n.args)) + "] arguments."}
 	}
 	if et, ok := n.obj.(*plEType); ok {
 		c.info.types[et] = "static:" + et.name
 		sig, ok := plStaticMethods[et.name][key]
 		if !ok {
-			return "", &plCompileErr{typ: "illegal_argument_exception", offset: n.pos,
-				reason: "static method [" + plCanon(et.name) + ", " + key + "] not found"}
+			return "", &CompileError{Type: "illegal_argument_exception", Offset: n.pos,
+				Reason: "static method [" + plCanon(et.name) + ", " + key + "] not found"}
 		}
 		if err := checkArgs(sig); err != nil {
 			return "", err
@@ -1068,7 +1068,7 @@ func (c *plChecker) call(n *plECall) (string, *plCompileErr) {
 	}
 	if v, ok := n.obj.(*plEVar); ok {
 		if _, found := c.lookup(v.name); !found {
-			return "", &plCompileErr{typ: "illegal_argument_exception", offset: n.pos, reason: "cannot resolve symbol [" + v.name + "]"}
+			return "", &CompileError{Type: "illegal_argument_exception", Offset: n.pos, Reason: "cannot resolve symbol [" + v.name + "]"}
 		}
 	}
 	ot, err := c.expr(n.obj)
@@ -1078,16 +1078,16 @@ func (c *plChecker) call(n *plECall) (string, *plCompileErr) {
 	if ot == "String" {
 		sig, ok := plStringMethods[key]
 		if !ok {
-			return "", &plCompileErr{typ: "illegal_argument_exception", offset: n.pos,
-				reason: "member method [java.lang.String, " + key + "] not found"}
+			return "", &CompileError{Type: "illegal_argument_exception", Offset: n.pos,
+				Reason: "member method [java.lang.String, " + key + "] not found"}
 		}
 		if err := checkArgs(sig); err != nil {
 			return "", err
 		}
 		c.info.sigs[n] = sig
 		if n.nullSafe && plIsPrimitive(sig.ret) {
-			return "", &plCompileErr{typ: "illegal_argument_exception", offset: n.pos, noPos: true,
-				reason: "Result of null safe operator must be nullable"}
+			return "", &CompileError{Type: "illegal_argument_exception", Offset: n.pos, NoPos: true,
+				Reason: "Result of null safe operator must be nullable"}
 		}
 		return c.set(n, sig.ret)
 	}

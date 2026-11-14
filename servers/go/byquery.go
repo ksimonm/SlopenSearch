@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/painless"
 )
 
 var byQueryParams = map[string]bool{
@@ -342,10 +344,10 @@ func checkByQueryCtx(res updateScriptResult, index, id string) *apiError {
 	default:
 		return errBad("Operation type [" + res.rawOp + "] not allowed, only [noop, index, delete] are allowed")
 	}
-	if plToString(res.id) != id {
+	if painless.ToString(res.id) != id {
 		return errBad("Modifying [_id] not allowed")
 	}
-	if plToString(res.index) != index {
+	if painless.ToString(res.index) != index {
 		return errBad("Modifying [_index] not allowed")
 	}
 	return nil

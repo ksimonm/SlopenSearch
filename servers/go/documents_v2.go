@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/painless"
 )
 
 type orderedKV struct {
@@ -1824,24 +1826,24 @@ func runUpdateScriptCtx(raw any, source map[string]any, index, id string, versio
 	if se != nil {
 		return updateScriptResult{}, updateScriptFailure(se, nil)
 	}
-	ctx := newPlMap(plHash)
-	ctx.put("_index", index)
-	ctx.put("_id", id)
-	ctx.put("_version", int64(version))
+	ctx := painless.NewMap(painless.Hash)
+	ctx.Put("_index", index)
+	ctx.Put("_id", id)
+	ctx.Put("_version", int64(version))
 	if rs, ok := routing.(string); ok && rs == "" {
 		routing = nil
 	}
-	ctx.put("_routing", plFromJSON(routing, plLinked))
-	ctx.put("op", op)
-	ctx.put("_now", nowMillis())
-	ctx.put("_source", plFromJSON(deepCopySource(source), plLinked))
-	_, rerr := script.exec(plBindings{vars: map[string]any{"params": scriptParams(spec.params), "ctx": ctx}}, spec.errName())
+	ctx.Put("_routing", painless.FromJSON(routing, painless.Linked))
+	ctx.Put("op", op)
+	ctx.Put("_now", nowMillis())
+	ctx.Put("_source", painless.FromJSON(deepCopySource(source), painless.Linked))
+	_, rerr := script.exec(painless.Bindings{Vars: map[string]any{"params": scriptParams(spec.params), "ctx": ctx}}, spec.errName())
 	if rerr != nil {
 		return updateScriptResult{}, updateScriptFailure(rerr, nil)
 	}
 	res := updateScriptResult{op: "index"}
-	rawOp, _ := ctx.get("op")
-	res.rawOp = plToString(rawOp)
+	rawOp, _ := ctx.Get("op")
+	res.rawOp = painless.ToString(rawOp)
 	switch res.rawOp {
 	case "delete":
 		res.op = "delete"
@@ -1850,16 +1852,16 @@ func runUpdateScriptCtx(raw any, source map[string]any, index, id string, versio
 	default:
 		res.op = "noop"
 	}
-	if src, ok := ctx.get("_source"); ok {
-		if m, ok := plToJSON(src).(map[string]any); ok {
+	if src, ok := ctx.Get("_source"); ok {
+		if m, ok := painless.ToJSON(src).(map[string]any); ok {
 			res.source = m
 		}
 	}
 	if res.source == nil {
 		res.source = map[string]any{}
 	}
-	res.id, _ = ctx.get("_id")
-	res.index, _ = ctx.get("_index")
+	res.id, _ = ctx.Get("_id")
+	res.index, _ = ctx.Get("_index")
 	return res, nil
 }
 
