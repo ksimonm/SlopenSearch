@@ -23,8 +23,14 @@ Rules:
   names and order.
 - The Go and Rust servers share nothing but the suite. Keep Go-only changes in
   `servers/go/` and Rust-only changes in `servers/rust/`.
-- Go: standard library only, `gofmt` clean. Rust: keep `cargo build` free of new warnings
-  in the code you touch.
+- Go: `gofmt` and `go vet` clean. Rust: keep `cargo build` free of new warnings in the
+  code you touch.
+- Use libraries where they make sense. Adding a well-maintained Go module or Rust crate
+  is welcome when it replaces code we would otherwise write and maintain ourselves
+  (compression, hashing, parsers, protocol details, ...). Prefer widely used, actively
+  maintained packages with a permissive license, keep the dependency set small, and say
+  in the commit message why it was added. Hand-written ports are still the right call
+  where we must match OpenSearch/Lucene bit for bit and no library does that.
 
 Good areas to pick up: HTTP compression in the Rust server (`test_62`), the literal `NaN`
 vector case (`test_72`), and the multi-node and cross-DC suites (`test_96`, `test_97`).
@@ -66,7 +72,9 @@ Hard rules:
 - Never edit anything in tests/ (including tests/reference/). If you believe a test is
   wrong, stop and tell me which test and why, quoting its recorded reference answer.
 - Only change files in servers/<server>/.
-- No new dependencies without asking me (the Go server uses the standard library only).
+- New Go modules or Rust crates are allowed when they save us real work (compression,
+  parsers, hashing, ...): pick widely used, maintained, permissively licensed ones and
+  name each new dependency and the reason in your report.
 - Don't special-case test index names or test inputs; implement the real behaviour.
 
 Finish with a short report: which behaviours you implemented, the pass rate of

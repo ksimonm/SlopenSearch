@@ -1,6 +1,7 @@
 # SlopenSearch — Go implementation
 
-Standard library only (`net/http`, `encoding/json`), no third-party modules.
+Built on the standard library (`net/http`, `encoding/json`) so far; third-party modules
+are welcome where they save real work (see [CONTRIBUTING.md](../../CONTRIBUTING.md)).
 Everything is in `package main`. State is durable by default (stored in `./data`);
 `SLOP_IN_MEMORY=true` keeps it in memory only (see [Persistence](#persistence)).
 
