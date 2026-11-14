@@ -32,6 +32,10 @@ services:
 
   go:
     build: servers/go
+    environment:
+      SLOP_DATA_DIR: /var/lib/slopensearch/data
+    volumes:
+      - go-data:/var/lib/slopensearch/data
     ports:
       - "127.0.0.1:${GO_PORT:-9291}:9200"
     healthcheck:
@@ -61,3 +65,6 @@ services:
       HOME: /tmp
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+volumes:
+  go-data:

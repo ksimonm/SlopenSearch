@@ -18,5 +18,8 @@ servers/go/slopsearch
 .claude/worktrees/
 
 
+# Server data directories (default SLOP_DATA_DIR)
+data/
+
 # Compatibility score reports (scripts/score.py)
 .score/

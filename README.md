@@ -49,7 +49,7 @@ Go all of it, Rust all but 18 tests in text analysis and languages. The open wor
 the newest test files: the phrase and completion suggesters (`test_50`), `knn_score` and
 the Painless vector functions (`test_72`), long-running async tasks and, for Rust,
 compression and the task API (`test_62`), and a shard request cache (`test_61`).
-Both servers keep data in memory only.
+The Go server stores its state on disk by default (`SLOP_DATA_DIR`, default `./data`; `SLOP_IN_MEMORY=true` keeps it in memory, see [servers/go/README.md](servers/go/README.md#persistence)); the Rust server keeps data in memory only.
 
 ## Quick start
 

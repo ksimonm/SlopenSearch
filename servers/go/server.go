@@ -1889,7 +1889,7 @@ func main() {
 	}
 	addr := net.JoinHostPort(host, port)
 	server := NewServer()
-	if err := server.openPersistence(os.Getenv("SLOP_DATA_DIR")); err != nil {
+	if err := server.openPersistence(persistenceDir()); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -1899,7 +1899,7 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
-	fmt.Println("slopensearch (go) listening on " + addr)
+	fmt.Println("slopensearch (go) listening on " + addr + persistenceDescription(server))
 	if err := srv.ListenAndServe(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

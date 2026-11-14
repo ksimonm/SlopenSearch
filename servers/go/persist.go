@@ -1,7 +1,8 @@
 package main
 
-// Durable state (opt-in): when SLOP_DATA_DIR is set, the server keeps its
-// cluster state and documents in that directory and reloads them on start.
+// Durable state (default): the server keeps its cluster state and documents in
+// SLOP_DATA_DIR (default ./data) and reloads them on start. SLOP_IN_MEMORY=true
+// keeps everything in memory only.
 //
 // Layout: <dir>/snapshot holds the full state as of generation G and
 // <dir>/journal-G holds every change made since. After each request that may
@@ -32,6 +33,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -80,12 +82,55 @@ type persister struct {
 	dir      string
 	gen      uint64
 	journal  *os.File
-	jsize    int64
+	jsize    int64 // bytes of frames in the current journal
+	jalloc   int64 // bytes of the journal file already allocated (zero-filled)
 	snapSize int64
 	lock     *os.File
 
+	// group commit: written counts frame bytes ever written (all
+	// generations), synced how many of them are known to be durable.
+	// syncMu orders journal syncs and journal swaps.
+	syncMu  sync.Mutex
+	written atomic.Int64
+	synced  atomic.Int64
+
 	global, pipelines, scripts []byte
 	indices                    map[string]*idxPersistState
+}
+
+// processID is the node's process.id. Inside a container the server usually
+// runs as PID 1 on every start; a restart must still be observable, so PID 1
+// is replaced by a plausible PID derived from the start time.
+var processID = func() int {
+	if pid := os.Getpid(); pid > 1 {
+		return pid
+	}
+	return 2 + int(time.Now().UnixNano()/1000%4194000)
+}()
+
+// persistenceDir returns the data directory from the environment:
+// SLOP_DATA_DIR (default "data", relative to the working directory), or ""
+// when SLOP_IN_MEMORY is true.
+func persistenceDir() string {
+	if v := strings.TrimSpace(os.Getenv("SLOP_IN_MEMORY")); v != "" {
+		if on, err := strconv.ParseBool(v); err == nil && on {
+			return ""
+		}
+	}
+	if d := os.Getenv("SLOP_DATA_DIR"); d != "" {
+		return d
+	}
+	return "data"
+}
+
+func persistenceDescription(s *Server) string {
+	if s.persist == nil {
+		return " (in memory)"
+	}
+	if abs, err := filepath.Abs(s.persist.dir); err == nil {
+		return " (data in " + abs + ")"
+	}
+	return " (data in " + s.persist.dir + ")"
 }
 
 // openPersistence loads the state stored in dir (creating it if needed) and
@@ -144,7 +189,6 @@ func (s *Server) persistNow() {
 		return
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	var buf pbuf
 	// pipelines and scripts have their own locks
 	s.ingestMu.RLock()
@@ -175,7 +219,34 @@ func (s *Server) persistNow() {
 			fmt.Fprintln(os.Stderr, "persistence: snapshot failed:", err)
 		}
 	}
+	target := p.written.Load()
 	s.mu.Unlock()
+	p.mu.Unlock()
+	// other requests proceed while this one waits for its frame to be durable
+	if err := p.syncTo(target); err != nil {
+		fmt.Fprintln(os.Stderr, "persistence: journal sync failed:", err)
+	}
+}
+
+// syncTo returns once the first target journal bytes are durable. One sync
+// covers every frame written before it starts (group commit).
+func (p *persister) syncTo(target int64) error {
+	if p.synced.Load() >= target {
+		return nil
+	}
+	p.syncMu.Lock()
+	defer p.syncMu.Unlock()
+	if p.synced.Load() >= target {
+		return nil
+	}
+	upto := p.written.Load()
+	if err := fdatasync(p.journal); err != nil {
+		return err
+	}
+	if upto > p.synced.Load() {
+		p.synced.Store(upto)
+	}
+	return nil
 }
 
 // readOnlyPath reports requests that never change durable state.
@@ -620,6 +691,9 @@ func readFrames(data []byte) ([][]byte, int, error) {
 		}
 		n := binary.LittleEndian.Uint64(data[pos:])
 		sum := binary.LittleEndian.Uint32(data[pos+8:])
+		if n == 0 {
+			break // zero-filled space after the last frame
+		}
 		if n > uint64(len(data)-pos-12) {
 			return out, pos, io.ErrUnexpectedEOF
 		}
@@ -640,13 +714,36 @@ func frame(body []byte) []byte {
 	return append(out, body...)
 }
 
+// journalChunk is how far the journal file is zero-filled ahead of the
+// frames: overwriting allocated blocks lets fdatasync skip metadata updates.
+const journalChunk = 16 << 20
+
+// appendFrame writes a frame after the last one; syncTo makes it durable.
+// Caller holds p.mu.
 func (p *persister) appendFrame(body []byte) error {
 	f := frame(body)
-	if _, err := p.journal.Write(f); err != nil {
+	if end := p.jsize + int64(len(f)); end > p.jalloc {
+		size := p.jalloc + journalChunk
+		if size < end {
+			size = end + journalChunk
+		}
+		if _, err := p.journal.WriteAt(make([]byte, size-p.jalloc), p.jalloc); err != nil {
+			return err
+		}
+		p.syncMu.Lock()
+		err := p.journal.Sync() // the new file size is metadata
+		p.syncMu.Unlock()
+		if err != nil {
+			return err
+		}
+		p.jalloc = size
+	}
+	if _, err := p.journal.WriteAt(f, p.jsize); err != nil {
 		return err
 	}
 	p.jsize += int64(len(f))
-	return p.journal.Sync()
+	p.written.Add(int64(len(f)))
+	return nil
 }
 
 // compactLocked writes the whole state as the next snapshot generation and
@@ -665,7 +762,7 @@ func (p *persister) compactLocked(s *Server) error {
 	p.diffLocked(s, &buf)
 
 	next := p.gen + 1
-	jf, err := os.OpenFile(p.journalPath(next), os.O_CREATE|os.O_TRUNC|os.O_WRONLY|os.O_APPEND, 0o644)
+	jf, err := os.OpenFile(p.journalPath(next), os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o644)
 	if err != nil {
 		return err
 	}
@@ -690,10 +787,14 @@ func (p *persister) compactLocked(s *Server) error {
 		jf.Close()
 		return err
 	}
+	// the snapshot holds every frame written so far
+	p.syncMu.Lock()
 	if p.journal != nil {
 		p.journal.Close()
 	}
-	p.journal, p.jsize, p.snapSize, p.gen = jf, 0, int64(len(content)), next
+	p.journal, p.jsize, p.jalloc, p.snapSize, p.gen = jf, 0, 0, int64(len(content)), next
+	p.synced.Store(p.written.Load())
+	p.syncMu.Unlock()
 	// drop journals of older generations
 	if entries, err := os.ReadDir(p.dir); err == nil {
 		for _, e := range entries {
