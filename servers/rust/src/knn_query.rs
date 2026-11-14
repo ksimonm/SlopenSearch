@@ -610,3 +610,84 @@ pub fn knn_score_script(qc: &QueryCtx, script: &Value) -> Result<f64, ApiError> 
         _ => Ok(0.0),
     }
 }
+
+// ---------------------------------------------------------------- explain
+
+/// The explanation of a top-level knn query (k-NN search) hit.
+pub fn explanation(idx: &Index, id: &str, q: &Value, score_v: f64) -> Option<Value> {
+    let m = q.get("knn")?.as_object()?;
+    let (field, spec) = m.iter().next()?;
+    let spec = spec.as_object()?;
+    let def = field_def(&idx.mappings, field)?;
+    let kf = knn_field(def);
+    if kf.engine == "lucene" {
+        let k = spec.get("k").and_then(to_f64).unwrap_or(10.0) as i64;
+        return Some(json!({"value": score_v, "description": format!("within top {} docs", k), "details": []}));
+    }
+    let qv = query_vector(spec);
+    let doc = idx.docs.get(id)?;
+    let v = source_vector(doc, field)?;
+    let r = raw(&kf.space, &qv, &v);
+    let (formula, raw_score) = match kf.space.as_str() {
+        "innerproduct" => ("`rawScore >= 0 ? 1 + rawScore : 1 / (1 - rawScore)`", -r),
+        "cosinesimil" => ("`(2 - rawScore) / 2`", 1.0 - r),
+        _ => ("`1 / (1 + rawScore)`", r),
+    };
+    Some(json!({
+        "value": score_v,
+        "description": "the type of knn search executed was Approximate-NN",
+        "details": [{
+            "value": score_v,
+            "description": format!(
+                "the type of knn search executed at leaf was Approximate-NN with vectorDataType = {}, spaceType = {} where score is computed as {} from:",
+                kf.data_type.to_uppercase(), kf.space, formula
+            ),
+            "details": [{"value": f32r(raw_score), "description": "rawScore, returned from FAISS library", "details": []}],
+        }],
+    }))
+}
+
+// ---------------------------------------------------------------- unsupported operations
+
+/// A term query on a knn_vector field.
+pub fn exact_search_err(idx: &Index, field: &str) -> ApiError {
+    let o = json!({
+        "type": "query_shard_exception",
+        "reason": format!("KNN vector do not support exact searching, use KNN queries instead: [{}]", field),
+        "index": idx.name,
+        "index_uuid": idx.uuid,
+    });
+    crate::script_ctx::shard_failure(&idx.name, 400, o.clone(), o.clone(), o, "query")
+}
+
+/// Sorting on a knn_vector field fails on the shard.
+pub fn check_sort(idx: &Index, sort: Option<&Value>) -> Result<(), ApiError> {
+    let items: Vec<&Value> = match sort {
+        Some(Value::Array(a)) => a.iter().collect(),
+        Some(v) => vec![v],
+        None => return Ok(()),
+    };
+    for it in items {
+        let field = match it {
+            Value::String(s) => s.as_str(),
+            Value::Object(m) => match m.keys().next() {
+                Some(k) => k.as_str(),
+                None => continue,
+            },
+            _ => continue,
+        };
+        let is_vec = field_def(&idx.mappings, field)
+            .and_then(|d| d.get("type"))
+            .and_then(|t| t.as_str())
+            == Some("knn_vector");
+        if is_vec {
+            let e = ApiError::new(
+                "unsupported_operation_exception",
+                "knn vector field doesn't support this operation",
+                500,
+            );
+            return Err(crate::script_ctx::plain_shard_error(idx, &e));
+        }
+    }
+    Ok(())
+}

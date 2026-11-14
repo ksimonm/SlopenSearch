@@ -2781,6 +2781,7 @@ pub fn run_search(
     for n in names {
         if let Some(idx) = store.indices.get(n) {
             crate::eval::validate_query(idx, &query)?;
+            crate::knn_query::check_sort(idx, bodym.get("sort"))?;
         }
     }
 
@@ -4225,6 +4226,7 @@ fn apply_search_extras(
                         .to_string();
                     let expl = match store.indices.get(&idx_name) {
                         Some(idx) => crate::script_ctx::script_score_explanation(&q, score)
+                            .or_else(|| crate::knn_query::explanation(idx, &id, &q, score))
                             .unwrap_or_else(|| bm25_explanation(idx, &id, &q, score, &idx_name)),
                         None => json!({"value": score, "description": "match", "details": []}),
                     };
