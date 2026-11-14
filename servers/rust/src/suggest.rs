@@ -47,7 +47,11 @@ const TERM_OPTIONS: &[&str] = &[
     "min_word_len", "min_doc_freq", "lowercase_terms",
 ];
 
-pub fn eval_suggest(suggest: &Map<String, Value>, indices: &[&Index]) -> Result<Value, ApiError> {
+pub fn eval_suggest(
+    suggest: &Map<String, Value>,
+    indices: &[&Index],
+    search_body: &Map<String, Value>,
+) -> Result<Value, ApiError> {
     let global_text = suggest.get("text").and_then(value_to_string);
     let mut out = Map::new();
     let mut names: Vec<&String> = suggest.keys().filter(|k| k.as_str() != "text").collect();
@@ -65,9 +69,10 @@ pub fn eval_suggest(suggest: &Map<String, Value>, indices: &[&Index]) -> Result<
                 out.insert(name.clone(), json!([phrase_suggester(spec, t, idx)]));
             }
         } else if let Some(t) = spec.get("completion").and_then(|v| v.as_object()) {
-            if let Some(idx) = indices.first() {
-                out.insert(name.clone(), json!([completion_suggester(spec, t, idx)]));
-            }
+            out.insert(
+                name.clone(),
+                crate::suggest_completion::completion_suggest(spec, t, indices, global_text.as_deref(), search_body)?,
+            );
         }
     }
     Ok(Value::Object(out))
@@ -380,120 +385,4 @@ fn phrase_suggester(spec: &Map<String, Value>, body: &Map<String, Value>, idx: &
         options.push(json!({"text": corrected.join(" "), "score": 0.9}));
     }
     json!({"text": input, "offset": 0, "length": input.len(), "options": options})
-}
-
-fn completion_inputs(v: &Value) -> Vec<(String, f64)> {
-    let mut out = vec![];
-    match v {
-        Value::String(s) => out.push((s.clone(), 0.0)),
-        Value::Object(m) => {
-            let w = m.get("weight").and_then(to_f64).unwrap_or(0.0);
-            if let Some(inp) = m.get("input") {
-                match inp {
-                    Value::String(s) => out.push((s.clone(), w)),
-                    Value::Array(a) => {
-                        for e in a {
-                            if let Some(s) = value_to_string(e) {
-                                out.push((s, w));
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        Value::Array(a) => {
-            for e in a {
-                match e {
-                    Value::String(s) => out.push((s.clone(), 0.0)),
-                    Value::Object(m) => {
-                        let w = m.get("weight").and_then(to_f64).unwrap_or(0.0);
-                        if let Some(inp) = m.get("input") {
-                            match inp {
-                                Value::String(s) => out.push((s.clone(), w)),
-                                Value::Array(ia) => {
-                                    for x in ia {
-                                        if let Some(s) = value_to_string(x) {
-                                            out.push((s, w));
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        _ => {}
-    }
-    out
-}
-
-fn completion_suggester(spec: &Map<String, Value>, body: &Map<String, Value>, idx: &Index) -> Value {
-    let field = body.get("field").and_then(value_to_string).unwrap_or_default();
-    let prefix = suggest_text(spec);
-    let lower = prefix.to_lowercase();
-    let def = crate::eval::mapping_field_def(idx, &field).cloned().unwrap_or_default();
-    let preserve = def
-        .get("preserve_separators")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-    let max_len = def
-        .get("max_input_length")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(50)
-        .max(1) as usize;
-    let fuzzy = body
-        .get("fuzzy")
-        .and_then(|v| v.as_object())
-        .and_then(|f| f.get("fuzziness"))
-        .and_then(to_f64)
-        .or_else(|| {
-            spec.get("fuzzy")
-                .and_then(|v| v.as_object())
-                .and_then(|f| f.get("fuzziness"))
-                .and_then(to_f64)
-        })
-        .unwrap_or(0.0);
-    let size = body
-        .get("size")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(10)
-        .max(0) as usize;
-    let norm = |s: &str| -> String {
-        let lower = s.to_lowercase();
-        if preserve {
-            lower
-        } else {
-            lower.chars().filter(|c| c.is_alphanumeric()).collect()
-        }
-    };
-    let want = norm(&lower);
-
-    let mut entries: Vec<(String, f64, String)> = vec![];
-    for id in &idx.order {
-        let doc = match idx.docs.get(id) { Some(d) => d, None => continue };
-        if let Some(v) = field_value(doc, &field) {
-            for (raw_text, weight) in completion_inputs(v) {
-                let text: String = raw_text.chars().take(max_len).collect();
-                if norm(&text).starts_with(&want) {
-                    let mut score = if weight > 0.0 { weight } else { 1.0 };
-                    if fuzzy > 0.0 {
-                        score *= 1.0 + fuzzy * 2.0;
-                    }
-                    entries.push((text, score, id.clone()));
-                }
-            }
-        }
-    }
-    entries.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    let options: Vec<Value> = entries
-        .iter()
-        .take(size)
-        .map(|(text, weight, id)| json!({"text": text, "_score": weight, "_id": id}))
-        .collect();
-    json!({"text": prefix, "offset": 0, "length": prefix.len(), "options": options})
 }

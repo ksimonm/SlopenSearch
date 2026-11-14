@@ -141,7 +141,7 @@ pub fn validate_mapping_analysis(props: &Map<String, Value>, settings: &Map<Stri
             let Some(def) = raw.as_object() else { continue };
             let typ = def.get("type").and_then(|v| v.as_str()).unwrap_or("");
             match typ {
-                "text" | "match_only_text" | "search_as_you_type" | "token_count" => {
+                "text" | "match_only_text" | "search_as_you_type" | "token_count" | "completion" => {
                     for key in ["analyzer", "search_analyzer", "search_quote_analyzer"] {
                         if let Some(a) = def.get(key).and_then(|v| v.as_str()) {
                             let known = a == "default"

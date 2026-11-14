@@ -45,6 +45,7 @@ mod search;
 mod shared;
 mod store;
 mod suggest;
+mod suggest_completion;
 mod templates;
 
 use axum::body::Bytes;

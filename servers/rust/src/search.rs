@@ -3866,7 +3866,7 @@ pub fn run_search(
         }
         if let Some(suggest) = bodym.get("suggest").and_then(|s| s.as_object()).filter(|s| !s.is_empty()) {
             let all: Vec<&Index> = names.iter().filter_map(|n| store.indices.get(n)).collect();
-            let plain = eval_suggest(suggest, &all)?;
+            let plain = eval_suggest(suggest, &all, &bodym)?;
             let typed = req
                 .param("typed_keys")
                 .map(|v| v != "false")
@@ -3887,11 +3887,20 @@ pub fn run_search(
                         mapped.insert(format!("{}{}", prefix, name), v.clone());
                     }
                 }
+                mapped.sort_keys();
                 resp.insert("suggest".to_string(), Value::Object(mapped));
             } else {
                 resp.insert("suggest".to_string(), plain);
             }
         }
+    }
+    if bodym.get("suggest").map(|s| s.is_object()).unwrap_or(false)
+        && bodym.get("query").is_none()
+        && req.param("q").is_none()
+        && !bodym.contains_key("aggs")
+        && !bodym.contains_key("aggregations")
+    {
+        crate::suggest_completion::clear_hits(&mut resp);
     }
 
     Ok(Value::Object(resp))
@@ -5046,6 +5055,9 @@ pub fn handle_search(store: &mut Store, req: &Req, name: &str) -> Response {
                     ));
                 }
             }
+        }
+        if let Some(e) = crate::suggest_completion::check_suggest_body(&body, &eff) {
+            return err_response(e);
         }
         if let Some(sv) = body.get("suggest") {
             if !sv.is_object() {
