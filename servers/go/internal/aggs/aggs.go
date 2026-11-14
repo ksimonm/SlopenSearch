@@ -676,7 +676,7 @@ func termKeyFor(v any, ft, valueType, format string, idx *model.Index, field str
 		}
 		return int64(0), "false", true, "b:0", true
 	case "date", "date_nanos":
-		ms, ok := DateMillisFor(idx, field, ft, v)
+		ms, ok := mapping.DateMillis(idx, field, ft, v)
 		if !ok {
 			return nil, "", false, "", false
 		}
@@ -1595,7 +1595,7 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 			}
 			v = missingMs
 		}
-		ms, ok := DateMillisFor(idx, resolved, ft, v)
+		ms, ok := mapping.DateMillis(idx, resolved, ft, v)
 		if !ok {
 			continue
 		}
@@ -1849,25 +1849,6 @@ func parseDateHistBound(v any, ft string, idx *model.Index, field, format string
 	}
 	if ms, ok := dates.ParseAny(def, s); ok {
 		return ms, true
-	}
-	return 0, false
-}
-
-// DateMillisFor converts a value of a date field to epoch millis.
-func DateMillisFor(idx *model.Index, field, ft string, v any) (int64, bool) {
-	switch t := v.(type) {
-	case int64:
-		return t, true
-	case uint64:
-		return int64(t), true
-	case float64:
-		return int64(t), true
-	case json.Number:
-		n, err := t.Int64()
-		return n, err == nil
-	case string:
-		def, _ := mapping.FieldDef(idx, field)
-		return dates.ParseAny(def, t)
 	}
 	return 0, false
 }

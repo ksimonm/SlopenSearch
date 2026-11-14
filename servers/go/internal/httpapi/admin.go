@@ -15,6 +15,7 @@ import (
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
+	"slopensearch/internal/search"
 	"slopensearch/internal/settings"
 	"slopensearch/internal/wildcard"
 )
@@ -793,7 +794,7 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 		}
 		if filt, ok := def["filter"]; ok && filt != nil {
 			if fq, ok := filt.(map[string]any); ok {
-				if err := validateQuery(&model.Index{FieldTypes: map[string]string{}}, fq); err != nil {
+				if err := search.ValidateQuery(&model.Index{FieldTypes: map[string]string{}}, fq); err != nil {
 					return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 						Reason:   "failed to parse filter for alias [" + aliasName + "]",
 						CausedBy: &apierr.Error{Type: "parsing_exception", Reason: err.Reason}}

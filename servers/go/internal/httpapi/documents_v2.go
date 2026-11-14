@@ -760,7 +760,7 @@ func validatePercolatorDocs(idx *model.Index, body map[string]any, raw []byte) *
 			return percolatorParseError("[_na] query malformed, must start with start_object",
 				map[string]any{"line": 1, "col": col}, nil)
 		}
-		if verr := validateQuery(idx, qm); verr != nil {
+		if verr := search.ValidateQuery(idx, qm); verr != nil {
 			if verr.Clause != "" {
 				annotateQueryClause(verr, raw)
 			}

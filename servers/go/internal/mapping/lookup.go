@@ -1,9 +1,11 @@
 package mapping
 
 import (
+	"encoding/json"
 	"strings"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/dates"
 	"slopensearch/internal/model"
 )
 
@@ -76,4 +78,24 @@ func MatchAnalyzerExists(idx *model.Index, name string) bool {
 		return settingsHasAnalyzer(idx.Settings, "analyzer", name)
 	}
 	return false
+}
+
+// DateMillis converts a doc value or search_after value of a date field to
+// epoch millis.
+func DateMillis(idx *model.Index, field, ft string, v any) (int64, bool) {
+	switch t := v.(type) {
+	case int64:
+		return t, true
+	case uint64:
+		return int64(t), true
+	case float64:
+		return int64(t), true
+	case json.Number:
+		n, err := t.Int64()
+		return n, err == nil
+	case string:
+		def, _ := FieldDef(idx, field)
+		return dates.ParseAny(def, t)
+	}
+	return 0, false
 }

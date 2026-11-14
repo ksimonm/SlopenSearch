@@ -430,7 +430,7 @@ func sortValue(doc map[string]any, field string, idx *model.Index) (any, bool) {
 	def, _ := mapping.FieldDef(idx, field)
 	ft, _ := def["type"].(string)
 	if ft == "date" || ft == "date_nanos" {
-		if ms, ok := DateMillisFor(idx, field, ft, v); ok {
+		if ms, ok := mapping.DateMillis(idx, field, ft, v); ok {
 			return float64(ms), true
 		}
 	}

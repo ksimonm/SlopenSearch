@@ -1416,7 +1416,7 @@ func (s *Server) handleCount(w http.ResponseWriter, r *http.Request, name string
 		matchAll = true
 	}
 	if len(indices) > 0 {
-		if verr := validateQuery(indices[0], query); verr != nil {
+		if verr := search.ValidateQuery(indices[0], query); verr != nil {
 			if verr.Clause != "" {
 				annotateQueryClause(verr, bodyRaw)
 				writeError(w, verr)

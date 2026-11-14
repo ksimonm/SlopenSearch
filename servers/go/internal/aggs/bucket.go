@@ -438,7 +438,7 @@ func dateRangeAgg(name, field string, spec map[string]any, docs []map[string]any
 				}
 				v = missing
 			}
-			ms, ok := DateMillisFor(idx, resolved, ft, v)
+			ms, ok := mapping.DateMillis(idx, resolved, ft, v)
 			if !ok {
 				continue
 			}
@@ -1316,7 +1316,7 @@ func compositeValues(src *compositeSource, doc map[string]any, idx *model.Index,
 		k := math.Floor((f-float64(src.offsetMs))/src.interval)*src.interval + float64(src.offsetMs)
 		return []any{k}, true
 	case "date_histogram":
-		ms, ok := DateMillisFor(idx, resolved, src.ft, v)
+		ms, ok := mapping.DateMillis(idx, resolved, src.ft, v)
 		if !ok {
 			if src.missingBucket {
 				return []any{nil}, true
@@ -1870,7 +1870,7 @@ func autoDateHistogramAgg(field string, spec map[string]any, docs []map[string]a
 		if !ok {
 			continue
 		}
-		if ms, ok := DateMillisFor(idx, resolved, ft, v); ok {
+		if ms, ok := mapping.DateMillis(idx, resolved, ft, v); ok {
 			vals = append(vals, ms)
 		}
 	}
@@ -1911,7 +1911,7 @@ func autoDateHistogramAgg(field string, spec map[string]any, docs []map[string]a
 		if !ok {
 			continue
 		}
-		ms, ok := DateMillisFor(idx, resolved, ft, v)
+		ms, ok := mapping.DateMillis(idx, resolved, ft, v)
 		if !ok {
 			continue
 		}

@@ -7,6 +7,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/model"
+	"slopensearch/internal/search"
 	"slopensearch/internal/wildcard"
 )
 
@@ -218,7 +219,7 @@ func (s *Server) putAliasAPI(w http.ResponseWriter, r *http.Request, indexSpec, 
 	def := normalizeAliasDef(body)
 	if filt, ok := def["filter"]; ok && filt != nil {
 		if fq, ok := filt.(map[string]any); ok {
-			if err := validateQuery(&model.Index{FieldTypes: map[string]string{}}, fq); err != nil {
+			if err := search.ValidateQuery(&model.Index{FieldTypes: map[string]string{}}, fq); err != nil {
 				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason:   "failed to parse filter for alias [" + aliasName + "]",
 					CausedBy: &apierr.Error{Type: "parsing_exception", Reason: err.Reason}})
@@ -494,7 +495,7 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 			def = normalizeAliasDef(def)
 			if filt, ok := def["filter"]; ok && filt != nil {
 				if fq, ok := filt.(map[string]any); ok {
-					if err := validateQuery(&model.Index{FieldTypes: map[string]string{}}, fq); err != nil {
+					if err := search.ValidateQuery(&model.Index{FieldTypes: map[string]string{}}, fq); err != nil {
 						writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 							Reason:   "failed to parse filter for alias [" + strings.Join(aliasNames, ",") + "]",
 							CausedBy: &apierr.Error{Type: "parsing_exception", Reason: err.Reason}})
