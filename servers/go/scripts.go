@@ -8,6 +8,7 @@ import (
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/painless"
+	"slopensearch/internal/search"
 )
 
 // Stored scripts, _render and script fields.
@@ -48,14 +49,14 @@ func (s *Server) handleScriptsRoute(w http.ResponseWriter, r *http.Request, segs
 			src, _ := sc["source"].(string)
 			switch sc["lang"] {
 			case "painless":
-				if _, se := plCompileScript(src, ctxName, ""); se != nil {
-					writeJSON(w, 400, se.errorBody())
+				if _, se := search.CompileScript(src, ctxName, ""); se != nil {
+					writeJSON(w, 400, se.ErrorBody())
 					return true
 				}
 			case "expression":
-				if _, se, ae := exPrepare(src, ctxName); se != nil || ae != nil {
+				if _, se, ae := search.PrepareExpression(src, ctxName); se != nil || ae != nil {
 					if se != nil {
-						writeJSON(w, 400, se.errorBody())
+						writeJSON(w, 400, se.ErrorBody())
 					} else {
 						writeError(w, ae)
 					}
@@ -100,27 +101,27 @@ func (s *Server) handleScriptsRoute(w http.ResponseWriter, r *http.Request, segs
 // mutates it is seen by the next one.
 func evalScriptFields(hit multiHit, specs map[string]any) (map[string]any, *apierr.Error) {
 	out := map[string]any{}
-	qc := newQueryCtxForDoc(hit.idx, hit.id, hit.doc)
+	qc := search.NewQueryCtxForDoc(hit.idx, hit.id, hit.doc)
 	src := map[string]any{}
 	for k, v := range hit.doc {
 		if k != "_ignored" {
 			src[k] = v
 		}
 	}
-	source := painless.FromJSON(deepCopySource(src), painless.Linked).(*painless.Map)
+	source := painless.FromJSON(search.DeepCopySource(src), painless.Linked).(*painless.Map)
 	for _, name := range jsonv.SortedKeys(specs) {
 		spec, _ := specs[name].(map[string]any)
 		ignore, _ := spec["ignore_failure"].(bool)
-		cs, se, ae := prepareScript(spec["script"], "field")
+		cs, se, ae := search.PrepareScript(spec["script"], "field")
 		if se != nil || ae != nil {
-			return nil, scriptErrForShard(hit.idx, se, ae, false)
+			return nil, search.ScriptErrForShard(hit.idx, se, ae, false)
 		}
-		v, rerr := cs.run(qc, runOpts{source: source})
+		v, rerr := cs.Run(qc, search.RunOpts{Source: source})
 		if rerr != nil {
 			if ignore {
 				continue
 			}
-			return nil, scriptShardError(hit.idx, rerr)
+			return nil, search.ScriptShardError(hit.idx, rerr)
 		}
 		if vals, ok := fieldScriptValues(v); ok {
 			out[name] = vals
@@ -145,7 +146,7 @@ func buildStoredScript(body map[string]any) (map[string]any, *apierr.Error) {
 	}
 	sc, ok := raw.(map[string]any)
 	if !ok {
-		return nil, errParsing("unexpected token [VALUE_STRING], expected [{, <source>]")
+		return nil, apierr.Parsing("unexpected token [VALUE_STRING], expected [{, <source>]")
 	}
 	if len(sc) == 0 {
 		return map[string]any{"lang": "mustache", "source": ""}, nil

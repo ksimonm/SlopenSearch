@@ -11,6 +11,7 @@ import (
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
+	"slopensearch/internal/search"
 )
 
 type tvToken struct {
@@ -175,13 +176,13 @@ func termVectorFor(idx *model.Index, field string, doc map[string]any, analyzer 
 	minFreq := 0
 	minDocFreq := 0
 	if filter != nil {
-		if n, ok := integerOf(filter["max_num_terms"]); ok {
+		if n, ok := search.IntegerOf(filter["max_num_terms"]); ok {
 			maxNum = int(n)
 		}
-		if n, ok := integerOf(filter["min_term_freq"]); ok {
+		if n, ok := search.IntegerOf(filter["min_term_freq"]); ok {
 			minFreq = int(n)
 		}
-		if n, ok := integerOf(filter["min_doc_freq"]); ok {
+		if n, ok := search.IntegerOf(filter["min_doc_freq"]); ok {
 			minDocFreq = int(n)
 		}
 	}

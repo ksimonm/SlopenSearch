@@ -13,6 +13,7 @@ import (
 	"slopensearch/internal/mustache"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
+	"slopensearch/internal/search"
 )
 
 // resolveTemplate finds the template text of a render / search template
@@ -26,7 +27,7 @@ func (s *Server) resolveTemplate(body map[string]any) (text string, rendered boo
 	if hasSource {
 		text, ok := mustache.TemplateText(source)
 		if !ok {
-			return "", false, errParsing("template source must be a string or object")
+			return "", false, apierr.Parsing("template source must be a string or object")
 		}
 		return text, false, nil
 	}
@@ -35,22 +36,22 @@ func (s *Server) resolveTemplate(body map[string]any) (text string, rendered boo
 		return "", false, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 			Reason: "Validation Failed: 1: template is missing;2: template's script type is missing;"}
 	}
-	sc, serr := storedScript(id)
+	sc, serr := search.StoredScript(id)
 	if serr != nil {
 		return "", false, serr
 	}
 	src, _ := sc["source"].(string)
 	if lang, _ := sc["lang"].(string); lang != "" && lang != "mustache" {
 		if lang == "painless" {
-			script, se := plCompileScript(src, "template", id)
+			script, se := search.CompileScript(src, "template", id)
 			if se != nil {
 				return "", false, &apierr.Error{Type: "script_exception", Status: 400, Reason: "compile error",
-					Shard: &shardFailure{raw: se.errorBody(), status: 400}}
+					Shard: &search.ShardFailure{Raw: se.ErrorBody(), Status: 400}}
 			}
-			v, se := script.exec(painless.Bindings{Vars: map[string]any{"params": scriptParams(templateParams(body))}}, id)
+			v, se := script.Exec(painless.Bindings{Vars: map[string]any{"params": search.ScriptParams(templateParams(body))}}, id)
 			if se != nil {
 				return "", false, &apierr.Error{Type: "script_exception", Status: 400, Reason: "runtime error",
-					Shard: &shardFailure{raw: se.errorBody(), status: 400}}
+					Shard: &search.ShardFailure{Raw: se.ErrorBody(), Status: 400}}
 			}
 			return painless.ToString(v), true, nil
 		}
@@ -147,7 +148,7 @@ func (s *Server) handleSearchTemplate(w http.ResponseWriter, r *http.Request, na
 		if !searchTemplateKeys[k] {
 			col := strings.Index(string(raw), `"`+k+`"`) + 1
 			writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
-				Reason: "[1:" + itoa(col) + "] [search_template] unknown field [" + k + "]"})
+				Reason: "[1:" + search.Itoa(col) + "] [search_template] unknown field [" + k + "]"})
 			return
 		}
 	}
@@ -199,10 +200,10 @@ func parseMsearchPairs(raw []byte) ([][2]map[string]any, *apierr.Error) {
 	for i := 0; i+1 < len(lines); i += 2 {
 		var header, body map[string]any
 		if err := json.Unmarshal([]byte(lines[i]), &header); err != nil {
-			return nil, errParsing("Failed to parse request body")
+			return nil, apierr.Parsing("Failed to parse request body")
 		}
 		if err := json.Unmarshal([]byte(lines[i+1]), &body); err != nil {
-			return nil, errParsing("Failed to parse request body")
+			return nil, apierr.Parsing("Failed to parse request body")
 		}
 		for k := range header {
 			if !msearchHeaderKeys[k] {

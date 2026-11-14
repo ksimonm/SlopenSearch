@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/search"
 )
 
 type scrollContext struct {
@@ -187,7 +188,7 @@ func (s *Server) handleScroll(w http.ResponseWriter, r *http.Request, rest []str
 	hits := make([]any, 0, len(page))
 	for _, h := range page {
 		hits = append(hits, map[string]any{
-			"_index": h.idx.Name, "_id": h.id, "_score": scoreJSON(h.score), "_source": h.doc,
+			"_index": h.idx.Name, "_id": h.id, "_score": search.ScoreJSON(h.score), "_source": h.doc,
 		})
 	}
 	var totalOut any = map[string]any{"value": total, "relation": "eq"}

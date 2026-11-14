@@ -13,6 +13,7 @@ import (
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
+	"slopensearch/internal/search"
 )
 
 // Completion suggester: a model of Lucene's NRT completion suggester as used by
@@ -393,7 +394,7 @@ func geoContextPoint(v any) (float64, float64, bool) {
 			return lat, lon, true
 		}
 	}
-	return geoPointOf(v)
+	return search.GeoPointOf(v)
 }
 
 // geohashNeighbors returns the cells around a geohash at the same precision.
@@ -627,7 +628,7 @@ func completionSuggest(spec, body map[string]any, indices []*model.Index, global
 		return nil, suggestShardError(first, "no mapping found for field ["+field+"]")
 	}
 
-	includes, excludes, omitSource, _ := sourceFilterFromBody(searchBody)
+	includes, excludes, omitSource, _ := search.SourceFilterFromBody(searchBody)
 
 	var hits []*completionHit
 	for _, tg := range targets {
@@ -809,11 +810,11 @@ func completionSuggest(spec, body map[string]any, indices []*model.Index, global
 			seenText[h.text] = true
 		}
 		opt := ojson.Object{{"text", h.text}, {"_index", h.idx.Name}, {"_id", h.id},
-			{"_score", scoreJSON(float64(float32(h.score)))}}
+			{"_score", search.ScoreJSON(float64(float32(h.score)))}}
 		if !omitSource {
 			src := h.idx.Docs[h.id]
 			if len(includes) > 0 || len(excludes) > 0 {
-				src = filterSourceDoc(src, includes, excludes)
+				src = search.FilterSourceDoc(src, includes, excludes)
 			}
 			opt = append(opt, ojson.KV{"_source", src})
 		}

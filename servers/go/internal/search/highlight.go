@@ -1,4 +1,4 @@
-package main
+package search
 
 import (
 	"html"
@@ -39,7 +39,7 @@ type highlightConfig struct {
 	query             map[string]any
 }
 
-func parseHighlightConfig(body map[string]any, query map[string]any) (*highlightConfig, *apierr.Error) {
+func ParseHighlightConfig(body map[string]any, query map[string]any) (*highlightConfig, *apierr.Error) {
 	raw, ok := body["highlight"].(map[string]any)
 	if !ok {
 		return nil, nil
@@ -162,12 +162,12 @@ func highlightParseError(reason string) *apierr.Error {
 		RootCause: &apierr.Error{Type: "parsing_exception", Reason: reason}}
 }
 
-func (cfg *highlightConfig) validate(idx *model.Index) *apierr.Error {
+func (cfg *highlightConfig) Validate(idx *model.Index) *apierr.Error {
 	for _, f := range cfg.fields {
 		names := []string{f.pattern}
 		if strings.ContainsAny(f.pattern, "*?") {
 			names = nil
-			re := wildcardRegex(f.pattern)
+			re := WildcardRegex(f.pattern)
 			for name := range idx.DocValues {
 				_ = name
 				break
@@ -195,14 +195,14 @@ func (cfg *highlightConfig) validate(idx *model.Index) *apierr.Error {
 			if f.boundary == "sentence" && f.fragmentSize < 18 {
 				return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
 					RootCause: &apierr.Error{Type: "illegal_argument_exception",
-						Reason: "fragCharSize(" + itoa(f.fragmentSize) + ") is too small. It must be 18 or higher."}}
+						Reason: "fragCharSize(" + Itoa(f.fragmentSize) + ") is too small. It must be 18 or higher."}}
 			}
 		}
 	}
 	return nil
 }
 
-func itoa(n int) string {
+func Itoa(n int) string {
 	if n == 0 {
 		return "0"
 	}
@@ -250,7 +250,7 @@ func queryHighlightInfo(q map[string]any) (map[string]bool, map[string]bool, []s
 							val = vm["query"]
 						}
 					}
-					text, _ := queryText(val)
+					text, _ := QueryText(val)
 					for _, t := range mapping.Analyze(text) {
 						terms[t] = true
 					}
@@ -315,7 +315,7 @@ func queryHighlightInfo(q map[string]any) (map[string]bool, map[string]bool, []s
 					continue
 				}
 				for _, key := range []string{"must", "should", "filter", "must_not"} {
-					for _, item := range asQueryList(bm[key]) {
+					for _, item := range AsQueryList(bm[key]) {
 						if child, ok := item.(map[string]any); ok {
 							walk(child)
 						}
@@ -328,13 +328,13 @@ func queryHighlightInfo(q map[string]any) (map[string]bool, map[string]bool, []s
 	return terms, fields, patterns
 }
 
-func (cfg *highlightConfig) render(idx *model.Index, doc map[string]any) map[string]any {
+func (cfg *highlightConfig) Render(idx *model.Index, doc map[string]any) map[string]any {
 	out := map[string]any{}
 	for _, f := range cfg.fields {
 		names := []string{f.pattern}
 		if strings.ContainsAny(f.pattern, "*?") {
 			names = nil
-			re := wildcardRegex(f.pattern)
+			re := WildcardRegex(f.pattern)
 			for name := range doc {
 				if re.MatchString(name) {
 					names = append(names, name)
@@ -381,7 +381,7 @@ func (cfg *highlightConfig) render(idx *model.Index, doc map[string]any) map[str
 			if require && len(qfields)+len(qpatterns) > 0 {
 				fieldAllowed = qfields[name]
 				for _, p := range qpatterns {
-					if wildcardRegex(p).MatchString(name) {
+					if WildcardRegex(p).MatchString(name) {
 						fieldAllowed = true
 					}
 				}

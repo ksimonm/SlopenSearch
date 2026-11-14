@@ -12,6 +12,7 @@ import (
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
+	"slopensearch/internal/search"
 )
 
 func osaDistance(a, b []rune) int {
@@ -45,7 +46,7 @@ func suggestShardError(idx *model.Index, reason string) *apierr.Error {
 	if idx != nil {
 		name = idx.Name
 	}
-	f := &shardFailure{status: 400, index: name, root: leaf, shard: leaf, top: top}
+	f := &search.ShardFailure{Status: 400, Index: name, Root: leaf, Shard: leaf, Top: top}
 	return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed", Shard: f}
 }
 
@@ -282,7 +283,7 @@ func termCandidates(term string, terms []string, df map[string]int, maxDoc int, 
 		var score float64
 		switch distance {
 		case "levenshtein":
-			score = float64(float32(1) - float32(levenshtein(term, c))/float32(max(len(tr), len(cr))))
+			score = float64(float32(1) - float32(search.Levenshtein(term, c))/float32(max(len(tr), len(cr))))
 		case "jaro_winkler":
 			score = jaroWinkler(tr, cr)
 		case "ngram":

@@ -1,6 +1,10 @@
 package main
 
-import "net/http"
+import (
+	"net/http"
+
+	"slopensearch/internal/model"
+)
 
 func (s *Server) handleSearchShards(w http.ResponseWriter, r *http.Request, indexSpec string) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
@@ -24,13 +28,13 @@ func (s *Server) handleSearchShards(w http.ResponseWriter, r *http.Request, inde
 				continue
 			}
 			shardsOut = append(shardsOut, []any{map[string]any{
-				"index": idx.Name, "shard": shard, "primary": true, "state": "STARTED", "node": nodeID,
+				"index": idx.Name, "shard": shard, "primary": true, "state": "STARTED", "node": model.NodeID,
 			}})
 		}
 	}
 	writeJSON(w, 200, map[string]any{
-		"nodes": map[string]any{nodeID: map[string]any{
-			"name": nodeName, "transport_address": nodeTransport,
+		"nodes": map[string]any{model.NodeID: map[string]any{
+			"name": model.NodeName, "transport_address": nodeTransport,
 		}},
 		"indices": indicesOut,
 		"shards":  shardsOut,

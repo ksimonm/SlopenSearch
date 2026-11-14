@@ -19,6 +19,7 @@ import (
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
+	"slopensearch/internal/search"
 )
 
 func resolveField(field, pathPrefix string) string {
@@ -57,7 +58,7 @@ func injectAliasValues(mappings map[string]any, prefix string, doc map[string]an
 				continue
 			}
 			if v, ok := mapping.FieldValue(doc, target); ok {
-				doc[path] = deepCopySource(v)
+				doc[path] = search.DeepCopySource(v)
 			}
 			continue
 		}
@@ -138,7 +139,7 @@ func injectAggDocValues(h aggHit, doc map[string]any) {
 func aggDocs(hits []aggHit) []map[string]any {
 	out := make([]map[string]any, 0, len(hits))
 	for _, h := range hits {
-		d := deepCopySource(h.doc).(map[string]any)
+		d := search.DeepCopySource(h.doc).(map[string]any)
 		// only root documents read their indexed values; nested elements
 		// (and documents already prepared by an outer aggregation) keep theirs
 		if _, nested := h.doc["__slop_nested_ctx"]; !nested {
@@ -731,9 +732,9 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *mode
 			RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason},
 			CausedBy:  &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
 	}
-	if isRangeFieldType(ft) {
+	if search.IsRangeFieldType(ft) {
 		reason := "Field [" + field + "] of type [" + ft + "] is not supported for aggregation [terms]"
-		return nil, matchSearchError("illegal_argument_exception", reason)
+		return nil, search.MatchSearchError("illegal_argument_exception", reason)
 	}
 	if ft == "text" {
 		fd := false
@@ -818,8 +819,8 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *mode
 		tb.docs = append(tb.docs, doc)
 	}
 	scriptSpec, hasScript := spec["script"]
-	var termsScript *compiledScript
-	joinField, _, hasJoin := findJoinField(idx)
+	var termsScript *search.CompiledScript
+	joinField, _, hasJoin := search.FindJoinField(idx)
 	joinType := ""
 	isJoinField := false
 	if hasJoin {
@@ -837,7 +838,7 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *mode
 			if src == nil {
 				src = d
 			}
-			name, parent := joinParts(src[joinField])
+			name, parent := search.JoinParts(src[joinField])
 			if joinType == "" {
 				if name != "" {
 					addVal(name, d, false)
@@ -890,7 +891,7 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *mode
 				return nil, serr
 			}
 			for _, r := range res {
-				addVal(termsScriptKey(r, useField, valueType, termsScript.ex != nil), d, false)
+				addVal(termsScriptKey(r, useField, valueType, termsScript.Ex != nil), d, false)
 			}
 			continue
 		}
@@ -1318,7 +1319,7 @@ func loadAggLocation(tz string) (*time.Location, *apierr.Error) {
 		return time.UTC, nil
 	}
 	if strings.HasPrefix(tz, "+") || strings.HasPrefix(tz, "-") {
-		off, err := parseTZOffset(tz)
+		off, err := search.ParseTZOffset(tz)
 		if err != nil {
 			return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason:   "Failed to parse aggregation [x]",
@@ -1326,7 +1327,7 @@ func loadAggLocation(tz string) (*time.Location, *apierr.Error) {
 		}
 		return time.FixedZone(tz, int(off/1000)), nil
 	}
-	loc, err := timeLoadLocation(tz)
+	loc, err := search.TimeLoadLocation(tz)
 	if err != nil {
 		return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason:   "Failed to parse aggregation [x]",
@@ -2122,7 +2123,7 @@ func filterAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pat
 func rangeAgg(field string, rangesRaw any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	ranges, ok := rangesRaw.([]any)
 	if !ok {
-		return nil, errParsing("range requires ranges")
+		return nil, apierr.Parsing("range requires ranges")
 	}
 	buckets := []any{}
 	for _, rRaw := range ranges {
@@ -2233,7 +2234,7 @@ func walkNested(cur any, parts []string, full string, ancestors map[string]map[s
 		}
 	case map[string]any:
 		if len(parts) == 0 {
-			cp, ok := deepCopySource(t).(map[string]any)
+			cp, ok := search.DeepCopySource(t).(map[string]any)
 			if !ok {
 				cp = t
 			}
@@ -2286,7 +2287,7 @@ func reverseNestedAgg(name, path string, docs []map[string]any, idx *model.Index
 			if !ok {
 				continue
 			}
-			cp, ok := deepCopySource(rootDoc).(map[string]any)
+			cp, ok := search.DeepCopySource(rootDoc).(map[string]any)
 			if !ok {
 				continue
 			}
@@ -2303,7 +2304,7 @@ func reverseNestedAgg(name, path string, docs []map[string]any, idx *model.Index
 		if seen[key] {
 			continue
 		}
-		cp, ok := deepCopySource(obj).(map[string]any)
+		cp, ok := search.DeepCopySource(obj).(map[string]any)
 		if !ok {
 			continue
 		}

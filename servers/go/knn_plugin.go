@@ -6,6 +6,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/mapping"
+	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 )
 
@@ -108,7 +109,7 @@ func (s *Server) handleKnnStats(w http.ResponseWriter, r *http.Request, segs []s
 			node = append(node, ojson.KV{n, knnNodeStatValue(n)})
 		}
 	}
-	out = append(out, ojson.KV{"nodes", ojson.Object{{nodeID, node}}})
+	out = append(out, ojson.KV{"nodes", ojson.Object{{model.NodeID, node}}})
 	writeJSON(w, 200, out)
 }
 

@@ -1,4 +1,4 @@
-package main
+package search
 
 import (
 	"strings"
@@ -46,7 +46,7 @@ func queryHighlightTexts(q map[string]any) []hlQueryText {
 							val = vm["query"]
 						}
 					}
-					text, _ := queryText(val)
+					text, _ := QueryText(val)
 					out = append(out, hlQueryText{text: text, opts: opts, exact: clause == "term"})
 				}
 			case "terms":
@@ -70,7 +70,7 @@ func queryHighlightTexts(q map[string]any) []hlQueryText {
 				out = append(out, hlQueryText{text: clean, opts: mm})
 			case "bool":
 				for _, key := range []string{"must", "should", "filter", "must_not"} {
-					for _, item := range asQueryList(mm[key]) {
+					for _, item := range AsQueryList(mm[key]) {
 						if child, ok := item.(map[string]any); ok {
 							walk(child)
 						}
@@ -85,7 +85,7 @@ func queryHighlightTexts(q map[string]any) []hlQueryText {
 
 // hlAnalyzedSpans marks the tokens of a text field value matching the query.
 func hlAnalyzedSpans(idx *model.Index, field, text string, query map[string]any) []hlSpan {
-	qc := &queryCtx{idx: idx}
+	qc := &QueryCtx{Idx: idx}
 	terms := map[string]bool{}
 	for _, qt := range queryHighlightTexts(query) {
 		if qt.exact {

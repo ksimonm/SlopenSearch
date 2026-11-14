@@ -82,7 +82,7 @@ func validateName(name string, alias bool) *apierr.Error {
 }
 
 func errIndexNotFoundNamed(name string) *apierr.Error {
-	e := errNotFound(name)
+	e := apierr.IndexNotFound(name)
 	e.Fields = map[string]any{"index": name, "index_uuid": "_na_",
 		"resource.type": "index_or_alias", "resource.id": name}
 	return e

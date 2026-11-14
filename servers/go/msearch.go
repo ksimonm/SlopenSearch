@@ -47,7 +47,7 @@ func (s *Server) handleMsearch(w http.ResponseWriter, r *http.Request, pathIndex
 			}
 			var m map[string]any
 			if err := json.Unmarshal([]byte(ln), &m); err != nil {
-				writeError(w, errParsing("Failed to parse request body"))
+				writeError(w, apierr.Parsing("Failed to parse request body"))
 				return
 			}
 			for k := range m {
@@ -60,7 +60,7 @@ func (s *Server) handleMsearch(w http.ResponseWriter, r *http.Request, pathIndex
 	for i := 0; i+1 < len(lines); i += 2 {
 		var header map[string]any
 		if err := json.Unmarshal([]byte(lines[i]), &header); err != nil {
-			writeError(w, errParsing("Failed to parse request body"))
+			writeError(w, apierr.Parsing("Failed to parse request body"))
 			return
 		}
 		for k := range header {
@@ -72,7 +72,7 @@ func (s *Server) handleMsearch(w http.ResponseWriter, r *http.Request, pathIndex
 		}
 		var body map[string]any
 		if err := json.Unmarshal([]byte(lines[i+1]), &body); err != nil {
-			writeError(w, errParsing("Failed to parse request body"))
+			writeError(w, apierr.Parsing("Failed to parse request body"))
 			return
 		}
 		if f, ok := body["from"]; ok {

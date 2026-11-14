@@ -10,10 +10,11 @@ import (
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
+	"slopensearch/internal/search"
 )
 
 func matrixStatsAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string) (any, *apierr.Error) {
-	fields := anyStringList(spec["fields"])
+	fields := search.AnyStringList(spec["fields"])
 	cols := map[string][]float64{}
 	for _, f := range fields {
 		cols[f] = []float64{}
@@ -126,7 +127,7 @@ func geoBoundsAgg(spec map[string]any, docs []map[string]any, idx *model.Index, 
 		if !ok {
 			continue
 		}
-		lat, lon, ok := geoPointOf(v)
+		lat, lon, ok := search.GeoPointOf(v)
 		if !ok {
 			continue
 		}
@@ -194,7 +195,7 @@ func geoCentroidAgg(spec map[string]any, docs []map[string]any, idx *model.Index
 		if !ok {
 			continue
 		}
-		lat, lon, ok := geoPointOf(v)
+		lat, lon, ok := search.GeoPointOf(v)
 		if !ok {
 			continue
 		}
@@ -258,7 +259,7 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *model.Index) (a
 	storedNone := false
 	_, sourceExplicit := spec["_source"]
 	if sf, ok := spec["stored_fields"]; ok {
-		names := anyStringList(sf)
+		names := search.AnyStringList(sf)
 		for _, n := range names {
 			if n == "_none_" {
 				storedNone = true
@@ -291,7 +292,7 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *model.Index) (a
 			h = append(h, ojson.KV{"_score", nil})
 		}
 		if includeSource {
-			src := filterSourceDoc(d, sourceIncludes, sourceExcludes)
+			src := search.FilterSourceDoc(d, sourceIncludes, sourceExcludes)
 			delete(src, "__slop_id")
 			delete(src, "__slop_score")
 			h = append(h, ojson.KV{"_source", normalizeNumbers(src)})
@@ -330,7 +331,7 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *model.Index) (a
 		}
 		fields := ojson.Object{}
 		if dv, ok := spec["docvalue_fields"]; ok {
-			for _, f := range anyStringList(dv) {
+			for _, f := range search.AnyStringList(dv) {
 				if v, ok := mapping.FieldValue(d, f); ok {
 					fields = append(fields, ojson.KV{f, []any{normalizeNumbers(v)}})
 				}
@@ -473,17 +474,17 @@ func parseTopHitsSource(raw any) (bool, []string, []string) {
 		if t == "true" || t == "" {
 			return true, nil, nil
 		}
-		return true, splitSourceList(t), nil
+		return true, search.SplitSourceList(t), nil
 	case []any:
-		return true, anyStringList(t), nil
+		return true, search.AnyStringList(t), nil
 	case map[string]any:
-		inc := anyStringList(t["includes"])
+		inc := search.AnyStringList(t["includes"])
 		if len(inc) == 0 {
-			inc = anyStringList(t["include"])
+			inc = search.AnyStringList(t["include"])
 		}
-		exc := anyStringList(t["excludes"])
+		exc := search.AnyStringList(t["excludes"])
 		if len(exc) == 0 {
-			exc = anyStringList(t["exclude"])
+			exc = search.AnyStringList(t["exclude"])
 		}
 		return true, inc, exc
 	}

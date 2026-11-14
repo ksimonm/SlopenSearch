@@ -1,4 +1,4 @@
-package main
+package search
 
 import (
 	"strings"
@@ -13,8 +13,8 @@ import (
 // Wiring of the expression engine (internal/expressions) into scripts.
 
 // expressionScriptErr renders an expression error as a script_exception.
-func expressionScriptErr(e *expressions.Error, src string) *plScriptErr {
-	se := &plScriptErr{compile: !e.Link, script: src, lang: "expression", causeType: "parse_exception", reason: e.Reason}
+func expressionScriptErr(e *expressions.Error, src string) *ScriptError {
+	se := &ScriptError{Compile: !e.Link, Script: src, Lang: "expression", CauseType: "parse_exception", Reason: e.Reason}
 	if e.Link {
 		se.linkErr = true
 	}
@@ -25,12 +25,12 @@ func expressionScriptErr(e *expressions.Error, src string) *plScriptErr {
 	if off > len(src) {
 		off = len(src)
 	}
-	se.stack = []string{src, strings.Repeat(" ", off) + "^---- HERE"}
+	se.Stack = []string{src, strings.Repeat(" ", off) + "^---- HERE"}
 	return se
 }
 
 // exPrepare compiles and checks an expression for a context.
-func exPrepare(src, ctxName string) (*expressions.Script, *plScriptErr, *apierr.Error) {
+func PrepareExpression(src, ctxName string) (*expressions.Script, *ScriptError, *apierr.Error) {
 	s, err := expressions.Compile(src)
 	if err != nil {
 		return nil, expressionScriptErr(err, src), nil
@@ -65,9 +65,9 @@ func exprFields(idx *model.Index) func(field string) (expressions.Kind, bool) {
 }
 
 // exprDoc exposes a document's values to expressions.
-type exprDoc struct{ qc *queryCtx }
+type exprDoc struct{ qc *QueryCtx }
 
 func (d exprDoc) Values(field string) []any {
-	vals, _ := d.qc.values(field)
+	vals, _ := d.qc.Values(field)
 	return vals
 }

@@ -15,26 +15,11 @@ import (
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
+	"slopensearch/internal/search"
 	"slopensearch/internal/storage"
 )
 
 const versionCreated = "137307827"
-
-const (
-	clusterName = "opensearch"
-	clusterUUID = "slopensearch-cluster-uuid"
-	nodeID      = "c2xvcGVuc2VhcmNobm9kZQ"
-	nodeName    = "slopensearch-node"
-	nodeVersion = "3.9.0"
-)
-
-func errNotFound(index string) *apierr.Error {
-	return &apierr.Error{Type: "index_not_found_exception", Reason: "no such index [" + index + "]", Status: 404}
-}
-
-func errParsing(reason string) *apierr.Error {
-	return &apierr.Error{Type: "parsing_exception", Reason: reason, Status: 400}
-}
 
 type Server struct {
 	// mu guards State except IngestPipelines (ingestMu) and Scripts (scriptsMu).
@@ -52,8 +37,6 @@ type Server struct {
 	ingest        *ingest.Engine
 }
 
-var globalServer *Server
-
 func NewServer() *Server {
 	s := &Server{
 		State:   model.NewState(),
@@ -61,7 +44,7 @@ func NewServer() *Server {
 		pits:    map[string]*pitContext{},
 	}
 	s.ingest = ingest.NewEngine(&s.State, &s.ingestMu, ingestScripts{})
-	globalServer = s
+	search.Cluster = clusterLookup{s}
 	return s
 }
 
@@ -86,39 +69,6 @@ func analyzeWith(analyzer, text string) []string {
 		return []string{strings.ToLower(text)}
 	default:
 		return mapping.Analyze(text)
-	}
-}
-
-func levenshtein(a, b string) int {
-	ar, br := []rune(a), []rune(b)
-	prev := make([]int, len(br)+1)
-	curr := make([]int, len(br)+1)
-	for j := range prev {
-		prev[j] = j
-	}
-	for i := 1; i <= len(ar); i++ {
-		curr[0] = i
-		for j := 1; j <= len(br); j++ {
-			cost := 1
-			if ar[i-1] == br[j-1] {
-				cost = 0
-			}
-			curr[j] = min(prev[j]+1, min(curr[j-1]+1, prev[j-1]+cost))
-		}
-		prev, curr = curr, prev
-	}
-	return prev[len(br)]
-}
-
-func autoFuzziness(term string) int {
-	n := len([]rune(term))
-	switch {
-	case n <= 2:
-		return 0
-	case n <= 5:
-		return 1
-	default:
-		return 2
 	}
 }
 
@@ -248,15 +198,6 @@ func inferType(v any) map[string]any {
 	return nil
 }
 
-func ensureProperties(mappings map[string]any) map[string]any {
-	props, ok := mappings["properties"].(map[string]any)
-	if !ok {
-		props = map[string]any{}
-		mappings["properties"] = props
-	}
-	return props
-}
-
 func mergeMappingForIndex(idx *model.Index, props, src map[string]any) *apierr.Error {
 	if enabled, ok := idx.Mappings["enabled"].(bool); ok && !enabled {
 		return nil
@@ -341,4 +282,20 @@ func httpPortNum() int {
 		return 9200
 	}
 	return n
+}
+
+// clusterLookup gives query evaluation access to other indices and stored
+// scripts.
+type clusterLookup struct{ s *Server }
+
+func (c clusterLookup) Index(name string) (*model.Index, bool) {
+	idx, ok := c.s.Indices[name]
+	return idx, ok
+}
+
+func (c clusterLookup) StoredScript(id string) (map[string]any, bool) {
+	c.s.scriptsMu.RLock()
+	defer c.s.scriptsMu.RUnlock()
+	sc, ok := c.s.Scripts[id]
+	return sc, ok
 }

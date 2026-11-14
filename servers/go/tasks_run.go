@@ -16,6 +16,7 @@ import (
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
+	"slopensearch/internal/search"
 )
 
 // Background execution of tasks started with wait_for_completion=false.
@@ -89,7 +90,7 @@ func (t *storedTask) liveStatus(now time.Time, asResponse bool) ojson.Object {
 // taskEntry renders a running task as the task list, cancel and rethrottle
 // APIs show it; the caller holds taskReg.
 func (t *storedTask) taskEntry(now time.Time, detailed bool) ojson.Object {
-	e := ojson.Object{{"node", nodeID}, {"id", t.id}, {"type", "transport"}, {"action", t.action}}
+	e := ojson.Object{{"node", model.NodeID}, {"id", t.id}, {"type", "transport"}, {"action", t.action}}
 	if detailed {
 		if t.bulk {
 			e = append(e, ojson.KV{"status", t.liveStatus(now, false)})
@@ -118,8 +119,8 @@ func resourceStatsJSON() ojson.Object {
 // taskNodeJSON wraps task entries in the node object of task list answers.
 func taskNodeJSON(tasks ojson.Object) ojson.Object {
 	return ojson.Object{
-		{"nodes", ojson.Object{{nodeID, ojson.Object{
-			{"name", nodeName}, {"transport_address", nodeTransport}, {"host", nodeHost},
+		{"nodes", ojson.Object{{model.NodeID, ojson.Object{
+			{"name", model.NodeName}, {"transport_address", nodeTransport}, {"host", nodeHost},
 			{"ip", nodeTransport}, {"roles", nodeRoles()}, {"attributes", nodeAttributes()},
 			{"tasks", tasks},
 		}}}},
@@ -141,7 +142,7 @@ func runningTasks(actions string, detailed bool) ojson.Object {
 	out := ojson.Object{}
 	for _, id := range ids {
 		t := taskReg.tasks[id]
-		out = append(out, ojson.KV{nodeID + ":" + strconv.FormatInt(id, 10), t.taskEntry(now, detailed)})
+		out = append(out, ojson.KV{model.NodeID + ":" + strconv.FormatInt(id, 10), t.taskEntry(now, detailed)})
 	}
 	return out
 }
@@ -283,8 +284,8 @@ func (s *Server) bbsMatches(action string, segs []string, q url.Values, body map
 				continue
 			}
 			if query != nil {
-				qc := newQueryCtxForDoc(idx, id, doc)
-				match, _, qerr := qc.eval(query)
+				qc := search.NewQueryCtxForDoc(idx, id, doc)
+				match, _, qerr := qc.Eval(query)
 				if qerr != nil {
 					return false
 				}

@@ -1,4 +1,4 @@
-package main
+package search
 
 import (
 	"encoding/base64"
@@ -25,7 +25,7 @@ import (
 // time helpers used by date range queries
 // ---------------------------------------------------------------------------
 
-func timeLoadLocation(name string) (*time.Location, error) { return time.LoadLocation(name) }
+func TimeLoadLocation(name string) (*time.Location, error) { return time.LoadLocation(name) }
 
 func timeNowIn(loc *time.Location) (time.Time, int) {
 	now := time.Now().In(loc)
@@ -48,8 +48,8 @@ func stripFieldBoost(f string) (string, float64) {
 	return f, 1
 }
 
-func (c *queryCtx) fieldMatchedCount(field string, terms []string) int {
-	vals, ok := c.values(field)
+func (c *QueryCtx) fieldMatchedCount(field string, terms []string) int {
+	vals, ok := c.Values(field)
 	if !ok {
 		return 0
 	}
@@ -57,7 +57,7 @@ func (c *queryCtx) fieldMatchedCount(field string, terms []string) int {
 	tf := map[string]int{}
 	for _, v := range vals {
 		s, _ := jsonv.ScalarString(v)
-		for _, t := range analysis.Tokens(mapping.AnalysisIndex(c.idx), analyzer, s) {
+		for _, t := range analysis.Tokens(mapping.AnalysisIndex(c.Idx), analyzer, s) {
 			tf[t.Term]++
 		}
 	}
@@ -70,11 +70,11 @@ func (c *queryCtx) fieldMatchedCount(field string, terms []string) int {
 	return n
 }
 
-func (c *queryCtx) bm25FieldScore(field string, qtokens []string, operator string, boost float64) float64 {
-	if c.idx == nil || c.id == "" {
+func (c *QueryCtx) bm25FieldScore(field string, qtokens []string, operator string, boost float64) float64 {
+	if c.Idx == nil || c.ID == "" {
 		return -1
 	}
-	def, _ := mapping.FieldDef(c.idx, field)
+	def, _ := mapping.FieldDef(c.Idx, field)
 	ftype, _ := def["type"].(string)
 	if ftype != "" && ftype != "text" && ftype != "match_only_text" && ftype != "search_as_you_type" {
 		return -1
@@ -84,7 +84,7 @@ func (c *queryCtx) bm25FieldScore(field string, qtokens []string, operator strin
 		out := []string{}
 		for _, v := range vals {
 			s, _ := jsonv.ScalarString(v)
-			for _, t := range analysis.Tokens(mapping.AnalysisIndex(c.idx), analyzer, s) {
+			for _, t := range analysis.Tokens(mapping.AnalysisIndex(c.Idx), analyzer, s) {
 				out = append(out, t.Term)
 			}
 		}
@@ -93,10 +93,10 @@ func (c *queryCtx) bm25FieldScore(field string, qtokens []string, operator strin
 	var myTokens []string
 	var st *fieldTermStats
 	if c.vals == nil {
-		st = termStatsFor(c.idx, mapping.ResolveAliasField(c.idx, field), analyzer, docTerms)
-		myTokens = st.docTokens[c.id]
+		st = termStatsFor(c.Idx, mapping.ResolveAliasField(c.Idx, field), analyzer, docTerms)
+		myTokens = st.docTokens[c.ID]
 	} else {
-		myTokens = docTerms(c.vals[mapping.ResolveAliasField(c.idx, field)])
+		myTokens = docTerms(c.vals[mapping.ResolveAliasField(c.Idx, field)])
 	}
 	if len(myTokens) == 0 {
 		return 0
@@ -113,7 +113,7 @@ func (c *queryCtx) bm25FieldScore(field string, qtokens []string, operator strin
 		}
 	}
 	if st == nil {
-		st = termStatsFor(c.idx, mapping.ResolveAliasField(c.idx, field), analyzer, docTerms)
+		st = termStatsFor(c.Idx, mapping.ResolveAliasField(c.Idx, field), analyzer, docTerms)
 	}
 	N := st.n
 	df := st.df
@@ -150,10 +150,10 @@ func (c *queryCtx) bm25FieldScore(field string, qtokens []string, operator strin
 	return score * boost
 }
 
-func (c *queryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apierr.Error) {
 	query, _ := jsonv.ToString(bm["query"])
 	if query == "" {
-		return false, 0, errParsing("[multi_match] requires 'query'")
+		return false, 0, apierr.Parsing("[multi_match] requires 'query'")
 	}
 	typ, _ := bm["type"].(string)
 	if typ == "" {
@@ -192,7 +192,7 @@ func (c *queryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apierr.Err
 	for _, f := range fields {
 		name, _ := stripFieldBoost(f)
 		if strings.ContainsAny(name, "*?") {
-			re := wildcardRegex(name)
+			re := WildcardRegex(name)
 			for path, vals := range c.valuesMap() {
 				if re.MatchString(path) && len(vals) > 0 {
 					expanded = append(expanded, path)
@@ -222,7 +222,7 @@ func (c *queryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apierr.Err
 			} else {
 				bm2 := map[string]any{name: map[string]any{"query": query, "boost": boost * fb}}
 				q := map[string]any{"match_phrase_prefix": bm2}
-				ok, _, _ = c.eval(q)
+				ok, _, _ = c.Eval(q)
 			}
 			if ok {
 				matchedAny = true
@@ -243,7 +243,7 @@ func (c *queryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apierr.Err
 		}
 	case "cross_fields":
 		if _, has := bm["fuzziness"]; has {
-			return false, 0, errParsing("Fuzziness not allowed for type [cross_fields]")
+			return false, 0, apierr.Parsing("Fuzziness not allowed for type [cross_fields]")
 		}
 		terms := mapping.Analyze(query)
 		operator, _ := bm["operator"].(string)
@@ -283,7 +283,7 @@ func (c *queryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apierr.Err
 		for _, f := range expanded {
 			name, fb := stripFieldBoost(f)
 			if fromWildcard[name] {
-				if def, ok := mapping.FieldDef(c.idx, name); ok {
+				if def, ok := mapping.FieldDef(c.Idx, name); ok {
 					ft, _ := def["type"].(string)
 					if ft != "" && ft != "text" && ft != "keyword" && ft != "constant_keyword" &&
 						ft != "wildcard" && ft != "match_only_text" && ft != "search_as_you_type" && ft != "flat_object" {
@@ -359,7 +359,7 @@ func (c *queryCtx) evalMultiMatch(bm map[string]any) (bool, float64, *apierr.Err
 	}
 }
 
-func (c *queryCtx) evalCombinedFields(bm map[string]any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalCombinedFields(bm map[string]any) (bool, float64, *apierr.Error) {
 	query, _ := jsonv.ToString(bm["query"])
 	var fields []string
 	switch t := bm["fields"].(type) {
@@ -380,17 +380,17 @@ func (c *queryCtx) evalCombinedFields(bm map[string]any) (bool, float64, *apierr
 		name, fb := stripFieldBoost(f)
 		if fb < 1 {
 			reason := "weight must be greater or equal to 1"
-			return false, 0, matchSearchError("query_shard_exception", reason)
+			return false, 0, MatchSearchError("query_shard_exception", reason)
 		}
 		if strings.ContainsAny(name, "*?") {
-			re := wildcardRegex(name)
+			re := WildcardRegex(name)
 			for path, vals := range c.valuesMap() {
 				if re.MatchString(path) && len(vals) > 0 {
 					expanded = append(expanded, f)
 					break
 				}
 			}
-			re2 := wildcardRegex(name)
+			re2 := WildcardRegex(name)
 			for path := range c.valuesMap() {
 				if re2.MatchString(path) && !containsString(expanded, path) {
 					expanded = append(expanded, path)
@@ -413,13 +413,13 @@ func (c *queryCtx) evalCombinedFields(bm map[string]any) (bool, float64, *apierr
 	expanded = finalFields
 	for _, f := range expanded {
 		name, _ := stripFieldBoost(f)
-		def, ok := mapping.FieldDef(c.idx, name)
+		def, ok := mapping.FieldDef(c.Idx, name)
 		if !ok {
 			continue
 		}
 		ft, _ := def["type"].(string)
 		if ft != "" && ft != "text" && ft != "match_only_text" && ft != "search_as_you_type" {
-			return false, 0, matchSearchError("query_shard_exception",
+			return false, 0, MatchSearchError("query_shard_exception",
 				"Field ["+name+"] of type ["+ft+"] does not support [combined_fields] queries")
 		}
 	}
@@ -474,14 +474,14 @@ func containsString(list []string, s string) bool {
 // nested / join queries
 // ---------------------------------------------------------------------------
 
-func (c *queryCtx) evalNested(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalNested(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("[nested] query malformed")
+		return false, 0, apierr.Parsing("[nested] query malformed")
 	}
 	inner, ok := bm["query"].(map[string]any)
 	if !ok {
-		return false, 0, errParsing("[nested] requires 'query'")
+		return false, 0, apierr.Parsing("[nested] requires 'query'")
 	}
 	path, _ := bm["path"].(string)
 	scoreMode, _ := bm["score_mode"].(string)
@@ -489,16 +489,16 @@ func (c *queryCtx) evalNested(body any) (bool, float64, *apierr.Error) {
 		scoreMode = "avg"
 	}
 	ignoreUnmapped, _ := bm["ignore_unmapped"].(bool)
-	def, mapped := mapping.FieldDef(c.idx, path)
+	def, mapped := mapping.FieldDef(c.Idx, path)
 	if !mapped {
 		if ignoreUnmapped {
 			return false, 0, nil
 		}
-		return false, 0, matchSearchError("query_shard_exception",
+		return false, 0, MatchSearchError("query_shard_exception",
 			"failed to create query: [nested] failed to find nested object under path ["+path+"]")
 	}
 	if t, _ := def["type"].(string); t != "nested" {
-		return false, 0, matchSearchError("query_shard_exception",
+		return false, 0, MatchSearchError("query_shard_exception",
 			"failed to create query: [nested] nested object under path ["+path+"] is not of nested type")
 	}
 	objects, ok := nestedObjectsForCtx(c, path)
@@ -516,9 +516,9 @@ func (c *queryCtx) evalNested(body any) (bool, float64, *apierr.Error) {
 		parentNested = parentMeta
 	}
 	for i, obj := range objects {
-		child := &queryCtx{idx: c.idx, id: c.id, doc: c.doc, vals: c.vals,
-			nestedPath: path, nestedRoot: obj, nestedOffset: i, nestedParent: parentNested}
-		matched, sc, err := child.eval(inner)
+		child := &QueryCtx{Idx: c.Idx, ID: c.ID, Doc: c.Doc, vals: c.vals,
+			NestedPath: path, NestedRoot: obj, nestedOffset: i, nestedParent: parentNested}
+		matched, sc, err := child.Eval(inner)
 		if err != nil {
 			return false, 0, err
 		}
@@ -557,19 +557,19 @@ func (c *queryCtx) evalNested(body any) (bool, float64, *apierr.Error) {
 	return true, float64(float32(total / float64(count))), nil
 }
 
-func nestedObjectsForCtx(c *queryCtx, path string) ([]map[string]any, bool) {
-	if c.nestedRoot != nil {
+func nestedObjectsForCtx(c *QueryCtx, path string) ([]map[string]any, bool) {
+	if c.NestedRoot != nil {
 		lookup := path
-		if path == c.nestedPath {
+		if path == c.NestedPath {
 			lookup = ""
-		} else if strings.HasPrefix(path, c.nestedPath+".") {
-			lookup = strings.TrimPrefix(path, c.nestedPath+".")
+		} else if strings.HasPrefix(path, c.NestedPath+".") {
+			lookup = strings.TrimPrefix(path, c.NestedPath+".")
 		} else {
 			return nil, false
 		}
-		return nestedObjectsAt(c.nestedRoot, lookup), true
+		return nestedObjectsAt(c.NestedRoot, lookup), true
 	}
-	return nestedObjectsAt(c.doc, path), true
+	return nestedObjectsAt(c.Doc, path), true
 }
 
 func nestedSourceFilter(obj map[string]any, path string, spec any) any {
@@ -642,11 +642,11 @@ func nestedSortCompare(a, b any) int {
 	return strings.Compare(as, bs)
 }
 
-func nestedSortOutput(obj map[string]any, path string, sp searchSortSpec) any {
-	if sp.field == "_score" {
+func nestedSortOutput(obj map[string]any, path string, sp SearchSortSpec) any {
+	if sp.Field == "_score" {
 		return nil
 	}
-	rel := sp.field
+	rel := sp.Field
 	if strings.HasPrefix(rel, path+".") {
 		rel = strings.TrimPrefix(rel, path+".")
 	}
@@ -657,7 +657,7 @@ func nestedSortOutput(obj map[string]any, path string, sp searchSortSpec) any {
 	return vals[0]
 }
 
-func collectNestedInnerHits(c *queryCtx, query map[string]any, omitScores bool) map[string]any {
+func CollectNestedInnerHits(c *QueryCtx, query map[string]any, omitScores bool) map[string]any {
 	out := map[string]any{}
 	collectNestedInnerHitsClause(c, query, omitScores, out)
 	if len(out) == 0 {
@@ -666,7 +666,7 @@ func collectNestedInnerHits(c *queryCtx, query map[string]any, omitScores bool) 
 	return out
 }
 
-func collectNestedInnerHitsClause(c *queryCtx, query map[string]any, omitScores bool, out map[string]any) {
+func collectNestedInnerHitsClause(c *QueryCtx, query map[string]any, omitScores bool, out map[string]any) {
 	for clause, raw := range query {
 		bm, ok := raw.(map[string]any)
 		if !ok {
@@ -685,7 +685,7 @@ func collectNestedInnerHitsClause(c *queryCtx, query map[string]any, omitScores 
 			}
 		case "bool":
 			for _, key := range []string{"must", "should", "filter", "must_not"} {
-				for _, q := range asQueryList(bm[key]) {
+				for _, q := range AsQueryList(bm[key]) {
 					if qm, ok := q.(map[string]any); ok {
 						collectNestedInnerHitsClause(c, qm, omitScores, out)
 					}
@@ -696,7 +696,7 @@ func collectNestedInnerHitsClause(c *queryCtx, query map[string]any, omitScores 
 				collectNestedInnerHitsClause(c, qm, omitScores, out)
 			}
 		case "dis_max":
-			for _, q := range asQueryList(bm["queries"]) {
+			for _, q := range AsQueryList(bm["queries"]) {
 				if qm, ok := q.(map[string]any); ok {
 					collectNestedInnerHitsClause(c, qm, omitScores, out)
 				}
@@ -715,7 +715,7 @@ func collectNestedInnerHitsClause(c *queryCtx, query map[string]any, omitScores 
 	}
 }
 
-func collectOneNestedInnerHits(c *queryCtx, path string, inner map[string]any, spec any, omitScores bool, out map[string]any) {
+func collectOneNestedInnerHits(c *QueryCtx, path string, inner map[string]any, spec any, omitScores bool, out map[string]any) {
 	objects, ok := nestedObjectsForCtx(c, path)
 	if !ok {
 		return
@@ -749,15 +749,15 @@ func collectOneNestedInnerHits(c *queryCtx, path string, inner map[string]any, s
 		parentNested = parentMeta
 	}
 	for i, obj := range objects {
-		child := &queryCtx{idx: c.idx, id: c.id, doc: c.doc, vals: c.vals,
-			nestedPath: path, nestedRoot: obj, nestedOffset: i, nestedParent: parentNested}
-		ok, sc, err := child.eval(inner)
+		child := &QueryCtx{Idx: c.Idx, ID: c.ID, Doc: c.Doc, vals: c.vals,
+			NestedPath: path, NestedRoot: obj, nestedOffset: i, nestedParent: parentNested}
+		ok, sc, err := child.Eval(inner)
 		if err != nil || !ok {
 			continue
 		}
 		entry := map[string]any{
-			"_index":  c.idx.Name,
-			"_id":     c.id,
+			"_index":  c.Idx.Name,
+			"_id":     c.ID,
 			"_nested": child.nestedMeta(),
 		}
 		src := nestedSourceFilter(obj, path, specMap["_source"])
@@ -767,15 +767,15 @@ func collectOneNestedInnerHits(c *queryCtx, path string, inner map[string]any, s
 		if omitScores {
 			entry["_score"] = nil
 		} else {
-			entry["_score"] = scoreJSON(sc)
+			entry["_score"] = ScoreJSON(sc)
 		}
-		if deeper := collectNestedInnerHits(child, inner, omitScores); len(deeper) > 0 {
+		if deeper := CollectNestedInnerHits(child, inner, omitScores); len(deeper) > 0 {
 			entry["inner_hits"] = deeper
 		}
 		matched = append(matched, nestedInnerHit{score: sc, entry: entry, obj: obj})
 	}
 	if rawSort, has := specMap["sort"]; has {
-		if specs, err := parseSortSpecs(rawSort, ""); err == nil && len(specs) > 0 {
+		if specs, err := ParseSortSpecs(rawSort, ""); err == nil && len(specs) > 0 {
 			for i := range matched {
 				vals := make([]any, 0, len(specs))
 				for _, sp := range specs {
@@ -788,7 +788,7 @@ func collectOneNestedInnerHits(c *queryCtx, path string, inner map[string]any, s
 				for k, sp := range specs {
 					cmp := nestedSortCompare(matched[i].sortVals[k], matched[j].sortVals[k])
 					if cmp != 0 {
-						if sp.desc {
+						if sp.Desc {
 							return cmp > 0
 						}
 						return cmp < 0
@@ -821,7 +821,7 @@ func collectOneNestedInnerHits(c *queryCtx, path string, inner map[string]any, s
 				m = x.score
 			}
 		}
-		maxScore = scoreJSON(m)
+		maxScore = ScoreJSON(m)
 	}
 	out[name] = map[string]any{"hits": map[string]any{
 		"total":     map[string]any{"value": total, "relation": "eq"},
@@ -830,7 +830,7 @@ func collectOneNestedInnerHits(c *queryCtx, path string, inner map[string]any, s
 	}}
 }
 
-func findJoinField(idx *model.Index) (string, map[string]any, bool) {
+func FindJoinField(idx *model.Index) (string, map[string]any, bool) {
 	props, _ := idx.Mappings["properties"].(map[string]any)
 	for name, raw := range props {
 		def, ok := raw.(map[string]any)
@@ -845,7 +845,7 @@ func findJoinField(idx *model.Index) (string, map[string]any, bool) {
 	return "", nil, false
 }
 
-func joinParts(v any) (string, string) {
+func JoinParts(v any) (string, string) {
 	switch t := v.(type) {
 	case string:
 		return t, ""
@@ -873,7 +873,7 @@ func joinRelationChildren(relations map[string]any, parent string) []string {
 	return nil
 }
 
-func joinValidName(relations map[string]any, name string) bool {
+func JoinValidName(relations map[string]any, name string) bool {
 	if _, ok := relations[name]; ok {
 		return true
 	}
@@ -887,7 +887,7 @@ func joinValidName(relations map[string]any, name string) bool {
 	return false
 }
 
-func joinParentRelation(relations map[string]any, child string) string {
+func JoinParentRelation(relations map[string]any, child string) string {
 	for parent := range relations {
 		for _, c := range joinRelationChildren(relations, parent) {
 			if c == child {
@@ -899,26 +899,26 @@ func joinParentRelation(relations map[string]any, child string) string {
 }
 
 func joinError(clause, reason string) *apierr.Error {
-	return matchSearchError("query_shard_exception", "["+clause+"] "+reason)
+	return MatchSearchError("query_shard_exception", "["+clause+"] "+reason)
 }
 
-func (c *queryCtx) joinChildContexts(childType string, inner map[string]any) ([]*queryCtx, []float64, *apierr.Error) {
-	var ctxs []*queryCtx
+func (c *QueryCtx) joinChildContexts(childType string, inner map[string]any) ([]*QueryCtx, []float64, *apierr.Error) {
+	var ctxs []*QueryCtx
 	var scores []float64
-	for _, id := range c.idx.Order {
-		doc, live := c.idx.Docs[id]
+	for _, id := range c.Idx.Order {
+		doc, live := c.Idx.Docs[id]
 		if !live {
 			continue
 		}
-		name, parent := joinParts(doc[fieldOfJoin(c.idx)])
-		if parent != c.id {
+		name, parent := JoinParts(doc[fieldOfJoin(c.Idx)])
+		if parent != c.ID {
 			continue
 		}
 		if childType != "" && name != childType {
 			continue
 		}
-		cc := newQueryCtxForDoc(c.idx, id, doc)
-		ok, sc, err := cc.eval(inner)
+		cc := NewQueryCtxForDoc(c.Idx, id, doc)
+		ok, sc, err := cc.Eval(inner)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -931,29 +931,29 @@ func (c *queryCtx) joinChildContexts(childType string, inner map[string]any) ([]
 }
 
 func fieldOfJoin(idx *model.Index) string {
-	field, _, _ := findJoinField(idx)
+	field, _, _ := FindJoinField(idx)
 	return field
 }
 
-func (c *queryCtx) evalHasChild(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalHasChild(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("[has_child] query malformed")
+		return false, 0, apierr.Parsing("[has_child] query malformed")
 	}
 	childType, _ := bm["type"].(string)
 	inner, ok := bm["query"].(map[string]any)
 	if !ok {
-		return false, 0, errParsing("[has_child] requires 'query'")
+		return false, 0, apierr.Parsing("[has_child] requires 'query'")
 	}
 	ignoreUnmapped, _ := bm["ignore_unmapped"].(bool)
-	field, relations, hasJoin := findJoinField(c.idx)
+	field, relations, hasJoin := FindJoinField(c.Idx)
 	if !hasJoin {
 		if ignoreUnmapped {
 			return false, 0, nil
 		}
 		return false, 0, joinError("has_child", "no join field has been configured")
 	}
-	if childType != "" && !joinValidName(relations, childType) {
+	if childType != "" && !JoinValidName(relations, childType) {
 		return false, 0, joinError("has_child",
 			"join field ["+field+"] doesn't hold ["+childType+"] as a child")
 	}
@@ -1008,10 +1008,10 @@ func (c *queryCtx) evalHasChild(body any) (bool, float64, *apierr.Error) {
 	return true, 1, nil
 }
 
-func (c *queryCtx) evalHasParent(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalHasParent(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("[has_parent] query malformed")
+		return false, 0, apierr.Parsing("[has_parent] query malformed")
 	}
 	parentType, _ := bm["parent_type"].(string)
 	if parentType == "" {
@@ -1019,37 +1019,37 @@ func (c *queryCtx) evalHasParent(body any) (bool, float64, *apierr.Error) {
 	}
 	inner, ok := bm["query"].(map[string]any)
 	if !ok {
-		return false, 0, errParsing("[has_parent] requires 'query'")
+		return false, 0, apierr.Parsing("[has_parent] requires 'query'")
 	}
 	ignoreUnmapped, _ := bm["ignore_unmapped"].(bool)
-	field, relations, hasJoin := findJoinField(c.idx)
+	field, relations, hasJoin := FindJoinField(c.Idx)
 	if !hasJoin {
 		if ignoreUnmapped {
 			return false, 0, nil
 		}
 		return false, 0, joinError("has_parent", "no join field has been configured")
 	}
-	if parentType != "" && !joinValidName(relations, parentType) {
+	if parentType != "" && !JoinValidName(relations, parentType) {
 		return false, 0, joinError("has_parent",
 			"join field ["+field+"] doesn't hold ["+parentType+"] as a parent")
 	}
-	parentID := c.idx.Routing[c.id]
+	parentID := c.Idx.Routing[c.ID]
 	if parentID == "" {
-		_, parentID = joinParts(c.doc[field])
+		_, parentID = JoinParts(c.Doc[field])
 	}
 	if parentID == "" {
 		return false, 0, nil
 	}
-	doc, live := c.idx.Docs[parentID]
+	doc, live := c.Idx.Docs[parentID]
 	if !live {
 		return false, 0, nil
 	}
-	name, _ := joinParts(doc[field])
+	name, _ := JoinParts(doc[field])
 	if parentType != "" && name != parentType {
 		return false, 0, nil
 	}
-	cc := newQueryCtxForDoc(c.idx, parentID, doc)
-	ok, sc, err := cc.eval(inner)
+	cc := NewQueryCtxForDoc(c.Idx, parentID, doc)
+	ok, sc, err := cc.Eval(inner)
 	if err != nil {
 		return false, 0, err
 	}
@@ -1062,34 +1062,34 @@ func (c *queryCtx) evalHasParent(body any) (bool, float64, *apierr.Error) {
 	return true, 1, nil
 }
 
-func (c *queryCtx) evalParentId(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalParentId(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("[parent_id] query malformed")
+		return false, 0, apierr.Parsing("[parent_id] query malformed")
 	}
 	childType, _ := bm["type"].(string)
 	parentID, _ := bm["id"].(string)
 	ignoreUnmapped, _ := bm["ignore_unmapped"].(bool)
-	field, relations, hasJoin := findJoinField(c.idx)
+	field, relations, hasJoin := FindJoinField(c.Idx)
 	if !hasJoin {
 		if ignoreUnmapped {
 			return false, 0, nil
 		}
 		return false, 0, joinError("parent_id", "no join field has been configured")
 	}
-	name, parent := joinParts(c.doc[field])
+	name, parent := JoinParts(c.Doc[field])
 	if name != childType || parent != parentID {
 		return false, 0, nil
 	}
-	parentType := joinParentRelation(relations, childType)
+	parentType := JoinParentRelation(relations, childType)
 	df := 0
 	total := 0
-	for _, id := range c.idx.Order {
-		doc, live := c.idx.Docs[id]
+	for _, id := range c.Idx.Order {
+		doc, live := c.Idx.Docs[id]
 		if !live {
 			continue
 		}
-		n, p := joinParts(doc[field])
+		n, p := JoinParts(doc[field])
 		if n == "" {
 			continue
 		}
@@ -1111,34 +1111,34 @@ func (c *queryCtx) evalParentId(body any) (bool, float64, *apierr.Error) {
 
 func joinInnerSource(doc map[string]any, spec any) map[string]any {
 	body := map[string]any{"_source": spec}
-	inc, exc, omit, ok := sourceFilterFromBody(body)
+	inc, exc, omit, ok := SourceFilterFromBody(body)
 	if !ok || omit {
 		if omit {
 			return nil
 		}
 		return doc
 	}
-	return filterSourceDoc(doc, inc, exc)
+	return FilterSourceDoc(doc, inc, exc)
 }
 
-func joinSortOutput(ctx *queryCtx, sp searchSortSpec) any {
-	if sp.field == "_score" {
+func joinSortOutput(ctx *QueryCtx, sp SearchSortSpec) any {
+	if sp.Field == "_score" {
 		return nil
 	}
-	vals, ok := ctx.values(sp.field)
+	vals, ok := ctx.Values(sp.Field)
 	if !ok || len(vals) == 0 {
 		return nil
 	}
 	return vals[0]
 }
 
-func joinInnerHitEntry(c *queryCtx, ctx *queryCtx, doc map[string]any, spec map[string]any, sortSpecs []searchSortSpec, score float64, includeRouting bool) (map[string]any, []any) {
+func joinInnerHitEntry(c *QueryCtx, ctx *QueryCtx, doc map[string]any, spec map[string]any, sortSpecs []SearchSortSpec, score float64, includeRouting bool) (map[string]any, []any) {
 	entry := map[string]any{
-		"_index": c.idx.Name,
-		"_id":    ctx.id,
+		"_index": c.Idx.Name,
+		"_id":    ctx.ID,
 	}
 	if includeRouting {
-		if rv := c.idx.Routing[ctx.id]; rv != "" {
+		if rv := c.Idx.Routing[ctx.ID]; rv != "" {
 			entry["_routing"] = rv
 		}
 	}
@@ -1150,7 +1150,7 @@ func joinInnerHitEntry(c *queryCtx, ctx *queryCtx, doc map[string]any, spec map[
 		}
 		entry["_score"] = nil
 	} else {
-		entry["_score"] = scoreJSON(score)
+		entry["_score"] = ScoreJSON(score)
 	}
 	src := joinInnerSource(doc, spec["_source"])
 	if src != nil {
@@ -1162,7 +1162,7 @@ func joinInnerHitEntry(c *queryCtx, ctx *queryCtx, doc map[string]any, spec map[
 	return entry, sortVals
 }
 
-func joinInnerHitsSortAndPage(matched []map[string]any, sortVals [][]any, specs []searchSortSpec, from, size int) []any {
+func joinInnerHitsSortAndPage(matched []map[string]any, sortVals [][]any, specs []SearchSortSpec, from, size int) []any {
 	if len(specs) > 0 {
 		idx := make([]int, len(matched))
 		for i := range idx {
@@ -1173,7 +1173,7 @@ func joinInnerHitsSortAndPage(matched []map[string]any, sortVals [][]any, specs 
 			for k, sp := range specs {
 				cmp := nestedSortCompare(sortVals[a][k], sortVals[b][k])
 				if cmp != 0 {
-					if sp.desc {
+					if sp.Desc {
 						return cmp > 0
 					}
 					return cmp < 0
@@ -1216,10 +1216,10 @@ func joinInnerHitsMaxScore(scores []float64, sorted bool) any {
 			m = s
 		}
 	}
-	return scoreJSON(m)
+	return ScoreJSON(m)
 }
 
-func collectJoinInnerHits(c *queryCtx, query map[string]any, omitScores bool) map[string]any {
+func CollectJoinInnerHits(c *QueryCtx, query map[string]any, omitScores bool) map[string]any {
 	out := map[string]any{}
 	collectJoinInnerHitsClause(c, query, omitScores, out)
 	if len(out) == 0 {
@@ -1228,7 +1228,7 @@ func collectJoinInnerHits(c *queryCtx, query map[string]any, omitScores bool) ma
 	return out
 }
 
-func collectJoinInnerHitsClause(c *queryCtx, query map[string]any, omitScores bool, out map[string]any) {
+func collectJoinInnerHitsClause(c *QueryCtx, query map[string]any, omitScores bool, out map[string]any) {
 	for clause, raw := range query {
 		bm, ok := raw.(map[string]any)
 		if !ok {
@@ -1241,7 +1241,7 @@ func collectJoinInnerHitsClause(c *queryCtx, query map[string]any, omitScores bo
 			}
 		case "bool":
 			for _, key := range []string{"must", "should", "filter", "must_not"} {
-				for _, q := range asQueryList(bm[key]) {
+				for _, q := range AsQueryList(bm[key]) {
 					if qm, ok := q.(map[string]any); ok {
 						collectJoinInnerHitsClause(c, qm, omitScores, out)
 					}
@@ -1252,7 +1252,7 @@ func collectJoinInnerHitsClause(c *queryCtx, query map[string]any, omitScores bo
 				collectJoinInnerHitsClause(c, qm, omitScores, out)
 			}
 		case "dis_max":
-			for _, q := range asQueryList(bm["queries"]) {
+			for _, q := range AsQueryList(bm["queries"]) {
 				if qm, ok := q.(map[string]any); ok {
 					collectJoinInnerHitsClause(c, qm, omitScores, out)
 				}
@@ -1271,12 +1271,12 @@ func collectJoinInnerHitsClause(c *queryCtx, query map[string]any, omitScores bo
 	}
 }
 
-func collectOneJoinInnerHits(c *queryCtx, clause string, bm map[string]any, spec any, out map[string]any) {
+func collectOneJoinInnerHits(c *QueryCtx, clause string, bm map[string]any, spec any, out map[string]any) {
 	specMap, _ := spec.(map[string]any)
 	if specMap == nil {
 		specMap = map[string]any{}
 	}
-	sortSpecs, _ := parseSortSpecs(specMap["sort"], "")
+	sortSpecs, _ := ParseSortSpecs(specMap["sort"], "")
 	from := 0
 	if n, ok := jsonv.ToFloat(specMap["from"]); ok {
 		from = int(n)
@@ -1298,7 +1298,7 @@ func collectOneJoinInnerHits(c *queryCtx, clause string, bm map[string]any, spec
 			return
 		}
 		for i, ctx := range ctxs {
-			entry, sv := joinInnerHitEntry(c, ctx, ctx.doc, specMap, sortSpecs, cscores[i], true)
+			entry, sv := joinInnerHitEntry(c, ctx, ctx.Doc, specMap, sortSpecs, cscores[i], true)
 			hits = append(hits, entry)
 			sortVals = append(sortVals, sv)
 			scores = append(scores, cscores[i])
@@ -1310,23 +1310,23 @@ func collectOneJoinInnerHits(c *queryCtx, clause string, bm map[string]any, spec
 		}
 		inner, _ := bm["query"].(map[string]any)
 		name = parentType
-		field, _, hasJoin := findJoinField(c.idx)
+		field, _, hasJoin := FindJoinField(c.Idx)
 		if !hasJoin {
 			return
 		}
-		parentID := c.idx.Routing[c.id]
+		parentID := c.Idx.Routing[c.ID]
 		if parentID == "" {
-			_, parentID = joinParts(c.doc[field])
+			_, parentID = JoinParts(c.Doc[field])
 		}
 		if parentID == "" {
 			return
 		}
-		doc, live := c.idx.Docs[parentID]
+		doc, live := c.Idx.Docs[parentID]
 		if !live {
 			return
 		}
-		pctx := newQueryCtxForDoc(c.idx, parentID, doc)
-		ok, sc, err := pctx.eval(inner)
+		pctx := NewQueryCtxForDoc(c.Idx, parentID, doc)
+		ok, sc, err := pctx.Eval(inner)
 		if err != nil || !ok {
 			return
 		}
@@ -1359,7 +1359,7 @@ func collectOneJoinInnerHits(c *queryCtx, clause string, bm map[string]any, spec
 // geo queries
 // ---------------------------------------------------------------------------
 
-func geoPointOf(v any) (float64, float64, bool) {
+func GeoPointOf(v any) (float64, float64, bool) {
 	switch t := v.(type) {
 	case map[string]any:
 		lat, ok1 := jsonv.ToFloat(t["lat"])
@@ -1414,7 +1414,7 @@ func geoPointOf(v any) (float64, float64, bool) {
 	return 0, 0, false
 }
 
-func unitToMeters(unit string) float64 {
+func UnitToMeters(unit string) float64 {
 	switch strings.ToLower(unit) {
 	case "mi", "miles":
 		return 1609.344
@@ -1455,12 +1455,12 @@ func parseDistanceMeters(v any) (float64, bool) {
 			return 0, false
 		}
 		unit := strings.TrimSpace(s[i:])
-		return num * unitToMeters(unit), true
+		return num * UnitToMeters(unit), true
 	}
 	return 0, false
 }
 
-func haversineMeters(lat1, lon1, lat2, lon2 float64) float64 {
+func HaversineMeters(lat1, lon1, lat2, lon2 float64) float64 {
 	const r = 6371008.8
 	rad := math.Pi / 180
 	dLat := (lat2 - lat1) * rad
@@ -1480,7 +1480,7 @@ func geoFieldTypeOf(idx *model.Index, field string) (string, bool) {
 }
 
 func geoQueryShardError(reason string) *apierr.Error {
-	return matchSearchError("query_shard_exception", reason)
+	return MatchSearchError("query_shard_exception", reason)
 }
 
 func geoFloatString(f float64) string {
@@ -1491,14 +1491,14 @@ func geoFloatString(f float64) string {
 	return s
 }
 
-func (c *queryCtx) evalGeoDistance(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalGeoDistance(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("[geo_distance] query malformed")
+		return false, 0, apierr.Parsing("[geo_distance] query malformed")
 	}
 	distance, hasDist := parseDistanceMeters(bm["distance"])
 	if !hasDist {
-		return false, 0, errParsing("[geo_distance] requires 'distance'")
+		return false, 0, apierr.Parsing("[geo_distance] requires 'distance'")
 	}
 	field := ""
 	var pointRaw any
@@ -1512,10 +1512,10 @@ func (c *queryCtx) evalGeoDistance(body any) (bool, float64, *apierr.Error) {
 		break
 	}
 	if field == "" {
-		return false, 0, errParsing("[geo_distance] requires a field")
+		return false, 0, apierr.Parsing("[geo_distance] requires a field")
 	}
 	ignoreUnmapped, _ := bm["ignore_unmapped"].(bool)
-	ftype, mapped := geoFieldTypeOf(c.idx, field)
+	ftype, mapped := geoFieldTypeOf(c.Idx, field)
 	if !mapped {
 		if ignoreUnmapped {
 			return false, 0, nil
@@ -1526,9 +1526,9 @@ func (c *queryCtx) evalGeoDistance(body any) (bool, float64, *apierr.Error) {
 		return false, 0, geoQueryShardError("type [" + ftype + "] for field [" + field +
 			"] is not supported for [geo_distance] queries. Must be one of [geo_point] or [geo_shape]")
 	}
-	plat, plon, ok := geoPointOf(pointRaw)
+	plat, plon, ok := GeoPointOf(pointRaw)
 	if !ok {
-		return false, 0, errParsing("failed to parse geo_distance point")
+		return false, 0, apierr.Parsing("failed to parse geo_distance point")
 	}
 	validationMethod, _ := bm["validation_method"].(string)
 	if plat < -90 || plat > 90 {
@@ -1553,26 +1553,26 @@ func (c *queryCtx) evalGeoDistance(body any) (bool, float64, *apierr.Error) {
 	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		boost = b
 	}
-	vals, present := c.values(field)
+	vals, present := c.Values(field)
 	if !present {
 		return false, 0, nil
 	}
 	for _, v := range vals {
-		lat, lon, ok := geoPointOf(v)
+		lat, lon, ok := GeoPointOf(v)
 		if !ok {
 			continue
 		}
-		if haversineMeters(plat, plon, lat, lon) <= distance {
+		if HaversineMeters(plat, plon, lat, lon) <= distance {
 			return true, boost, nil
 		}
 	}
 	return false, 0, nil
 }
 
-func (c *queryCtx) evalGeoBoundingBox(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalGeoBoundingBox(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("[geo_bounding_box] query malformed")
+		return false, 0, apierr.Parsing("[geo_bounding_box] query malformed")
 	}
 	field := ""
 	var spec map[string]any
@@ -1585,10 +1585,10 @@ func (c *queryCtx) evalGeoBoundingBox(body any) (bool, float64, *apierr.Error) {
 		break
 	}
 	if field == "" || spec == nil {
-		return false, 0, errParsing("[geo_bounding_box] requires a field")
+		return false, 0, apierr.Parsing("[geo_bounding_box] requires a field")
 	}
 	ignoreUnmapped, _ := bm["ignore_unmapped"].(bool)
-	ftype, mapped := geoFieldTypeOf(c.idx, field)
+	ftype, mapped := geoFieldTypeOf(c.Idx, field)
 	if !mapped {
 		if ignoreUnmapped {
 			return false, 0, nil
@@ -1606,7 +1606,7 @@ func (c *queryCtx) evalGeoBoundingBox(body any) (bool, float64, *apierr.Error) {
 		if !ok {
 			return 0, 0, false
 		}
-		return geoPointOf(v)
+		return GeoPointOf(v)
 	}
 	if lat, lon, ok := corner("top_left"); ok {
 		top, left, have = lat, lon, true
@@ -1642,13 +1642,13 @@ func (c *queryCtx) evalGeoBoundingBox(body any) (bool, float64, *apierr.Error) {
 	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		boost = b
 	}
-	vals, present := c.values(field)
+	vals, present := c.Values(field)
 	if !present {
 		return false, 0, nil
 	}
 	wrap := left > right
 	for _, v := range vals {
-		lat, lon, ok := geoPointOf(v)
+		lat, lon, ok := GeoPointOf(v)
 		if !ok {
 			continue
 		}
@@ -1659,10 +1659,10 @@ func (c *queryCtx) evalGeoBoundingBox(body any) (bool, float64, *apierr.Error) {
 	return false, 0, nil
 }
 
-func (c *queryCtx) evalGeoPolygon(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalGeoPolygon(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("[geo_polygon] query malformed")
+		return false, 0, apierr.Parsing("[geo_polygon] query malformed")
 	}
 	field := ""
 	var spec map[string]any
@@ -1675,10 +1675,10 @@ func (c *queryCtx) evalGeoPolygon(body any) (bool, float64, *apierr.Error) {
 		break
 	}
 	if field == "" || spec == nil {
-		return false, 0, errParsing("[geo_polygon] requires a field")
+		return false, 0, apierr.Parsing("[geo_polygon] requires a field")
 	}
 	ignoreUnmapped, _ := bm["ignore_unmapped"].(bool)
-	ftype, mapped := geoFieldTypeOf(c.idx, field)
+	ftype, mapped := geoFieldTypeOf(c.Idx, field)
 	if !mapped {
 		if ignoreUnmapped {
 			return false, 0, nil
@@ -1692,25 +1692,25 @@ func (c *queryCtx) evalGeoPolygon(body any) (bool, float64, *apierr.Error) {
 	pts, _ := spec["points"].([]any)
 	ring := make([][2]float64, 0, len(pts))
 	for _, p := range pts {
-		lat, lon, ok := geoPointOf(p)
+		lat, lon, ok := GeoPointOf(p)
 		if !ok {
-			return false, 0, errParsing("failed to parse geo_polygon point")
+			return false, 0, apierr.Parsing("failed to parse geo_polygon point")
 		}
 		ring = append(ring, [2]float64{lon, lat})
 	}
 	if len(ring) < 3 {
-		return false, 0, errParsing("failed to parse geo_polygon")
+		return false, 0, apierr.Parsing("failed to parse geo_polygon")
 	}
 	boost := 1.0
 	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		boost = b
 	}
-	vals, present := c.values(field)
+	vals, present := c.Values(field)
 	if !present {
 		return false, 0, nil
 	}
 	for _, v := range vals {
-		lat, lon, ok := geoPointOf(v)
+		lat, lon, ok := GeoPointOf(v)
 		if !ok {
 			continue
 		}
@@ -1757,7 +1757,7 @@ func parseGeoShape(v any) (*mapping.GeoShape, bool) {
 	switch gs.Typ {
 	case "point":
 		if c, ok := m["coordinates"].(string); ok {
-			lat, lon, ok := geoPointOf(c)
+			lat, lon, ok := GeoPointOf(c)
 			if !ok {
 				return nil, false
 			}
@@ -1850,7 +1850,7 @@ func shapeContainsPoint(gs *mapping.GeoShape, lon, lat float64) bool {
 	case "envelope":
 		return lat <= gs.Top && lat >= gs.Bot && lon >= gs.Left && lon <= gs.Right
 	case "circle":
-		return haversineMeters(gs.Lat, gs.Lon, lat, lon) <= gs.RadiusM
+		return HaversineMeters(gs.Lat, gs.Lon, lat, lon) <= gs.RadiusM
 	case "polygon":
 		return pointInRing(lon, lat, gs.Points)
 	case "linestring":
@@ -1989,12 +1989,12 @@ func lookupIndexedShape(spec map[string]any) (any, bool) {
 	idxName, _ := spec["index"].(string)
 	id, _ := spec["id"].(string)
 	path, _ := spec["path"].(string)
-	if globalServer == nil || idxName == "" || id == "" {
+	if Cluster == nil || idxName == "" || id == "" {
 		return nil, false
 	}
-	// Callers already hold globalServer.mu (read or write); taking it again
+	// Callers already hold the state lock (read or write); taking it again
 	// here deadlocks once a writer is queued.
-	idx, ok := globalServer.Indices[idxName]
+	idx, ok := Cluster.Index(idxName)
 	if !ok {
 		return nil, false
 	}
@@ -2013,10 +2013,10 @@ func lookupIndexedShape(spec map[string]any) (any, bool) {
 	return cur, cur != nil
 }
 
-func (c *queryCtx) evalGeoShape(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalGeoShape(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("[geo_shape] query malformed")
+		return false, 0, apierr.Parsing("[geo_shape] query malformed")
 	}
 	field := ""
 	var spec map[string]any
@@ -2029,10 +2029,10 @@ func (c *queryCtx) evalGeoShape(body any) (bool, float64, *apierr.Error) {
 		break
 	}
 	if field == "" || spec == nil {
-		return false, 0, errParsing("[geo_shape] requires a field")
+		return false, 0, apierr.Parsing("[geo_shape] requires a field")
 	}
 	ignoreUnmapped, _ := bm["ignore_unmapped"].(bool)
-	ftype, mapped := geoFieldTypeOf(c.idx, field)
+	ftype, mapped := geoFieldTypeOf(c.Idx, field)
 	if !mapped {
 		if ignoreUnmapped {
 			return false, 0, nil
@@ -2049,7 +2049,7 @@ func (c *queryCtx) evalGeoShape(body any) (bool, float64, *apierr.Error) {
 	} else if is, has := spec["indexed_shape"].(map[string]any); has {
 		v, ok := lookupIndexedShape(is)
 		if !ok {
-			return false, 0, errParsing("failed to load indexed shape")
+			return false, 0, apierr.Parsing("failed to load indexed shape")
 		}
 		shapeRaw = v
 	} else {
@@ -2057,7 +2057,7 @@ func (c *queryCtx) evalGeoShape(body any) (bool, float64, *apierr.Error) {
 	}
 	qs, ok := parseGeoShape(shapeRaw)
 	if !ok {
-		return false, 0, errParsing("failed to parse geo_shape")
+		return false, 0, apierr.Parsing("failed to parse geo_shape")
 	}
 	relation, _ := spec["relation"].(string)
 	if relation == "" {
@@ -2071,14 +2071,14 @@ func (c *queryCtx) evalGeoShape(body any) (bool, float64, *apierr.Error) {
 	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		boost = b
 	}
-	vals, present := c.values(field)
+	vals, present := c.Values(field)
 	if !present {
 		return false, 0, nil
 	}
 	for _, v := range vals {
 		var ds *mapping.GeoShape
 		if ftype == "geo_point" {
-			lat, lon, ok := geoPointOf(v)
+			lat, lon, ok := GeoPointOf(v)
 			if !ok {
 				continue
 			}
@@ -2132,10 +2132,10 @@ func rankFeatureFieldDef(idx *model.Index, field string) (map[string]any, string
 	return nil, ""
 }
 
-func (c *queryCtx) evalRankFeature(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalRankFeature(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("[rank_feature] query malformed")
+		return false, 0, apierr.Parsing("[rank_feature] query malformed")
 	}
 	field, _ := bm["field"].(string)
 	boost := 1.0
@@ -2154,7 +2154,7 @@ func (c *queryCtx) evalRankFeature(body any) (bool, float64, *apierr.Error) {
 			CausedBy: &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "Can only specify one of [log], [saturation], [sigmoid] and [linear]"}}
 	}
-	def, ftype := rankFeatureFieldDef(c.idx, field)
+	def, ftype := rankFeatureFieldDef(c.Idx, field)
 	if ftype != "rank_feature" && ftype != "rank_features" {
 		if ftype == "" {
 			ftype = "unmapped"
@@ -2165,7 +2165,7 @@ func (c *queryCtx) evalRankFeature(body any) (bool, float64, *apierr.Error) {
 		e.CausedBy = &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "failed to create query: " + reason}
 		return false, 0, e
 	}
-	vals, present := c.values(field)
+	vals, present := c.Values(field)
 	if !present {
 		return false, 0, nil
 	}
@@ -2253,17 +2253,17 @@ func datePivotMillis(v any) (float64, bool) {
 	return num * mult, true
 }
 
-func (c *queryCtx) evalDistanceFeature(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalDistanceFeature(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("[distance_feature] query malformed")
+		return false, 0, apierr.Parsing("[distance_feature] query malformed")
 	}
 	field, _ := bm["field"].(string)
 	boost := 1.0
 	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		boost = b
 	}
-	def, _ := mapping.FieldDef(c.idx, field)
+	def, _ := mapping.FieldDef(c.Idx, field)
 	ftype, _ := def["type"].(string)
 	if ftype != "date" && ftype != "date_nanos" && ftype != "geo_point" {
 		shown := ftype
@@ -2276,7 +2276,7 @@ func (c *queryCtx) evalDistanceFeature(body any) (bool, float64, *apierr.Error) 
 		e.CausedBy = &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: reason}
 		return false, 0, e
 	}
-	vals, present := c.values(field)
+	vals, present := c.Values(field)
 	if !present {
 		return false, 0, nil
 	}
@@ -2285,15 +2285,15 @@ func (c *queryCtx) evalDistanceFeature(body any) (bool, float64, *apierr.Error) 
 		if !ok {
 			return false, 0, nil
 		}
-		olat, olon, ok := geoPointOf(bm["origin"])
+		olat, olon, ok := GeoPointOf(bm["origin"])
 		if !ok {
 			return false, 0, nil
 		}
-		lat, lon, ok := geoPointOf(vals[0])
+		lat, lon, ok := GeoPointOf(vals[0])
 		if !ok {
 			return false, 0, nil
 		}
-		dist := haversineMeters(olat, olon, lat, lon)
+		dist := HaversineMeters(olat, olon, lat, lon)
 		return true, boost * pivot / (pivot + dist), nil
 	}
 	v, ok := jsonv.ToFloat(vals[0])
@@ -2326,39 +2326,39 @@ func (c *queryCtx) evalDistanceFeature(body any) (bool, float64, *apierr.Error) 
 // wrapper / pinned / percolate / terms_set
 // ---------------------------------------------------------------------------
 
-func (c *queryCtx) evalWrapper(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalWrapper(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("[wrapper] query malformed")
+		return false, 0, apierr.Parsing("[wrapper] query malformed")
 	}
 	raw, ok := bm["query"]
 	if !ok {
-		return false, 0, errParsing("[wrapper] requires 'query'")
+		return false, 0, apierr.Parsing("[wrapper] requires 'query'")
 	}
 	switch t := raw.(type) {
 	case string:
 		decoded, err := base64.StdEncoding.DecodeString(t)
 		if err != nil {
 			if uerr := json.Unmarshal([]byte(t), &map[string]any{}); uerr != nil {
-				return false, 0, errParsing("failed to parse wrapper query")
+				return false, 0, apierr.Parsing("failed to parse wrapper query")
 			}
 			decoded = []byte(t)
 		}
 		var inner map[string]any
 		if err := json.Unmarshal(decoded, &inner); err != nil {
-			return false, 0, errParsing("failed to parse wrapper query")
+			return false, 0, apierr.Parsing("failed to parse wrapper query")
 		}
-		return c.eval(inner)
+		return c.Eval(inner)
 	case map[string]any:
-		return c.eval(t)
+		return c.Eval(t)
 	}
-	return false, 0, errParsing("failed to parse wrapper query")
+	return false, 0, apierr.Parsing("failed to parse wrapper query")
 }
 
-func (c *queryCtx) evalPinned(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalPinned(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("[pinned] query malformed")
+		return false, 0, apierr.Parsing("[pinned] query malformed")
 	}
 	boost := 1.0
 	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
@@ -2368,7 +2368,7 @@ func (c *queryCtx) evalPinned(body any) (bool, float64, *apierr.Error) {
 	for _, key := range []string{"ids"} {
 		if list, ok := bm[key].([]any); ok {
 			for _, e := range list {
-				if s, _ := jsonv.ToString(e); s == c.id {
+				if s, _ := jsonv.ToString(e); s == c.ID {
 					pinned = true
 				}
 			}
@@ -2377,7 +2377,7 @@ func (c *queryCtx) evalPinned(body any) (bool, float64, *apierr.Error) {
 	if docs, ok := bm["docs"].([]any); ok {
 		for _, e := range docs {
 			if m, ok := e.(map[string]any); ok {
-				if s, _ := jsonv.ToString(m["_id"]); s == c.id {
+				if s, _ := jsonv.ToString(m["_id"]); s == c.ID {
 					pinned = true
 				}
 			}
@@ -2387,12 +2387,12 @@ func (c *queryCtx) evalPinned(body any) (bool, float64, *apierr.Error) {
 		return true, boost, nil
 	}
 	if organic, ok := bm["organic"].(map[string]any); ok {
-		return c.eval(organic)
+		return c.Eval(organic)
 	}
 	return false, 0, nil
 }
 
-func percolateFieldName(bm map[string]any) string {
+func PercolateFieldName(bm map[string]any) string {
 	field, _ := bm["field"].(string)
 	if field == "" {
 		field = "query"
@@ -2433,25 +2433,25 @@ func percolateInputDocs(idx *model.Index, bm map[string]any) ([]map[string]any, 
 		}
 		return []map[string]any{doc}, nil
 	}
-	return nil, errParsing("[percolate] requires 'document'")
+	return nil, apierr.Parsing("[percolate] requires 'document'")
 }
 
-func percolateInputCtx(idx *model.Index, doc map[string]any) *queryCtx {
+func percolateInputCtx(idx *model.Index, doc map[string]any) *QueryCtx {
 	inputCtx := mapping.NewParseContext(idx, "_percolate")
 	inputCtx.Doc = doc
 	if err := inputCtx.BuildDocValues(); err != nil {
-		return &queryCtx{idx: idx, id: "_percolate", doc: doc}
+		return &QueryCtx{Idx: idx, ID: "_percolate", Doc: doc}
 	}
-	return &queryCtx{idx: idx, id: "_percolate", doc: doc, vals: inputCtx.Values}
+	return &QueryCtx{Idx: idx, ID: "_percolate", Doc: doc, vals: inputCtx.Values}
 }
 
-func (c *queryCtx) evalPercolate(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalPercolate(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("[percolate] query malformed")
+		return false, 0, apierr.Parsing("[percolate] query malformed")
 	}
-	field := percolateFieldName(bm)
-	def, mapped := mapping.FieldDef(c.idx, field)
+	field := PercolateFieldName(bm)
+	def, mapped := mapping.FieldDef(c.Idx, field)
 	ftype := ""
 	if mapped {
 		ftype, _ = def["type"].(string)
@@ -2460,22 +2460,22 @@ func (c *queryCtx) evalPercolate(body any) (bool, float64, *apierr.Error) {
 		if ftype == "" {
 			ftype = "object"
 		}
-		return false, 0, matchShardError(
+		return false, 0, MatchShardError(
 			fmt.Sprintf("expected field [%s] to be of type [percolator], but is of type [%s]", field, ftype))
 	}
-	docs, derr := percolateInputDocs(c.idx, bm)
+	docs, derr := percolateInputDocs(c.Idx, bm)
 	if derr != nil {
 		return false, 0, derr
 	}
-	stored, ok := c.doc[field].(map[string]any)
+	stored, ok := c.Doc[field].(map[string]any)
 	if !ok {
 		return false, 0, nil
 	}
 	best := 0.0
 	found := false
 	for _, docRaw := range docs {
-		inputQC := percolateInputCtx(c.idx, docRaw)
-		matched, sc, err := inputQC.eval(stored)
+		inputQC := percolateInputCtx(c.Idx, docRaw)
+		matched, sc, err := inputQC.Eval(stored)
 		if err != nil {
 			return false, 0, err
 		}
@@ -2503,7 +2503,7 @@ func collectPercolateClauses(q map[string]any, out *[]map[string]any) {
 			*out = append(*out, bm)
 		case "bool":
 			for _, key := range []string{"must", "should", "filter", "must_not"} {
-				for _, item := range asQueryList(bm[key]) {
+				for _, item := range AsQueryList(bm[key]) {
 					if child, ok := item.(map[string]any); ok {
 						collectPercolateClauses(child, out)
 					}
@@ -2514,7 +2514,7 @@ func collectPercolateClauses(q map[string]any, out *[]map[string]any) {
 				collectPercolateClauses(child, out)
 			}
 		case "dis_max":
-			for _, item := range asQueryList(bm["queries"]) {
+			for _, item := range AsQueryList(bm["queries"]) {
 				if child, ok := item.(map[string]any); ok {
 					collectPercolateClauses(child, out)
 				}
@@ -2533,7 +2533,7 @@ func collectPercolateClauses(q map[string]any, out *[]map[string]any) {
 	}
 }
 
-func percolateSlotsForHit(c *queryCtx, query map[string]any) []any {
+func PercolateSlotsForHit(c *QueryCtx, query map[string]any) []any {
 	var clauses []map[string]any
 	collectPercolateClauses(query, &clauses)
 	if len(clauses) == 0 {
@@ -2541,18 +2541,18 @@ func percolateSlotsForHit(c *queryCtx, query map[string]any) []any {
 	}
 	slotSet := map[int]bool{}
 	for _, bm := range clauses {
-		field := percolateFieldName(bm)
-		docs, err := percolateInputDocs(c.idx, bm)
+		field := PercolateFieldName(bm)
+		docs, err := percolateInputDocs(c.Idx, bm)
 		if err != nil {
 			continue
 		}
-		stored, ok := c.doc[field].(map[string]any)
+		stored, ok := c.Doc[field].(map[string]any)
 		if !ok {
 			continue
 		}
 		for slot, docRaw := range docs {
-			inputQC := percolateInputCtx(c.idx, docRaw)
-			matched, _, err := inputQC.eval(stored)
+			inputQC := percolateInputCtx(c.Idx, docRaw)
+			matched, _, err := inputQC.Eval(stored)
 			if err == nil && matched {
 				slotSet[slot] = true
 			}
@@ -2573,19 +2573,19 @@ func percolateSlotsForHit(c *queryCtx, query map[string]any) []any {
 	return out
 }
 
-func percolateHighlights(c *queryCtx, query map[string]any, cfg *highlightConfig) map[string]any {
+func PercolateHighlights(c *QueryCtx, query map[string]any, cfg *highlightConfig) map[string]any {
 	var clauses []map[string]any
 	collectPercolateClauses(query, &clauses)
 	if len(clauses) == 0 {
 		return nil
 	}
 	bm := clauses[0]
-	field := percolateFieldName(bm)
-	stored, ok := c.doc[field].(map[string]any)
+	field := PercolateFieldName(bm)
+	stored, ok := c.Doc[field].(map[string]any)
 	if !ok {
 		return nil
 	}
-	docs, err := percolateInputDocs(c.idx, bm)
+	docs, err := percolateInputDocs(c.Idx, bm)
 	if err != nil || len(docs) == 0 {
 		return nil
 	}
@@ -2595,7 +2595,7 @@ func percolateHighlights(c *queryCtx, query map[string]any, cfg *highlightConfig
 		local := *cfg
 		local.terms, local.queryFields, local.queryPatterns = terms, qfields, qpatterns
 		local.query = stored
-		rendered := local.render(c.idx, docRaw)
+		rendered := local.Render(c.Idx, docRaw)
 		for name, val := range rendered {
 			if len(docs) == 1 {
 				out[name] = val
@@ -2610,10 +2610,10 @@ func percolateHighlights(c *queryCtx, query map[string]any, cfg *highlightConfig
 	return out
 }
 
-func (c *queryCtx) evalTermsSet(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalTermsSet(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("[terms_set] query malformed")
+		return false, 0, apierr.Parsing("[terms_set] query malformed")
 	}
 	field := ""
 	var spec map[string]any
@@ -2626,14 +2626,14 @@ func (c *queryCtx) evalTermsSet(body any) (bool, float64, *apierr.Error) {
 		break
 	}
 	if field == "" || spec == nil {
-		return false, 0, errParsing("[terms_set] requires a field")
+		return false, 0, apierr.Parsing("[terms_set] requires a field")
 	}
 	terms, _ := spec["terms"].([]any)
 	boost := 1.0
 	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		boost = b
 	}
-	vals, present := c.values(field)
+	vals, present := c.Values(field)
 	if !present {
 		return false, 0, nil
 	}
@@ -2653,7 +2653,7 @@ func (c *queryCtx) evalTermsSet(body any) (bool, float64, *apierr.Error) {
 	}
 	required := 1
 	if name, ok := spec["minimum_should_match_field"].(string); ok {
-		if reqVals, ok := c.values(name); ok && len(reqVals) > 0 {
+		if reqVals, ok := c.Values(name); ok && len(reqVals) > 0 {
 			required, _ = numericInt(reqVals[0])
 		}
 	}
@@ -2671,7 +2671,7 @@ func (c *queryCtx) evalTermsSet(body any) (bool, float64, *apierr.Error) {
 }
 
 func numericInt(v any) (int, bool) {
-	if n, ok := integerOf(v); ok {
+	if n, ok := IntegerOf(v); ok {
 		return int(n), true
 	}
 	if f, ok := jsonv.ToFloat(v); ok {
@@ -2743,11 +2743,11 @@ func spanTermValue(bm map[string]any) (string, string, *apierr.Error) {
 	}
 	if len(keys) > 1 {
 		sort.Strings(keys)
-		return "", "", errParsing("[span_term] query doesn't support multiple fields, found [" +
+		return "", "", apierr.Parsing("[span_term] query doesn't support multiple fields, found [" +
 			strings.Join(keys, "] and [") + "]")
 	}
 	if len(keys) == 0 {
-		return "", "", errParsing("span_term malformed")
+		return "", "", apierr.Parsing("span_term malformed")
 	}
 	field := keys[0]
 	val := bm[field]
@@ -2760,10 +2760,10 @@ func spanTermValue(bm map[string]any) (string, string, *apierr.Error) {
 	return field, term, nil
 }
 
-func (c *queryCtx) evalSpanTerm(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalSpanTerm(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("span_term malformed")
+		return false, 0, apierr.Parsing("span_term malformed")
 	}
 	spans, _, err := c.spanTermSpans(bm)
 	if err != nil {
@@ -2772,26 +2772,26 @@ func (c *queryCtx) evalSpanTerm(body any) (bool, float64, *apierr.Error) {
 	return len(spans) > 0, 1, nil
 }
 
-func (c *queryCtx) spanTermSpans(bm map[string]any) ([]intervalSpan, string, *apierr.Error) {
+func (c *QueryCtx) spanTermSpans(bm map[string]any) ([]intervalSpan, string, *apierr.Error) {
 	field, term, err := spanTermValue(bm)
 	if err != nil {
 		return nil, "", err
 	}
-	def, known := mapping.FieldDef(c.idx, field)
+	def, known := mapping.FieldDef(c.Idx, field)
 	if !known {
 		return nil, field, nil
 	}
 	ftype, _ := def["type"].(string)
 	if ftype == "match_only_text" {
 		reason := "field \"" + field + "\" was indexed without position data; cannot run SpanTermQuery (term=" + term + ")"
-		e := matchSearchError("illegal_state_exception", reason)
+		e := MatchSearchError("illegal_state_exception", reason)
 		e.Status = 500
 		return nil, field, e
 	}
 	if ftype == "integer" || ftype == "long" || ftype == "short" || ftype == "byte" || ftype == "double" ||
 		ftype == "float" || ftype == "half_float" || ftype == "scaled_float" || ftype == "unsigned_long" ||
 		ftype == "date" || ftype == "date_nanos" || ftype == "boolean" || ftype == "ip" {
-		return nil, field, matchSearchError("query_shard_exception",
+		return nil, field, MatchSearchError("query_shard_exception",
 			"Cannot extract a term from a query of type ["+ftype+"]")
 	}
 	spans := []intervalSpan{}
@@ -2803,14 +2803,14 @@ func (c *queryCtx) spanTermSpans(bm map[string]any) ([]intervalSpan, string, *ap
 	return spans, field, nil
 }
 
-func (c *queryCtx) spanQuery(body any) ([]intervalSpan, string, *apierr.Error) {
+func (c *QueryCtx) spanQuery(body any) ([]intervalSpan, string, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return nil, "", errParsing("span query malformed")
+		return nil, "", apierr.Parsing("span query malformed")
 	}
 	kind, inner := spanKind(bm)
 	if kind == "" || inner == nil {
-		return nil, "", errParsing("span query malformed")
+		return nil, "", apierr.Parsing("span query malformed")
 	}
 	switch kind {
 	case "span_term":
@@ -2818,7 +2818,7 @@ func (c *queryCtx) spanQuery(body any) ([]intervalSpan, string, *apierr.Error) {
 	case "span_near":
 		clauses, _ := inner["clauses"].([]any)
 		if len(clauses) == 0 {
-			return nil, "", errParsing("span_near must include [clauses]")
+			return nil, "", apierr.Parsing("span_near must include [clauses]")
 		}
 		lists := [][]intervalSpan{}
 		field := ""
@@ -2826,7 +2826,7 @@ func (c *queryCtx) spanQuery(body any) ([]intervalSpan, string, *apierr.Error) {
 			cm, _ := cl.(map[string]any)
 			ck, cinner := spanKind(cm)
 			if !isSpanType(ck) {
-				return nil, "", errParsing("span_near [clauses] must be of type span query")
+				return nil, "", apierr.Parsing("span_near [clauses] must be of type span query")
 			}
 			spans, f, err := c.spanQuery(cm)
 			if err != nil {
@@ -2839,7 +2839,7 @@ func (c *queryCtx) spanQuery(body any) ([]intervalSpan, string, *apierr.Error) {
 				if ck == "span_term" {
 					_, term, _ = spanTermValue(cinner)
 				}
-				return nil, "", matchSearchError("query_shard_exception",
+				return nil, "", MatchSearchError("query_shard_exception",
 					"Cannot add clause "+f+":"+term+" to SpanNearQuery for field "+field)
 			}
 			lists = append(lists, spans)
@@ -2869,7 +2869,7 @@ func (c *queryCtx) spanQuery(body any) ([]intervalSpan, string, *apierr.Error) {
 			if field == "" {
 				field = f
 			} else if f != field {
-				return nil, "", matchSearchError("query_shard_exception", "Clauses must have same field.")
+				return nil, "", MatchSearchError("query_shard_exception", "Clauses must have same field.")
 			}
 			spans = append(spans, sp...)
 		}
@@ -2986,7 +2986,7 @@ func (c *queryCtx) spanQuery(body any) ([]intervalSpan, string, *apierr.Error) {
 		match, _ := inner["match"].(map[string]any)
 		mk, mbm := spanKind(match)
 		if mk != "prefix" && mk != "wildcard" && mk != "regexp" && mk != "fuzzy" {
-			return nil, "", errParsing("[span_multi] [match] must be of type multi term query")
+			return nil, "", apierr.Parsing("[span_multi] [match] must be of type multi term query")
 		}
 		field, val := "", ""
 		for k, v := range mbm {
@@ -3017,7 +3017,7 @@ func (c *queryCtx) spanQuery(body any) ([]intervalSpan, string, *apierr.Error) {
 				}
 			}
 		case "wildcard":
-			re := wildcardRegex(strings.ToLower(val))
+			re := WildcardRegex(strings.ToLower(val))
 			for _, p := range positions {
 				if re.MatchString(p.Term) {
 					spans = append(spans, intervalSpan{p.Pos, p.Pos})
@@ -3026,7 +3026,7 @@ func (c *queryCtx) spanQuery(body any) ([]intervalSpan, string, *apierr.Error) {
 		case "regexp":
 			re, rerr := regexp.Compile(val)
 			if rerr != nil {
-				return nil, "", errParsing("invalid regexp")
+				return nil, "", apierr.Parsing("invalid regexp")
 			}
 			for _, p := range positions {
 				if re.MatchString(p.Term) {
@@ -3035,7 +3035,7 @@ func (c *queryCtx) spanQuery(body any) ([]intervalSpan, string, *apierr.Error) {
 			}
 		case "fuzzy":
 			for _, p := range positions {
-				if fuzzyDistance(p.Term, val, true) <= autoFuzziness(val) {
+				if fuzzyDistance(p.Term, val, true) <= AutoFuzziness(val) {
 					spans = append(spans, intervalSpan{p.Pos, p.Pos})
 				}
 			}
@@ -3050,13 +3050,13 @@ func (c *queryCtx) spanQuery(body any) ([]intervalSpan, string, *apierr.Error) {
 		}
 		return spans, target, nil
 	}
-	return nil, "", errParsing("unknown span query [" + kind + "]")
+	return nil, "", apierr.Parsing("unknown span query [" + kind + "]")
 }
 
-func (c *queryCtx) evalSpanNear(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalSpanNear(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("span_near malformed")
+		return false, 0, apierr.Parsing("span_near malformed")
 	}
 	spans, _, err := c.spanQuery(map[string]any{"span_near": bm})
 	if err != nil {
@@ -3065,10 +3065,10 @@ func (c *queryCtx) evalSpanNear(body any) (bool, float64, *apierr.Error) {
 	return len(spans) > 0, 1, nil
 }
 
-func (c *queryCtx) evalSpanOr(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalSpanOr(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("span_or malformed")
+		return false, 0, apierr.Parsing("span_or malformed")
 	}
 	spans, _, err := c.spanQuery(map[string]any{"span_or": bm})
 	if err != nil {
@@ -3077,10 +3077,10 @@ func (c *queryCtx) evalSpanOr(body any) (bool, float64, *apierr.Error) {
 	return len(spans) > 0, 1, nil
 }
 
-func (c *queryCtx) evalSpanFirst(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalSpanFirst(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("span_first malformed")
+		return false, 0, apierr.Parsing("span_first malformed")
 	}
 	spans, _, err := c.spanQuery(map[string]any{"span_first": bm})
 	if err != nil {
@@ -3089,10 +3089,10 @@ func (c *queryCtx) evalSpanFirst(body any) (bool, float64, *apierr.Error) {
 	return len(spans) > 0, 1, nil
 }
 
-func (c *queryCtx) evalSpanNot(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalSpanNot(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("span_not malformed")
+		return false, 0, apierr.Parsing("span_not malformed")
 	}
 	spans, _, err := c.spanQuery(map[string]any{"span_not": bm})
 	if err != nil {
@@ -3101,10 +3101,10 @@ func (c *queryCtx) evalSpanNot(body any) (bool, float64, *apierr.Error) {
 	return len(spans) > 0, 1, nil
 }
 
-func (c *queryCtx) evalSpanContaining(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalSpanContaining(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("span_containing malformed")
+		return false, 0, apierr.Parsing("span_containing malformed")
 	}
 	spans, _, err := c.spanQuery(map[string]any{"span_containing": bm})
 	if err != nil {
@@ -3113,10 +3113,10 @@ func (c *queryCtx) evalSpanContaining(body any) (bool, float64, *apierr.Error) {
 	return len(spans) > 0, 1, nil
 }
 
-func (c *queryCtx) evalSpanWithin(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalSpanWithin(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("span_within malformed")
+		return false, 0, apierr.Parsing("span_within malformed")
 	}
 	spans, _, err := c.spanQuery(map[string]any{"span_within": bm})
 	if err != nil {
@@ -3125,10 +3125,10 @@ func (c *queryCtx) evalSpanWithin(body any) (bool, float64, *apierr.Error) {
 	return len(spans) > 0, 1, nil
 }
 
-func (c *queryCtx) evalSpanMulti(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalSpanMulti(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("span_multi malformed")
+		return false, 0, apierr.Parsing("span_multi malformed")
 	}
 	spans, _, err := c.spanQuery(map[string]any{"span_multi": bm})
 	if err != nil {
@@ -3142,10 +3142,10 @@ type intervalSpan struct {
 	end   int
 }
 
-func (c *queryCtx) evalIntervals(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalIntervals(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("intervals malformed")
+		return false, 0, apierr.Parsing("intervals malformed")
 	}
 	field := ""
 	var rules map[string]any
@@ -3158,19 +3158,19 @@ func (c *queryCtx) evalIntervals(body any) (bool, float64, *apierr.Error) {
 		break
 	}
 	if field == "" || rules == nil {
-		return false, 0, errParsing("intervals malformed")
+		return false, 0, apierr.Parsing("intervals malformed")
 	}
-	def, known := mapping.FieldDef(c.idx, field)
+	def, known := mapping.FieldDef(c.Idx, field)
 	if !known {
 		return false, 0, nil
 	}
 	ftype, _ := def["type"].(string)
 	if ftype == "match_only_text" {
-		return false, 0, matchSearchError("query_shard_exception",
+		return false, 0, MatchSearchError("query_shard_exception",
 			"failed to create query: Cannot create intervals over field ["+field+"] with no positions indexed")
 	}
 	if ftype != "" && ftype != "text" && ftype != "match_only_text" && ftype != "search_as_you_type" {
-		return false, 0, matchSearchError("query_shard_exception",
+		return false, 0, MatchSearchError("query_shard_exception",
 			"Can only use interval queries on text fields - not on ["+field+"] which is of type ["+ftype+"]")
 	}
 	ruleKeys := []string{}
@@ -3182,14 +3182,14 @@ func (c *queryCtx) evalIntervals(body any) (bool, float64, *apierr.Error) {
 	}
 	if len(ruleKeys) > 1 {
 		sort.Strings(ruleKeys)
-		return false, 0, errParsing("Only one interval rule can be specified, found [" +
+		return false, 0, apierr.Parsing("Only one interval rule can be specified, found [" +
 			strings.Join(ruleKeys, "] and [") + "]")
 	}
 	if len(ruleKeys) == 0 {
 		return false, 0, nil
 	}
 	if !isKnownIntervalType(ruleKeys[0]) {
-		return false, 0, errParsing("Unknown interval type [" + ruleKeys[0] + "]")
+		return false, 0, apierr.Parsing("Unknown interval type [" + ruleKeys[0] + "]")
 	}
 	positions := c.intervalPositions(field)
 	spans, err := c.intervalRule(rules, positions, field)
@@ -3210,9 +3210,9 @@ func isKnownIntervalType(k string) bool {
 	return false
 }
 
-func (c *queryCtx) intervalPositions(field string) []analysis.Token {
+func (c *QueryCtx) intervalPositions(field string) []analysis.Token {
 	vals := c.mustValues(field)
-	def, _ := mapping.FieldDef(c.idx, field)
+	def, _ := mapping.FieldDef(c.Idx, field)
 	gap := 100
 	if g, ok := jsonv.ToFloat(def["position_increment_gap"]); ok {
 		gap = int(g)
@@ -3221,7 +3221,7 @@ func (c *queryCtx) intervalPositions(field string) []analysis.Token {
 	last := -1
 	for _, v := range vals {
 		s, _ := jsonv.ScalarString(v)
-		toks := analysis.Tokens(mapping.AnalysisIndex(c.idx), c.indexAnalyzerName(field), s)
+		toks := analysis.Tokens(mapping.AnalysisIndex(c.Idx), c.indexAnalyzerName(field), s)
 		base := 0
 		if last >= 0 {
 			base = last + gap + 1
@@ -3309,7 +3309,7 @@ func combineUnorderedIntervals(lists [][]intervalSpan, maxGaps int) []intervalSp
 	return cur
 }
 
-func (c *queryCtx) intervalRule(rule map[string]any, positions []analysis.Token, field string) ([]intervalSpan, *apierr.Error) {
+func (c *QueryCtx) intervalRule(rule map[string]any, positions []analysis.Token, field string) ([]intervalSpan, *apierr.Error) {
 	kind := ""
 	var bm map[string]any
 	for k, v := range rule {
@@ -3321,7 +3321,7 @@ func (c *queryCtx) intervalRule(rule map[string]any, positions []analysis.Token,
 		break
 	}
 	if kind == "" || bm == nil {
-		return nil, errParsing("intervals malformed")
+		return nil, apierr.Parsing("intervals malformed")
 	}
 	var spans []intervalSpan
 	switch kind {
@@ -3333,7 +3333,7 @@ func (c *queryCtx) intervalRule(rule map[string]any, positions []analysis.Token,
 		} else {
 			analyzer = c.searchAnalyzerName(field, bm)
 		}
-		toks := analysis.Tokens(mapping.AnalysisIndex(c.idx), analyzer, q)
+		toks := analysis.Tokens(mapping.AnalysisIndex(c.Idx), analyzer, q)
 		terms := []string{}
 		for _, t := range toks {
 			terms = append(terms, t.Term)
@@ -3362,7 +3362,7 @@ func (c *queryCtx) intervalRule(rule map[string]any, positions []analysis.Token,
 		}
 	case "wildcard":
 		pat, _ := bm["pattern"].(string)
-		re := wildcardRegex(strings.ToLower(pat))
+		re := WildcardRegex(strings.ToLower(pat))
 		for _, p := range positions {
 			if re.MatchString(p.Term) {
 				spans = append(spans, intervalSpan{p.Pos, p.Pos})
@@ -3372,7 +3372,7 @@ func (c *queryCtx) intervalRule(rule map[string]any, positions []analysis.Token,
 		pat, _ := bm["pattern"].(string)
 		re, err := regexp.Compile(pat)
 		if err != nil {
-			return nil, errParsing("invalid regexp")
+			return nil, apierr.Parsing("invalid regexp")
 		}
 		for _, p := range positions {
 			if re.MatchString(p.Term) {
@@ -3381,7 +3381,7 @@ func (c *queryCtx) intervalRule(rule map[string]any, positions []analysis.Token,
 		}
 	case "fuzzy":
 		term, _ := bm["term"].(string)
-		fuzz := autoFuzziness(term)
+		fuzz := AutoFuzziness(term)
 		if v, ok := bm["fuzziness"]; ok {
 			if n, ok2 := fuzzinessValue(v, term); ok2 {
 				fuzz = n
@@ -3434,7 +3434,7 @@ func (c *queryCtx) intervalRule(rule map[string]any, positions []analysis.Token,
 			spans = append(spans, sp...)
 		}
 	default:
-		return nil, errParsing("Unknown interval type [" + kind + "]")
+		return nil, apierr.Parsing("Unknown interval type [" + kind + "]")
 	}
 	if f, ok := bm["filter"].(map[string]any); ok {
 		filtered, err := c.filterIntervalSpans(spans, f, positions, field)
@@ -3446,7 +3446,7 @@ func (c *queryCtx) intervalRule(rule map[string]any, positions []analysis.Token,
 	return spans, nil
 }
 
-func (c *queryCtx) filterIntervalSpans(spans []intervalSpan, filter map[string]any, positions []analysis.Token, field string) ([]intervalSpan, *apierr.Error) {
+func (c *QueryCtx) filterIntervalSpans(spans []intervalSpan, filter map[string]any, positions []analysis.Token, field string) ([]intervalSpan, *apierr.Error) {
 	if len(spans) == 0 {
 		return spans, nil
 	}
@@ -3530,7 +3530,7 @@ func (c *queryCtx) filterIntervalSpans(spans []intervalSpan, filter map[string]a
 	return out, nil
 }
 
-func (c *queryCtx) evalTermSingle(field string, bm map[string]any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalTermSingle(field string, bm map[string]any) (bool, float64, *apierr.Error) {
 	q, _ := bm["query"].(string)
 	if field == "" {
 		for f := range c.valuesMap() {
@@ -3545,7 +3545,7 @@ func (c *queryCtx) evalTermSingle(field string, bm map[string]any) (bool, float6
 	return ok, 1, err
 }
 
-func (c *queryCtx) evalIntervalsSimple(pred func(field string, tokens []string) bool) bool {
+func (c *QueryCtx) evalIntervalsSimple(pred func(field string, tokens []string) bool) bool {
 	for f, vals := range c.valuesMap() {
 		tokens := []string{}
 		for _, v := range vals {
@@ -3576,7 +3576,7 @@ func mltFieldTokens(idx *model.Index, field, text string) []string {
 	return mapping.Analyze(text)
 }
 
-func mltLikeTexts(c *queryCtx, raw any, fields []string, include bool, excluded map[string]bool) []string {
+func mltLikeTexts(c *QueryCtx, raw any, fields []string, include bool, excluded map[string]bool) []string {
 	var texts []string
 	add := func(v any) {
 		switch t := v.(type) {
@@ -3588,7 +3588,7 @@ func mltLikeTexts(c *queryCtx, raw any, fields []string, include bool, excluded 
 				return
 			}
 			if id, ok := jsonv.ToString(t["_id"]); ok {
-				if sd, live := c.idx.Docs[id]; live {
+				if sd, live := c.Idx.Docs[id]; live {
 					texts = append(texts, collectDocTexts(sd, fields)...)
 					if !include {
 						excluded[id] = true
@@ -3610,7 +3610,7 @@ func mltLikeTexts(c *queryCtx, raw any, fields []string, include bool, excluded 
 	return texts
 }
 
-func mltTermSet(c *queryCtx, raw any, fields []string) map[string]bool {
+func mltTermSet(c *QueryCtx, raw any, fields []string) map[string]bool {
 	out := map[string]bool{}
 	for _, text := range mltLikeTexts(c, raw, fields, true, map[string]bool{}) {
 		if len(fields) == 0 {
@@ -3620,7 +3620,7 @@ func mltTermSet(c *queryCtx, raw any, fields []string) map[string]bool {
 			continue
 		}
 		for _, f := range fields {
-			for _, tok := range mltFieldTokens(c.idx, f, text) {
+			for _, tok := range mltFieldTokens(c.Idx, f, text) {
 				out[tok] = true
 			}
 		}
@@ -3658,7 +3658,7 @@ func mltDocHasTerm(idx *model.Index, doc map[string]any, fields []string, term s
 	return false
 }
 
-func (c *queryCtx) evalMoreLikeThis(bm map[string]any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalMoreLikeThis(bm map[string]any) (bool, float64, *apierr.Error) {
 	var fields []string
 	switch t := bm["fields"].(type) {
 	case []any:
@@ -3672,12 +3672,12 @@ func (c *queryCtx) evalMoreLikeThis(bm map[string]any) (bool, float64, *apierr.E
 	}
 	likeRaw, hasLike := bm["like"]
 	if !hasLike {
-		return false, 0, errParsing("more_like_this requires 'like' to be specified")
+		return false, 0, apierr.Parsing("more_like_this requires 'like' to be specified")
 	}
 	excluded := map[string]bool{}
 	include, _ := bm["include"].(bool)
 	texts := mltLikeTexts(c, likeRaw, fields, include, excluded)
-	if excluded[c.id] || len(texts) == 0 {
+	if excluded[c.ID] || len(texts) == 0 {
 		return false, 0, nil
 	}
 	targets := fields
@@ -3712,7 +3712,7 @@ func (c *queryCtx) evalMoreLikeThis(bm map[string]any) (bool, float64, *apierr.E
 			toks = mapping.Analyze(text)
 		} else {
 			for _, f := range fields {
-				toks = append(toks, mltFieldTokens(c.idx, f, text)...)
+				toks = append(toks, mltFieldTokens(c.Idx, f, text)...)
 			}
 		}
 		for _, tok := range toks {
@@ -3744,12 +3744,12 @@ func (c *queryCtx) evalMoreLikeThis(bm map[string]any) (bool, float64, *apierr.E
 			continue
 		}
 		df := 0
-		for _, id := range c.idx.Order {
-			doc, live := c.idx.Docs[id]
+		for _, id := range c.Idx.Order {
+			doc, live := c.Idx.Docs[id]
 			if !live {
 				continue
 			}
-			if mltDocHasTerm(c.idx, doc, targets, term) {
+			if mltDocHasTerm(c.Idx, doc, targets, term) {
 				df++
 			}
 		}
@@ -3772,7 +3772,7 @@ func (c *queryCtx) evalMoreLikeThis(bm map[string]any) (bool, float64, *apierr.E
 	}
 	matched := 0
 	for term := range terms {
-		if mltDocHasTerm(c.idx, c.doc, targets, term) {
+		if mltDocHasTerm(c.Idx, c.Doc, targets, term) {
 			matched++
 		}
 	}
@@ -3824,16 +3824,16 @@ func collectDocTexts(doc map[string]any, fields []string) []string {
 // knn
 // ---------------------------------------------------------------------------
 
-func (c *queryCtx) evalKnn(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalKnn(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("[knn] query malformed")
+		return false, 0, apierr.Parsing("[knn] query malformed")
 	}
 	if _, old := bm["field"]; !old && len(bm) == 1 {
 		for f, v := range bm {
 			pm, ok := v.(map[string]any)
 			if !ok {
-				return false, 0, errParsing("[knn] malformed query, expected a START_OBJECT")
+				return false, 0, apierr.Parsing("[knn] malformed query, expected a START_OBJECT")
 			}
 			return c.evalKnnField(f, pm)
 		}
@@ -3847,9 +3847,9 @@ func (c *queryCtx) evalKnn(body any) (bool, float64, *apierr.Error) {
 		}
 	}
 	if field == "" || len(qv) == 0 {
-		return false, 0, errParsing("[knn] requires field and query_vector")
+		return false, 0, apierr.Parsing("[knn] requires field and query_vector")
 	}
-	vals, present := c.values(field)
+	vals, present := c.Values(field)
 	if !present {
 		return false, 0, nil
 	}
@@ -3880,18 +3880,18 @@ func (c *queryCtx) evalKnn(body any) (bool, float64, *apierr.Error) {
 // values map access helper
 // ---------------------------------------------------------------------------
 
-func (c *queryCtx) valuesMap() map[string][]any {
+func (c *QueryCtx) valuesMap() map[string][]any {
 	if c.vals != nil {
 		return c.vals
 	}
-	return c.idx.DocValues[c.id]
+	return c.Idx.DocValues[c.ID]
 }
 
 // ---------------------------------------------------------------------------
 // function_score
 // ---------------------------------------------------------------------------
 
-func hasScoreFunctionKey(bm map[string]any) bool {
+func HasScoreFunctionKey(bm map[string]any) bool {
 	for _, k := range []string{"weight", "field_value_factor", "random_score", "script_score",
 		"gauss", "exp", "linear"} {
 		if _, ok := bm[k]; ok {
@@ -3918,7 +3918,7 @@ func javaDoubleString(f float64) string {
 	return s
 }
 
-func newFunctionScoreFailure(marker, reason string) *apierr.Error {
+func NewFunctionScoreFailure(marker, reason string) *apierr.Error {
 	return &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 		Reason: reason, SearchFailure: marker}
 }
@@ -3962,19 +3962,19 @@ func decayDateMillis(def map[string]any, v any) (int64, bool) {
 	if s, ok := v.(string); ok {
 		return dates.ParseAny(def, s)
 	}
-	return integerOf(v)
+	return IntegerOf(v)
 }
 
-func (c *queryCtx) evalFunctionScore(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalFunctionScore(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("[function_score] query malformed")
+		return false, 0, apierr.Parsing("[function_score] query malformed")
 	}
 	inner, ok := bm["query"].(map[string]any)
 	if !ok {
 		inner = map[string]any{"match_all": map[string]any{}}
 	}
-	matched, base, err := c.eval(inner)
+	matched, base, err := c.Eval(inner)
 	if err != nil {
 		return false, 0, err
 	}
@@ -3984,11 +3984,11 @@ func (c *queryCtx) evalFunctionScore(body any) (bool, float64, *apierr.Error) {
 	if b, ok := jsonv.ToFloat(bm["boost"]); ok {
 		base *= b
 	}
-	functions := asQueryList(bm["functions"])
+	functions := AsQueryList(bm["functions"])
 	if len(functions) == 0 {
 		if f, ok := bm["function"].(map[string]any); ok {
 			functions = []any{f}
-		} else if hasScoreFunctionKey(bm) {
+		} else if HasScoreFunctionKey(bm) {
 			functions = []any{bm}
 		}
 	}
@@ -4007,7 +4007,7 @@ func (c *queryCtx) evalFunctionScore(body any) (bool, float64, *apierr.Error) {
 			continue
 		}
 		if filter, ok := fn["filter"].(map[string]any); ok {
-			fm, _, ferr := c.eval(filter)
+			fm, _, ferr := c.Eval(filter)
 			if ferr != nil {
 				return false, 0, ferr
 			}
@@ -4092,7 +4092,7 @@ func (c *queryCtx) evalFunctionScore(body any) (bool, float64, *apierr.Error) {
 	return true, combined, nil
 }
 
-func (c *queryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (float64, *apierr.Error) {
+func (c *QueryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (float64, *apierr.Error) {
 	if fvf, ok := fn["field_value_factor"].(map[string]any); ok {
 		field, _ := fvf["field"].(string)
 		factor := 1.0
@@ -4102,26 +4102,26 @@ func (c *queryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 		modifier, _ := fvf["modifier"].(string)
 		missingRaw, hasMissing := fvf["missing"]
 		var value float64
-		vals, present := c.values(field)
+		vals, present := c.Values(field)
 		if present && len(vals) > 0 {
 			n, ok := jsonv.ToFloat(vals[0])
 			if !ok {
-				return 0, newFunctionScoreFailure("fvf_unmapped",
+				return 0, NewFunctionScoreFailure("fvf_unmapped",
 					"Unable to find a field mapper for field ["+field+"]. No 'missing' value defined.")
 			}
 			value = n
 		} else if hasMissing {
 			n, ok := jsonv.ToFloat(missingRaw)
 			if !ok {
-				return 0, newFunctionScoreFailure("fvf_missing",
+				return 0, NewFunctionScoreFailure("fvf_missing",
 					"Missing value for field ["+field+"]")
 			}
 			value = n
-		} else if _, mapped := mapping.FieldDef(c.idx, field); !mapped {
-			return 0, newFunctionScoreFailure("fvf_unmapped",
+		} else if _, mapped := mapping.FieldDef(c.Idx, field); !mapped {
+			return 0, NewFunctionScoreFailure("fvf_unmapped",
 				"Unable to find a field mapper for field ["+field+"]. No 'missing' value defined.")
 		} else {
-			return 0, newFunctionScoreFailure("fvf_missing",
+			return 0, NewFunctionScoreFailure("fvf_missing",
 				"Missing value for field ["+field+"]")
 		}
 		result := value * factor
@@ -4149,32 +4149,32 @@ func (c *queryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 			reason := "field value function must not produce negative scores, but got: [" +
 				javaDoubleString(result) + "] for field value: [" + javaDoubleString(value) +
 				"]; consider using log1p or log2p instead of log to avoid negative scores"
-			return 0, newFunctionScoreFailure("fvf_log", reason)
+			return 0, NewFunctionScoreFailure("fvf_log", reason)
 		}
 		return result, nil
 	}
 	if rs, ok := fn["random_score"].(map[string]any); ok {
 		seed := int64(0)
 		if s, ok := rs["seed"]; ok {
-			seed, _ = integerOf(s)
+			seed, _ = IntegerOf(s)
 		}
 		if seed == 0 {
 			seed = 42
 		}
-		return pseudoRandom(c.id, seed), nil
+		return pseudoRandom(c.ID, seed), nil
 	}
 	if ss, ok := fn["script_score"].(map[string]any); ok {
-		cs, se, ae := prepareScript(ss["script"], "score")
+		cs, se, ae := PrepareScript(ss["script"], "score")
 		if se != nil || ae != nil {
-			return 0, scriptErrForShard(c.idx, se, ae, true)
+			return 0, ScriptErrForShard(c.Idx, se, ae, true)
 		}
-		v, rerr := cs.run(c, runOpts{score: float64(float32(baseScore))})
+		v, rerr := cs.Run(c, RunOpts{Score: float64(float32(baseScore))})
 		if rerr != nil {
-			return 0, scriptShardError(c.idx, rerr)
+			return 0, ScriptShardError(c.Idx, rerr)
 		}
 		score := painless.F64(v)
 		if score < 0 {
-			return 0, plainShardError(c.idx, apierr.BadRequest("script score function must not produce negative scores, but got: ["+painless.FormatDouble(score)+"]"))
+			return 0, PlainShardError(c.Idx, apierr.BadRequest("script score function must not produce negative scores, but got: ["+painless.FormatDouble(score)+"]"))
 		}
 		return float64(float32(score)), nil
 	}
@@ -4196,11 +4196,11 @@ func (c *queryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 		if field == "" || spec == nil {
 			return 1, nil
 		}
-		vals, present := c.values(field)
+		vals, present := c.Values(field)
 		if !present || len(vals) == 0 {
 			return 1, nil
 		}
-		def, _ := mapping.FieldDef(c.idx, field)
+		def, _ := mapping.FieldDef(c.Idx, field)
 		ftype, _ := def["type"].(string)
 		decayV := 0.5
 		if d, ok := jsonv.ToFloat(spec["decay"]); ok {
@@ -4215,15 +4215,15 @@ func (c *queryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 		}
 		var dist, scale, offset float64
 		if geo {
-			olat, olon, ok := geoPointOf(spec["origin"])
+			olat, olon, ok := GeoPointOf(spec["origin"])
 			if !ok {
 				return 1, nil
 			}
-			lat, lon, ok := geoPointOf(vals[0])
+			lat, lon, ok := GeoPointOf(vals[0])
 			if !ok {
 				return 1, nil
 			}
-			dist = haversineMeters(olat, olon, lat, lon)
+			dist = HaversineMeters(olat, olon, lat, lon)
 			if s, ok := parseDistanceMeters(spec["scale"]); ok {
 				scale = s
 			}
@@ -4296,14 +4296,14 @@ func pseudoRandom(id string, seed int64) float64 {
 // query_string parser
 // ---------------------------------------------------------------------------
 
-type qsParser struct {
-	tokens       []string
+type QueryStringParser struct {
+	Tokens       []string
 	pos          int
-	default_     string
+	Default_     string
 	fields       []string
-	operator     string
+	Operator     string
 	simple       bool
-	c            *queryCtx
+	C            *QueryCtx
 	allowLeading bool
 	hasFields    bool
 	plusUsed     bool
@@ -4316,7 +4316,7 @@ type qsParser struct {
 	quoteSuffix  string
 }
 
-func tokenizeQueryString(s string) []string {
+func TokenizeQueryString(s string) []string {
 	var out []string
 	i := 0
 	for i < len(s) {
@@ -4368,7 +4368,7 @@ func tokenizeQueryString(s string) []string {
 	return out
 }
 
-func (p *qsParser) parse() (map[string]any, *apierr.Error) {
+func (p *QueryStringParser) Parse() (map[string]any, *apierr.Error) {
 	q, err := p.parseOr()
 	if err != nil {
 		return nil, err
@@ -4376,17 +4376,17 @@ func (p *qsParser) parse() (map[string]any, *apierr.Error) {
 	return q, nil
 }
 
-func (p *qsParser) parseOr() (map[string]any, *apierr.Error) {
+func (p *QueryStringParser) parseOr() (map[string]any, *apierr.Error) {
 	left, err := p.parseAnd()
 	if err != nil {
 		return nil, err
 	}
-	for p.pos < len(p.tokens) {
-		tok := p.tokens[p.pos]
+	for p.pos < len(p.Tokens) {
+		tok := p.Tokens[p.pos]
 		if tok == "OR" || tok == "||" {
 			p.pos++
-			if p.pos >= len(p.tokens) {
-				return nil, errParsing("trailing operator")
+			if p.pos >= len(p.Tokens) {
+				return nil, apierr.Parsing("trailing operator")
 			}
 			right, err := p.parseAnd()
 			if err != nil {
@@ -4400,13 +4400,13 @@ func (p *qsParser) parseOr() (map[string]any, *apierr.Error) {
 	return left, nil
 }
 
-func (p *qsParser) parseAnd() (map[string]any, *apierr.Error) {
+func (p *QueryStringParser) parseAnd() (map[string]any, *apierr.Error) {
 	must := []any{}
 	should := []any{}
 	mustNot := []any{}
 	forceMust := false
-	for p.pos < len(p.tokens) {
-		tok := p.tokens[p.pos]
+	for p.pos < len(p.Tokens) {
+		tok := p.Tokens[p.pos]
 		if p.simple && (tok == "AND" || tok == "OR" || tok == "NOT") {
 			// plain term in simple query syntax
 		} else if tok == "OR" || tok == "||" || tok == ")" {
@@ -4436,7 +4436,7 @@ func (p *qsParser) parseAnd() (map[string]any, *apierr.Error) {
 			case '-', '!':
 				sign = -1
 			}
-			p.tokens[p.pos] = tok[1:]
+			p.Tokens[p.pos] = tok[1:]
 		} else if tok == "-" || tok == "+" || tok == "!" {
 			if tok == "-" || tok == "!" {
 				sign = -1
@@ -4446,7 +4446,7 @@ func (p *qsParser) parseAnd() (map[string]any, *apierr.Error) {
 			}
 			p.pos++
 		}
-		if p.pos >= len(p.tokens) {
+		if p.pos >= len(p.Tokens) {
 			if p.simple && sign > 0 {
 				return map[string]any{"match_none": map[string]any{}}, nil
 			}
@@ -4458,7 +4458,7 @@ func (p *qsParser) parseAnd() (map[string]any, *apierr.Error) {
 		}
 		if sign < 0 {
 			if p.simple && !p.notOp {
-				if p.operator == "AND" {
+				if p.Operator == "AND" {
 					must = append(must, q)
 				} else {
 					should = append(should, q)
@@ -4476,7 +4476,7 @@ func (p *qsParser) parseAnd() (map[string]any, *apierr.Error) {
 				should = nil
 			}
 			must = append(must, q)
-		} else if p.operator == "AND" {
+		} else if p.Operator == "AND" {
 			must = append(must, q)
 		} else {
 			should = append(should, q)
@@ -4484,7 +4484,7 @@ func (p *qsParser) parseAnd() (map[string]any, *apierr.Error) {
 		forceMust = false
 	}
 	if forceMust {
-		return nil, errParsing("trailing operator")
+		return nil, apierr.Parsing("trailing operator")
 	}
 	bm := map[string]any{}
 	if len(must) > 0 {
@@ -4501,9 +4501,9 @@ func (p *qsParser) parseAnd() (map[string]any, *apierr.Error) {
 	}
 	return map[string]any{"bool": bm}, nil
 }
-func (p *qsParser) parseUnary() (map[string]any, *apierr.Error) {
-	if p.pos < len(p.tokens) {
-		tok := p.tokens[p.pos]
+func (p *QueryStringParser) parseUnary() (map[string]any, *apierr.Error) {
+	if p.pos < len(p.Tokens) {
+		tok := p.Tokens[p.pos]
 		if tok == "NOT" || tok == "!" {
 			p.pos++
 			inner, err := p.parseUnary()
@@ -4513,7 +4513,7 @@ func (p *qsParser) parseUnary() (map[string]any, *apierr.Error) {
 			return map[string]any{"bool": map[string]any{"must_not": []any{inner}}}, nil
 		}
 		if strings.HasPrefix(tok, "!") && len(tok) > 1 {
-			p.tokens[p.pos] = tok[1:]
+			p.Tokens[p.pos] = tok[1:]
 			inner, err := p.parseUnary()
 			if err != nil {
 				return nil, err
@@ -4529,7 +4529,7 @@ func (p *qsParser) parseUnary() (map[string]any, *apierr.Error) {
 				}
 				return map[string]any{"bool": map[string]any{"must_not": []any{inner}}}, nil
 			}
-			p.tokens[p.pos] = tok[1:]
+			p.Tokens[p.pos] = tok[1:]
 			inner, err := p.parseUnary()
 			if err != nil {
 				return nil, err
@@ -4565,22 +4565,22 @@ func parsePhraseToken(tok string) (string, float64, bool) {
 	return phrase, slop, true
 }
 
-func (p *qsParser) parseTerm() (map[string]any, *apierr.Error) {
-	if p.pos >= len(p.tokens) {
+func (p *QueryStringParser) parseTerm() (map[string]any, *apierr.Error) {
+	if p.pos >= len(p.Tokens) {
 		return map[string]any{"match_all": map[string]any{}}, nil
 	}
-	tok := p.tokens[p.pos]
+	tok := p.Tokens[p.pos]
 	p.pos++
 	if tok == "(" {
 		q, err := p.parseOr()
 		if err != nil {
 			return nil, err
 		}
-		if p.pos < len(p.tokens) && p.tokens[p.pos] == ")" {
+		if p.pos < len(p.Tokens) && p.Tokens[p.pos] == ")" {
 			p.pos++
 		}
-		if p.pos < len(p.tokens) && strings.HasPrefix(p.tokens[p.pos], "^") {
-			if f, err := strconv.ParseFloat(strings.TrimPrefix(p.tokens[p.pos], "^"), 64); err == nil {
+		if p.pos < len(p.Tokens) && strings.HasPrefix(p.Tokens[p.pos], "^") {
+			if f, err := strconv.ParseFloat(strings.TrimPrefix(p.Tokens[p.pos], "^"), 64); err == nil {
 				applyQueryBoost(q, f)
 			}
 			p.pos++
@@ -4601,34 +4601,34 @@ func (p *qsParser) parseTerm() (map[string]any, *apierr.Error) {
 		value := tok[i+1:]
 		rawField := field
 		if rawField != "*" && strings.ContainsAny(rawField, "*?") && !strings.Contains(rawField, "\\") {
-			return nil, errParsing("invalid field wildcard")
+			return nil, apierr.Parsing("invalid field wildcard")
 		}
 		if strings.Contains(value, ":") {
-			return nil, errParsing("invalid field syntax")
+			return nil, apierr.Parsing("invalid field syntax")
 		}
 		field = unescapeQueryString(field)
 		if strings.Contains(rawField, "\\*") || strings.Contains(rawField, "\\?") {
-			field = p.default_
-		} else if _, known := mapping.FieldDef(p.c.idx, field); !known && field != "_id" && field != "_index" && field != "_routing" {
+			field = p.Default_
+		} else if _, known := mapping.FieldDef(p.C.Idx, field); !known && field != "_id" && field != "_index" && field != "_routing" {
 			if value == "*" {
 				return map[string]any{"match_none": map[string]any{}}, nil
 			}
-			field = p.default_
+			field = p.Default_
 		}
-		if value == "" && p.pos < len(p.tokens) {
+		if value == "" && p.pos < len(p.Tokens) {
 			// field:(...)
-			if p.tokens[p.pos] == "(" {
+			if p.Tokens[p.pos] == "(" {
 				p.pos++
 				q, err := p.parseOr()
 				if err != nil {
 					return nil, err
 				}
-				if p.pos < len(p.tokens) && p.tokens[p.pos] == ")" {
+				if p.pos < len(p.Tokens) && p.Tokens[p.pos] == ")" {
 					p.pos++
 				}
 				out := p.prefixField(field, q)
-				if p.pos < len(p.tokens) && strings.HasPrefix(p.tokens[p.pos], "^") {
-					if f, err := strconv.ParseFloat(strings.TrimPrefix(p.tokens[p.pos], "^"), 64); err == nil {
+				if p.pos < len(p.Tokens) && strings.HasPrefix(p.Tokens[p.pos], "^") {
+					if f, err := strconv.ParseFloat(strings.TrimPrefix(p.Tokens[p.pos], "^"), 64); err == nil {
 						applyQueryBoost(out, f)
 					}
 					p.pos++
@@ -4637,8 +4637,8 @@ func (p *qsParser) parseTerm() (map[string]any, *apierr.Error) {
 			}
 		}
 		if strings.HasPrefix(value, "\"") {
-			for !strings.Contains(strings.TrimPrefix(value, "\""), "\"") && p.pos < len(p.tokens) {
-				value += " " + p.tokens[p.pos]
+			for !strings.Contains(strings.TrimPrefix(value, "\""), "\"") && p.pos < len(p.Tokens) {
+				value += " " + p.Tokens[p.pos]
 				p.pos++
 			}
 			phrase, slop, _ := parsePhraseToken(value)
@@ -4680,9 +4680,9 @@ func (p *qsParser) parseTerm() (map[string]any, *apierr.Error) {
 			return mq, nil
 		}
 		if slop > 0 {
-			return map[string]any{"match_phrase": map[string]any{p.default_: map[string]any{"query": phrase, "slop": slop}}}, nil
+			return map[string]any{"match_phrase": map[string]any{p.Default_: map[string]any{"query": phrase, "slop": slop}}}, nil
 		}
-		return map[string]any{"match_phrase": map[string]any{p.default_: phrase}}, nil
+		return map[string]any{"match_phrase": map[string]any{p.Default_: phrase}}, nil
 	}
 	if p.simple {
 		if i := strings.Index(tok, "\\-"); i > 0 {
@@ -4696,7 +4696,7 @@ func (p *qsParser) parseTerm() (map[string]any, *apierr.Error) {
 		}
 		target := p.fields
 		if !p.hasFields {
-			target = textFieldNames(p.c)
+			target = textFieldNames(p.C)
 		}
 		if strings.ContainsAny(tok, "*?") {
 			if !p.prefixOp {
@@ -4725,10 +4725,10 @@ func (p *qsParser) parseTerm() (map[string]any, *apierr.Error) {
 		}
 		return multiFieldQuery("match", p.fields, tok), nil
 	}
-	return p.valueQuery(p.default_, tok)
+	return p.valueQuery(p.Default_, tok)
 }
 
-func (p *qsParser) prefixField(field string, q map[string]any) map[string]any {
+func (p *QueryStringParser) prefixField(field string, q map[string]any) map[string]any {
 	// rewrite inner default fields to the given field
 	return rewriteQSFiels(q, field)
 }
@@ -4745,7 +4745,7 @@ func rewriteQSFiels(q map[string]any, field string) map[string]any {
 				switch bk {
 				case "must", "should", "must_not", "filter":
 					list := []any{}
-					for _, e := range asQueryList(bv) {
+					for _, e := range AsQueryList(bv) {
 						list = append(list, rewriteQSFiels(e.(map[string]any), field))
 					}
 					bm[bk] = list
@@ -4768,10 +4768,10 @@ func firstKey(m map[string]any) string {
 	return ""
 }
 
-func textFieldNames(c *queryCtx) []string {
+func textFieldNames(c *QueryCtx) []string {
 	all := []string{}
 	for f := range c.valuesMap() {
-		def, ok := mapping.FieldDef(c.idx, f)
+		def, ok := mapping.FieldDef(c.Idx, f)
 		if !ok {
 			continue
 		}
@@ -4870,7 +4870,7 @@ func applyQueryBoost(q map[string]any, boost float64) map[string]any {
 	return q
 }
 
-func (p *qsParser) valueQuery(field, value string) (map[string]any, *apierr.Error) {
+func (p *QueryStringParser) valueQuery(field, value string) (map[string]any, *apierr.Error) {
 	value = unescapeQueryString(value)
 	if i := strings.LastIndex(value, "^"); i > 0 {
 		if f, err := strconv.ParseFloat(value[i+1:], 64); err == nil {
@@ -4882,9 +4882,9 @@ func (p *qsParser) valueQuery(field, value string) (map[string]any, *apierr.Erro
 		}
 	}
 	if strings.HasSuffix(value, "^") {
-		return nil, errParsing("invalid boost")
+		return nil, apierr.Parsing("invalid boost")
 	}
-	if fieldUnderNested(p.c.idx, field) {
+	if FieldUnderNested(p.C.Idx, field) {
 		return map[string]any{"match_none": map[string]any{}}, nil
 	}
 	if value == "*" {
@@ -4912,16 +4912,16 @@ func (p *qsParser) valueQuery(field, value string) (map[string]any, *apierr.Erro
 		inclusiveLow := strings.HasPrefix(value, "[")
 		body := strings.Trim(value, "[]{}")
 		// value may span tokens
-		if !strings.Contains(body, "TO") && p.pos < len(p.tokens) {
-			for p.pos < len(p.tokens) && !strings.Contains(body, "TO") {
-				body += " " + p.tokens[p.pos]
+		if !strings.Contains(body, "TO") && p.pos < len(p.Tokens) {
+			for p.pos < len(p.Tokens) && !strings.Contains(body, "TO") {
+				body += " " + p.Tokens[p.pos]
 				p.pos++
 			}
 			body = strings.Trim(body, "[]{}")
 		}
 		loTO := strings.Index(body, " TO ")
 		if loTO < 0 {
-			return nil, errParsing("failed to parse range in query string")
+			return nil, apierr.Parsing("failed to parse range in query string")
 		}
 		lo := strings.TrimSpace(body[:loTO])
 		hi := strings.TrimSpace(body[loTO+4:])
@@ -4960,11 +4960,11 @@ func (p *qsParser) valueQuery(field, value string) (map[string]any, *apierr.Erro
 	}
 	if strings.ContainsAny(value, "*?") {
 		if !p.allowLeading && (strings.HasPrefix(value, "*") || strings.HasPrefix(value, "?")) {
-			return nil, errParsing("leading wildcard disallowed")
+			return nil, apierr.Parsing("leading wildcard disallowed")
 		}
 		return map[string]any{"wildcard": map[string]any{field: map[string]any{"value": strings.ToLower(value)}}}, nil
 	}
-	def, ok := mapping.FieldDef(p.c.idx, field)
+	def, ok := mapping.FieldDef(p.C.Idx, field)
 	ftype, _ := def["type"].(string)
 	if (ftype == "keyword" || ftype == "constant_keyword") && def != nil {
 		if split, _ := def["split_queries_on_whitespace"].(bool); split && len(strings.Fields(value)) > 1 {
@@ -4974,7 +4974,7 @@ func (p *qsParser) valueQuery(field, value string) (map[string]any, *apierr.Erro
 				clauses = append(clauses, map[string]any{"term": map[string]any{field: lintValue(t)}})
 			}
 			kind := "should"
-			if p.operator == "AND" {
+			if p.Operator == "AND" {
 				kind = "must"
 			}
 			return boolQuery(kind, clauses, 0), nil
@@ -5110,10 +5110,10 @@ func applyQueryFuzzyTranspositions(q map[string]any, transpositions bool) {
 	}
 }
 
-func (c *queryCtx) evalQueryString(body any, simple bool) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalQueryString(body any, simple bool) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("query_string malformed")
+		return false, 0, apierr.Parsing("query_string malformed")
 	}
 	if simple {
 		allowed := map[string]bool{"query": true, "fields": true, "default_operator": true, "flags": true,
@@ -5123,7 +5123,7 @@ func (c *queryCtx) evalQueryString(body any, simple bool) (bool, float64, *apier
 			"allow_leading_wildcard": true, "phrase_slop": true, "tie_breaker": true, "type": true}
 		for k := range bm {
 			if !allowed[k] {
-				return false, 0, errParsing("[simple_query_string] unsupported field [" + k + "]")
+				return false, 0, apierr.Parsing("[simple_query_string] unsupported field [" + k + "]")
 			}
 		}
 	}
@@ -5165,13 +5165,13 @@ func (c *queryCtx) evalQueryString(body any, simple bool) (bool, float64, *apier
 		for _, f := range fields {
 			name, _ := stripFieldBoost(f)
 			if strings.ContainsAny(name, "*?") {
-				re := wildcardRegex(name)
+				re := WildcardRegex(name)
 				paths := []string{}
 				for path := range c.valuesMap() {
 					if !re.MatchString(path) {
 						continue
 					}
-					def, ok := mapping.FieldDef(c.idx, path)
+					def, ok := mapping.FieldDef(c.Idx, path)
 					if !ok {
 						continue
 					}
@@ -5191,11 +5191,11 @@ func (c *queryCtx) evalQueryString(body any, simple bool) (bool, float64, *apier
 	}
 	if !simple && len(fields) == 0 && defaultField != "*" &&
 		!strings.ContainsAny(query, ":\"()[]{}^~*?\\+-!&|") && len(strings.Fields(query)) > 1 {
-		if def, ok := mapping.FieldDef(c.idx, defaultField); ok {
+		if def, ok := mapping.FieldDef(c.Idx, defaultField); ok {
 			ftype, _ := def["type"].(string)
 			split, _ := def["split_queries_on_whitespace"].(bool)
 			if (ftype == "keyword" || ftype == "constant_keyword" || ftype == "wildcard") && !split {
-				return c.eval(map[string]any{"term": map[string]any{defaultField: query}})
+				return c.Eval(map[string]any{"term": map[string]any{defaultField: query}})
 			}
 		}
 	}
@@ -5212,7 +5212,7 @@ func (c *queryCtx) evalQueryString(body any, simple bool) (bool, float64, *apier
 		if v, has := bm["phrase_slop"]; has {
 			applyQueryPhraseSlop(q, v)
 		}
-		return c.eval(q)
+		return c.Eval(q)
 	}
 	if !simple && !balancedQueryParens(query) {
 		return false, 0, qsParseError(query)
@@ -5248,12 +5248,12 @@ func (c *queryCtx) evalQueryString(body any, simple bool) (bool, float64, *apier
 			andOp = allowed["AND"]
 		}
 	}
-	p := &qsParser{tokens: tokenizeQueryString(query), default_: defaultField, fields: fields, operator: operator, simple: simple, c: c, allowLeading: allowLeading, hasFields: hasFields,
+	p := &QueryStringParser{Tokens: TokenizeQueryString(query), Default_: defaultField, fields: fields, Operator: operator, simple: simple, C: c, allowLeading: allowLeading, hasFields: hasFields,
 		prefixOp: prefixOp, fuzzyOp: fuzzyOp, phraseOp: phraseOp, slopOp: slopOp, notOp: notOp, andOp: andOp, quoteSuffix: quoteSuffix}
-	q, err := p.parse()
+	q, err := p.Parse()
 	if err != nil {
 		if simple {
-			return c.eval(map[string]any{"match_none": map[string]any{}})
+			return c.Eval(map[string]any{"match_none": map[string]any{}})
 		}
 		return false, 0, qsParseError(query)
 	}
@@ -5300,11 +5300,11 @@ func (c *queryCtx) evalQueryString(body any, simple bool) (bool, float64, *apier
 	if v, ok := bm["lenient"].(bool); ok && v {
 		applyQueryLenient(q)
 	}
-	return c.eval(q)
+	return c.Eval(q)
 }
 
 // expandMultifield rewrites queries against "*" default field into multi_match.
-func expandMultifield(q map[string]any, c *queryCtx) map[string]any {
+func expandMultifield(q map[string]any, c *QueryCtx) map[string]any {
 	for k, v := range q {
 		switch k {
 		case "match", "match_phrase":
@@ -5317,7 +5317,7 @@ func expandMultifield(q map[string]any, c *queryCtx) map[string]any {
 			if field == "*" {
 				all := []string{}
 				for f := range c.valuesMap() {
-					def, ok := mapping.FieldDef(c.idx, f)
+					def, ok := mapping.FieldDef(c.Idx, f)
 					if !ok {
 						continue
 					}
@@ -5358,9 +5358,9 @@ func expandMultifield(q map[string]any, c *queryCtx) map[string]any {
 	return q
 }
 
-func fieldUnderNested(idx *model.Index, field string) bool {
+func FieldUnderNested(idx *model.Index, field string) bool {
 	parts := strings.Split(field, ".")
-	props := ensureProperties(idx.Mappings)
+	props := mapping.EnsureProperties(idx.Mappings)
 	for i := 0; i < len(parts)-1; i++ {
 		def, ok := props[parts[i]].(map[string]any)
 		if !ok {

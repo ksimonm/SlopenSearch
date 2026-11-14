@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/search"
 )
 
 func fieldCapsCollect(props map[string]any, prefix string, out map[string]map[string]any) {
@@ -135,7 +136,7 @@ func (s *Server) handleFieldCapsImpl(w http.ResponseWriter, r *http.Request, ind
 		matched := false
 		if strings.ContainsAny(pat, "*?") {
 			for _, name := range unionOrder {
-				if wildcardMatch(pat, name) && !seenSel[name] {
+				if search.WildcardMatch(pat, name) && !seenSel[name] {
 					seenSel[name] = true
 					selected = append(selected, name)
 					matched = true

@@ -12,6 +12,7 @@ import (
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
+	"slopensearch/internal/search"
 )
 
 var byQueryParams = map[string]bool{
@@ -95,7 +96,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 	}
 	qmap, ok := query.(map[string]any)
 	if !ok {
-		writeError(w, errParsing("[query] malformed"))
+		writeError(w, apierr.Parsing("[query] malformed"))
 		return
 	}
 	maxDocs := int64(-1)
@@ -145,8 +146,8 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 		if _, pending := idx.Pending[id]; pending {
 			continue
 		}
-		qc := newQueryCtxForDoc(idx, id, doc)
-		match, _, qerr := qc.eval(qmap)
+		qc := search.NewQueryCtxForDoc(idx, id, doc)
+		match, _, qerr := qc.Eval(qmap)
 		if qerr != nil {
 			writeError(w, qerr)
 			return
@@ -192,8 +193,8 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 		if hasScript {
 			res, serr := runUpdateScriptCtx(script, newDoc, idx.Name, id, -1, "index", idx.Routing[id])
 			if serr != nil {
-				if se, ok := serr.Extra.(*plScriptErr); ok {
-					writeJSON(w, 400, se.errorBody())
+				if se, ok := serr.Extra.(*search.ScriptError); ok {
+					writeJSON(w, 400, se.ErrorBody())
 					return
 				}
 				if serr.CausedBy != nil {
@@ -243,7 +244,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 			}
 			continue
 		}
-		props := ensureProperties(idx.Mappings)
+		props := mapping.EnsureProperties(idx.Mappings)
 		if derr := mappingShapeConflict(props, newDoc); derr != nil {
 			failures = append(failures, byQueryFailure(idx.Name, id, derr))
 			continue

@@ -7,7 +7,6 @@ import (
 	"math"
 	"net"
 	"net/http"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +20,7 @@ import (
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
+	"slopensearch/internal/search"
 	"slopensearch/internal/settings"
 )
 
@@ -101,9 +101,9 @@ func docValuesOutput(idx *model.Index, id, field string, spec fieldSpec, fallbac
 		base := field[:i]
 		if bdef, ok := mapping.FieldDef(idx, base); ok {
 			if bt, _ := bdef["type"].(string); bt == "join" {
-				name, parent := joinParts(idx.Docs[id][base])
+				name, parent := search.JoinParts(idx.Docs[id][base])
 				relations, _ := bdef["relations"].(map[string]any)
-				if name != "" && parent != "" && joinParentRelation(relations, name) == field[i+1:] {
+				if name != "" && parent != "" && search.JoinParentRelation(relations, name) == field[i+1:] {
 					return []any{parent}, true, nil
 				}
 				return nil, false, nil
@@ -242,7 +242,7 @@ func formatDocValue(idx *model.Index, field, ftype string, v any, format string)
 		case uint64:
 			raw = int64(t)
 		default:
-			if n, ok := integerOf(v); ok {
+			if n, ok := search.IntegerOf(v); ok {
 				raw = n
 			} else {
 				return v
@@ -323,7 +323,7 @@ func (h multiHit) sortValue(field string, desc bool, mode string) (any, bool) {
 			if len(list) == 1 {
 				if s, ok := jsonv.ScalarString(list[0]); ok {
 					if ip := net.ParseIP(s); ip != nil {
-						return ipSortKey{key: string(ip.To16()), out: canonicalIP(s)}, true
+						return ipSortKey{key: string(ip.To16()), out: search.CanonicalIP(s)}, true
 					}
 				}
 			}
@@ -656,13 +656,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 
 	if body["size"] == nil {
 		if _, exists := body["size"]; exists {
-			writeError(w, errParsing("Unknown key for a VALUE_NULL in [size]."))
+			writeError(w, apierr.Parsing("Unknown key for a VALUE_NULL in [size]."))
 			return
 		}
 	}
 	if body["from"] == nil {
 		if _, exists := body["from"]; exists {
-			writeError(w, errParsing("Unknown key for a VALUE_NULL in [from]."))
+			writeError(w, apierr.Parsing("Unknown key for a VALUE_NULL in [from]."))
 			return
 		}
 	}
@@ -779,8 +779,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	if pitCtx != nil {
 		shards = pitCtx.shards
 		for _, h := range pitCtx.hits {
-			qc := newQueryCtxForDoc(h.idx, h.id, h.doc)
-			ok, score, err := qc.eval(query)
+			qc := search.NewQueryCtxForDoc(h.idx, h.id, h.doc)
+			ok, score, err := qc.Eval(query)
 			if err != nil {
 				if isQueryShardCause(err) {
 					writeQueryShardError(w, h.idx, err)
@@ -822,8 +822,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				if _, pending := idx.Pending[id]; pending {
 					continue
 				}
-				qc := newQueryCtxForDoc(idx, id, doc)
-				ok, score, err := qc.eval(q)
+				qc := search.NewQueryCtxForDoc(idx, id, doc)
+				ok, score, err := qc.Eval(q)
 				if err != nil {
 					if isQueryShardCause(err) {
 						writeQueryShardError(w, idx, err)
@@ -857,8 +857,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	if pf, ok := body["post_filter"].(map[string]any); ok && len(pf) > 0 {
 		kept := matched[:0]
 		for _, h := range matched {
-			qc := newQueryCtxForDoc(h.idx, h.id, h.doc)
-			ok, _, err := qc.eval(pf)
+			qc := search.NewQueryCtxForDoc(h.idx, h.id, h.doc)
+			ok, _, err := qc.Eval(pf)
 			if err != nil {
 				writeError(w, err)
 				return
@@ -871,7 +871,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	}
 	total := 0
 
-	searchSortSpecs, sortErr := parseSortSpecs(body["sort"], r.URL.Query().Get("sort"))
+	searchSortSpecs, sortErr := search.ParseSortSpecs(body["sort"], r.URL.Query().Get("sort"))
 	if sortErr != nil {
 		writeError(w, sortErr)
 		return
@@ -879,7 +879,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	hasScoreSort := false
 	allScoreSort := len(searchSortSpecs) > 0
 	for _, sp := range searchSortSpecs {
-		if sp.field == "_score" {
+		if sp.Field == "_score" {
 			hasScoreSort = true
 		} else {
 			allScoreSort = false
@@ -887,7 +887,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	}
 	sortedByField := len(searchSortSpecs) > 0 && !allScoreSort
 	for _, sp := range searchSortSpecs {
-		if sp.field == "_shard_doc" && pitCtx == nil {
+		if sp.Field == "_shard_doc" && pitCtx == nil {
 			writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: _shard_doc is only supported with point-in-time (PIT). Add a PIT or remove _shard_doc.;"})
 			return
@@ -917,14 +917,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		}
 		if len(indices) > 0 {
 			for i, sp := range searchSortSpecs {
-				def, ok := mapping.FieldDef(indices[0], sp.field)
+				def, ok := mapping.FieldDef(indices[0], sp.Field)
 				if !ok {
 					continue
 				}
 				ft, _ := def["type"].(string)
 				if mapping.IsNumericType(ft) && ft != "date" && ft != "date_nanos" {
 					if _, conv := jsonv.ToFloat(after[i]); !conv {
-						reason := "Failed to parse search_after value for field [" + sp.field + "]."
+						reason := "Failed to parse search_after value for field [" + sp.Field + "]."
 						writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 							Reason: reason, Phase: "query",
 							RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason}})
@@ -946,40 +946,40 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	var shardFailures []any
 	if sortedByField {
 		for _, sp := range searchSortSpecs {
-			if sp.field == "_score" || sp.field == "_doc" || sp.field == "_id" || sp.field == "_index" || sp.field == "_script" || sp.field == "_geo_distance" || sp.field == "_shard_doc" {
+			if sp.Field == "_score" || sp.Field == "_doc" || sp.Field == "_id" || sp.Field == "_index" || sp.Field == "_script" || sp.Field == "_geo_distance" || sp.Field == "_shard_doc" {
 				continue
 			}
 			anyMapped := false
 			for _, idx := range indices {
-				if kerr := knnUnsupportedSort(idx, sp.field); kerr != nil {
+				if kerr := knnUnsupportedSort(idx, sp.Field); kerr != nil {
 					writeError(w, kerr)
 					return
 				}
-				if sortFieldMapped(idx, sp.field) {
+				if search.SortFieldMapped(idx, sp.Field) {
 					anyMapped = true
 					break
 				}
 			}
-			if !anyMapped && sp.unmapped == "" {
-				reason := "No mapping found for [" + sp.field + "] in order to sort on"
+			if !anyMapped && sp.Unmapped == "" {
+				reason := "No mapping found for [" + sp.Field + "] in order to sort on"
 				writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 					Reason: reason, Phase: "query",
 					RootCause: &apierr.Error{Type: "query_shard_exception", Reason: reason}})
 				return
 			}
-			if !anyMapped || sp.unmapped != "" {
+			if !anyMapped || sp.Unmapped != "" {
 				continue
 			}
 			for _, idx := range indices {
-				if sortFieldMapped(idx, sp.field) {
+				if search.SortFieldMapped(idx, sp.Field) {
 					continue
 				}
 				failedShards++
-				partialReason = "No mapping found for [" + sp.field + "] in order to sort on"
+				partialReason = "No mapping found for [" + sp.Field + "] in order to sort on"
 				shardFailures = append(shardFailures, map[string]any{
 					"index":  idx.Name,
 					"shard":  0,
-					"reason": map[string]any{"type": "query_shard_exception", "reason": "No mapping found for [" + sp.field + "] in order to sort on"},
+					"reason": map[string]any{"type": "query_shard_exception", "reason": "No mapping found for [" + sp.Field + "] in order to sort on"},
 				})
 				kept := matched[:0]
 				for _, h := range matched {
@@ -1054,15 +1054,15 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	}
 	if sortedByField {
 		for _, sp := range searchSortSpecs {
-			if sp.field == "_score" || sp.field == "_doc" || sp.field == "_id" || sp.field == "_index" || sp.field == "_script" || sp.field == "_shard_doc" {
+			if sp.Field == "_score" || sp.Field == "_doc" || sp.Field == "_id" || sp.Field == "_index" || sp.Field == "_script" || sp.Field == "_shard_doc" {
 				continue
 			}
 			for _, idx := range indices {
-				if sp.field == "_geo_distance" {
-					def, ok := mapping.FieldDef(idx, sp.geoField)
+				if sp.Field == "_geo_distance" {
+					def, ok := mapping.FieldDef(idx, sp.GeoField)
 					t, _ := def["type"].(string)
-					if (!ok || t != "geo_point") && !sp.geoIgnore {
-						reason := "failed to find mapper for [" + sp.geoField + "] for geo distance based sort"
+					if (!ok || t != "geo_point") && !sp.GeoIgnore {
+						reason := "failed to find mapper for [" + sp.GeoField + "] for geo distance based sort"
 						writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 							Reason: reason, Phase: "query",
 							RootCause: &apierr.Error{Type: "query_shard_exception", Reason: reason}})
@@ -1070,19 +1070,19 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 					}
 					continue
 				}
-				if sp.nestedPath != "" {
-					def, ok := mapping.FieldDef(idx, sp.nestedPath)
+				if sp.NestedPath != "" {
+					def, ok := mapping.FieldDef(idx, sp.NestedPath)
 					t, _ := def["type"].(string)
 					if !ok || t != "nested" {
-						reason := "[nested] failed to find nested object under path [" + sp.nestedPath + "]"
+						reason := "[nested] failed to find nested object under path [" + sp.NestedPath + "]"
 						writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 							Reason: reason, Phase: "query",
 							RootCause: &apierr.Error{Type: "query_shard_exception", Reason: reason}})
 						return
 					}
 				}
-				if sp.mode == "avg" || sp.mode == "sum" || sp.mode == "median" {
-					if def, ok := mapping.FieldDef(idx, sp.field); ok {
+				if sp.Mode == "avg" || sp.Mode == "sum" || sp.Mode == "median" {
+					if def, ok := mapping.FieldDef(idx, sp.Field); ok {
 						t, _ := def["type"].(string)
 						if !mapping.IsNumericType(t) && t != "date" {
 							reason := "we only support AVG, MEDIAN and SUM on number based fields"
@@ -1093,11 +1093,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 						}
 					}
 				}
-				if def, ok := mapping.FieldDef(idx, sp.field); ok {
+				if def, ok := mapping.FieldDef(idx, sp.Field); ok {
 					t, _ := def["type"].(string)
 					fd, _ := def["fielddata"].(bool)
 					if (t == "text" || t == "match_only_text") && !fd {
-						reason := "Text fields are not optimised for operations that require per-document field data like aggregations and sorting, so these operations are disabled by default. Please use a keyword field instead. Alternatively, set fielddata=true on [" + sp.field + "] in order to load field data by uninverting the inverted index. Note that this can use significant memory."
+						reason := "Text fields are not optimised for operations that require per-document field data like aggregations and sorting, so these operations are disabled by default. Please use a keyword field instead. Alternatively, set fielddata=true on [" + sp.Field + "] in order to load field data by uninverting the inverted index. Note that this can use significant memory."
 						writeError(w, &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 							Reason: "all shards failed", Phase: "query",
 							RootCause: &apierr.Error{Type: "illegal_argument_exception", Reason: reason},
@@ -1121,7 +1121,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 						return
 					}
 				}
-				if err := checkDocValuesLoadable(idx, sp.field); err != nil {
+				if err := checkDocValuesLoadable(idx, sp.Field); err != nil {
 					writeError(w, err)
 					return
 				}
@@ -1129,36 +1129,36 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		}
 		for i := range searchSortSpecs {
 			sp := &searchSortSpecs[i]
-			if sp.field != "_script" {
+			if sp.Field != "_script" {
 				continue
 			}
 			ctxName := "number_sort"
-			if sp.scriptType == "string" {
+			if sp.ScriptType == "string" {
 				ctxName = "string_sort"
 			}
-			cs, se, ae := prepareScript(sp.scriptRaw, ctxName)
+			cs, se, ae := search.PrepareScript(sp.ScriptRaw, ctxName)
 			if se != nil || ae != nil {
-				writeError(w, scriptErrForShard(indices[0], se, ae, false))
+				writeError(w, search.ScriptErrForShard(indices[0], se, ae, false))
 				return
 			}
-			sp.scriptVals = map[string]any{}
+			sp.ScriptVals = map[string]any{}
 			for _, h := range matched {
-				v, rerr := cs.run(newQueryCtxForDoc(h.idx, h.id, h.doc), runOpts{score: h.score})
+				v, rerr := cs.Run(search.NewQueryCtxForDoc(h.idx, h.id, h.doc), search.RunOpts{Score: h.score})
 				if rerr != nil {
-					writeError(w, scriptShardError(h.idx, rerr))
+					writeError(w, search.ScriptShardError(h.idx, rerr))
 					return
 				}
 				if ctxName == "number_sort" {
 					v = painless.F64(v)
 				}
-				sp.scriptVals[h.idx.Name+"\x00"+h.id] = v
+				sp.ScriptVals[h.idx.Name+"\x00"+h.id] = v
 			}
 		}
 		sort.SliceStable(matched, func(i, j int) bool {
 			for _, sp := range searchSortSpecs {
 				c := compareSortSpec(matched[i], matched[j], sp)
 				if c != 0 {
-					if sp.desc {
+					if sp.Desc {
 						return c > 0
 					}
 					return c < 0
@@ -1193,7 +1193,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		scrollID = sid
 	}
 
-	srcIncludes, srcExcludes, omitSource, bodyHasSource := sourceFilterFromBody(body)
+	srcIncludes, srcExcludes, omitSource, bodyHasSource := search.SourceFilterFromBody(body)
 	qIncludes, qExcludes, qOmit, qHas := sourceFilterFromQuery(r.URL.Query())
 	if qHas || qOmit {
 		srcIncludes, srcExcludes, omitSource = qIncludes, qExcludes, qOmit
@@ -1247,7 +1247,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			return
 		}
 	}
-	hlCfg, hlParseErr := parseHighlightConfig(body, query)
+	hlCfg, hlParseErr := search.ParseHighlightConfig(body, query)
 	if hlParseErr != nil {
 		writeError(w, hlParseErr)
 		return
@@ -1303,7 +1303,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		seqNoTermFlag = vals[0] == "true"
 	}
 	omitScores := sortedByField && !hasScoreSort && !trackScores
-	maxScoreAllowed := !sortedByField || trackScores || (len(searchSortSpecs) > 0 && searchSortSpecs[0].field == "_score" && searchSortSpecs[0].desc)
+	maxScoreAllowed := !sortedByField || trackScores || (len(searchSortSpecs) > 0 && searchSortSpecs[0].Field == "_score" && searchSortSpecs[0].Desc)
 	var maxScore any
 	if maxScoreAllowed && len(indices) == 0 {
 		maxScore = 0.0
@@ -1314,7 +1314,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				m = h.score
 			}
 		}
-		maxScore = scoreJSON(m)
+		maxScore = search.ScoreJSON(m)
 		if math.IsInf(m, 0) || math.IsNaN(m) {
 			maxScore = nil
 		}
@@ -1417,12 +1417,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				hitOmit = true
 			}
 		}
-		src := filterSourceDoc(h.doc, hitIncludes, hitExcludes)
+		src := search.FilterSourceDoc(h.doc, hitIncludes, hitExcludes)
 		var scoreVal any = h.score
 		if omitScores {
 			scoreVal = nil
 		} else {
-			scoreVal = scoreJSON(h.score)
+			scoreVal = search.ScoreJSON(h.score)
 		}
 		entry := map[string]any{
 			"_index": h.idx.Name, "_id": h.id, "_score": scoreVal,
@@ -1448,16 +1448,16 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			entry["_shard"] = "[" + h.idx.Name + "][0]"
 			entry["_node"] = "slopensearch-node-1"
 			if ss, ok := query["script_score"].(map[string]any); ok && len(query) == 1 {
-				entry["_explanation"] = map[string]any{"value": scoreJSON(h.score),
+				entry["_explanation"] = map[string]any{"value": search.ScoreJSON(h.score),
 					"description": "script score function, computed with script:\"" + scriptToString(ss["script"]) + "\"",
 					"details":     []any{}}
 			} else if kexp := knnExplain(h.idx, query, h.id, h.score); kexp != nil {
 				entry["_explanation"] = kexp
 			} else {
 				field, term := explainLabel(query)
-				qc := newQueryCtxForDoc(h.idx, h.id, h.doc)
-				exp := qc.bm25Explain(field, term, h.score)
-				exp["value"] = scoreJSON(h.score)
+				qc := search.NewQueryCtxForDoc(h.idx, h.id, h.doc)
+				exp := qc.Bm25Explain(field, term, h.score)
+				exp["value"] = search.ScoreJSON(h.score)
 				entry["_explanation"] = exp
 			}
 		}
@@ -1474,15 +1474,15 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		if storedNone {
 			delete(entry, "_id")
 		}
-		hitCtx := newQueryCtxForDoc(h.idx, h.id, h.doc)
+		hitCtx := search.NewQueryCtxForDoc(h.idx, h.id, h.doc)
 		if hlCfg != nil && mappingSourceEnabled(h.idx) {
-			if hlErr := hlCfg.validate(h.idx); hlErr != nil {
+			if hlErr := hlCfg.Validate(h.idx); hlErr != nil {
 				writeError(w, hlErr)
 				return
 			}
-			hl := percolateHighlights(hitCtx, query, hlCfg)
+			hl := search.PercolateHighlights(hitCtx, query, hlCfg)
 			if len(hl) == 0 {
-				hl = hlCfg.render(h.idx, h.doc)
+				hl = hlCfg.Render(h.idx, h.doc)
 			}
 			if len(hl) > 0 {
 				entry["highlight"] = hl
@@ -1497,8 +1497,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				entry["fields"] = cf
 			}
 		}
-		nestedInner := collectNestedInnerHits(hitCtx, query, omitScores)
-		if joinInner := collectJoinInnerHits(hitCtx, query, omitScores); len(joinInner) > 0 {
+		nestedInner := search.CollectNestedInnerHits(hitCtx, query, omitScores)
+		if joinInner := search.CollectJoinInnerHits(hitCtx, query, omitScores); len(joinInner) > 0 {
 			if nestedInner == nil {
 				nestedInner = map[string]any{}
 			}
@@ -1524,7 +1524,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 					names := []string{spec.name}
 					if strings.ContainsAny(spec.name, "*?") {
 						names = nil
-						re := wildcardRegex(spec.name)
+						re := search.WildcardRegex(spec.name)
 						for _, f := range mappedLeafFields(h.idx) {
 							if re.MatchString(f) {
 								names = append(names, f)
@@ -1563,7 +1563,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				names := []string{name}
 				if strings.ContainsAny(name, "*?") {
 					names = nil
-					re := wildcardRegex(name)
+					re := search.WildcardRegex(name)
 					for _, f := range mappedLeafFields(h.idx) {
 						if re.MatchString(f) {
 							names = append(names, f)
@@ -1610,7 +1610,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				entry["fields"] = got
 			}
 		}
-		if slots := percolateSlotsForHit(hitCtx, query); len(slots) > 0 {
+		if slots := search.PercolateSlotsForHit(hitCtx, query); len(slots) > 0 {
 			if existing, ok := entry["fields"].(map[string]any); ok {
 				existing["_percolator_document_slot"] = slots
 			} else {
@@ -1618,7 +1618,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			}
 		}
 		named := map[string]float64{}
-		qcNamed := newQueryCtxForDoc(h.idx, h.id, h.doc)
+		qcNamed := search.NewQueryCtxForDoc(h.idx, h.id, h.doc)
 		collectNamedQueries(query, qcNamed, named)
 		if pf, ok := body["post_filter"].(map[string]any); ok {
 			collectNamedQueries(pf, qcNamed, named)
@@ -1627,7 +1627,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			if r.URL.Query().Get("include_named_queries_score") == "true" {
 				scored := map[string]any{}
 				for n, sc := range named {
-					scored[n] = scoreJSON(sc)
+					scored[n] = search.ScoreJSON(sc)
 				}
 				entry["matched_queries"] = scored
 			} else {
@@ -1793,7 +1793,7 @@ func profileQuery(query map[string]any) map[string]any {
 	}}
 	if m, ok := query["match"].(map[string]any); ok {
 		for field, raw := range m {
-			text, _ := queryText(raw)
+			text, _ := search.QueryText(raw)
 			term := ""
 			if toks := mapping.Analyze(text); len(toks) > 0 {
 				term = toks[0]
@@ -1818,7 +1818,7 @@ func profileQuery(query map[string]any) map[string]any {
 	if bm, ok := query["bool"].(map[string]any); ok {
 		parts := []string{}
 		children := []any{}
-		for _, item := range asQueryList(bm["must"]) {
+		for _, item := range search.AsQueryList(bm["must"]) {
 			if cm, ok := item.(map[string]any); ok {
 				ch := profileQuery(cm)
 				if _, isTerm := cm["term"]; isTerm {
@@ -1830,7 +1830,7 @@ func profileQuery(query map[string]any) map[string]any {
 				children = append(children, ch)
 			}
 		}
-		for _, item := range asQueryList(bm["filter"]) {
+		for _, item := range search.AsQueryList(bm["filter"]) {
 			if cm, ok := item.(map[string]any); ok {
 				ch := profileQuery(cm)
 				parts = append(parts, "+ConstantScore("+fmt.Sprint(ch["description"])+")")
@@ -1884,208 +1884,10 @@ func intField(body map[string]any, key string, def int) int {
 	return def
 }
 
-type searchSortSpec struct {
-	field        string
-	desc         bool
-	missing      any
-	hasMissing   bool
-	mode         string
-	unmapped     string
-	format       string
-	nestedPath   string
-	nestedFilter map[string]any
-	numericType  string
-	scriptSource string
-	scriptParams any
-	scriptType   string
-	scriptRaw    any
-	scriptVals   map[string]any
-	geoField     string
-	geoPoint     any
-	geoUnit      string
-	geoMode      string
-	geoIgnore    bool
-}
-
-func parseSortSpecs(bodySort any, uriSort string) ([]searchSortSpec, *apierr.Error) {
-	var out []searchSortSpec
-	add := func(raw any, uri bool) *apierr.Error {
-		switch t := raw.(type) {
-		case string:
-			if t == "" {
-				return nil
-			}
-			out = append(out, searchSortSpec{field: t})
-		case map[string]any:
-			for field, v := range t {
-				sp := searchSortSpec{field: field}
-				switch ov := v.(type) {
-				case string:
-					if !validSortOrder(ov) {
-						if uri {
-							return nil
-						}
-						return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
-							Reason: "No enum constant org.opensearch.search.sort.SortOrder." + strings.ToUpper(ov)}
-					}
-					sp.desc = strings.EqualFold(ov, "desc")
-				case map[string]any:
-					if o, ok := ov["order"].(string); ok {
-						if !validSortOrder(o) {
-							if uri {
-								return nil
-							}
-							return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
-								Reason: "No enum constant org.opensearch.search.sort.SortOrder." + strings.ToUpper(o)}
-						}
-						sp.desc = strings.EqualFold(o, "desc")
-					}
-					if m, ok := ov["missing"]; ok {
-						sp.missing = m
-						sp.hasMissing = true
-					}
-					if m, ok := ov["mode"].(string); ok {
-						switch m {
-						case "min", "max", "avg", "sum", "median":
-							sp.mode = m
-						default:
-							return &apierr.Error{Type: "x_content_parse_exception", Status: 400,
-								Reason: "Failed to parse sort mode [" + m + "]",
-								CausedBy: &apierr.Error{Type: "illegal_argument_exception",
-									Reason: "Unknown SortMode [" + m + "]"}}
-						}
-					}
-					if m, ok := ov["unmapped_type"].(string); ok {
-						sp.unmapped = m
-					}
-					if _, ok := ov["format"]; ok {
-						return &apierr.Error{Type: "x_content_parse_exception", Status: 400,
-							Reason: "Failed to parse sort [field_sort] unknown field [format]"}
-					}
-					if nt, ok := ov["numeric_type"].(string); ok {
-						sp.numericType = nt
-					}
-					if st, ok := ov["type"].(string); ok {
-						sp.scriptType = st
-					}
-					if sp.field == "_geo_distance" {
-						for k, v := range ov {
-							switch k {
-							case "order", "unit", "mode", "distance_type", "validation_method", "ignore_unmapped", "nested", "nested_path":
-							default:
-								sp.geoField = k
-								sp.geoPoint = v
-							}
-						}
-						if u, ok := ov["unit"].(string); ok {
-							sp.geoUnit = u
-						}
-						if m, ok := ov["mode"].(string); ok {
-							sp.geoMode = m
-						}
-						if b, ok := ov["ignore_unmapped"].(bool); ok {
-							sp.geoIgnore = b
-						}
-						if sp.geoUnit != "" {
-							if _, ok := geoUnitMeters(sp.geoUnit); !ok {
-								return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
-									Reason: "No distance unit match [" + sp.geoUnit + "]"}
-							}
-						}
-					}
-					if sp.field == "_script" {
-						sp.scriptRaw = ov["script"]
-						st, hasType := ov["type"].(string)
-						if !hasType {
-							return apierr.BadRequest("Required [type]")
-						}
-						if st != "number" && st != "string" && st != "version" {
-							return &apierr.Error{Type: "x_content_parse_exception", Status: 400,
-								Reason:   "[_script] failed to parse field [type]",
-								CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "Unknown ScriptSortType [" + st + "]"}}
-						}
-					}
-					switch sc := ov["script"].(type) {
-					case string:
-						sp.scriptSource = sc
-					case map[string]any:
-						if src, ok := sc["source"].(string); ok {
-							sp.scriptSource = src
-						} else if src, ok := sc["inline"].(string); ok {
-							sp.scriptSource = src
-						}
-						if pr, ok := sc["params"]; ok {
-							sp.scriptParams = pr
-						}
-					}
-					if np, ok := ov["nested_path"].(string); ok {
-						sp.nestedPath = np
-					}
-					if nm, ok := ov["nested"].(map[string]any); ok {
-						if np, ok := nm["path"].(string); ok {
-							sp.nestedPath = np
-						}
-						if f, ok := nm["filter"].(map[string]any); ok {
-							sp.nestedFilter = f
-						}
-					}
-					if m, ok := ov["format"].(string); ok {
-						sp.format = m
-					}
-				}
-				out = append(out, sp)
-			}
-		}
-		return nil
-	}
-	switch t := bodySort.(type) {
-	case []any:
-		for _, raw := range t {
-			if err := add(raw, false); err != nil {
-				return nil, err
-			}
-		}
-	case string, map[string]any:
-		if err := add(t, false); err != nil {
-			return nil, err
-		}
-	}
-	if uriSort != "" {
-		valid := true
-		var uriSpecs []searchSortSpec
-		for _, part := range strings.Split(uriSort, ",") {
-			part = strings.TrimSpace(part)
-			if part == "" {
-				continue
-			}
-			field := part
-			desc := false
-			if at := strings.LastIndex(part, ":"); at >= 0 {
-				field = part[:at]
-				ord := part[at+1:]
-				if ord != "asc" && ord != "desc" {
-					valid = false
-					break
-				}
-				desc = ord == "desc"
-			}
-			uriSpecs = append(uriSpecs, searchSortSpec{field: field, desc: desc})
-		}
-		if valid {
-			out = append(out, uriSpecs...)
-		}
-	}
-	return out, nil
-}
-
-func validSortOrder(s string) bool {
-	return s == "asc" || s == "desc" || s == "ASC" || s == "DESC"
-}
-
-func searchSortSpecValue(h multiHit, sp searchSortSpec) (any, bool, bool) {
+func searchSortSpecValue(h multiHit, sp search.SearchSortSpec) (any, bool, bool) {
 	v, ok, missing := searchSortSpecValueRaw(h, sp)
-	if ok && !missing && sp.numericType != "" {
-		v = convertSortNumeric(v, sp.numericType)
+	if ok && !missing && sp.NumericType != "" {
+		v = convertSortNumeric(v, sp.NumericType)
 	}
 	return v, ok, missing
 }
@@ -2106,8 +1908,8 @@ func convertSortNumeric(v any, numericType string) any {
 	return v
 }
 
-func searchSortSpecValueRaw(h multiHit, sp searchSortSpec) (any, bool, bool) {
-	switch sp.field {
+func searchSortSpecValueRaw(h multiHit, sp search.SearchSortSpec) (any, bool, bool) {
+	switch sp.Field {
 	case "_score":
 		return h.score, true, false
 	case "_id":
@@ -2115,8 +1917,8 @@ func searchSortSpecValueRaw(h multiHit, sp searchSortSpec) (any, bool, bool) {
 	case "_index":
 		return h.idx.Name, true, false
 	case "_script":
-		if sp.scriptVals != nil {
-			v, ok := sp.scriptVals[h.idx.Name+"\x00"+h.id]
+		if sp.ScriptVals != nil {
+			v, ok := sp.ScriptVals[h.idx.Name+"\x00"+h.id]
 			return v, ok, false
 		}
 		return scriptSortValue(sp, h), true, false
@@ -2146,10 +1948,10 @@ func searchSortSpecValueRaw(h multiHit, sp searchSortSpec) (any, bool, bool) {
 		}
 		return int64(pos), true, false
 	}
-	if fieldUnderNested(h.idx, sp.field) && sp.nestedPath == "" {
+	if search.FieldUnderNested(h.idx, sp.Field) && sp.NestedPath == "" {
 		return nil, false, true
 	}
-	if sp.nestedPath != "" {
+	if sp.NestedPath != "" {
 		vals := nestedSortValues(h, sp)
 		if len(vals) == 0 {
 			return nil, false, true
@@ -2157,11 +1959,11 @@ func searchSortSpecValueRaw(h multiHit, sp searchSortSpec) (any, bool, bool) {
 		if len(vals) == 1 {
 			return vals[0], true, false
 		}
-		return reduceSortValues(vals, sp.desc, sp.mode), true, false
+		return reduceSortValues(vals, sp.Desc, sp.Mode), true, false
 	}
-	if sp.unmapped != "" {
-		if !sortFieldMapped(h.idx, sp.field) {
-			switch sp.unmapped {
+	if sp.Unmapped != "" {
+		if !search.SortFieldMapped(h.idx, sp.Field) {
+			switch sp.Unmapped {
 			case "long":
 				return int64(9223372036854775807), true, false
 			case "integer", "short", "byte":
@@ -2171,23 +1973,23 @@ func searchSortSpecValueRaw(h multiHit, sp searchSortSpec) (any, bool, bool) {
 			}
 		}
 	}
-	v, ok := h.sortValue(sp.field, sp.desc, sp.mode)
+	v, ok := h.sortValue(sp.Field, sp.Desc, sp.Mode)
 	if ok {
 		return v, true, false
 	}
-	if sp.hasMissing {
-		switch m := sp.missing.(type) {
+	if sp.HasMissing {
+		switch m := sp.Missing.(type) {
 		case string:
 			if m == "_first" || m == "_last" {
 				return nil, false, true
 			}
 		}
-		return sp.missing, true, false
+		return sp.Missing, true, false
 	}
 	return nil, false, true
 }
 
-func compareSortSpec(a, b multiHit, sp searchSortSpec) int {
+func compareSortSpec(a, b multiHit, sp search.SearchSortSpec) int {
 	av, aok, amissing := searchSortSpecValue(a, sp)
 	bv, bok, bmissing := searchSortSpecValue(b, sp)
 	if amissing || bmissing {
@@ -2195,30 +1997,30 @@ func compareSortSpec(a, b multiHit, sp searchSortSpec) int {
 			return 0
 		}
 		first := false
-		if sp.hasMissing {
-			if m, ok := sp.missing.(string); ok && m == "_first" {
+		if sp.HasMissing {
+			if m, ok := sp.Missing.(string); ok && m == "_first" {
 				first = true
 			}
 		}
 		if amissing {
 			if first {
-				if sp.desc {
+				if sp.Desc {
 					return 1
 				}
 				return -1
 			}
-			if sp.desc {
+			if sp.Desc {
 				return -1
 			}
 			return 1
 		}
 		if first {
-			if sp.desc {
+			if sp.Desc {
 				return -1
 			}
 			return 1
 		}
-		if sp.desc {
+		if sp.Desc {
 			return 1
 		}
 		return -1
@@ -2235,7 +2037,7 @@ func compareSortSpec(a, b multiHit, sp searchSortSpec) int {
 	return compareSortValues(av, bv)
 }
 
-func sortOutputValue(h multiHit, sp searchSortSpec) any {
+func sortOutputValue(h multiHit, sp search.SearchSortSpec) any {
 	v, ok, missing := searchSortSpecValue(h, sp)
 	if ik, isIP := v.(ipSortKey); isIP {
 		return ik.out
@@ -2248,27 +2050,27 @@ func sortOutputValue(h multiHit, sp searchSortSpec) any {
 	}
 	if missing {
 		numeric := false
-		if def, ok := mapping.FieldDef(h.idx, sp.field); ok {
+		if def, ok := mapping.FieldDef(h.idx, sp.Field); ok {
 			t, _ := def["type"].(string)
 			numeric = mapping.IsNumericType(t)
 		}
-		if numeric && !sp.hasMissing {
-			switch sp.numericType {
+		if numeric && !sp.HasMissing {
+			switch sp.NumericType {
 			case "long", "date_nanos":
-				if sp.desc {
+				if sp.Desc {
 					return int64(-9223372036854775808)
 				}
 				return int64(9223372036854775807)
 			case "integer", "short", "byte":
-				if sp.desc {
+				if sp.Desc {
 					return int64(-2147483648)
 				}
 				return int64(2147483647)
 			}
-			if def, ok := mapping.FieldDef(h.idx, sp.field); ok {
+			if def, ok := mapping.FieldDef(h.idx, sp.Field); ok {
 				t, _ := def["type"].(string)
 				if t == "integer" || t == "long" || t == "short" || t == "byte" {
-					if sp.desc {
+					if sp.Desc {
 						return int64(-2147483648)
 					}
 					return int64(2147483647)
@@ -2276,27 +2078,27 @@ func sortOutputValue(h multiHit, sp searchSortSpec) any {
 			}
 		}
 		if !numeric {
-			if sp.hasMissing {
-				if m, ok := sp.missing.(string); ok && (m == "_first" || m == "_last") {
+			if sp.HasMissing {
+				if m, ok := sp.Missing.(string); ok && (m == "_first" || m == "_last") {
 					return nil
 				}
-				return sp.missing
+				return sp.Missing
 			}
 			return nil
 		}
-		if sp.hasMissing {
-			if m, ok := sp.missing.(string); ok && (m == "_first" || m == "_last") {
+		if sp.HasMissing {
+			if m, ok := sp.Missing.(string); ok && (m == "_first" || m == "_last") {
 				if m == "_first" {
 					return "-Infinity"
 				}
-				if sp.desc {
+				if sp.Desc {
 					return "-Infinity"
 				}
 				return "Infinity"
 			}
-			return sp.missing
+			return sp.Missing
 		}
-		if sp.desc {
+		if sp.Desc {
 			return "-Infinity"
 		}
 		return "Infinity"
@@ -2414,7 +2216,7 @@ func validateQuery(idx *model.Index, query map[string]any) *apierr.Error {
 		case "bool":
 			if bm, ok := raw.(map[string]any); ok {
 				for _, key := range []string{"must", "should", "filter", "must_not"} {
-					for _, q := range asQueryList(bm[key]) {
+					for _, q := range search.AsQueryList(bm[key]) {
 						if err := validateNestedQuery(idx, q); err != nil {
 							return err
 						}
@@ -2429,7 +2231,7 @@ func validateQuery(idx *model.Index, query map[string]any) *apierr.Error {
 			}
 		case "dis_max":
 			if bm, ok := raw.(map[string]any); ok {
-				queries := asQueryList(bm["queries"])
+				queries := search.AsQueryList(bm["queries"])
 				if len(queries) == 0 {
 					return &apierr.Error{Type: "parsing_exception", Status: 400, Clause: "queries",
 						NoCausedBy: true,
@@ -2473,7 +2275,7 @@ func validateQuery(idx *model.Index, query map[string]any) *apierr.Error {
 			}
 		case "percolate":
 			if bm, ok := raw.(map[string]any); ok {
-				field := percolateFieldName(bm)
+				field := search.PercolateFieldName(bm)
 				def, mapped := mapping.FieldDef(idx, field)
 				ftype := ""
 				if mapped {
@@ -2483,7 +2285,7 @@ func validateQuery(idx *model.Index, query map[string]any) *apierr.Error {
 					if ftype == "" {
 						ftype = "object"
 					}
-					return matchShardError(
+					return search.MatchShardError(
 						fmt.Sprintf("expected field [%s] to be of type [percolator], but is of type [%s]", field, ftype))
 				}
 			}
@@ -2495,7 +2297,7 @@ func validateQuery(idx *model.Index, query map[string]any) *apierr.Error {
 			}
 		case "span_near", "span_or":
 			if bm, ok := raw.(map[string]any); ok {
-				for _, q := range asQueryList(bm["clauses"]) {
+				for _, q := range search.AsQueryList(bm["clauses"]) {
 					if err := validateNestedQuery(idx, q); err != nil {
 						return err
 					}
@@ -2553,11 +2355,11 @@ func validateFunctionScore(idx *model.Index, raw any) *apierr.Error {
 					strings.ToUpper(bmMode)}
 		}
 	}
-	functions := asQueryList(bm["functions"])
+	functions := search.AsQueryList(bm["functions"])
 	if len(functions) == 0 {
 		if f, ok := bm["function"].(map[string]any); ok {
 			functions = []any{f}
-		} else if hasScoreFunctionKey(bm) {
+		} else if search.HasScoreFunctionKey(bm) {
 			functions = []any{bm}
 		}
 	}
@@ -2576,7 +2378,7 @@ func validateFunctionScore(idx *model.Index, raw any) *apierr.Error {
 			field, _ := fvf["field"].(string)
 			if _, mapped := mapping.FieldDef(idx, field); !mapped {
 				if _, hasMissing := fvf["missing"]; !hasMissing {
-					return newFunctionScoreFailure("fvf_unmapped",
+					return search.NewFunctionScoreFailure("fvf_unmapped",
 						"Unable to find a field mapper for field ["+field+"]. No 'missing' value defined.")
 				}
 			}
@@ -2627,7 +2429,7 @@ func validateTermQuery(idx *model.Index, raw any) *apierr.Error {
 	if !ok {
 		return nil
 	}
-	field, val, ok := singleEntry(m)
+	field, val, ok := search.SingleEntry(m)
 	if !ok {
 		return nil
 	}
@@ -2678,9 +2480,9 @@ func validateTermQuery(idx *model.Index, raw any) *apierr.Error {
 			}
 		}
 	}
-	_, err := parseTermValue(ftype, def, val)
+	_, err := search.ParseTermValue(ftype, def, val)
 	if err != nil && (ftype == "date" || ftype == "date_nanos") {
-		return termDateParseError(err)
+		return search.TermDateParseError(err)
 	}
 	return err
 }
@@ -2690,7 +2492,7 @@ func validateRangeQuery(idx *model.Index, raw any) *apierr.Error {
 	if !ok {
 		return nil
 	}
-	field, condRaw, ok := singleEntry(m)
+	field, condRaw, ok := search.SingleEntry(m)
 	if !ok {
 		return nil
 	}
@@ -2705,23 +2507,23 @@ func validateRangeQuery(idx *model.Index, raw any) *apierr.Error {
 	}
 	tz, _ := cond["time_zone"].(string)
 	format, _ := cond["format"].(string)
-	lower, upper := rangeQueryBounds(cond)
+	lower, upper := search.RangeQueryBounds(cond)
 	bounds := []struct {
-		spec    rangeBoundSpec
+		spec    search.RangeBoundSpec
 		roundUp bool
 	}{
-		{lower, !lower.incl},
-		{upper, upper.incl},
+		{lower, !lower.Incl},
+		{upper, upper.Incl},
 	}
 	for _, b := range bounds {
-		if !b.spec.present {
+		if !b.spec.Present {
 			continue
 		}
-		bound := b.spec.value
+		bound := b.spec.Value
 		var err *apierr.Error
 		switch ftype {
 		case "date", "date_nanos", "date_range":
-			_, err = parseRangeDateBound(def, bound, tz, format, b.roundUp)
+			_, err = search.ParseRangeDateBound(def, bound, tz, format, b.roundUp)
 			if err != nil && err.RootCause != nil {
 				err = err.RootCause
 			}
@@ -2730,7 +2532,7 @@ func validateRangeQuery(idx *model.Index, raw any) *apierr.Error {
 			_, err = ctx.ParseIPValue(field, bound)
 		case "integer", "long", "short", "byte", "unsigned_long":
 			ctx := &mapping.ParseContext{IndexCoerce: true}
-			if isFractionalNumber(bound) {
+			if search.IsFractionalNumber(bound) {
 				_, err = ctx.ParseFloatValue(field, ftype, def, bound)
 			} else {
 				_, err = ctx.ParseIntValue(field, ftype, def, bound)
@@ -2740,7 +2542,7 @@ func validateRangeQuery(idx *model.Index, raw any) *apierr.Error {
 			_, err = ctx.ParseFloatValue(field, ftype, def, bound)
 		case "integer_range", "long_range":
 			ctx := &mapping.ParseContext{IndexCoerce: true}
-			if isFractionalNumber(bound) {
+			if search.IsFractionalNumber(bound) {
 				_, err = ctx.ParseFloatValue(field, strings.TrimSuffix(ftype, "_range"), def, bound)
 			} else {
 				_, err = ctx.ParseIntValue(field, strings.TrimSuffix(ftype, "_range"), def, bound)
@@ -2953,7 +2755,7 @@ func writeQueryShardError(w http.ResponseWriter, idx *model.Index, cause *apierr
 		{"failed_shards", []any{ojson.Object{
 			{"shard", 0},
 			{"index", idx.Name},
-			{"node", nodeID},
+			{"node", model.NodeID},
 			{"reason", shardReasonObj},
 		}}},
 		{"caused_by", topCaused},
@@ -3000,7 +2802,7 @@ func writeCustomSearchFailure(w http.ResponseWriter, idx *model.Index, e *apierr
 		{"failed_shards", []any{ojson.Object{
 			{"shard", 0},
 			{"index", idx.Name},
-			{"node", nodeID},
+			{"node", model.NodeID},
 			{"reason", failedReason},
 		}}},
 		{"caused_by", topCaused},
@@ -3042,38 +2844,20 @@ func evalQuery(idx *model.Index, query map[string]any, doc map[string]any) (bool
 			return evalPrefix(idx, raw, doc)
 		case "script":
 			id, _ := doc["__slop_id"].(string)
-			return newQueryCtxForDoc(idx, id, doc).evalScriptQuery(raw)
+			return search.NewQueryCtxForDoc(idx, id, doc).EvalScriptQuery(raw)
 		default:
-			return false, 0, errParsing("unknown query [" + clause + "]")
+			return false, 0, apierr.Parsing("unknown query [" + clause + "]")
 		}
 	}
-	return false, 0, errParsing("empty query")
-}
-
-func singleEntry(m map[string]any) (string, any, bool) {
-	for k, v := range m {
-		return k, v, true
-	}
-	return "", nil, false
-}
-
-func queryText(raw any) (string, any) {
-	if m, ok := raw.(map[string]any); ok {
-		if q, ok := m["query"]; ok {
-			s, _ := jsonv.ToString(q)
-			return s, m
-		}
-	}
-	s, _ := jsonv.ToString(raw)
-	return s, nil
+	return false, 0, apierr.Parsing("empty query")
 }
 
 func evalMatch(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
-	field, val, ok := singleEntry(raw.(map[string]any))
+	field, val, ok := search.SingleEntry(raw.(map[string]any))
 	if !ok {
-		return false, 0, errParsing("empty match")
+		return false, 0, apierr.Parsing("empty match")
 	}
-	text, opts := queryText(val)
+	text, opts := search.QueryText(val)
 	operator := ""
 	if om, ok := opts.(map[string]any); ok {
 		if o, ok := om["operator"].(string); ok {
@@ -3114,9 +2898,9 @@ func evalMatch(idx *model.Index, raw any, doc map[string]any) (bool, float64, *a
 }
 
 func evalPrefix(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
-	field, val, ok := singleEntry(raw.(map[string]any))
+	field, val, ok := search.SingleEntry(raw.(map[string]any))
 	if !ok {
-		return false, 0, errParsing("empty prefix")
+		return false, 0, apierr.Parsing("empty prefix")
 	}
 	prefix := ""
 	if m, ok := val.(map[string]any); ok {
@@ -3144,9 +2928,9 @@ func evalPrefix(idx *model.Index, raw any, doc map[string]any) (bool, float64, *
 }
 
 func evalTerm(idx *model.Index, raw any, doc map[string]any, fuzz int) (bool, float64, *apierr.Error) {
-	field, val, ok := singleEntry(raw.(map[string]any))
+	field, val, ok := search.SingleEntry(raw.(map[string]any))
 	if !ok {
-		return false, 0, errParsing("empty term")
+		return false, 0, apierr.Parsing("empty term")
 	}
 	if m, ok := val.(map[string]any); ok {
 		if v, ok := m["value"]; ok {
@@ -3173,7 +2957,7 @@ func evalTerm(idx *model.Index, raw any, doc map[string]any, fuzz int) (bool, fl
 			if c == term {
 				return true, 1, nil
 			}
-			if fuzz > 0 && levenshtein(c, term) <= fuzz {
+			if fuzz > 0 && search.Levenshtein(c, term) <= fuzz {
 				return true, 1, nil
 			}
 		}
@@ -3182,25 +2966,25 @@ func evalTerm(idx *model.Index, raw any, doc map[string]any, fuzz int) (bool, fl
 }
 
 func evalFuzzy(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
-	field, val, _ := singleEntry(raw.(map[string]any))
-	fuzz := autoFuzziness(field)
+	field, val, _ := search.SingleEntry(raw.(map[string]any))
+	fuzz := search.AutoFuzziness(field)
 	if m, ok := val.(map[string]any); ok {
 		if v, ok := m["value"]; ok {
 			text, _ := jsonv.ToString(v)
-			fuzz = autoFuzziness(text)
+			fuzz = search.AutoFuzziness(text)
 		}
 	}
 	return evalTerm(idx, raw, doc, fuzz)
 }
 
 func evalTerms(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
-	field, val, ok := singleEntry(raw.(map[string]any))
+	field, val, ok := search.SingleEntry(raw.(map[string]any))
 	if !ok {
-		return false, 0, errParsing("empty terms")
+		return false, 0, apierr.Parsing("empty terms")
 	}
 	list, ok := val.([]any)
 	if !ok {
-		return false, 0, errParsing("terms expects array")
+		return false, 0, apierr.Parsing("terms expects array")
 	}
 	v, present := mapping.FieldValue(doc, field)
 	if !present {
@@ -3228,7 +3012,7 @@ func compareRange(dv float64, cond map[string]any, field string, parse func(any)
 	for op, bound := range cond {
 		bv, ok := parse(bound)
 		if !ok {
-			return false, 0, errParsing("failed to parse [" + field + "]")
+			return false, 0, apierr.Parsing("failed to parse [" + field + "]")
 		}
 		switch op {
 		case "gt":
@@ -3255,15 +3039,15 @@ func compareRange(dv float64, cond map[string]any, field string, parse func(any)
 func evalRange(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
 	m, ok := raw.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("bad range")
+		return false, 0, apierr.Parsing("bad range")
 	}
-	field, condRaw, ok := singleEntry(m)
+	field, condRaw, ok := search.SingleEntry(m)
 	if !ok {
-		return false, 0, errParsing("empty range")
+		return false, 0, apierr.Parsing("empty range")
 	}
 	cond, ok := condRaw.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("bad range condition")
+		return false, 0, apierr.Parsing("bad range condition")
 	}
 	v, present := mapping.FieldValue(doc, field)
 	if !present {
@@ -3310,26 +3094,16 @@ func evalRange(idx *model.Index, raw any, doc map[string]any) (bool, float64, *a
 	return true, 1, nil
 }
 
-func asQueryList(v any) []any {
-	switch t := v.(type) {
-	case []any:
-		return t
-	case map[string]any:
-		return []any{t}
-	}
-	return nil
-}
-
 func evalBool(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
 	m, ok := raw.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("bad bool")
+		return false, 0, apierr.Parsing("bad bool")
 	}
 	score := 0.0
-	must := asQueryList(m["must"])
-	filter := asQueryList(m["filter"])
-	should := asQueryList(m["should"])
-	mustNot := asQueryList(m["must_not"])
+	must := search.AsQueryList(m["must"])
+	filter := search.AsQueryList(m["filter"])
+	should := search.AsQueryList(m["should"])
+	mustNot := search.AsQueryList(m["must_not"])
 
 	for _, q := range append(append([]any{}, must...), filter...) {
 		ok, sc, err := evalQuery(idx, q.(map[string]any), doc)
@@ -3373,11 +3147,11 @@ func evalBool(idx *model.Index, raw any, doc map[string]any) (bool, float64, *ap
 }
 
 func evalMatchPhrase(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
-	field, val, ok := singleEntry(raw.(map[string]any))
+	field, val, ok := search.SingleEntry(raw.(map[string]any))
 	if !ok {
-		return false, 0, errParsing("empty match_phrase")
+		return false, 0, apierr.Parsing("empty match_phrase")
 	}
-	text, _ := queryText(val)
+	text, _ := search.QueryText(val)
 	qTokens := mapping.Analyze(text)
 	v, present := mapping.FieldValue(doc, field)
 	if !present {
@@ -3414,7 +3188,7 @@ func containsSubsequence(hay, needle []string) bool {
 func evalMultiMatch(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
 	m, ok := raw.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("bad multi_match")
+		return false, 0, apierr.Parsing("bad multi_match")
 	}
 	q, _ := jsonv.ToString(m["query"])
 	fields, _ := m["fields"].([]any)
@@ -3432,49 +3206,17 @@ func evalMultiMatch(idx *model.Index, raw any, doc map[string]any) (bool, float6
 	return total > 0, total, nil
 }
 
-var wildcardCache = map[string]*regexp.Regexp{}
-
-func wildcardRegex(pattern string) *regexp.Regexp {
-	if re, ok := wildcardCache[pattern]; ok {
-		return re
-	}
-	var b strings.Builder
-	b.WriteString("^")
-	escaped := false
-	for _, ch := range pattern {
-		if escaped {
-			b.WriteString(regexp.QuoteMeta(string(ch)))
-			escaped = false
-			continue
-		}
-		switch ch {
-		case '\\':
-			escaped = true
-		case '*':
-			b.WriteString(".*")
-		case '?':
-			b.WriteString(".")
-		default:
-			b.WriteString(regexp.QuoteMeta(string(ch)))
-		}
-	}
-	b.WriteString("$")
-	re := regexp.MustCompile(b.String())
-	wildcardCache[pattern] = re
-	return re
-}
-
 func evalWildcard(idx *model.Index, raw any, doc map[string]any) (bool, float64, *apierr.Error) {
-	field, val, ok := singleEntry(raw.(map[string]any))
+	field, val, ok := search.SingleEntry(raw.(map[string]any))
 	if !ok {
-		return false, 0, errParsing("empty wildcard")
+		return false, 0, apierr.Parsing("empty wildcard")
 	}
 	m, ok := val.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("bad wildcard body")
+		return false, 0, apierr.Parsing("bad wildcard body")
 	}
 	pattern, _ := jsonv.ToString(m["value"])
-	re := wildcardRegex(pattern)
+	re := search.WildcardRegex(pattern)
 	ft := fieldType(idx, field)
 	v, present := mapping.FieldValue(doc, field)
 	if !present {
@@ -3497,7 +3239,7 @@ func evalWildcard(idx *model.Index, raw any, doc map[string]any) (bool, float64,
 func evalExists(raw any, doc map[string]any) (bool, float64, *apierr.Error) {
 	m, ok := raw.(map[string]any)
 	if !ok {
-		return false, 0, errParsing("bad exists")
+		return false, 0, apierr.Parsing("bad exists")
 	}
 	field, _ := jsonv.ToString(m["field"])
 	_, present := mapping.FieldValue(doc, field)
@@ -3572,8 +3314,8 @@ func collectTokens(query map[string]any) map[string]bool {
 			switch clause {
 			case "match", "match_phrase":
 				if mm, ok := raw.(map[string]any); ok {
-					_, val, _ := singleEntry(mm)
-					text, _ := queryText(val)
+					_, val, _ := search.SingleEntry(mm)
+					text, _ := search.QueryText(val)
 					for _, t := range mapping.Analyze(text) {
 						out[t] = true
 					}
@@ -3588,7 +3330,7 @@ func collectTokens(query map[string]any) map[string]bool {
 			case "bool":
 				if bm, ok := raw.(map[string]any); ok {
 					for _, key := range []string{"must", "should", "filter"} {
-						for _, q := range asQueryList(bm[key]) {
+						for _, q := range search.AsQueryList(bm[key]) {
 							if qm, ok := q.(map[string]any); ok {
 								walk(qm)
 							}
@@ -3703,9 +3445,9 @@ func reduceSortValues(list []any, desc bool, mode string) any {
 	return sorted[0]
 }
 
-func nestedSortValues(h multiHit, sp searchSortSpec) []any {
-	pathParts := strings.Split(sp.nestedPath, ".")
-	fieldParts := strings.Split(sp.field, ".")
+func nestedSortValues(h multiHit, sp search.SearchSortSpec) []any {
+	pathParts := strings.Split(sp.NestedPath, ".")
+	fieldParts := strings.Split(sp.Field, ".")
 	rel := fieldParts
 	if len(pathParts) <= len(fieldParts) {
 		rel = fieldParts[len(pathParts):]
@@ -3733,12 +3475,12 @@ func nestedSortValues(h multiHit, sp searchSortSpec) []any {
 		if !ok {
 			continue
 		}
-		if sp.nestedFilter != nil {
-			fake := map[string]any{sp.nestedPath: []any{em}}
-			qc := newQueryCtxForDoc(h.idx, h.id+"__nested_sort", fake)
-			qc.nestedPath = sp.nestedPath
-			qc.nestedRoot = em
-			ok, _, err := qc.eval(sp.nestedFilter)
+		if sp.NestedFilter != nil {
+			fake := map[string]any{sp.NestedPath: []any{em}}
+			qc := search.NewQueryCtxForDoc(h.idx, h.id+"__nested_sort", fake)
+			qc.NestedPath = sp.NestedPath
+			qc.NestedRoot = em
+			ok, _, err := qc.Eval(sp.NestedFilter)
 			if err != nil || !ok {
 				continue
 			}
@@ -3759,24 +3501,6 @@ func nestedSortValues(h multiHit, sp searchSortSpec) []any {
 	return out
 }
 
-func scoreJSON(v float64) any {
-	switch {
-	case math.IsInf(v, 1):
-		return "Infinity"
-	case math.IsInf(v, -1):
-		return "-Infinity"
-	case math.IsNaN(v):
-		return "NaN"
-	}
-	if v == math.Trunc(v) {
-		return json.Number(strconv.FormatFloat(v, 'f', 1, 64))
-	}
-	if f32 := float32(v); float64(f32) == v && !math.IsInf(float64(f32), 0) {
-		return json.Number(strconv.FormatFloat(v, 'g', -1, 32))
-	}
-	return v
-}
-
 func docRawValue(doc map[string]any, field string) any {
 	var cur any = doc
 	for _, part := range strings.Split(field, ".") {
@@ -3789,32 +3513,8 @@ func docRawValue(doc map[string]any, field string) any {
 	return cur
 }
 
-func geoUnitMeters(unit string) (float64, bool) {
-	switch unit {
-	case "m", "meters":
-		return 1, true
-	case "km", "kilometers":
-		return 1000, true
-	case "mi", "miles":
-		return 1609.344, true
-	case "yd", "yards":
-		return 0.9144, true
-	case "ft", "feet":
-		return 0.3048, true
-	case "in", "inch":
-		return 0.0254, true
-	case "cm", "centimeters":
-		return 0.01, true
-	case "mm", "millimeters":
-		return 0.001, true
-	case "nmi", "NM", "nauticalmiles":
-		return 1852, true
-	}
-	return 0, false
-}
-
 func parseGeoPoint(v any) (float64, float64, bool) {
-	return geoPointOf(v)
+	return search.GeoPointOf(v)
 }
 
 func geoDistanceMeters(lat1, lon1, lat2, lon2 float64) float64 {
@@ -3852,12 +3552,12 @@ func parseGeoOrigins(v any) [][2]float64 {
 	return nil
 }
 
-func geoSortDistance(h multiHit, sp searchSortSpec) any {
-	origins := parseGeoOrigins(sp.geoPoint)
+func geoSortDistance(h multiHit, sp search.SearchSortSpec) any {
+	origins := parseGeoOrigins(sp.GeoPoint)
 	if len(origins) == 0 {
 		return math.Inf(1)
 	}
-	raw := docRawValue(h.doc, sp.geoField)
+	raw := docRawValue(h.doc, sp.GeoField)
 	if raw == nil {
 		return math.Inf(1)
 	}
@@ -3876,7 +3576,7 @@ func geoSortDistance(h multiHit, sp searchSortSpec) any {
 	} else {
 		candidates = []any{raw}
 	}
-	mult, _ := geoUnitMeters(sp.geoUnit)
+	mult, _ := search.GeoUnitMeters(sp.GeoUnit)
 	if mult == 0 {
 		mult = 1
 	}
@@ -3890,7 +3590,7 @@ func geoSortDistance(h multiHit, sp searchSortSpec) any {
 		}
 		for _, o := range origins {
 			d := geoDistanceMeters(o[0], o[1], lat, lon) / mult
-			switch sp.geoMode {
+			switch sp.GeoMode {
 			case "max":
 				if math.IsInf(best, 1) || d > best {
 					best = d
@@ -3912,7 +3612,7 @@ func geoSortDistance(h multiHit, sp searchSortSpec) any {
 	return best
 }
 
-func hitAfterSearchAfter(h multiHit, specs []searchSortSpec, after []any) bool {
+func hitAfterSearchAfter(h multiHit, specs []search.SearchSortSpec, after []any) bool {
 	for i, sp := range specs {
 		if i >= len(after) {
 			break
@@ -3922,7 +3622,7 @@ func hitAfterSearchAfter(h multiHit, specs []searchSortSpec, after []any) bool {
 		if cmp == 0 {
 			continue
 		}
-		if sp.desc {
+		if sp.Desc {
 			return cmp < 0
 		}
 		return cmp > 0
@@ -3930,12 +3630,12 @@ func hitAfterSearchAfter(h multiHit, specs []searchSortSpec, after []any) bool {
 	return false
 }
 
-func compareSearchAfterValue(h multiHit, sp searchSortSpec, av, bv any) int {
-	def, _ := mapping.FieldDef(h.idx, sp.field)
+func compareSearchAfterValue(h multiHit, sp search.SearchSortSpec, av, bv any) int {
+	def, _ := mapping.FieldDef(h.idx, sp.Field)
 	ft, _ := def["type"].(string)
 	if ft == "date" || ft == "date_nanos" {
-		am, ok1 := dateMillisFor(h.idx, sp.field, ft, av)
-		bm, ok2 := dateMillisFor(h.idx, sp.field, ft, bv)
+		am, ok1 := dateMillisFor(h.idx, sp.Field, ft, av)
+		bm, ok2 := dateMillisFor(h.idx, sp.Field, ft, bv)
 		if ok1 && ok2 {
 			switch {
 			case am < bm:
@@ -3946,7 +3646,7 @@ func compareSearchAfterValue(h multiHit, sp searchSortSpec, av, bv any) int {
 			return 0
 		}
 	}
-	if sp.numericType == "long" || sp.numericType == "date_nanos" {
+	if sp.NumericType == "long" || sp.NumericType == "date_nanos" {
 		af, _ := jsonv.ToFloat(av)
 		bf, _ := jsonv.ToFloat(bv)
 		switch {
@@ -3969,11 +3669,11 @@ func hashString(s string) uint32 {
 	return h
 }
 
-func collectNamedQueries(q map[string]any, qc *queryCtx, out map[string]float64) {
+func collectNamedQueries(q map[string]any, qc *search.QueryCtx, out map[string]float64) {
 	walkNamedClause(q, qc, out)
 }
 
-func walkNamedClause(cm map[string]any, qc *queryCtx, out map[string]float64) {
+func walkNamedClause(cm map[string]any, qc *search.QueryCtx, out map[string]float64) {
 	if cm == nil {
 		return
 	}
@@ -3988,7 +3688,7 @@ func walkNamedClause(cm map[string]any, qc *queryCtx, out map[string]float64) {
 				continue
 			}
 			for _, key := range []string{"must", "should", "filter", "must_not"} {
-				for _, item := range asQueryList(bm[key]) {
+				for _, item := range search.AsQueryList(bm[key]) {
 					if child, ok := item.(map[string]any); ok {
 						walkNamedClause(child, qc, out)
 					}
@@ -3999,7 +3699,7 @@ func walkNamedClause(cm map[string]any, qc *queryCtx, out map[string]float64) {
 				nm = n
 			}
 			if nm != "" {
-				matched, score, err := qc.eval(cm)
+				matched, score, err := qc.Eval(cm)
 				if err == nil && matched {
 					out[nm] = score
 				}
@@ -4030,7 +3730,7 @@ func walkNamedClause(cm map[string]any, qc *queryCtx, out map[string]float64) {
 						}
 					}
 				}
-				matched, score, err := qc.eval(evalMap)
+				matched, score, err := qc.Eval(evalMap)
 				if err == nil && matched {
 					out[nm] = score
 				}
@@ -4072,7 +3772,7 @@ func mappedLeafFields(idx *model.Index) []string {
 func explainDescription(query map[string]any) string {
 	if q, ok := query["match"].(map[string]any); ok {
 		for field, raw := range q {
-			text, _ := queryText(raw)
+			text, _ := search.QueryText(raw)
 			term := ""
 			if toks := mapping.Analyze(text); len(toks) > 0 {
 				term = toks[0]
@@ -4082,7 +3782,7 @@ func explainDescription(query map[string]any) string {
 	}
 	if q, ok := query["match_phrase"].(map[string]any); ok {
 		for field, raw := range q {
-			text, _ := queryText(raw)
+			text, _ := search.QueryText(raw)
 			term := ""
 			if toks := mapping.Analyze(text); len(toks) > 0 {
 				term = toks[0]
@@ -4193,10 +3893,10 @@ func applyCollapse(matched []multiHit, body map[string]any) ([]multiHit, map[str
 			if v, ok := spec["_source"].(bool); ok && !v {
 				srcFalse = true
 			}
-			var specs2 []searchSortSpec
+			var specs2 []search.SearchSortSpec
 			if rawSort, has := spec["sort"]; has {
 				var serr *apierr.Error
-				specs2, serr = parseSortSpecs(rawSort, "")
+				specs2, serr = search.ParseSortSpecs(rawSort, "")
 				if serr != nil {
 					return nil, nil, nil, serr
 				}
@@ -4209,7 +3909,7 @@ func applyCollapse(matched []multiHit, body map[string]any) ([]multiHit, map[str
 						for _, sp := range specs2 {
 							c := compareSortSpec(g[i], g[j], sp)
 							if c != 0 {
-								if sp.desc {
+								if sp.Desc {
 									return c > 0
 								}
 								return c < 0
@@ -4308,8 +4008,8 @@ func applyRescore(matched []multiHit, body map[string]any) *apierr.Error {
 		}
 		for _, i := range order {
 			h := &matched[i]
-			qc := newQueryCtxForDoc(h.idx, h.id, h.doc)
-			ok, rs, err := qc.eval(rq)
+			qc := search.NewQueryCtxForDoc(h.idx, h.id, h.doc)
+			ok, rs, err := qc.Eval(rq)
 			if err != nil {
 				return err
 			}

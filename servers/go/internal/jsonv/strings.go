@@ -5,6 +5,7 @@ import (
 	"strconv"
 )
 
+// ScalarString renders a JSON scalar (numbers in Java style).
 func ScalarString(v any) (string, bool) {
 	switch t := v.(type) {
 	case string:
@@ -19,6 +20,7 @@ func ScalarString(v any) (string, bool) {
 	return "", false
 }
 
+// ToString renders a JSON scalar or int64 (numbers in plain decimal form).
 func ToString(v any) (string, bool) {
 	switch t := v.(type) {
 	case string:

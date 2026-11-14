@@ -13,6 +13,7 @@ import (
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
+	"slopensearch/internal/search"
 )
 
 type bulkAction struct {
@@ -264,7 +265,7 @@ func metaInt(meta map[string]any, key string) (int64, bool) {
 	if !ok {
 		return 0, false
 	}
-	if n, ok := integerOf(v); ok {
+	if n, ok := search.IntegerOf(v); ok {
 		return n, true
 	}
 	if f, ok := jsonv.ToFloat(v); ok {
@@ -481,7 +482,7 @@ func (s *Server) runBulkIndex(idx *model.Index, a bulkAction, id, routing, rv, u
 	if derr := validateJoinDoc(idx, src, routing); derr != nil {
 		return bulkErrItem(a.op, idx.Name, id, derr), true
 	}
-	props := ensureProperties(idx.Mappings)
+	props := mapping.EnsureProperties(idx.Mappings)
 	if derr := mappingShapeConflict(props, src); derr != nil {
 		return bulkErrItem(a.op, idx.Name, id, derr), true
 	}
@@ -562,7 +563,7 @@ func (s *Server) runBulkUpdate(idx *model.Index, a bulkAction, id, routing, rv, 
 			it := bulkItem("update", idx.Name, id, -1, 0, 1, "noop", 200, false)
 			return bulkOKItem("update", it), false
 		}
-		props := ensureProperties(idx.Mappings)
+		props := mapping.EnsureProperties(idx.Mappings)
 		if derr := mappingShapeConflict(props, src); derr != nil {
 			return bulkErrItem("update", idx.Name, id, derr), true
 		}
@@ -625,7 +626,7 @@ func (s *Server) runBulkUpdate(idx *model.Index, a bulkAction, id, routing, rv, 
 		}
 		return bulkOKItem("update", it), false
 	}
-	props := ensureProperties(idx.Mappings)
+	props := mapping.EnsureProperties(idx.Mappings)
 	if derr := mappingShapeConflict(props, newDoc); derr != nil {
 		return bulkErrItem("update", idx.Name, id, derr), true
 	}
@@ -676,11 +677,11 @@ func bulkGetObject(idx *model.Index, id string, src map[string]any, seq int64, m
 	}
 	includes, excludes := []string(nil), []string(nil)
 	if urlSource != "" {
-		includes = splitSourceList(urlSource)
+		includes = search.SplitSourceList(urlSource)
 	}
 	out := ojson.Object{{"_seq_no", seq}, {"_primary_term", int64(1)}, {"found", true}}
 	if mappingSourceEnabled(idx) {
-		out = append(out, ojson.KV{"_source", filterSourceDoc(src, includes, excludes)})
+		out = append(out, ojson.KV{"_source", search.FilterSourceDoc(src, includes, excludes)})
 	}
 	return out, true
 }

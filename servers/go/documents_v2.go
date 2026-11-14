@@ -20,6 +20,7 @@ import (
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
+	"slopensearch/internal/search"
 	"slopensearch/internal/settings"
 )
 
@@ -411,7 +412,7 @@ func sourceSpecFromValue(v any) ([]string, []string, bool) {
 		if t == "true" || t == "" {
 			return nil, nil, false
 		}
-		return splitSourceList(t), nil, false
+		return search.SplitSourceList(t), nil, false
 	case []any:
 		var inc []string
 		for _, e := range t {
@@ -666,7 +667,7 @@ func percolatorFieldRefs(q map[string]any, out *[]string) {
 		switch clause {
 		case "bool":
 			for _, key := range []string{"must", "should", "filter", "must_not"} {
-				for _, item := range asQueryList(bm[key]) {
+				for _, item := range search.AsQueryList(bm[key]) {
 					if child, ok := item.(map[string]any); ok {
 						percolatorFieldRefs(child, out)
 					}
@@ -677,7 +678,7 @@ func percolatorFieldRefs(q map[string]any, out *[]string) {
 				percolatorFieldRefs(child, out)
 			}
 		case "dis_max":
-			for _, item := range asQueryList(bm["queries"]) {
+			for _, item := range search.AsQueryList(bm["queries"]) {
 				if child, ok := item.(map[string]any); ok {
 					percolatorFieldRefs(child, out)
 				}
@@ -697,7 +698,7 @@ func percolatorFieldRefs(q map[string]any, out *[]string) {
 				percolatorFieldRefs(child, out)
 			}
 		case "span_near", "span_or":
-			for _, item := range asQueryList(bm["clauses"]) {
+			for _, item := range search.AsQueryList(bm["clauses"]) {
 				if child, ok := item.(map[string]any); ok {
 					percolatorFieldRefs(child, out)
 				}
@@ -813,7 +814,7 @@ func joinDocError(reason string) *apierr.Error {
 }
 
 func validateJoinDoc(idx *model.Index, body map[string]any, routing string) *apierr.Error {
-	field, relations, hasJoin := findJoinField(idx)
+	field, relations, hasJoin := search.FindJoinField(idx)
 	if !hasJoin {
 		return nil
 	}
@@ -834,7 +835,7 @@ func validateJoinDoc(idx *model.Index, body map[string]any, routing string) *api
 	if name == "" {
 		return joinDocError("join name is missing")
 	}
-	if !joinValidName(relations, name) {
+	if !search.JoinValidName(relations, name) {
 		return joinDocError("unknown join name [" + name + "] for field [" + field + "]")
 	}
 	if _, isParent := relations[name]; isParent {
@@ -1004,7 +1005,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 		writeError(w, derr)
 		return
 	}
-	props := ensureProperties(idx.Mappings)
+	props := mapping.EnsureProperties(idx.Mappings)
 	if derr := mappingShapeConflict(props, body); derr != nil {
 		writeError(w, derr)
 		return
@@ -1187,10 +1188,10 @@ func (s *Server) handleGetDocV2(w http.ResponseWriter, r *http.Request, name, id
 			if filtered, ok2 := filterRawSource(raw, includes, excludes); ok2 {
 				resp = append(resp, ojson.KV{"_source", ojson.Verbatim(filtered)})
 			} else {
-				resp = append(resp, ojson.KV{"_source", normalizeNumbers(filterSourceDoc(doc, includes, excludes))})
+				resp = append(resp, ojson.KV{"_source", normalizeNumbers(search.FilterSourceDoc(doc, includes, excludes))})
 			}
 		} else {
-			resp = append(resp, ojson.KV{"_source", normalizeNumbers(filterSourceDoc(doc, includes, excludes))})
+			resp = append(resp, ojson.KV{"_source", normalizeNumbers(search.FilterSourceDoc(doc, includes, excludes))})
 		}
 	}
 	if fields := storedFieldsFor(idx, doc, storedSpec(storedSpecRaw, idx)); fields != nil {
@@ -1253,7 +1254,7 @@ func (s *Server) handleGetSourceV2(w http.ResponseWriter, r *http.Request, name,
 			return
 		}
 	}
-	writeJSON(w, 200, normalizeNumbers(filterSourceDoc(doc, includes, excludes)))
+	writeJSON(w, 200, normalizeNumbers(search.FilterSourceDoc(doc, includes, excludes)))
 }
 
 func (s *Server) handleDeleteDocV2(w http.ResponseWriter, r *http.Request, name, id string) {
@@ -1470,7 +1471,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 			writeError(w, apiErr)
 			return
 		}
-		props := ensureProperties(idx.Mappings)
+		props := mapping.EnsureProperties(idx.Mappings)
 		if derr := mappingShapeConflict(props, src); derr != nil {
 			writeError(w, derr)
 			return
@@ -1569,7 +1570,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		writeJSON(w, 200, resp)
 		return
 	}
-	props := ensureProperties(idx.Mappings)
+	props := mapping.EnsureProperties(idx.Mappings)
 	if derr := mappingShapeConflict(props, newDoc); derr != nil {
 		writeError(w, derr)
 		return
@@ -1644,7 +1645,7 @@ func updateGetObject(idx *model.Index, id string, src map[string]any, seq int64,
 	}
 	out := ojson.Object{{"_seq_no", seq}, {"_primary_term", int64(1)}, {"found", true}}
 	if mappingSourceEnabled(idx) {
-		out = append(out, ojson.KV{"_source", filterSourceDoc(src, includes, excludes)})
+		out = append(out, ojson.KV{"_source", search.FilterSourceDoc(src, includes, excludes)})
 	}
 	return out
 }
@@ -1659,10 +1660,10 @@ type updateScriptResult struct {
 
 // updateScriptFailure wraps a script problem the way the update API reports
 // it: "failed to execute script" caused by the script exception.
-func updateScriptFailure(se *plScriptErr, cause *apierr.Error) *apierr.Error {
+func updateScriptFailure(se *search.ScriptError, cause *apierr.Error) *apierr.Error {
 	var causeObj ojson.Object
 	if se != nil {
-		causeObj = se.object(true)
+		causeObj = se.Object(true)
 	} else {
 		causeObj = ojson.Object{{"type", cause.Type}, {"reason", cause.Reason}}
 		if cause.CausedBy != nil {
@@ -1675,9 +1676,9 @@ func updateScriptFailure(se *plScriptErr, cause *apierr.Error) *apierr.Error {
 		{"caused_by", causeObj},
 	}}, {"status", 400}}
 	e := &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "failed to execute script",
-		Shard: &shardFailure{raw: body, status: 400}}
+		Shard: &search.ShardFailure{Raw: body, Status: 400}}
 	if se != nil {
-		e.CausedBy = &apierr.Error{Type: "script_exception", Reason: map[bool]string{true: "compile error", false: "runtime error"}[se.compile]}
+		e.CausedBy = &apierr.Error{Type: "script_exception", Reason: map[bool]string{true: "compile error", false: "runtime error"}[se.Compile]}
 		e.Extra = se
 	} else {
 		e.CausedBy = cause
@@ -1692,21 +1693,21 @@ func runUpdateScript(raw any, source map[string]any, index, id string, version i
 }
 
 func runUpdateScriptCtx(raw any, source map[string]any, index, id string, version int64, op string, routing any) (updateScriptResult, *apierr.Error) {
-	spec, ae := parseScriptSpec(raw)
+	spec, ae := search.ParseScriptSpec(raw)
 	if ae != nil {
 		return updateScriptResult{}, updateScriptFailure(nil, ae)
 	}
-	if spec.lang == "expression" {
-		_, se, ae := exPrepare(spec.src, "update")
+	if spec.Lang == "expression" {
+		_, se, ae := search.PrepareExpression(spec.Src, "update")
 		if se != nil {
-			se.script = spec.errName()
+			se.Script = spec.ErrName()
 		}
 		return updateScriptResult{}, updateScriptFailure(se, ae)
 	}
-	if ae := checkScriptLang(spec, "update"); ae != nil {
+	if ae := search.CheckScriptLang(spec, "update"); ae != nil {
 		return updateScriptResult{}, updateScriptFailure(nil, ae)
 	}
-	script, se := compilePainless(spec, "update")
+	script, se := search.CompilePainless(spec, "update")
 	if se != nil {
 		return updateScriptResult{}, updateScriptFailure(se, nil)
 	}
@@ -1720,8 +1721,8 @@ func runUpdateScriptCtx(raw any, source map[string]any, index, id string, versio
 	ctx.Put("_routing", painless.FromJSON(routing, painless.Linked))
 	ctx.Put("op", op)
 	ctx.Put("_now", nowMillis())
-	ctx.Put("_source", painless.FromJSON(deepCopySource(source), painless.Linked))
-	_, rerr := script.exec(painless.Bindings{Vars: map[string]any{"params": scriptParams(spec.params), "ctx": ctx}}, spec.errName())
+	ctx.Put("_source", painless.FromJSON(search.DeepCopySource(source), painless.Linked))
+	_, rerr := script.Exec(painless.Bindings{Vars: map[string]any{"params": search.ScriptParams(spec.Params), "ctx": ctx}}, spec.ErrName())
 	if rerr != nil {
 		return updateScriptResult{}, updateScriptFailure(rerr, nil)
 	}
@@ -1875,7 +1876,7 @@ func (s *Server) handleMget(w http.ResponseWriter, r *http.Request, pathIndex st
 		doc := map[string]any{"_index": idxName, "_id": id}
 		idx, ok := s.Indices[idxName]
 		if !ok {
-			err := errNotFound(idxName)
+			err := apierr.IndexNotFound(idxName)
 			doc["error"] = errorObject(err)
 			docs = append(docs, doc)
 			continue
@@ -1934,7 +1935,7 @@ func (s *Server) handleMget(w http.ResponseWriter, r *http.Request, pathIndex st
 			omit = true
 		}
 		if !omit {
-			doc["_source"] = filterSourceDoc(src, inc, exc)
+			doc["_source"] = search.FilterSourceDoc(src, inc, exc)
 		}
 		if fields := storedFieldsFor(idx, src, storedSpec(storedRaw, idx)); fields != nil {
 			doc["fields"] = fields

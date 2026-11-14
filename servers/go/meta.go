@@ -131,7 +131,7 @@ func (s *Server) resolveIndices(spec string, opts resolveOpts) ([]*model.Index, 
 			continue
 		}
 		if opts.missing404 {
-			return nil, errNotFound(token)
+			return nil, apierr.IndexNotFound(token)
 		}
 	}
 	out := make([]*model.Index, 0, len(order))
@@ -342,7 +342,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request, indexSpec 
 	}
 
 	body := map[string]any{
-		"cluster_name":                     clusterName,
+		"cluster_name":                     model.ClusterName,
 		"status":                           status,
 		"timed_out":                        timedOut,
 		"number_of_nodes":                  1,
@@ -437,13 +437,13 @@ func waitForNodesSatisfied(expr string, nodes int) bool {
 
 func (s *Server) stateNodes() map[string]any {
 	return map[string]any{
-		nodeID: map[string]any{
-			"name":              nodeName,
+		model.NodeID: map[string]any{
+			"name":              model.NodeName,
 			"ephemeral_id":      nodeEphemeral,
 			"transport_address": nodeTransport,
 			"attributes":        nodeAttributes(),
 			"roles":             nodeRoles(),
-			"version":           nodeVersion,
+			"version":           model.NodeVersion,
 		},
 	}
 }
@@ -470,18 +470,18 @@ func (s *Server) handleClusterState(w http.ResponseWriter, r *http.Request, metr
 		w.Header().Set("Warning", `299 OpenSearch-3.9.0-00000000 "[cluster_manager_node] is deprecated"`)
 	}
 	body := map[string]any{
-		"cluster_name": clusterName,
-		"cluster_uuid": clusterUUID,
+		"cluster_name": model.ClusterName,
+		"cluster_uuid": model.ClusterUUID,
 	}
 	if requested["version"] {
 		body["version"] = s.StateVersion
 		body["state_uuid"] = stateUUIDConst
 	}
 	if requested["master_node"] {
-		body["master_node"] = nodeID
+		body["master_node"] = model.NodeID
 	}
 	if requested["cluster_manager_node"] {
-		body["cluster_manager_node"] = nodeID
+		body["cluster_manager_node"] = model.NodeID
 	}
 	if requested["nodes"] {
 		body["nodes"] = s.stateNodes()
@@ -553,7 +553,7 @@ func (s *Server) buildStateMetadata(indices []*model.Index) map[string]any {
 		}
 	}
 	return map[string]any{
-		"cluster_uuid": clusterUUID,
+		"cluster_uuid": model.ClusterUUID,
 		"templates":    map[string]any{},
 		"indices":      idxMap,
 	}
@@ -606,8 +606,8 @@ func (s *Server) buildRoutingTable(indices []*model.Index) map[string]any {
 					"shard":           i,
 					"primary":         true,
 					"state":           "STARTED",
-					"node":            nodeID,
-					"allocation_id":   map[string]any{"id": nodeID},
+					"node":            model.NodeID,
+					"allocation_id":   map[string]any{"id": model.NodeID},
 					"recovery_source": map[string]any{"type": "PEER"},
 					"unassigned_info": nil,
 				})
@@ -644,7 +644,7 @@ func (s *Server) buildRoutingNodes(indices []*model.Index) map[string]any {
 		}
 		for i := 0; i < idx.NumShards(); i++ {
 			assigned = append(assigned, map[string]any{
-				"index": idx.Name, "shard": i, "primary": true, "state": "STARTED", "node": nodeID,
+				"index": idx.Name, "shard": i, "primary": true, "state": "STARTED", "node": model.NodeID,
 			})
 			for r := 0; r < idx.NumReplicas(); r++ {
 				unassigned = append(unassigned, map[string]any{
@@ -654,7 +654,7 @@ func (s *Server) buildRoutingNodes(indices []*model.Index) map[string]any {
 		}
 	}
 	return map[string]any{
-		"nodes":      map[string]any{nodeID: assigned},
+		"nodes":      map[string]any{model.NodeID: assigned},
 		"unassigned": unassigned,
 	}
 }
@@ -722,8 +722,8 @@ func (s *Server) handleClusterStats(w http.ResponseWriter, r *http.Request, node
 	_ = createdAt
 	body := map[string]any{
 		"_nodes":       map[string]any{"total": 1, "successful": 1, "failed": 0},
-		"cluster_name": clusterName,
-		"cluster_uuid": clusterUUID,
+		"cluster_name": model.ClusterName,
+		"cluster_uuid": model.ClusterUUID,
 		"timestamp":    nowMillis(),
 		"status":       status,
 		"indices": map[string]any{
@@ -745,7 +745,7 @@ func (s *Server) handleClusterStats(w http.ResponseWriter, r *http.Request, node
 		},
 		"nodes": map[string]any{
 			"count":    map[string]any{"total": 1, "data": 1, "cluster_manager": 1, "ingest": 1},
-			"versions": []any{nodeVersion},
+			"versions": []any{model.NodeVersion},
 			"os":       map[string]any{"available_processors": int64(8), "allocated_processors": int64(8), "names": []any{}, "pretty_names": []any{}, "mem": map[string]any{"total_in_bytes": int64(1)}},
 			"process":  map[string]any{"cpu": map[string]any{"percent": 0}, "open_file_descriptors": map[string]any{"min": 0, "max": 0, "avg": 0.0}},
 			"jvm":      map[string]any{"max_uptime_in_millis": int64(1), "versions": []any{}, "mem": map[string]any{"heap_used_in_bytes": int64(1), "heap_max_in_bytes": int64(1)}, "threads": int64(1)},
@@ -819,7 +819,7 @@ func isKnownClusterSetting(key string) bool {
 var clusterDefaults = map[string]any{
 	"script.painless.regex.enabled":       "limited",
 	"script.painless.regex.limit-factor":  "6",
-	"cluster.name":                        clusterName,
+	"cluster.name":                        model.ClusterName,
 	"discovery.type":                      "single-node",
 	"search.max_open_scroll_context":      "500",
 	"indices.query.bool.max_clause_count": "1024",
@@ -833,7 +833,7 @@ func clusterDefaultsFor() map[string]any {
 	for k, v := range clusterDefaults {
 		d[k] = v
 	}
-	d["node.name"] = nodeName
+	d["node.name"] = model.NodeName
 	return d
 }
 
@@ -1133,7 +1133,7 @@ func (s *Server) handleAllocationExplain(w http.ResponseWriter, r *http.Request)
 	}
 	idx, ok := s.Indices[indexName]
 	if !ok {
-		writeError(w, errNotFound(indexName))
+		writeError(w, apierr.IndexNotFound(indexName))
 		return
 	}
 	if !hasShard || shardNum < 0 {
@@ -1155,7 +1155,7 @@ func (s *Server) handleAllocationExplain(w http.ResponseWriter, r *http.Request)
 			"shard":                       shardNum,
 			"primary":                     true,
 			"current_state":               "started",
-			"current_node":                map[string]any{"id": nodeID, "name": nodeName, "ephemeral_id": nodeEphemeral, "transport_address": nodeTransport, "attributes": nodeAttributes()},
+			"current_node":                map[string]any{"id": model.NodeID, "name": model.NodeName, "ephemeral_id": nodeEphemeral, "transport_address": nodeTransport, "attributes": nodeAttributes()},
 			"can_remain_on_current_node":  "yes",
 			"can_rebalance_cluster":       "yes",
 			"can_rebalance_to_other_node": "no",
@@ -1179,8 +1179,8 @@ func (s *Server) handleAllocationExplain(w http.ResponseWriter, r *http.Request)
 		"allocate_explanation": "cannot allocate because a previous copy of the primary shard existed but can no longer be found on the nodes in the cluster",
 		"node_allocation_decisions": []any{
 			map[string]any{
-				"node_id":           nodeID,
-				"node_name":         nodeName,
+				"node_id":           model.NodeID,
+				"node_name":         model.NodeName,
 				"transport_address": nodeTransport,
 				"node_attributes":   nodeAttributes(),
 				"node_decision":     "no",
@@ -1469,7 +1469,7 @@ func (s *Server) handlePutMapping(w http.ResponseWriter, r *http.Request, indexS
 		return
 	}
 	for _, idx := range indices {
-		props := ensureProperties(idx.Mappings)
+		props := mapping.EnsureProperties(idx.Mappings)
 		if err := mergeMappingForIndex(idx, props, body); err != nil {
 			writeError(w, err)
 			return

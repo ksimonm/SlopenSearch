@@ -729,7 +729,7 @@ func (s *Server) catHealth(r *http.Request) ([]catCol, []catRow) {
 	row := catRow{values: map[string]any{}}
 	row.values["epoch"] = strconv.FormatInt(now.Unix(), 10)
 	row.values["timestamp"] = now.Format("15:04:05")
-	row.values["cluster"] = clusterName
+	row.values["cluster"] = model.ClusterName
 	row.values["status"] = status
 	row.values["node.total"] = "1"
 	row.values["node.data"] = "1"
@@ -909,7 +909,7 @@ func (s *Server) catShards(r *http.Request, spec string) ([]catCol, []catRow, *a
 			row.values["docs"] = strconv.Itoa(perShard[i])
 			row.values["store"] = formatCatBytes(int64(perShard[i])*64, r.URL.Query().Get("bytes"))
 			row.values["ip"] = nodeHost
-			row.values["node"] = nodeName
+			row.values["node"] = model.NodeName
 			row.values["unassigned.reason"] = nil
 			rows = append(rows, row)
 			for rp := 0; rp < idx.NumReplicas(); rp++ {
@@ -984,17 +984,17 @@ func (s *Server) catNodes(r *http.Request) ([]catCol, []catRow) {
 	row.values["node.roles"] = "cluster_manager,data,ingest,remote_cluster_client"
 	row.values["cluster_manager"] = "*"
 	row.values["master"] = "*"
-	row.values["name"] = nodeName
+	row.values["name"] = model.NodeName
 	if fullID {
-		row.values["id"] = nodeID
+		row.values["id"] = model.NodeID
 	} else {
-		id := nodeID
+		id := model.NodeID
 		if len(id) > 4 {
 			id = id[:4]
 		}
 		row.values["id"] = id
 	}
-	row.values["version"] = nodeVersion
+	row.values["version"] = model.NodeVersion
 	return catNodesColumns(), []catRow{row}
 }
 
@@ -1006,7 +1006,7 @@ func (s *Server) catClusterManager(r *http.Request) ([]catCol, []catRow) {
 		{key: "node", aliases: []string{"n"}, desc: "node name"},
 	}
 	row := catRow{values: map[string]any{
-		"id": nodeID, "host": nodeHost, "ip": nodeHost, "node": nodeName,
+		"id": model.NodeID, "host": nodeHost, "ip": nodeHost, "node": model.NodeName,
 	}}
 	return cols, []catRow{row}
 }
@@ -1020,7 +1020,7 @@ func (s *Server) catNodeAttrs(r *http.Request) ([]catCol, []catRow) {
 		{key: "value", aliases: []string{"v"}, desc: "attribute value"},
 	}
 	row := catRow{values: map[string]any{
-		"node": nodeName, "host": nodeHost, "ip": nodeHost,
+		"node": model.NodeName, "host": nodeHost, "ip": nodeHost,
 		"attr": "shard_indexing_pressure_enabled", "value": "true",
 	}}
 	return cols, []catRow{row}
@@ -1035,7 +1035,7 @@ func catPlugins(r *http.Request) ([]catCol, []catRow) {
 	rows := make([]catRow, 0, len(pluginNames))
 	for _, name := range pluginNames {
 		rows = append(rows, catRow{values: map[string]any{
-			"name": nodeName, "component": name, "version": pluginVersion,
+			"name": model.NodeName, "component": name, "version": pluginVersion,
 		}})
 	}
 	return cols, rows
@@ -1077,7 +1077,7 @@ func catThreadPool(r *http.Request, spec string) ([]catCol, []catRow) {
 		}
 		pool, _ := pools[name].(map[string]any)
 		row := catRow{values: map[string]any{
-			"node_name": nodeName,
+			"node_name": model.NodeName,
 			"name":      name,
 			"active":    "0",
 			"queue":     "0",
@@ -1150,7 +1150,7 @@ func (s *Server) catAllocation(r *http.Request) ([]catCol, []catRow, *apierr.Err
 		"disk.percent": "1",
 		"host":         nodeHost,
 		"ip":           nodeHost,
-		"node":         nodeName,
+		"node":         model.NodeName,
 	}}
 	rows := []catRow{row}
 	if unassigned > 0 {
@@ -1213,7 +1213,7 @@ func (s *Server) catRecovery(r *http.Request, spec string) ([]catCol, []catRow, 
 				"start_time": "2026-01-01T00:00:00.000Z", "time": "0ms",
 				"type": "empty_store", "stage": "done",
 				"source_host": "-", "source_node": "-",
-				"target_host": nodeHost, "target_node": nodeName,
+				"target_host": nodeHost, "target_node": model.NodeName,
 				"repository": "-", "snapshot": "-",
 				"files": "0", "files_recovered": "0", "files_percent": "100.0%", "files_total": "0",
 				"bytes": "0", "bytes_recovered": "0", "bytes_percent": "100.0%", "bytes_total": "0",
@@ -1297,7 +1297,7 @@ func (s *Server) catTasks(r *http.Request) ([]catCol, []catRow) {
 			"timestamp":    strconv.FormatInt(nowMillis(), 10),
 			"running_time": "1ms",
 			"ip":           nodeHost,
-			"node":         nodeName,
+			"node":         model.NodeName,
 		}}
 		if pid, ok := t["parent_task_id"]; ok {
 			row.values["parent_task_id"] = pid

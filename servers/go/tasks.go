@@ -15,6 +15,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 )
 
@@ -98,7 +99,7 @@ func parseTaskID(id string) (string, int64, *apierr.Error) {
 func taskNodeFailure(reason string) ojson.Object {
 	return ojson.Object{
 		{"node_failures", []any{ojson.Object{
-			{"type", "failed_node_exception"}, {"reason", "Failed node [" + nodeID + "]"}, {"node_id", nodeID},
+			{"type", "failed_node_exception"}, {"reason", "Failed node [" + model.NodeID + "]"}, {"node_id", model.NodeID},
 			{"caused_by", ojson.Object{{"type", "resource_not_found_exception"}, {"reason", reason}}},
 		}}},
 		{"nodes", map[string]any{}},
@@ -149,7 +150,7 @@ func (s *Server) handleTaskRoutes(w http.ResponseWriter, r *http.Request) bool {
 			writeError(w, e)
 			return true
 		}
-		if t := liveTask(n); t != nil && node == nodeID && t.bulk {
+		if t := liveTask(n); t != nil && node == model.NodeID && t.bulk {
 			writeJSON(w, 200, rethrottleTask(t, segs[1], rps))
 			return true
 		}
@@ -164,7 +165,7 @@ func (s *Server) handleTaskRoutes(w http.ResponseWriter, r *http.Request) bool {
 				writeError(w, e)
 				return true
 			}
-			if t := liveTask(n); t != nil && node == nodeID && t.cancellable {
+			if t := liveTask(n); t != nil && node == model.NodeID && t.cancellable {
 				writeJSON(w, 200, cancelTask(t, id))
 				return true
 			}
@@ -180,7 +181,7 @@ func (s *Server) handleTaskRoutes(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		notStored := "task [" + id + "] isn't running and hasn't stored its results"
-		if node != nodeID {
+		if node != model.NodeID {
 			writeError(w, &apierr.Error{Type: "resource_not_found_exception", Status: 404,
 				Reason:    "task [" + id + "] belongs to the node [" + node + "] which isn't part of the cluster and there is no record of the task",
 				CausedBy:  &apierr.Error{Type: "resource_not_found_exception", Reason: notStored},
@@ -308,7 +309,7 @@ func (s *Server) startAsync(w http.ResponseWriter, r *http.Request, segs []strin
 	if !isForcemerge && rps > 0 {
 		if refs, ok := s.bbsMatches(action, segs, q, body); ok {
 			go s.runThrottled(t, r, segs, q, body, refs, int(batchSize))
-			writeJSON(w, 200, ojson.Object{{"task", nodeID + ":" + strconv.FormatInt(t.id, 10)}})
+			writeJSON(w, 200, ojson.Object{{"task", model.NodeID + ":" + strconv.FormatInt(t.id, 10)}})
 			return true
 		}
 	}
@@ -350,7 +351,7 @@ func (s *Server) startAsync(w http.ResponseWriter, r *http.Request, segs []strin
 		}
 		t.finishLocked(time.Now())
 	}()
-	writeJSON(w, 200, ojson.Object{{"task", nodeID + ":" + strconv.FormatInt(t.id, 10)}})
+	writeJSON(w, 200, ojson.Object{{"task", model.NodeID + ":" + strconv.FormatInt(t.id, 10)}})
 	return true
 }
 
@@ -440,7 +441,7 @@ func (t *storedTask) render() ojson.Object {
 	if !t.completed {
 		return ojson.Object{{"completed", false}, {"task", t.taskEntry(time.Now(), true)}}
 	}
-	task := ojson.Object{{"node", nodeID}, {"id", t.id}, {"type", "transport"}, {"action", t.action}}
+	task := ojson.Object{{"node", model.NodeID}, {"id", t.id}, {"type", "transport"}, {"action", t.action}}
 	if t.status != nil {
 		task = append(task, ojson.KV{"status", t.status})
 	}

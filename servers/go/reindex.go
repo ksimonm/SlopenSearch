@@ -10,6 +10,7 @@ import (
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/painless"
+	"slopensearch/internal/search"
 	"slopensearch/internal/settings"
 )
 
@@ -174,8 +175,8 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 		for _, id := range sidx.Order {
 			doc := sidx.Docs[id]
 			if query != nil {
-				qc := newQueryCtxForDoc(sidx, id, doc)
-				ok, _, qerr := qc.eval(query)
+				qc := search.NewQueryCtxForDoc(sidx, id, doc)
+				ok, _, qerr := qc.Eval(query)
 				if qerr != nil {
 					writeError(w, qerr)
 					return
@@ -207,8 +208,8 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 		if hasScript {
 			res, serr := runUpdateScriptCtx(scriptRaw, doc, it.idx.Name, id, -1, "index", it.idx.Routing[id])
 			if serr != nil {
-				if se, ok := serr.Extra.(*plScriptErr); ok {
-					writeJSON(w, 400, se.errorBody())
+				if se, ok := serr.Extra.(*search.ScriptError); ok {
+					writeJSON(w, 400, se.ErrorBody())
 					return
 				}
 				if serr.CausedBy != nil {
@@ -312,7 +313,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 				typ: apiErr.Type, rex: apiErr.Reason, code: apiErr.Status}.json(destUUID))
 			continue
 		}
-		props := ensureProperties(destIdx.Mappings)
+		props := mapping.EnsureProperties(destIdx.Mappings)
 		if derr := mergeMappingForIndex(destIdx, props, doc); derr != nil {
 			failures = append(failures, reindexFailure{index: destName, id: id,
 				typ: derr.Type, rex: derr.Reason, code: derr.Status}.json(destUUID))

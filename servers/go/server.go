@@ -20,6 +20,7 @@ import (
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/respfmt"
+	"slopensearch/internal/search"
 )
 
 type captureWriter struct {
@@ -234,7 +235,7 @@ func checkDuplicateJSONKeys(body []byte) error {
 func (s *Server) getIndex(name string) (*model.Index, *apierr.Error) {
 	idx, ok := s.Indices[name]
 	if !ok {
-		return nil, errNotFound(name)
+		return nil, apierr.IndexNotFound(name)
 	}
 	return idx, nil
 }
@@ -310,7 +311,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		cw.h.Set("Content-Type", "application/json; charset=UTF-8")
 	}
 	if strings.HasPrefix(cw.h.Get("Content-Type"), "application/json") {
-		body = respfmt.Process(cw.h, cw.ordered, r, status, body, nodeVersion)
+		body = respfmt.Process(cw.h, cw.ordered, r, status, body, model.NodeVersion)
 	}
 	cw.h.Set("X-OpenSearch-Version", "OpenSearch/3.9.0 (opensearch)")
 	writeFinal(w, r, status, body)
@@ -805,7 +806,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 func rootVersion() map[string]any {
 	return map[string]any{
 		"distribution":                        "opensearch",
-		"number":                              nodeVersion,
+		"number":                              model.NodeVersion,
 		"build_type":                          "tar",
 		"build_hash":                          "0000000000000000000000000000000000000000",
 		"build_date":                          "2026-01-01T00:00:00.000000000Z",
@@ -833,9 +834,9 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body := map[string]any{
-		"name":         nodeName,
-		"cluster_name": clusterName,
-		"cluster_uuid": clusterUUID,
+		"name":         model.NodeName,
+		"cluster_name": model.ClusterName,
+		"cluster_uuid": model.ClusterUUID,
 		"version":      rootVersion(),
 		"tagline":      "The OpenSearch Project: https://opensearch.org/",
 	}
@@ -981,7 +982,7 @@ func (s *Server) handleDeleteIndex(w http.ResponseWriter, r *http.Request, name 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.Indices[name]; !ok {
-		writeError(w, errNotFound(name))
+		writeError(w, apierr.IndexNotFound(name))
 		return
 	}
 	delete(s.Indices, name)
@@ -994,7 +995,7 @@ func (s *Server) handleGetIndex(w http.ResponseWriter, r *http.Request, name str
 	defer s.mu.RUnlock()
 	idx, ok := s.Indices[name]
 	if !ok {
-		writeError(w, errNotFound(name))
+		writeError(w, apierr.IndexNotFound(name))
 		return
 	}
 	aliases := map[string]any{}
@@ -1099,7 +1100,7 @@ func (s *Server) handleIndexDoc(w http.ResponseWriter, r *http.Request, name, id
 		writeError(w, apiErr)
 		return
 	}
-	props := ensureProperties(idx.Mappings)
+	props := mapping.EnsureProperties(idx.Mappings)
 	if derr := checkDynamicStrict(idx, props, body); derr != nil {
 		writeError(w, derr)
 		return
@@ -1180,7 +1181,7 @@ func (s *Server) handleGetDoc(w http.ResponseWriter, r *http.Request, name, id s
 	resp := map[string]any{"_index": idx.Name, "_id": id, "_version": 1, "found": true}
 	includes, excludes, omit, _ := sourceFilterFromQuery(r.URL.Query())
 	if !omit {
-		resp["_source"] = filterSourceDoc(doc, includes, excludes)
+		resp["_source"] = search.FilterSourceDoc(doc, includes, excludes)
 	}
 	if r2, ok := idx.Routing[id]; ok && r2 != "" {
 		resp["_routing"] = r2
@@ -1210,7 +1211,7 @@ func (s *Server) handleGetSource(w http.ResponseWriter, r *http.Request, name, i
 		return
 	}
 	includes, excludes, _, _ := sourceFilterFromQuery(r.URL.Query())
-	writeJSON(w, 200, filterSourceDoc(doc, includes, excludes))
+	writeJSON(w, 200, search.FilterSourceDoc(doc, includes, excludes))
 }
 
 func (s *Server) handleDeleteDoc(w http.ResponseWriter, r *http.Request, name, id string) {
@@ -1271,7 +1272,7 @@ func (s *Server) handleUpdateDoc(w http.ResponseWriter, r *http.Request, name, i
 		return
 	}
 	if patch, ok := body["doc"].(map[string]any); ok {
-		props := ensureProperties(idx.Mappings)
+		props := mapping.EnsureProperties(idx.Mappings)
 		if derr := mergeMappingForIndex(idx, props, patch); derr != nil {
 			writeError(w, derr)
 			return
@@ -1448,8 +1449,8 @@ func (s *Server) handleCount(w http.ResponseWriter, r *http.Request, name string
 			if _, pending := idx.Pending[id]; pending {
 				continue
 			}
-			qc := newQueryCtxForDoc(idx, id, doc)
-			matched, _, err := qc.eval(q)
+			qc := search.NewQueryCtxForDoc(idx, id, doc)
+			matched, _, err := qc.Eval(q)
 			if err != nil {
 				if isQueryShardCause(err) {
 					writeQueryShardError(w, idx, err)
@@ -1592,7 +1593,7 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, name string)
 				items = append(items, bulkErr("update", idxName, docID, 404, "document_missing_exception", "document missing"))
 				continue
 			}
-			props := ensureProperties(idx.Mappings)
+			props := mapping.EnsureProperties(idx.Mappings)
 			if derr := mergeMappingForIndex(idx, props, source); derr != nil {
 				hasErrors = true
 				items = append(items, bulkErrAPI("update", idx.Name, docID, derr))
@@ -1638,7 +1639,7 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, name string)
 			items = append(items, bulkErrAPI(op, idx.Name, docID, apiErr))
 			continue
 		}
-		props := ensureProperties(idx.Mappings)
+		props := mapping.EnsureProperties(idx.Mappings)
 		if derr := checkDynamicStrict(idx, props, source); derr != nil {
 			hasErrors = true
 			items = append(items, bulkErrAPI(op, idx.Name, docID, derr))

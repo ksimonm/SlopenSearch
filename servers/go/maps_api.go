@@ -117,7 +117,7 @@ func (s *Server) putMappingAPI(w http.ResponseWriter, r *http.Request, spec stri
 				}
 			}
 		}
-		existingProps := ensureProperties(idx.Mappings)
+		existingProps := mapping.EnsureProperties(idx.Mappings)
 		if props, ok := body["properties"].(map[string]any); ok {
 			if err := knnPutMappingCheck(idx, existingProps, props); err != nil {
 				writeError(w, err)

@@ -9,6 +9,7 @@ import (
 	"slopensearch/internal/jsonv"
 )
 
+// ValueString renders a setting value as OpenSearch stores it.
 func ValueString(v any) string {
 	switch t := v.(type) {
 	case string:
@@ -26,6 +27,7 @@ func ValueString(v any) string {
 	}
 }
 
+// ValueInt reads a setting value as an int.
 func ValueInt(v any) (int, bool) {
 	switch t := v.(type) {
 	case float64:

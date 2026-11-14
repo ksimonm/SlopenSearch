@@ -7,6 +7,7 @@ import (
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/ingest"
 	"slopensearch/internal/painless"
+	"slopensearch/internal/search"
 	"slopensearch/internal/wildcard"
 )
 
@@ -23,12 +24,12 @@ func (ingestScripts) Compile(raw map[string]any, ctxName, tag string) (ingest.Sc
 }
 
 type ingestScript struct {
-	script *plScript
-	spec   *scriptSpec
+	script *search.Script
+	spec   *search.ScriptSpec
 }
 
 func (sc ingestScript) Run(ctx *painless.Map) *apierr.Error {
-	_, se := sc.script.exec(painless.Bindings{Vars: map[string]any{"params": scriptParams(sc.spec.params), "ctx": ctx}}, sc.spec.errName())
+	_, se := sc.script.Exec(painless.Bindings{Vars: map[string]any{"params": search.ScriptParams(sc.spec.Params), "ctx": ctx}}, sc.spec.ErrName())
 	if se != nil {
 		return ingestScriptError(se, "")
 	}
@@ -209,45 +210,45 @@ func (s *Server) simulatePipeline(w http.ResponseWriter, r *http.Request, stored
 
 // ingestScriptError converts a script exception into the error an ingest
 // processor reports.
-func ingestScriptError(se *plScriptErr, tag string) *apierr.Error {
-	fields := map[string]any{"script_stack": anySlice(se.stack), "script": se.script, "lang": map[bool]string{true: "expression", false: "painless"}[se.lang == "expression"]}
-	if se.pos != nil {
-		fields["position"] = map[string]any{"offset": se.pos[0], "start": se.pos[1], "end": se.pos[2]}
+func ingestScriptError(se *search.ScriptError, tag string) *apierr.Error {
+	fields := map[string]any{"script_stack": anySlice(se.Stack), "script": se.Script, "lang": map[bool]string{true: "expression", false: "painless"}[se.Lang == "expression"]}
+	if se.Pos != nil {
+		fields["position"] = map[string]any{"offset": se.Pos[0], "start": se.Pos[1], "end": se.Pos[2]}
 	}
 	kind := "runtime error"
-	if se.compile {
+	if se.Compile {
 		kind = "compile error"
 		fields["processor_type"] = "script"
 		if tag != "" {
 			fields["processor_tag"] = tag
 		}
 	}
-	for _, kv := range se.extra {
+	for _, kv := range se.Extra {
 		fields[kv.K] = kv.V
 	}
 	return &apierr.Error{Type: "script_exception", Status: 400, Reason: kind, Fields: fields,
-		CausedBy: &apierr.Error{Type: se.causeType, Reason: se.reason}}
+		CausedBy: &apierr.Error{Type: se.CauseType, Reason: se.Reason}}
 }
 
 // compileIngestScript compiles a script processor's script.
-func compileIngestScript(raw map[string]any, ctxName, tag string) (*plScript, *scriptSpec, *apierr.Error) {
-	spec, ae := parseScriptSpec(raw)
+func compileIngestScript(raw map[string]any, ctxName, tag string) (*search.Script, *search.ScriptSpec, *apierr.Error) {
+	spec, ae := search.ParseScriptSpec(raw)
 	if ae != nil {
 		return nil, nil, ae
 	}
-	if spec.lang == "expression" {
-		_, se, ae := exPrepare(spec.src, ctxName)
+	if spec.Lang == "expression" {
+		_, se, ae := search.PrepareExpression(spec.Src, ctxName)
 		if se != nil {
 			return nil, nil, ingestScriptError(se, tag)
 		}
 		ae.ForceTop = true
 		return nil, nil, ae
 	}
-	if ae := checkScriptLang(spec, ctxName); ae != nil {
+	if ae := search.CheckScriptLang(spec, ctxName); ae != nil {
 		ae.ForceTop = true
 		return nil, nil, ae
 	}
-	script, se := compilePainless(spec, ctxName)
+	script, se := search.CompilePainless(spec, ctxName)
 	if se != nil {
 		return nil, nil, ingestScriptError(se, tag)
 	}

@@ -10,6 +10,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/ingest"
+	"slopensearch/internal/model"
 	"slopensearch/internal/wildcard"
 )
 
@@ -59,7 +60,7 @@ func pluginsList() []any {
 		out = append(out, map[string]any{
 			"name":                      name,
 			"version":                   pluginVersion,
-			"opensearch_version":        nodeVersion,
+			"opensearch_version":        model.NodeVersion,
 			"java_version":              "21",
 			"description":               name + " plugin",
 			"classname":                 "org.opensearch.plugin." + name,
@@ -74,11 +75,11 @@ func pluginsList() []any {
 
 func nodeInfoBase() map[string]any {
 	return map[string]any{
-		"name":              nodeName,
+		"name":              model.NodeName,
 		"transport_address": nodeTransport,
 		"host":              nodeHost,
 		"ip":                nodeHost,
-		"version":           nodeVersion,
+		"version":           model.NodeVersion,
 		"build_type":        "tar",
 		"build_hash":        "0000000000000000000000000000000000000000",
 		"roles":             nodeRoles(),
@@ -91,8 +92,8 @@ func modulesList() []any {
 	for _, name := range moduleNames {
 		out = append(out, map[string]any{
 			"name":                  name,
-			"version":               nodeVersion,
-			"opensearch_version":    nodeVersion,
+			"version":               model.NodeVersion,
+			"opensearch_version":    model.NodeVersion,
 			"java_version":          "25",
 			"description":           name + " module",
 			"classname":             "org.opensearch." + name,
@@ -107,8 +108,8 @@ func (s *Server) nodeInfoForMetric(metric string) map[string]any {
 	case "settings":
 		return map[string]any{
 			"settings": map[string]any{
-				"cluster": map[string]any{"name": clusterName},
-				"node":    map[string]any{"name": nodeName, "attr": map[string]any{"shard_indexing_pressure_enabled": "true"}},
+				"cluster": map[string]any{"name": model.ClusterName},
+				"node":    map[string]any{"name": model.NodeName, "attr": map[string]any{"shard_indexing_pressure_enabled": "true"}},
 				"path":    map[string]any{"home": "/tmp/os", "data": []any{}, "logs": "/tmp/logs"},
 			},
 		}
@@ -237,7 +238,7 @@ func nodeThreadPools() map[string]any {
 func emptyNodesResponse() map[string]any {
 	return map[string]any{
 		"_nodes":       map[string]any{"total": 0, "successful": 0, "failed": 0},
-		"cluster_name": clusterName,
+		"cluster_name": model.ClusterName,
 		"nodes":        map[string]any{},
 	}
 }
@@ -303,13 +304,13 @@ func nodesSelectorMatches(selector string) bool {
 		switch token {
 		case "_local", "_all", "*", "_cluster_manager", "_master", "data:true", "cluster_manager:true", "master:true", "ingest:true":
 			return true
-		case nodeID, nodeName:
+		case model.NodeID, model.NodeName:
 			return true
 		}
 		if strings.HasPrefix(token, "_") {
 			continue
 		}
-		if strings.ContainsAny(token, "*?") && (wildcard.Match(token, nodeID) || wildcard.Match(token, nodeName)) {
+		if strings.ContainsAny(token, "*?") && (wildcard.Match(token, model.NodeID) || wildcard.Match(token, model.NodeName)) {
 			return true
 		}
 	}
@@ -344,8 +345,8 @@ func (s *Server) writeNodeInfo(w http.ResponseWriter, r *http.Request, metric st
 	}
 	writeJSON(w, 200, map[string]any{
 		"_nodes":       map[string]any{"total": 1, "successful": 1, "failed": 0},
-		"cluster_name": clusterName,
-		"nodes":        map[string]any{nodeID: info},
+		"cluster_name": model.ClusterName,
+		"nodes":        map[string]any{model.NodeID: info},
 	})
 }
 
@@ -416,15 +417,15 @@ func (s *Server) handleNodeStats(w http.ResponseWriter, r *http.Request, selecto
 				"total": 1, "successful": 0, "failed": 1,
 				"failures": []any{map[string]any{
 					"type":    "failed_node_exception",
-					"reason":  "failed to execute stats on node [" + nodeID + "]",
-					"node_id": nodeID,
+					"reason":  "failed to execute stats on node [" + model.NodeID + "]",
+					"node_id": model.NodeID,
 					"caused_by": map[string]any{
 						"type":   "illegal_argument_exception",
 						"reason": "level [" + level + "] is not supported",
 					},
 				}},
 			},
-			"cluster_name": clusterName,
+			"cluster_name": model.ClusterName,
 			"nodes":        map[string]any{},
 		})
 		return
@@ -432,15 +433,15 @@ func (s *Server) handleNodeStats(w http.ResponseWriter, r *http.Request, selecto
 	stats := s.buildNodeStats(r, metrics, indexMetric, level)
 	writeJSON(w, 200, map[string]any{
 		"_nodes":       map[string]any{"total": 1, "successful": 1, "failed": 0},
-		"cluster_name": clusterName,
-		"nodes":        map[string]any{nodeID: stats},
+		"cluster_name": model.ClusterName,
+		"nodes":        map[string]any{model.NodeID: stats},
 	})
 }
 
 func (s *Server) buildNodeStats(r *http.Request, metrics []string, indexMetric, level string) map[string]any {
 	stats := map[string]any{
 		"timestamp":         nowMillis(),
-		"name":              nodeName,
+		"name":              model.NodeName,
 		"transport_address": nodeTransport,
 		"host":              nodeHost,
 		"ip":                nodeHost,
@@ -571,8 +572,8 @@ func (s *Server) handleNodeUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{
 		"_nodes":       map[string]any{"total": 1, "successful": 1, "failed": 0},
-		"cluster_name": clusterName,
-		"nodes": map[string]any{nodeID: map[string]any{
+		"cluster_name": model.ClusterName,
+		"nodes": map[string]any{model.NodeID: map[string]any{
 			"timestamp":    nowMillis(),
 			"since":        nowMillis() - 1000,
 			"rest_actions": map[string]any{},
@@ -585,7 +586,7 @@ func (s *Server) handleHotThreads(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=UTF-8")
 	w.WriteHeader(200)
 	ts := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
-	w.Write([]byte(fmt.Sprintf("::: {%s}{%s}\n   Hot threads at %s, interval=500ms, busiestThreads=3, ignoreIdleThreads=true:\n\n", nodeName, nodeID, ts)))
+	w.Write([]byte(fmt.Sprintf("::: {%s}{%s}\n   Hot threads at %s, interval=500ms, busiestThreads=3, ignoreIdleThreads=true:\n\n", model.NodeName, model.NodeID, ts)))
 }
 
 // -------------------------------------------------------------------- tasks
@@ -595,18 +596,18 @@ func (s *Server) syntheticTasks() []map[string]any {
 	childID := "2"
 	now := nowMillis()
 	parent := map[string]any{
-		"node": nodeID, "id": parentID, "type": "transport",
+		"node": model.NodeID, "id": parentID, "type": "transport",
 		"action":               "cluster:monitor/tasks/lists",
 		"start_time_in_millis": now, "running_time_in_nanos": int64(1000),
 		"cancellable": false, "cancelled": false, "headers": map[string]any{},
 		"description": "cluster:monitor/tasks/lists",
 	}
 	child := map[string]any{
-		"node": nodeID, "id": childID, "type": "direct",
+		"node": model.NodeID, "id": childID, "type": "direct",
 		"action":               "cluster:monitor/tasks/lists[n]",
 		"start_time_in_millis": now, "running_time_in_nanos": int64(500),
 		"cancellable": true, "cancelled": false, "headers": map[string]any{},
-		"parent_task_id": nodeID + ":" + parentID,
+		"parent_task_id": model.NodeID + ":" + parentID,
 		"description":    "cluster:monitor/tasks/lists[n]",
 	}
 	return []map[string]any{parent, child}
@@ -661,7 +662,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request, rest []stri
 		for _, t := range matched {
 			tasksOut[t["node"].(string)+":"+t["id"].(string)] = map[string]any{"action": t["action"], "cancelled": true}
 		}
-		writeJSON(w, 200, map[string]any{"nodes": map[string]any{nodeID: map[string]any{"name": nodeName, "tasks": tasksOut}}})
+		writeJSON(w, 200, map[string]any{"nodes": map[string]any{model.NodeID: map[string]any{"name": model.NodeName, "tasks": tasksOut}}})
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -675,7 +676,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request, rest []stri
 			return
 		}
 		parts := strings.SplitN(id, ":", 2)
-		if parts[0] != nodeID {
+		if parts[0] != model.NodeID {
 			writeError(w, &apierr.Error{Type: "resource_not_found_exception",
 				Reason: "task [" + id + "] belongs to the node [" + parts[0] + "] which is not part of the cluster", Status: 404})
 			return
@@ -744,7 +745,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request, rest []stri
 			tasksOut[kv.K] = kv.V
 		}
 		writeJSON(w, 200, map[string]any{
-			"nodes": map[string]any{nodeID: map[string]any{"name": nodeName, "tasks": tasksOut}},
+			"nodes": map[string]any{model.NodeID: map[string]any{"name": model.NodeName, "tasks": tasksOut}},
 		})
 	}
 }

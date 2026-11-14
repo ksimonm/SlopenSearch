@@ -8,6 +8,7 @@ import (
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
+	"slopensearch/internal/search"
 )
 
 func (s *Server) handleValidateQuery(w http.ResponseWriter, r *http.Request, name string) {
@@ -71,8 +72,8 @@ func (s *Server) handleValidateQuery(w http.ResponseWriter, r *http.Request, nam
 	if doc == nil {
 		doc = map[string]any{}
 	}
-	qc := newQueryCtxForDoc(idx, id, doc)
-	_, _, qerr := qc.eval(query)
+	qc := search.NewQueryCtxForDoc(idx, id, doc)
+	_, _, qerr := qc.Eval(query)
 	if qerr != nil {
 		reason := qerr.Reason
 		if qerr.RootCause != nil && qerr.RootCause.Reason != "" {
@@ -127,7 +128,7 @@ func (s *Server) handleValidateQuery(w http.ResponseWriter, r *http.Request, nam
 	writeJSON(w, 200, map[string]any{"_shards": shards, "valid": true})
 }
 
-func validateExplanationWithCtx(q map[string]any, qc *queryCtx) string {
+func validateExplanationWithCtx(q map[string]any, qc *search.QueryCtx) string {
 	if qs, ok := q["query_string"].(map[string]any); ok {
 		query, _ := jsonv.ToString(qs["query"])
 		operator := "OR"
@@ -138,8 +139,8 @@ func validateExplanationWithCtx(q map[string]any, qc *queryCtx) string {
 		if df, ok := qs["default_field"].(string); ok && df != "" {
 			defaultField = df
 		}
-		p := &qsParser{tokens: tokenizeQueryString(query), default_: defaultField, operator: operator, c: qc}
-		if parsed, err := p.parse(); err == nil {
+		p := &search.QueryStringParser{Tokens: search.TokenizeQueryString(query), Default_: defaultField, Operator: operator, C: qc}
+		if parsed, err := p.Parse(); err == nil {
 			return explainParsed(parsed)
 		}
 	}
@@ -149,7 +150,7 @@ func validateExplanationWithCtx(q map[string]any, qc *queryCtx) string {
 func explainParsed(q map[string]any) string {
 	if bm, ok := q["bool"].(map[string]any); ok {
 		parts := []string{}
-		for _, item := range asQueryList(bm["must"]) {
+		for _, item := range search.AsQueryList(bm["must"]) {
 			if cm, ok := item.(map[string]any); ok {
 				if _, isTerm := cm["term"]; isTerm {
 					parts = append(parts, "+ConstantScore("+explainParsed(cm)+")")
@@ -158,7 +159,7 @@ func explainParsed(q map[string]any) string {
 				}
 			}
 		}
-		for _, item := range asQueryList(bm["filter"]) {
+		for _, item := range search.AsQueryList(bm["filter"]) {
 			if cm, ok := item.(map[string]any); ok {
 				parts = append(parts, "+ConstantScore("+explainParsed(cm)+")")
 			}
@@ -178,7 +179,7 @@ func validateExplanation(q map[string]any) string {
 	if m, ok := q["match"].(map[string]any); ok {
 		parts := []string{}
 		for field, raw := range m {
-			text, _ := queryText(raw)
+			text, _ := search.QueryText(raw)
 			for _, tok := range mapping.Analyze(text) {
 				parts = append(parts, field+":"+tok)
 			}
@@ -187,12 +188,12 @@ func validateExplanation(q map[string]any) string {
 	}
 	if bm, ok := q["bool"].(map[string]any); ok {
 		parts := []string{}
-		for _, item := range asQueryList(bm["must"]) {
+		for _, item := range search.AsQueryList(bm["must"]) {
 			if cm, ok := item.(map[string]any); ok {
 				parts = append(parts, "+"+validateExplanation(cm))
 			}
 		}
-		for _, item := range asQueryList(bm["filter"]) {
+		for _, item := range search.AsQueryList(bm["filter"]) {
 			if cm, ok := item.(map[string]any); ok {
 				parts = append(parts, "+ConstantScore("+validateExplanation(cm)+")")
 			}

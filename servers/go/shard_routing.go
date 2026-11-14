@@ -8,6 +8,7 @@ import (
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
+	"slopensearch/internal/search"
 )
 
 type shardFilter struct {
@@ -81,12 +82,12 @@ func searchShardMultiplier(idx *model.Index, id string, query map[string]any, df
 	if m, ok := query["match"].(map[string]any); ok {
 		for f, raw := range m {
 			field = f
-			text, _ = queryText(raw)
+			text, _ = search.QueryText(raw)
 		}
 	} else if m, ok := query["match_phrase"].(map[string]any); ok {
 		for f, raw := range m {
 			field = f
-			text, _ = queryText(raw)
+			text, _ = search.QueryText(raw)
 		}
 	}
 	if field == "" {
@@ -118,15 +119,15 @@ func searchShardMultiplier(idx *model.Index, id string, query map[string]any, df
 			continue
 		}
 		n++
-		qc := newQueryCtxForDoc(idx, did, doc)
-		vals, present := qc.values(field)
+		qc := search.NewQueryCtxForDoc(idx, did, doc)
+		vals, present := qc.Values(field)
 		if !present {
 			continue
 		}
 		found := false
 		for _, v := range vals {
 			s, _ := jsonv.ScalarString(v)
-			for _, tok := range qc.analyzeDocField(field, s) {
+			for _, tok := range qc.AnalyzeDocField(field, s) {
 				for _, want := range tokens {
 					if tok == want {
 						found = true

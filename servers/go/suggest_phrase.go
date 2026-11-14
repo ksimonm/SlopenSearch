@@ -16,6 +16,7 @@ import (
 	"slopensearch/internal/mustache"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
+	"slopensearch/internal/search"
 )
 
 // The phrase suggester, ported from OpenSearch's PhraseSuggester: a noisy
@@ -482,7 +483,7 @@ func phStringDistance(distance, a, b string) float32 {
 	ar, br := []rune(a), []rune(b)
 	switch distance {
 	case "levenshtein":
-		return float32(1) - float32(levenshtein(a, b))/float32(max(len(ar), len(br)))
+		return float32(1) - float32(search.Levenshtein(a, b))/float32(max(len(ar), len(br)))
 	case "damerau_levenshtein":
 		if len(ar) == 0 || len(br) == 0 {
 			if len(ar) == len(br) {
@@ -1465,10 +1466,10 @@ func phraseSuggestIndex(req *phraseRequest, idx *model.Index, text string) (*phE
 	}
 	if req.forceUnigrams && !anyUnigram && anyTokens {
 		return nil, &apierr.Error{Type: "search_phase_execution_exception", Status: 500, Reason: "all shards failed",
-			Shard: &shardFailure{status: 500, index: idx.Name,
-				root:  ojson.Object{{"type", "illegal_state_exception"}, {"reason", "At least one unigram is required but all tokens were ngrams"}},
-				shard: ojson.Object{{"type", "illegal_state_exception"}, {"reason", "At least one unigram is required but all tokens were ngrams"}},
-				top:   ojson.Object{{"type", "illegal_state_exception"}, {"reason", "At least one unigram is required but all tokens were ngrams"}}}}
+			Shard: &search.ShardFailure{Status: 500, Index: idx.Name,
+				Root:  ojson.Object{{"type", "illegal_state_exception"}, {"reason", "At least one unigram is required but all tokens were ngrams"}},
+				Shard: ojson.Object{{"type", "illegal_state_exception"}, {"reason", "At least one unigram is required but all tokens were ngrams"}},
+				Top:   ojson.Object{{"type", "illegal_state_exception"}, {"reason", "At least one unigram is required but all tokens were ngrams"}}}}
 	}
 	if len(sets) == 0 || len(sets) >= req.tokenLimit {
 		return entry, nil
@@ -1544,7 +1545,7 @@ func phCollateMatches(idx *model.Index, req *phraseRequest, suggestion string) (
 		if _, pending := idx.Pending[id]; pending {
 			continue
 		}
-		ok, _, err := newQueryCtxForDoc(idx, id, doc).eval(q)
+		ok, _, err := search.NewQueryCtxForDoc(idx, id, doc).Eval(q)
 		if err != nil {
 			return false, err
 		}

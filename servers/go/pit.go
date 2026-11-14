@@ -40,7 +40,7 @@ func (s *Server) openPit(w http.ResponseWriter, r *http.Request, name string) {
 	idx, ok := s.Indices[name]
 	if !ok {
 		s.mu.RUnlock()
-		writeError(w, errNotFound(name))
+		writeError(w, apierr.IndexNotFound(name))
 		return
 	}
 	hits := make([]multiHit, 0, len(idx.Order))

@@ -202,7 +202,7 @@ func (s *Server) handleStatsAPI(w http.ResponseWriter, r *http.Request, spec, me
 		}
 		if level == "shards" {
 			shardArr := []any{map[string]any{
-				"id": 0, "routing": map[string]any{"state": "STARTED", "primary": true, "node": nodeID},
+				"id": 0, "routing": map[string]any{"state": "STARTED", "primary": true, "node": model.NodeID},
 				"docs": prim["docs"], "store": prim["store"], "indexing": prim["indexing"],
 				"search": prim["search"], "merges": prim["merges"], "refresh": prim["refresh"],
 				"flush": prim["flush"], "segments": map[string]any{"count": 1},
@@ -296,7 +296,7 @@ func (s *Server) handleSegmentsAPI(w http.ResponseWriter, r *http.Request, spec 
 				},
 			}
 			entry := map[string]any{
-				"routing":                map[string]any{"state": "STARTED", "primary": true, "node": nodeID},
+				"routing":                map[string]any{"state": "STARTED", "primary": true, "node": model.NodeID},
 				"num_committed_segments": 1,
 				"num_search_segments":    1,
 				"segments":               segs,
@@ -336,7 +336,7 @@ func (s *Server) handleRecoveryAPI(w http.ResponseWriter, r *http.Request, spec 
 				"stop_time_in_millis":  idx.CreationDate,
 				"total_time_in_millis": 0,
 				"source":               map[string]any{},
-				"target":               map[string]any{"id": nodeID, "host": "127.0.0.1", "transport_address": "127.0.0.1:9300", "ip": "127.0.0.1", "name": nodeName},
+				"target":               map[string]any{"id": model.NodeID, "host": "127.0.0.1", "transport_address": "127.0.0.1:9300", "ip": "127.0.0.1", "name": model.NodeName},
 				"index":                map[string]any{"size": map[string]any{"total_in_bytes": storeBytes(idx)}, "files": map[string]any{"total": 1, "reused": 0, "recovered": 0}, "total_time_in_millis": 0},
 				"translog":             map[string]any{"recovered": 0, "total": 0, "percent": "100.0%", "total_on_start": 0, "total_time_in_millis": 0},
 				"verify_index":         map[string]any{"check_index_time_in_millis": 0, "total_time_in_millis": 0},

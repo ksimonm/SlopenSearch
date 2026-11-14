@@ -17,6 +17,7 @@ import (
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
+	"slopensearch/internal/search"
 )
 
 func allIndexDocs(idx *model.Index) []map[string]any {
@@ -26,7 +27,7 @@ func allIndexDocs(idx *model.Index) []map[string]any {
 		if !ok {
 			continue
 		}
-		d := deepCopySource(doc).(map[string]any)
+		d := search.DeepCopySource(doc).(map[string]any)
 		d["__slop_id"] = id
 		out = append(out, d)
 	}
@@ -269,7 +270,7 @@ func parseRangeDateValue(v any, def map[string]any, format, tz string, now time.
 		}
 		if ms, ok := dates.ParseAny(tmp, s); ok {
 			if tz != "" {
-				if off, err := parseTZOffset(tz); err == nil {
+				if off, err := search.ParseTZOffset(tz); err == nil {
 					ms -= off
 				}
 			}
@@ -410,7 +411,7 @@ func dateRangeAgg(name, field string, spec map[string]any, docs []map[string]any
 	fmtDate := func(ms int64) string {
 		loc := time.UTC
 		if tz != "" {
-			if off, err := parseTZOffset(tz); err == nil {
+			if off, err := search.ParseTZOffset(tz); err == nil {
 				loc = time.FixedZone(tz, int(off/1000))
 			}
 		}
@@ -1517,7 +1518,7 @@ func geoHashGridAgg(name string, spec map[string]any, docs []map[string]any, idx
 		if !ok {
 			continue
 		}
-		lat, lon, ok := geoPointOf(v)
+		lat, lon, ok := search.GeoPointOf(v)
 		if !ok {
 			continue
 		}
@@ -1566,13 +1567,13 @@ func geoHashGridAgg(name string, spec map[string]any, docs []map[string]any, idx
 
 func geoDistanceAgg(name string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	field, _ := jsonv.ToString(spec["field"])
-	olat, olon, ok := geoPointOf(spec["origin"])
+	olat, olon, ok := search.GeoPointOf(spec["origin"])
 	if !ok {
 		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "failed to parse geo_distance point"}
 	}
 	unit, _ := jsonv.ToString(spec["unit"])
-	unitM := unitToMeters(unit)
+	unitM := search.UnitToMeters(unit)
 	if unitM == 0 {
 		unitM = 1
 	}
@@ -1615,11 +1616,11 @@ func geoDistanceAgg(name string, spec map[string]any, docs []map[string]any, idx
 			if !ok {
 				continue
 			}
-			lat, lon, ok := geoPointOf(v)
+			lat, lon, ok := search.GeoPointOf(v)
 			if !ok {
 				continue
 			}
-			dist := haversineMeters(olat, olon, lat, lon) / unitM
+			dist := search.HaversineMeters(olat, olon, lat, lon) / unitM
 			if dist < x.from {
 				continue
 			}
@@ -2071,7 +2072,7 @@ func copyAggDoc(doc map[string]any, id string) map[string]any {
 }
 
 func childrenAgg(typ string, docs []map[string]any, idx *model.Index, sub map[string]any, typed bool) (any, *apierr.Error) {
-	field, _, hasJoin := findJoinField(idx)
+	field, _, hasJoin := search.FindJoinField(idx)
 	if !hasJoin {
 		return map[string]any{"doc_count": 0}, nil
 	}
@@ -2087,7 +2088,7 @@ func childrenAgg(typ string, docs []map[string]any, idx *model.Index, sub map[st
 		if doc == nil {
 			continue
 		}
-		name, parent := joinParts(doc[field])
+		name, parent := search.JoinParts(doc[field])
 		if name != typ || parent == "" || !parents[parent] {
 			continue
 		}
@@ -2107,7 +2108,7 @@ func childrenAgg(typ string, docs []map[string]any, idx *model.Index, sub map[st
 }
 
 func parentAgg(typ string, docs []map[string]any, idx *model.Index, sub map[string]any, typed bool) (any, *apierr.Error) {
-	field, _, hasJoin := findJoinField(idx)
+	field, _, hasJoin := search.FindJoinField(idx)
 	if !hasJoin {
 		return map[string]any{"doc_count": 0}, nil
 	}
@@ -2122,7 +2123,7 @@ func parentAgg(typ string, docs []map[string]any, idx *model.Index, sub map[stri
 		if src == nil {
 			continue
 		}
-		name, parent := joinParts(src[field])
+		name, parent := search.JoinParts(src[field])
 		if name != typ {
 			continue
 		}
