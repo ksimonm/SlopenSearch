@@ -11,7 +11,7 @@ use crate::resp::{format_number, glob_match};
 use crate::jsonv::stringify_scalar;
 use crate::model::{DataStreamInfo, Index, Store, VERSION_CREATED};
 use crate::settings::{find_setting, settings_value_int, settings_value_string};
-use crate::Req;
+use crate::http::Req;
 
 // ---------------------------------------------------------------- name rules
 
@@ -486,7 +486,7 @@ pub fn resolve_write_target<'a>(
         }
         return Err(err_no_write_index(name));
     }
-    if let Some(idx_name) = crate::datastreams::maybe_auto_create_data_stream(store, name)? {
+    if let Some(idx_name) = crate::http::datastreams::maybe_auto_create_data_stream(store, name)? {
         return Ok(&store.indices[&idx_name]);
     }
     validate_index_name(name)?;

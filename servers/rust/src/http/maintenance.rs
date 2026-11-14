@@ -2,9 +2,9 @@ use axum::response::Response;
 use serde_json::{json, Map, Value};
 
 use crate::errors::{err_response, json_response, ApiError};
-use crate::shared::{parse_resolve_params, resolve_spec2, ResolveOpts2};
+use crate::http::shared::{parse_resolve_params, resolve_spec2, ResolveOpts2};
 use crate::model::{NODE_ID, NODE_NAME, Store};
-use crate::Req;
+use crate::http::Req;
 
 // ----------------------------------------------------------- refresh/flush
 
@@ -18,7 +18,7 @@ pub fn maintenance_op(store: &mut Store, req: &Req, spec: &str, op: &str) -> Res
     for name in &names {
         let idx = &store.indices[name];
         if idx.closed {
-            return err_response(crate::shared::err_index_closed(idx));
+            return err_response(crate::http::shared::err_index_closed(idx));
         }
         shards += idx.num_shards();
     }
@@ -215,7 +215,7 @@ pub fn handle_stats_api(store: &mut Store, req: &Req, spec: &str, metrics: &str)
     for name in &names {
         let idx = &store.indices[name];
         if idx.closed {
-            return err_response(crate::shared::err_index_closed(idx));
+            return err_response(crate::http::shared::err_index_closed(idx));
         }
         shards += idx.num_shards();
         let prim = index_metrics(idx, requested.as_ref());
@@ -261,7 +261,7 @@ pub fn handle_stats_api(store: &mut Store, req: &Req, spec: &str, metrics: &str)
     }
     let mut resp = Value::Object(resp);
     if req.bool_param("human") {
-        crate::human::humanize_stats(&mut resp);
+        crate::http::human::humanize_stats(&mut resp);
     }
     json_response(200, resp)
 }
@@ -279,7 +279,7 @@ pub fn handle_segments_api(store: &mut Store, req: &Req, spec: &str) -> Response
     for name in &names {
         let idx = &store.indices[name];
         if idx.closed {
-            return err_response(crate::shared::err_index_closed(idx));
+            return err_response(crate::http::shared::err_index_closed(idx));
         }
         shards += idx.num_shards();
         let mut shard_map = Map::new();

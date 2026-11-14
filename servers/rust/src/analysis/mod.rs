@@ -16,7 +16,6 @@
 //! (english, french, ...) hook in there.
 
 pub mod basic;
-pub mod api;
 pub mod charfilters;
 pub mod filters;
 mod fold_table;

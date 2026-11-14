@@ -1,13 +1,14 @@
 use axum::response::Response;
 use serde_json::{json, Map, Value};
 
-use crate::datastreams::{backing_index_name, create_backing_index};
-use crate::errors::{err_response, json_response, method_not_allowed, ApiError};
-use crate::shared::sorted_index_names;
+use crate::http::datastreams::{backing_index_name, create_backing_index};
+use crate::errors::{err_response, json_response, ApiError};
+use crate::http::method_not_allowed;
+use crate::http::shared::sorted_index_names;
 use crate::jsonv::{to_f64, value_to_string};
 use crate::model::{DataStreamInfo, Store};
 use crate::settings::settings_value_int;
-use crate::Req;
+use crate::http::Req;
 
 fn parse_duration_millis(v: &Value) -> Option<i64> {
     match v {
@@ -247,7 +248,7 @@ pub fn handle_rollover(store: &mut Store, req: &Req, target: &str, new_index_nam
             Value::Object(old_idx.settings.clone()),
         );
         body.insert("mappings".to_string(), old_idx.mappings.clone());
-        if let Err(e) = crate::admin::create_index_internal(store, &new_name, &body, false) {
+        if let Err(e) = crate::http::admin::create_index_internal(store, &new_name, &body, false) {
             return err_response(e);
         }
         let old_def = old_idx

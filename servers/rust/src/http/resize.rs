@@ -1,11 +1,12 @@
 use axum::response::Response;
 use serde_json::{json, Map, Value};
 
-use crate::errors::{err_response, json_response, method_not_allowed, ApiError};
-use crate::shared::{err_index_not_found_named, flatten_settings, validate_index_name};
+use crate::errors::{err_response, json_response, ApiError};
+use crate::http::method_not_allowed;
+use crate::http::shared::{err_index_not_found_named, flatten_settings, validate_index_name};
 use crate::model::Store;
 use crate::settings::{settings_value_int, settings_value_string};
-use crate::Req;
+use crate::http::Req;
 
 pub fn handle_resize(
     store: &mut Store,
@@ -155,7 +156,7 @@ pub fn handle_resize(
             new_body.insert("aliases".to_string(), a.clone());
         }
     }
-    if let Err(e) = crate::admin::create_index_internal(store, target, &new_body, false) {
+    if let Err(e) = crate::http::admin::create_index_internal(store, target, &new_body, false) {
         return err_response(e);
     }
     let docs: Vec<(String, Map<String, Value>)> = idx

@@ -13,9 +13,9 @@ use axum::response::Response;
 use serde_json::{json, Map, Value};
 
 use crate::errors::{err_response, json_response, ApiError};
-use crate::shared::{resolve_spec2, ResolveOpts2};
+use crate::http::shared::{resolve_spec2, ResolveOpts2};
 use crate::model::{NODE_ID, NODE_NAME, Store, now_millis};
-use crate::{Req, Shared};
+use crate::http::{Req, Shared};
 
 const RPS_REASON: &str =
     "[requests_per_second] must be a float greater than 0. Use -1 to disable throttling.";
@@ -227,10 +227,10 @@ fn node_tasks(tid: &str, task: Value) -> Response {
         json!({"nodes": {NODE_ID: {
             "name": NODE_NAME,
             "transport_address": "127.0.0.1:9300",
-            "host": crate::cluster::NODE_HOST,
+            "host": crate::http::cluster::NODE_HOST,
             "ip": "127.0.0.1:9300",
-            "roles": crate::cluster::node_roles(),
-            "attributes": crate::cluster::node_attributes(),
+            "roles": crate::http::cluster::node_roles(),
+            "attributes": crate::http::cluster::node_attributes(),
             "tasks": tasks,
         }}}),
     )
@@ -390,7 +390,7 @@ pub fn route(shared: &Shared, req: &Req) -> Option<Response> {
         .path
         .split('/')
         .filter(|s| !s.is_empty())
-        .map(crate::path_decode)
+        .map(crate::http::path_decode)
         .collect();
     if segs.len() == 3
         && segs[2] == "_rethrottle"
@@ -766,7 +766,7 @@ fn run(shared: Shared, id: u64, job: Job, q_param: Option<String>, max_docs: Opt
         let (status, v) = {
             let mut st = lock_store(&shared);
             {
-                let r = read_response(crate::dispatch(&mut st, &req));
+                let r = read_response(crate::http::dispatch(&mut st, &req));
                 // background batches change state outside a request: journal them too
                 crate::persist::after_request(&st, &req.method, &req.path);
                 r
@@ -862,7 +862,7 @@ fn run(shared: Shared, id: u64, job: Job, q_param: Option<String>, max_docs: Opt
             let (status, v) = {
                 let mut st = lock_store(&shared);
                 {
-                let r = read_response(crate::dispatch(&mut st, &req));
+                let r = read_response(crate::http::dispatch(&mut st, &req));
                 // background batches change state outside a request: journal them too
                 crate::persist::after_request(&st, &req.method, &req.path);
                 r
@@ -966,7 +966,7 @@ fn list_docs(
             let q = job.body.get("query").cloned().or_else(|| {
                 q_param
                     .filter(|q| !q.is_empty())
-                    .map(crate::docs::parse_q_param)
+                    .map(crate::http::docs::parse_q_param)
             });
             let max = job
                 .body
@@ -1022,7 +1022,7 @@ fn run_sliced(shared: &Shared, id: u64, job: &Job) {
     let (status, v) = {
         let mut st = lock_store(shared);
         {
-                let r = read_response(crate::dispatch(&mut st, &req));
+                let r = read_response(crate::http::dispatch(&mut st, &req));
                 // background batches change state outside a request: journal them too
                 crate::persist::after_request(&st, &req.method, &req.path);
                 r

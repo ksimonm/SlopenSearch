@@ -1,11 +1,12 @@
 use axum::response::Response;
 use serde_json::{json, Map, Value};
 
-use crate::errors::{json_response, method_not_allowed};
+use crate::errors::json_response;
+use crate::http::method_not_allowed;
 use crate::resp::glob_match;
-use crate::shared::{accept_class, default_expand, parse_expand_wildcards, sorted_index_names};
+use crate::http::shared::{accept_class, default_expand, parse_expand_wildcards, sorted_index_names};
 use crate::model::Store;
-use crate::Req;
+use crate::http::Req;
 
 pub fn handle_resolve_index(store: &mut Store, req: &Req, spec: &str) -> Response {
     if req.method != "GET" && req.method != "HEAD" {

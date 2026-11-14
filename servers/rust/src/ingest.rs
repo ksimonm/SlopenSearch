@@ -2,7 +2,7 @@ use crate::errors::{err_response, json_response, ApiError};
 use crate::ingest_script;
 use crate::resp::format_number;
 use crate::model::Store;
-use crate::Req;
+use crate::http::Req;
 use axum::response::Response;
 use regex::Regex;
 use serde_json::{json, Map, Value};

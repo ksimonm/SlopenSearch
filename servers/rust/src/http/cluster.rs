@@ -1,14 +1,15 @@
 use serde_json::{json, Map, Number, Value};
 
-use crate::errors::{err_response, json_response, method_not_allowed, ApiError};
+use crate::errors::{err_response, json_response, ApiError};
+use crate::http::method_not_allowed;
 use crate::resp::parse_simple_yaml;
-use crate::shared::{
+use crate::http::shared::{
     err_index_not_found_named, resolve_indices, settings_to_nested, sorted_index_names,
 };
 use crate::jsonv::to_f64;
 use crate::model::{CLUSTER_NAME, CLUSTER_UUID, Index, LUCENE_VERSION, NODE_ID, NODE_NAME, NODE_VERSION, Store, VERSION_CREATED, now_millis};
 use crate::settings::settings_value_string;
-use crate::Req;
+use crate::http::Req;
 use axum::response::Response;
 
 pub(crate) const NODE_HOST: &str = "127.0.0.1";

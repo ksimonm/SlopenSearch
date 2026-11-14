@@ -1,12 +1,12 @@
 use crate::aggs::eval_aggs_root;
-use crate::docs::{bm25_explanation, parse_q_param, search_alias_filter};
+use crate::http::docs::{bm25_explanation, parse_q_param, search_alias_filter};
 use crate::errors::{err_response, json_response};
 use crate::eval::{
     as_query_list, integer_of, mapping_field_def, resolve_alias_field, single_entry,
     wildcard_regex, QueryCtx,
 };
 use crate::fields::doc_values_for;
-use crate::shared;
+use crate::http::shared;
 use crate::analysis::basic::analyze;
 use crate::dates::parse_date;
 use crate::errors::ApiError;
@@ -14,7 +14,7 @@ use crate::jsonv::{field_value, to_f64, value_to_string};
 use crate::model::{Index, PitState, ScrollState, Store, now_millis};
 use crate::settings::{find_setting, settings_value_int};
 use crate::suggest::eval_suggest;
-use crate::Req;
+use crate::http::Req;
 use axum::response::Response;
 use serde_json::{json, Map, Value};
 use std::cmp::Ordering;
@@ -1615,7 +1615,7 @@ fn stored_paths(idx: &Index, patterns: &[String]) -> Vec<String> {
             };
             let matched = patterns.iter().any(|p| {
                 p == "*"
-                    || crate::shared::wildcard_match(p, &path)
+                    || crate::http::shared::wildcard_match(p, &path)
                     || (p == &path)
             });
             if def.get("store").and_then(|v| v.as_bool()) == Some(true) && matched {
@@ -4329,7 +4329,7 @@ fn pit_missing_context(id: &str) -> ApiError {
 
 pub fn handle_pit_create(store: &mut Store, req: &Req, name: &str) -> Response {
     if req.method != "POST" {
-        return crate::errors::method_not_allowed(req, &["POST"]);
+        return crate::http::method_not_allowed(req, &["POST"]);
     }
     let keep = match req.param("keep_alive") {
         Some(k) if !k.is_empty() => k.to_string(),
@@ -4441,7 +4441,7 @@ pub fn handle_pit_route(store: &mut Store, req: &Req, rest: &[String]) -> Respon
             .collect();
         return json_response(200, json!({"pits": pits}));
     }
-    crate::errors::method_not_allowed(req, &["GET", "DELETE"])
+    crate::http::method_not_allowed(req, &["GET", "DELETE"])
 }
 
 fn no_handler_pit() -> Response {
@@ -4735,7 +4735,7 @@ pub fn handle_scroll(store: &mut Store, req: &Req, rest: &[String]) -> Response 
         return json_response(status, json!({"succeeded": true, "num_freed": freed}));
     }
     if req.method != "POST" && req.method != "GET" {
-        return crate::errors::method_not_allowed(req, &["GET", "POST", "DELETE"]);
+        return crate::http::method_not_allowed(req, &["GET", "POST", "DELETE"]);
     }
     let body = req.json_body().unwrap_or_default();
     let id = rest
@@ -4839,7 +4839,7 @@ pub fn handle_scroll(store: &mut Store, req: &Req, rest: &[String]) -> Response 
 
 pub fn handle_search_shards(store: &mut Store, req: &Req, name: &str) -> Response {
     if req.method != "GET" && req.method != "POST" {
-        return crate::errors::method_not_allowed(req, &["GET", "POST"]);
+        return crate::http::method_not_allowed(req, &["GET", "POST"]);
     }
     let o = shared::parse_resolve_params(req, shared::ResolveOpts2::default());
     let names = match shared::resolve_spec2(store, name, &o) {
@@ -5019,7 +5019,7 @@ pub fn handle_search(store: &mut Store, req: &Req, name: &str) -> Response {
     } else {
         raw
     };
-    if let Some(k) = crate::duplicate_object_key(&eff) {
+    if let Some(k) = crate::jsonv::duplicate_object_key(&eff) {
         return err_response(ApiError::new(
             "json_parse_exception",
             &format!("Duplicate Object property \"{}\"", k),
@@ -5596,7 +5596,7 @@ pub fn handle_validate_query(store: &mut Store, req: &Req, name: &str) -> Respon
 
 pub fn handle_field_caps(store: &mut Store, req: &Req, name: &str) -> Response {
     if req.method != "GET" && req.method != "POST" {
-        return crate::errors::method_not_allowed(req, &["GET", "POST"]);
+        return crate::http::method_not_allowed(req, &["GET", "POST"]);
     }
     let o = shared::parse_resolve_params(req, shared::ResolveOpts2::default());
     let names = match shared::resolve_spec2(store, name, &o) {
@@ -5766,7 +5766,7 @@ pub fn handle_field_caps(store: &mut Store, req: &Req, name: &str) -> Response {
 
 pub fn handle_rank_eval(store: &mut Store, req: &Req, name: &str) -> Response {
     if req.method != "POST" && req.method != "GET" {
-        return crate::errors::method_not_allowed(req, &["POST", "GET"]);
+        return crate::http::method_not_allowed(req, &["POST", "GET"]);
     }
     let body = match req.json_body() {
         Ok(b) => Value::Object(b),

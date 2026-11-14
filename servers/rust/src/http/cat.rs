@@ -2,13 +2,13 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use serde_json::{json, Map, Value};
 
-use crate::cluster::{compute_index_health, format_utc_millis, worst_status, NODE_HOST};
+use crate::http::cluster::{compute_index_health, format_utc_millis, worst_status, NODE_HOST};
 use crate::errors::{err_response, no_handler, text_response, ApiError};
 use crate::resp::encode_string;
-use crate::shared::{parse_expand_wildcards, resolve_indices, resolve_spec2, ResolveOpts2};
+use crate::http::shared::{parse_expand_wildcards, resolve_indices, resolve_spec2, ResolveOpts2};
 use crate::jsonv::to_f64;
 use crate::model::{CLUSTER_NAME, LUCENE_VERSION, NODE_ID, NODE_NAME, NODE_VERSION, Store, now_millis};
-use crate::Req;
+use crate::http::Req;
 
 const CAT_ROOT_LISTING: &str = "=^.^=\n/_cat/allocation\n/_cat/segment_replication\n/_cat/segment_replication/{index}\n/_cat/shards\n/_cat/shards/{index}\n/_cat/cluster_manager\n/_cat/nodes\n/_cat/tasks\n/_cat/indices\n/_cat/indices/{index}\n/_cat/segments\n/_cat/segments/{index}\n/_cat/count\n/_cat/count/{index}\n/_cat/recovery\n/_cat/recovery/{index}\n/_cat/health\n/_cat/pending_tasks\n/_cat/aliases\n/_cat/aliases/{alias}\n/_cat/thread_pool\n/_cat/thread_pool/{thread_pools}\n/_cat/plugins\n/_cat/fielddata\n/_cat/fielddata/{fields}\n/_cat/nodeattrs\n/_cat/repositories\n/_cat/snapshots/{repository}\n/_cat/templates\n/_cat/pit_segments\n/_cat/pit_segments/{pit_id}\n";
 
@@ -496,7 +496,7 @@ fn format_patterns(v: Option<&Value>) -> String {
 
 pub fn handle_cat(store: &mut Store, req: &Req, rest: &[String]) -> Response {
     if req.method != "GET" && req.method != "HEAD" {
-        return crate::errors::method_not_allowed(req, &["GET"]);
+        return crate::http::method_not_allowed(req, &["GET"]);
     }
     if rest.is_empty() {
         return text_response(200, "text/plain; charset=UTF-8", CAT_ROOT_LISTING.to_string());
@@ -1221,7 +1221,7 @@ fn cat_plugins() -> (Vec<CatCol>, Vec<CatRow>) {
         col("component", &["c"], "component"),
         col("version", &["v"], "version"),
     ];
-    let rows = crate::nodes::PLUGIN_NAMES
+    let rows = crate::http::nodes::PLUGIN_NAMES
         .iter()
         .map(|name| {
             let mut values = Map::new();
@@ -1254,7 +1254,7 @@ fn cat_thread_pool(spec: &str) -> (Vec<CatCol>, Vec<CatRow>) {
         col_nd("type", &["t"], "pool type"),
         ncol_nd("queue_size", &["qs"], "queue size limit"),
     ];
-    let pools = crate::nodes::node_thread_pools();
+    let pools = crate::http::nodes::node_thread_pools();
     let mut names: Vec<&String> = pools.as_object().map(|m| m.keys().collect()).unwrap_or_default();
     names.sort();
     let mut rows: Vec<CatRow> = vec![];
@@ -1495,8 +1495,8 @@ fn cat_tasks(req: &Req) -> (Vec<CatCol>, Vec<CatRow>) {
     ];
     let actions = req.param_or("actions", "");
     let mut rows: Vec<CatRow> = vec![];
-    for t in crate::nodes::synthetic_tasks() {
-        if !crate::nodes::task_action_matches(&t, &actions) {
+    for t in crate::http::nodes::synthetic_tasks() {
+        if !crate::http::nodes::task_action_matches(&t, &actions) {
             continue;
         }
         let now = now_millis();

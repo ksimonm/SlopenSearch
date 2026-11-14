@@ -3,12 +3,12 @@
 use axum::response::Response;
 use serde_json::{json, Map, Value};
 
-use super::tokenizers::Tokenizer;
+use crate::analysis::tokenizers::Tokenizer;
 use crate::uchar::utf16_len;
-use super::{bad, specs_of, Analyzer, Chain, Ctx, Named, Spec, Stream, Token};
+use crate::analysis::{bad, specs_of, Analyzer, Chain, Ctx, Named, Spec, Stream, Token};
 use crate::errors::{err_response, json_response, ApiError};
 use crate::model::{Index, Store};
-use crate::Req;
+use crate::http::Req;
 
 fn err400(typ: &str, reason: &str) -> ApiError {
     ApiError::new(typ, reason, 400)
@@ -172,7 +172,7 @@ fn spec_list(v: Option<&Value>, kind: &str) -> Result<Vec<Spec>, ApiError> {
     let specs = specs_of(v);
     for s in &specs {
         if let Spec::Inline(m) = s {
-            if super::p_str(m, "type").map(|t| t.is_empty()).unwrap_or(true) {
+            if crate::analysis::p_str(m, "type").map(|t| t.is_empty()).unwrap_or(true) {
                 let enc = serde_json::to_string(&Value::Object(m.clone())).unwrap_or_default();
                 return Err(bad(&format!("Missing [type] setting for anonymous {}: {}", kind, enc)));
             }
@@ -183,12 +183,12 @@ fn spec_list(v: Option<&Value>, kind: &str) -> Result<Vec<Spec>, ApiError> {
 
 pub fn handle_analyze(store: &Store, req: &Req, name: &str) -> Response {
     if req.method != "POST" && req.method != "GET" {
-        return crate::errors::method_not_allowed(req, &["GET", "POST"]);
+        return crate::http::method_not_allowed(req, &["GET", "POST"]);
     }
     let idx: Option<&Index> = if name.is_empty() {
         None
     } else {
-        match crate::shared::resolve_read_target(store, name) {
+        match crate::http::shared::resolve_read_target(store, name) {
             Ok(i) => Some(i),
             Err(e) => return err_response(e),
         }
@@ -241,7 +241,7 @@ fn analyze(idx: Option<&Index>, req: &Req) -> Result<Value, ApiError> {
                 .caused_by(bad(&format!("Failed to parse value [{}] as only [true] or [false] are allowed.", shown))));
         }
     };
-    let attrs: Option<Vec<String>> = body.get("attributes").and_then(super::value_list);
+    let attrs: Option<Vec<String>> = body.get("attributes").and_then(crate::analysis::value_list);
     let texts: Vec<String> = match body.get("text") {
         Some(Value::String(s)) => vec![s.clone()],
         Some(Value::Array(a)) => a.iter().map(|v| crate::jsonv::value_to_string(v).unwrap_or_default()).collect(),
@@ -314,8 +314,8 @@ fn analyze(idx: Option<&Index>, req: &Req) -> Result<Value, ApiError> {
             Some(a) => a,
             // Interim until language analyzers are implemented: standard
             // tokenizer + lowercase, as the previous simple analysis did.
-            None if super::LANGUAGE_ANALYZERS.contains(&n.as_str()) => {
-                let mut a = super::builtin_analyzer("standard", &Map::new(), &ctx)?.unwrap();
+            None if crate::analysis::LANGUAGE_ANALYZERS.contains(&n.as_str()) => {
+                let mut a = crate::analysis::builtin_analyzer("standard", &Map::new(), &ctx)?.unwrap();
                 if n == "thai" {
                     a.chain.tokenizer = Named { name: "thai".to_string(), inner: Tokenizer::Thai };
                 }
@@ -326,7 +326,7 @@ fn analyze(idx: Option<&Index>, req: &Req) -> Result<Value, ApiError> {
         };
     } else if tokenizer_spec.is_some() || has_filters || has_cfs {
         let tok = match &tokenizer_spec {
-            Some(Spec::Inline(m)) if super::p_str(m, "type").map(|t| t.is_empty()).unwrap_or(true) => {
+            Some(Spec::Inline(m)) if crate::analysis::p_str(m, "type").map(|t| t.is_empty()).unwrap_or(true) => {
                 let enc = serde_json::to_string(&Value::Object(m.clone())).unwrap_or_default();
                 return Err(bad(&format!("Missing [type] setting for anonymous tokenizer: {}", enc)));
             }
@@ -354,7 +354,7 @@ fn analyze(idx: Option<&Index>, req: &Req) -> Result<Value, ApiError> {
     } else {
         analyzer = match ctx.analyzer("default")? {
             Some(a) if ctx.section("analyzer", "default").is_some() => a,
-            _ => super::builtin_analyzer("standard", &Map::new(), &ctx)?.unwrap(),
+            _ => crate::analysis::builtin_analyzer("standard", &Map::new(), &ctx)?.unwrap(),
         };
     }
 
@@ -380,7 +380,7 @@ fn analyze(idx: Option<&Index>, req: &Req) -> Result<Value, ApiError> {
         return Ok(json!({"detail": {"custom_analyzer": false, "analyzer": {"name": analyzer.name, "tokens": toks}}}));
     }
     let chain = &analyzer.chain;
-    let details: Vec<super::Detail> = texts.iter().map(|t| chain.run_detailed(t)).collect();
+    let details: Vec<crate::analysis::Detail> = texts.iter().map(|t| chain.run_detailed(t)).collect();
     let mut charfilters = Vec::new();
     for (ci, cf) in chain.char_filters.iter().enumerate() {
         let ft: Vec<Value> = details.iter().map(|d| json!(d.filtered_texts[ci])).collect();
@@ -416,7 +416,7 @@ fn field_analyzer(idx: &Index, ctx: &Ctx, field: &str) -> Result<Analyzer, ApiEr
         None => {
             return Ok(match ctx.analyzer("default")? {
                 Some(a) if ctx.section("analyzer", "default").is_some() => a,
-                _ => super::builtin_analyzer("standard", &Map::new(), ctx)?.unwrap(),
+                _ => crate::analysis::builtin_analyzer("standard", &Map::new(), ctx)?.unwrap(),
             })
         }
     };
@@ -426,11 +426,11 @@ fn field_analyzer(idx: &Index, ctx: &Ctx, field: &str) -> Result<Analyzer, ApiEr
             let name = def.get("analyzer").and_then(|v| v.as_str()).unwrap_or("default");
             let mut a = match ctx.analyzer(name)? {
                 Some(a) if name != "default" || ctx.section("analyzer", "default").is_some() => a,
-                _ => super::builtin_analyzer("standard", &Map::new(), ctx)?.unwrap(),
+                _ => crate::analysis::builtin_analyzer("standard", &Map::new(), ctx)?.unwrap(),
             };
             let explicit = ctx.section("analyzer", name).map(|d| d.contains_key("position_increment_gap")).unwrap_or(false);
             a.gap = match def.get("position_increment_gap") {
-                Some(v) => super::p_int(&{
+                Some(v) => crate::analysis::p_int(&{
                     let mut m = Map::new();
                     m.insert("g".to_string(), v.clone());
                     m
@@ -452,7 +452,7 @@ fn field_analyzer(idx: &Index, ctx: &Ctx, field: &str) -> Result<Analyzer, ApiEr
                     return Ok(a);
                 }
             }
-            Ok(super::builtin_analyzer("keyword", &Map::new(), ctx)?.unwrap())
+            Ok(crate::analysis::builtin_analyzer("keyword", &Map::new(), ctx)?.unwrap())
         }
         _ => Err(bad(&format!("Can't process field [{}], Analysis requests are only supported on tokenized fields", field))),
     }

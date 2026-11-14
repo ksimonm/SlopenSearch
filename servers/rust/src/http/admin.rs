@@ -2,8 +2,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::{json, Map, Value};
 
-use crate::errors::{err_response, json_response, method_not_allowed, ApiError};
-use crate::shared::{
+use crate::errors::{err_response, json_response, ApiError};
+use crate::http::method_not_allowed;
+use crate::http::shared::{
     canonical_body_settings, default_expand, is_known_index_setting,
     meta_read_block, normalize_alias_def, parse_resolve_params, settings_to_nested, settings_view,
     validate_alias_name, validate_index_name, validate_mapping_full, validate_setting_value,
@@ -11,8 +12,8 @@ use crate::shared::{
 };
 use crate::model::{Index, Store, now_millis, random_uuid};
 use crate::settings::settings_value_string;
-use crate::templates::{compose_for_index, merge_mappings_deep};
-use crate::Req;
+use crate::http::templates::{compose_for_index, merge_mappings_deep};
+use crate::http::Req;
 
 fn validate_normalizers(
     props: &Map<String, Value>,
@@ -151,7 +152,7 @@ pub fn create_index_internal(
         }
     }
     if let Some(settings_raw) = body.get("settings").and_then(|s| s.as_object()) {
-        crate::shared::flatten_settings(settings_raw, &mut canonical);
+        crate::http::shared::flatten_settings(settings_raw, &mut canonical);
     }
     let keys: Vec<String> = canonical.keys().cloned().collect();
     for k in keys {
@@ -203,8 +204,8 @@ pub fn create_index_internal(
         merge_mappings_deep(&mut merged_mappings, mappings_raw);
     }
     if let Some(props) = merged_mappings.get_mut("properties").and_then(|p| p.as_object_mut()) {
-        crate::shared::expand_mapping_properties(props)?;
-        crate::shared::apply_mapper_defaults(props);
+        crate::http::shared::expand_mapping_properties(props)?;
+        crate::http::shared::apply_mapper_defaults(props);
         let knn = canonical.get("index.knn").and_then(|v| v.as_str()) == Some("true");
         crate::knn::normalize_knn_props(props, knn)?;
     }
@@ -225,7 +226,7 @@ pub fn create_index_internal(
     }
     let field_limit = crate::settings::setting_int(&canonical, "mapping.total_fields.limit")
         .unwrap_or(1000);
-    if crate::shared::count_mapped_fields(&Value::Object(merged_mappings.clone())) as i64
+    if crate::http::shared::count_mapped_fields(&Value::Object(merged_mappings.clone())) as i64
         > field_limit
     {
         return Err(ApiError::bad(&format!(
@@ -235,7 +236,7 @@ pub fn create_index_internal(
     }
     let nested_limit = crate::settings::setting_int(&canonical, "mapping.nested_fields.limit")
         .unwrap_or(50);
-    if crate::shared::count_nested_fields(&Value::Object(merged_mappings.clone())) as i64
+    if crate::http::shared::count_nested_fields(&Value::Object(merged_mappings.clone())) as i64
         > nested_limit
     {
         return Err(ApiError::bad(&format!(
@@ -337,7 +338,7 @@ pub fn create_index_internal(
 
 pub fn get_index_meta(store: &mut Store, req: &Req, spec: &str) -> Response {
     let o = parse_resolve_params(req, ResolveOpts2::default());
-    let names = match crate::shared::resolve_spec2(store, spec, &o) {
+    let names = match crate::http::shared::resolve_spec2(store, spec, &o) {
         Ok(n) => n,
         Err(e) => return err_response(e),
     };
@@ -362,9 +363,9 @@ pub fn get_index_meta(store: &mut Store, req: &Req, spec: &str) -> Response {
             alias_defs.insert(an.clone(), def.clone());
         }
         let settings = if flat {
-            Value::Object(crate::shared::materialized_flat(idx))
+            Value::Object(crate::http::shared::materialized_flat(idx))
         } else {
-            settings_to_nested(&crate::shared::materialized_flat(idx))
+            settings_to_nested(&crate::http::shared::materialized_flat(idx))
         };
         let mut entry = Map::new();
         entry.insert("aliases".to_string(), Value::Object(alias_defs));
@@ -381,7 +382,7 @@ pub fn get_index_meta(store: &mut Store, req: &Req, spec: &str) -> Response {
 pub fn delete_indices(store: &mut Store, req: &Req, spec: &str) -> Response {
     let mut o = parse_resolve_params(req, ResolveOpts2::default());
     o.reject_alias = true;
-    let names = match crate::shared::resolve_spec2(store, spec, &o) {
+    let names = match crate::http::shared::resolve_spec2(store, spec, &o) {
         Ok(n) => n,
         Err(e) => return err_response(e),
     };
@@ -399,10 +400,10 @@ pub fn delete_indices(store: &mut Store, req: &Req, spec: &str) -> Response {
                 }
             }
         }
-        if let Some(err) = crate::shared::parse_index_block_error(idx, "metadata", 9, 403) {
+        if let Some(err) = crate::http::shared::parse_index_block_error(idx, "metadata", 9, 403) {
             return err_response(err);
         }
-        if let Some(err) = crate::shared::parse_index_block_error(idx, "read_only", 5, 403) {
+        if let Some(err) = crate::http::shared::parse_index_block_error(idx, "read_only", 5, 403) {
             return err_response(err);
         }
     }
@@ -475,7 +476,7 @@ fn field_mappings(idx: &Index, spec: &str, include_defaults: bool) -> Value {
     let patterns: Vec<String> = spec.split(',').map(|s| s.to_string()).collect();
     let mut result = Map::new();
     for (path, leaf_name, def) in leaves {
-        if !crate::shared::match_any_setting_pattern(&patterns, &path) {
+        if !crate::http::shared::match_any_setting_pattern(&patterns, &path) {
             continue;
         }
         let mut def = def;
@@ -520,7 +521,7 @@ fn normalize_mapping_view(v: &mut Value) {
 
 pub fn get_mapping_api(store: &mut Store, req: &Req, spec: &str, fields: &str) -> Response {
     let o = parse_resolve_params(req, ResolveOpts2::default());
-    let names = match crate::shared::resolve_spec2(store, spec, &o) {
+    let names = match crate::http::shared::resolve_spec2(store, spec, &o) {
         Ok(n) => n,
         Err(e) => return err_response(e),
     };
@@ -554,7 +555,7 @@ pub fn put_mapping_api(store: &mut Store, req: &Req, spec: &str) -> Response {
         Err(e) => return err_response(e),
     };
     let o = parse_resolve_params(req, ResolveOpts2::default());
-    let names = match crate::shared::resolve_spec2(store, spec, &o) {
+    let names = match crate::http::shared::resolve_spec2(store, spec, &o) {
         Ok(n) => n,
         Err(e) => return err_response(e),
     };
@@ -582,7 +583,7 @@ pub fn put_mapping_api(store: &mut Store, req: &Req, spec: &str) -> Response {
         }
     }
     if let Some(props) = body.get("properties").and_then(|p| p.as_object()) {
-        if let Err(e) = crate::shared::validate_mapping_full(&json!({"properties": props})) {
+        if let Err(e) = crate::http::shared::validate_mapping_full(&json!({"properties": props})) {
             if e.typ == "illegal_argument_exception" || e.reason.starts_with("Invalid [path]") {
                 return err_response(e);
             }
@@ -625,7 +626,7 @@ pub fn put_mapping_api(store: &mut Store, req: &Req, spec: &str) -> Response {
         }
         if let Some(props) = body.get("properties").and_then(|p| p.as_object()) {
             let mut expanded = props.clone();
-            if let Err(e) = crate::shared::expand_mapping_properties(&mut expanded) {
+            if let Err(e) = crate::http::shared::expand_mapping_properties(&mut expanded) {
                 return err_response(e);
             }
             let existing = idx
@@ -691,7 +692,7 @@ pub fn put_mapping_api(store: &mut Store, req: &Req, spec: &str) -> Response {
             .get_mut("properties")
             .and_then(|p| p.as_object_mut())
         {
-            crate::shared::apply_mapper_defaults(props);
+            crate::http::shared::apply_mapper_defaults(props);
             let knn = idx.settings.get("index.knn").and_then(|v| v.as_str()) == Some("true");
             if let Err(e) = crate::knn::normalize_knn_props(props, knn) {
                 return err_response(e);
@@ -699,7 +700,7 @@ pub fn put_mapping_api(store: &mut Store, req: &Req, spec: &str) -> Response {
         }
         let field_limit = crate::settings::setting_int(&idx.settings, "mapping.total_fields.limit")
             .unwrap_or(1000);
-        if crate::shared::count_mapped_fields(&idx.mappings) as i64 > field_limit {
+        if crate::http::shared::count_mapped_fields(&idx.mappings) as i64 > field_limit {
             return err_response(ApiError::bad(&format!(
                 "Limit of total fields [{}] has been exceeded",
                 field_limit
@@ -707,7 +708,7 @@ pub fn put_mapping_api(store: &mut Store, req: &Req, spec: &str) -> Response {
         }
         let nested_limit = crate::settings::setting_int(&idx.settings, "mapping.nested_fields.limit")
             .unwrap_or(50);
-        if crate::shared::count_nested_fields(&idx.mappings) as i64 > nested_limit {
+        if crate::http::shared::count_nested_fields(&idx.mappings) as i64 > nested_limit {
             return err_response(ApiError::bad(&format!(
                 "Limit of nested fields [{}] has been exceeded",
                 nested_limit
@@ -906,7 +907,7 @@ fn merge_mapping_checked(
 
 pub fn get_settings_api(store: &mut Store, req: &Req, spec: &str, filter: &str) -> Response {
     let o = parse_resolve_params(req, ResolveOpts2::default());
-    let names = match crate::shared::resolve_spec2(store, spec, &o) {
+    let names = match crate::http::shared::resolve_spec2(store, spec, &o) {
         Ok(n) => n,
         Err(e) => return err_response(e),
     };
@@ -924,7 +925,7 @@ pub fn get_settings_api(store: &mut Store, req: &Req, spec: &str, filter: &str) 
     }
     let mut out = Value::Object(out);
     if req.bool_param("human") {
-        crate::human::humanize_settings(&mut out);
+        crate::http::human::humanize_settings(&mut out);
     }
     json_response(200, out)
 }
@@ -944,7 +945,7 @@ pub fn put_settings_api(store: &mut Store, req: &Req, spec: &str) -> Response {
     if o.allow_no_indices.is_none() {
         o.allow_no_indices = Some(false);
     }
-    let names = match crate::shared::resolve_spec2(store, spec, &o) {
+    let names = match crate::http::shared::resolve_spec2(store, spec, &o) {
         Ok(n) => n,
         Err(e) => return err_response(e),
     };
@@ -953,7 +954,7 @@ pub fn put_settings_api(store: &mut Store, req: &Req, spec: &str) -> Response {
     for name in &names {
         let idx = &store.indices[name];
         if !only_blocks {
-            if let Some(err) = crate::shared::parse_index_block_error(idx, "read_only", 5, 403) {
+            if let Some(err) = crate::http::shared::parse_index_block_error(idx, "read_only", 5, 403) {
                 return err_response(err);
             }
             if let Some(err) = meta_read_block(idx) {
@@ -1063,7 +1064,7 @@ pub fn put_block_api(store: &mut Store, req: &Req, spec: &str, block: &str) -> R
         return err_response(ApiError::bad(&format!("No block found with name {}", block)));
     }
     let o = parse_resolve_params(req, ResolveOpts2::default());
-    let names = match crate::shared::resolve_spec2(store, spec, &o) {
+    let names = match crate::http::shared::resolve_spec2(store, spec, &o) {
         Ok(n) => n,
         Err(e) => return err_response(e),
     };
@@ -1097,7 +1098,7 @@ pub fn handle_close_open(store: &mut Store, req: &Req, spec: &str, close: bool) 
         expand.insert("closed".to_string(), true);
     }
     o = parse_resolve_params(req, o);
-    let names = match crate::shared::resolve_spec2(store, spec, &o) {
+    let names = match crate::http::shared::resolve_spec2(store, spec, &o) {
         Ok(n) => n,
         Err(e) => return err_response(e),
     };

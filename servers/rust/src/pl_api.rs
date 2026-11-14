@@ -26,7 +26,7 @@ use crate::painless::time::Zdt;
 use crate::painless::value::*;
 use crate::model::Index;
 use crate::model::Store;
-use crate::Req;
+use crate::http::Req;
 
 fn contexts() -> &'static HashMap<&'static str, CheckCtx> {
     static C: OnceLock<HashMap<&'static str, CheckCtx>> = OnceLock::new();

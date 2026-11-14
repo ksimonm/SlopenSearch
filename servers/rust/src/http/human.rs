@@ -101,7 +101,7 @@ fn humanize_index_settings(m: &mut Map<String, Value>, prefix: &str) {
             if let Some(ms) = millis_of(&val) {
                 m.insert(
                     format!("{}_string", k),
-                    Value::String(crate::cluster::format_utc_millis(ms)),
+                    Value::String(crate::http::cluster::format_utc_millis(ms)),
                 );
             }
         } else if full == "index.version.created" || full == "index.version.upgraded" {

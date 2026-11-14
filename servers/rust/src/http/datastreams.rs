@@ -1,13 +1,14 @@
 use axum::response::Response;
 use serde_json::{json, Map, Value};
 
-use crate::errors::{err_response, json_response, method_not_allowed, ApiError};
+use crate::errors::{err_response, json_response, ApiError};
+use crate::http::method_not_allowed;
 use crate::resp::glob_match;
-use crate::shared::err_index_not_found_named;
+use crate::http::shared::err_index_not_found_named;
 use crate::dates::parse_date_string;
 use crate::jsonv::field_value;
 use crate::model::{DataStreamInfo, Store};
-use crate::Req;
+use crate::http::Req;
 
 // ------------------------------------------------------- template matching
 
@@ -21,10 +22,10 @@ pub fn find_data_stream_template(store: &Store, name: &str) -> Option<(String, M
         if !tpl.contains_key("data_stream") {
             continue;
         }
-        if !crate::templates::template_matches(tpl, name) {
+        if !crate::http::templates::template_matches(tpl, name) {
             continue;
         }
-        let p = crate::templates::priority_of(tpl);
+        let p = crate::http::templates::priority_of(tpl);
         if p > best_prio || (p == best_prio && (best_name.is_empty() || *n < best_name)) {
             best_prio = p;
             best_name = n.clone();
@@ -89,14 +90,14 @@ pub fn create_data_stream(
 }
 
 pub fn create_backing_index(store: &mut Store, info: &DataStreamInfo) -> Result<String, ApiError> {
-    let composed = crate::templates::compose_for_index(store, &info.name);
+    let composed = crate::http::templates::compose_for_index(store, &info.name);
     let mut body = Map::new();
     let mut settings = composed.settings.clone();
     settings.insert("index.hidden".to_string(), json!("true"));
     body.insert("settings".to_string(), Value::Object(settings));
     let mut mappings = Map::new();
     if let Some(src) = composed.mappings.as_object() {
-        crate::templates::merge_mappings_deep(&mut mappings, src);
+        crate::http::templates::merge_mappings_deep(&mut mappings, src);
     }
     let props = mappings
         .entry("properties".to_string())
@@ -116,7 +117,7 @@ pub fn create_backing_index(store: &mut Store, info: &DataStreamInfo) -> Result<
         body.insert("aliases".to_string(), Value::Object(aliases));
     }
     let backing = backing_index_name(&info.name, info.generation);
-    crate::admin::create_index_internal(store, &backing, &body, true)?;
+    crate::http::admin::create_index_internal(store, &backing, &body, true)?;
     if let Some(idx) = store.indices.get_mut(&backing) {
         idx.data_stream = info.name.clone();
     }

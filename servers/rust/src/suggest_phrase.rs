@@ -928,7 +928,7 @@ fn collate_matches(idx: &Index, template: &Value, params: &Value, phrase: &str) 
         Value::String(s) => s.clone(),
         other => other.to_string(),
     };
-    let rendered = crate::render::render_mustache(&src, &Value::Object(p))
+    let rendered = crate::mustache::render_mustache(&src, &Value::Object(p))
         .map_err(|_| ApiError::bad("failed to render collate query"))?;
     let q: Value = serde_json::from_str(&rendered).map_err(|_| ApiError::bad("failed to parse collate query"))?;
     let Some(qm) = q.as_object() else { return Ok(false) };

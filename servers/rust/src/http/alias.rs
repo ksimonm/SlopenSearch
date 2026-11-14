@@ -3,12 +3,12 @@ use serde_json::{json, Map, Value};
 
 use crate::errors::{err_response, json_response, write_simple_error, ApiError};
 use crate::resp::glob_match;
-use crate::shared::{
+use crate::http::shared::{
     normalize_alias_def, parse_resolve_params, resolve_spec2, sorted_index_names,
     validate_alias_name, ResolveOpts2,
 };
 use crate::model::{Index, Store};
-use crate::Req;
+use crate::http::Req;
 
 // ------------------------------------------------------------- alias views
 
@@ -234,7 +234,7 @@ pub fn put_alias_api(store: &mut Store, req: &Req, index_spec: &str, alias_name:
         }
     }
     if names.is_empty() {
-        return err_response(crate::shared::err_index_not_found_named(index_spec));
+        return err_response(crate::http::shared::err_index_not_found_named(index_spec));
     }
     if let Some(e) = alias_hidden_conflict(store, alias_name, &def) {
         return err_response(e);
@@ -442,7 +442,7 @@ pub fn post_aliases(store: &mut Store, req: &Req) -> Response {
             }
         }
         if matched.is_empty() && require_existing {
-            return Err(crate::shared::err_index_not_found_named(name));
+            return Err(crate::http::shared::err_index_not_found_named(name));
         }
         Ok(matched)
     };
@@ -593,7 +593,7 @@ pub fn post_aliases(store: &mut Store, req: &Req) -> Response {
                             in_
                         )));
                     }
-                    return err_response(crate::shared::err_index_not_found_named(in_));
+                    return err_response(crate::http::shared::err_index_not_found_named(in_));
                 }
                 if !remove_indexes.is_empty() {
                     applied = true;

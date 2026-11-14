@@ -3,12 +3,12 @@ use serde_json::{json, Map, Value};
 
 use crate::errors::{err_response, json_response, ApiError};
 use crate::search::{eval_doc, precompute_doc_values};
-use crate::shared::{
+use crate::http::shared::{
     parse_resolve_params, resolve_read_target, resolve_write_target, ResolveOpts2,
 };
 use crate::analysis::basic::analyze_with;
 use crate::model::{Index, Store};
-use crate::Req;
+use crate::http::Req;
 
 // ----------------------------------------------------------------- helpers
 
@@ -163,7 +163,7 @@ fn parse_index_body(req: &Req) -> Result<Map<String, Value>, ApiError> {
     match serde_json::from_str::<Value>(&raw) {
         Ok(Value::Object(m)) => {
             let mut v = Value::Object(m);
-            crate::fix_exponent_literals(&raw, &mut v);
+            crate::jsonv::fix_exponent_literals(&raw, &mut v);
             match v {
                 Value::Object(m) => Ok(m),
                 _ => Ok(Map::new()),
@@ -427,7 +427,7 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
         Ok(t) => t.name.clone(),
         Err(e) => {
             if e.typ == "index_not_found_exception" && !name.contains('*') && !name.contains(',') {
-                if crate::admin::create_index_internal(store, name, &Map::new(), false).is_err() {
+                if crate::http::admin::create_index_internal(store, name, &Map::new(), false).is_err() {
                     return err_response(e);
                 }
                 name.to_string()
@@ -498,9 +498,9 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
             ));
         }
         if idx.closed {
-            return err_response(crate::shared::err_index_closed(idx));
+            return err_response(crate::http::shared::err_index_closed(idx));
         }
-        if let Some(e) = crate::shared::write_block_error(idx) {
+        if let Some(e) = crate::http::shared::write_block_error(idx) {
             return err_response(e);
         }
         if let Some(w) = req.param("wait_for_active_shards") {
@@ -574,7 +574,7 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
         pipeline_routing = r.to_string();
     }
     if !store.indices.contains_key(&target) {
-        let _ = crate::admin::create_index_internal(store, &target, &Map::new(), false);
+        let _ = crate::http::admin::create_index_internal(store, &target, &Map::new(), false);
     }
     if let Some(fpname) = crate::ingest::final_ingest_pipeline(store, &target) {
         pipeline_applied = true;
@@ -705,7 +705,7 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
     }
     let field_limit = crate::settings::setting_int(&idx.settings, "mapping.total_fields.limit")
         .unwrap_or(1000);
-    if crate::shared::count_mapped_fields(&idx.mappings) as i64 > field_limit {
+    if crate::http::shared::count_mapped_fields(&idx.mappings) as i64 > field_limit {
         return err_response(ApiError::bad(&format!(
             "Limit of total fields [{}] has been exceeded",
             field_limit
@@ -721,7 +721,7 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
     }
     let nested_limit = crate::settings::setting_int(&idx.settings, "mapping.nested_objects.limit")
         .unwrap_or(10000);
-    if crate::shared::count_nested_instances(&idx.mappings, &Value::Object(body.clone())) as i64
+    if crate::http::shared::count_nested_instances(&idx.mappings, &Value::Object(body.clone())) as i64
         > nested_limit
     {
         return err_response(ApiError::new(
@@ -912,7 +912,7 @@ fn stored_fields_json(idx: &Index, doc: &Value, spec: &str) -> Map<String, Value
             if def.get("store").and_then(|v| v.as_bool()) == Some(true)
                 && patterns
                     .iter()
-                    .any(|p| p == "*" || p == &path || crate::shared::wildcard_match(p, &path))
+                    .any(|p| p == "*" || p == &path || crate::http::shared::wildcard_match(p, &path))
             {
                 out.push(path.clone());
             }
@@ -969,9 +969,9 @@ pub fn handle_get_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> Res
     };
     let idx = &store.indices[&target];
     if idx.closed {
-        return err_response(crate::shared::err_index_closed(idx));
+        return err_response(crate::http::shared::err_index_closed(idx));
     }
-    if let Some(e) = crate::shared::read_block_error(idx) {
+    if let Some(e) = crate::http::shared::read_block_error(idx) {
         return err_response(e);
     }
     let get_routing = req.param("routing").unwrap_or("");
@@ -1104,9 +1104,9 @@ pub fn handle_get_source(store: &mut Store, req: &Req, name: &str, id: &str) -> 
     };
     let idx = &store.indices[&target];
     if idx.closed {
-        return err_response(crate::shared::err_index_closed(idx));
+        return err_response(crate::http::shared::err_index_closed(idx));
     }
-    if let Some(e) = crate::shared::read_block_error(idx) {
+    if let Some(e) = crate::http::shared::read_block_error(idx) {
         return err_response(e);
     }
     let realtime = req.param("realtime").map(|v| v != "false").unwrap_or(true);
@@ -1165,9 +1165,9 @@ pub fn handle_delete_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
     };
     let idx = store.indices.get_mut(&target).unwrap();
     if idx.closed {
-        return err_response(crate::shared::err_index_closed(idx));
+        return err_response(crate::http::shared::err_index_closed(idx));
     }
-    if let Some(e) = crate::shared::write_block_error(idx) {
+    if let Some(e) = crate::http::shared::write_block_error(idx) {
         return err_response(e);
     }
     if routing_required(idx) && req.param("routing").unwrap_or("").is_empty() {
@@ -1504,7 +1504,7 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
         Ok(t) => t.name.clone(),
         Err(e) => {
             if e.typ == "index_not_found_exception" && !name.contains('*') && !name.contains(',') {
-                if crate::admin::create_index_internal(store, name, &Map::new(), false).is_err() {
+                if crate::http::admin::create_index_internal(store, name, &Map::new(), false).is_err() {
                     return err_response(e);
                 }
                 name.to_string()
@@ -1550,12 +1550,12 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
     };
     let idx = match store.indices.get_mut(&target) {
         Some(i) => i,
-        None => return err_response(crate::shared::err_index_not_found_named(&target)),
+        None => return err_response(crate::http::shared::err_index_not_found_named(&target)),
     };
     if idx.closed {
-        return err_response(crate::shared::err_index_closed(idx));
+        return err_response(crate::http::shared::err_index_closed(idx));
     }
-    if let Some(e) = crate::shared::write_block_error(idx) {
+    if let Some(e) = crate::http::shared::write_block_error(idx) {
         return err_response(e);
     }
     if routing_required(idx) && req.param("routing").unwrap_or("").is_empty() {
@@ -2079,7 +2079,7 @@ pub fn handle_count(store: &mut Store, req: &Req, name: &str) -> Response {
 
 fn handle_count_visible(store: &mut Store, req: &Req, name: &str) -> Response {
     if req.method != "POST" && req.method != "GET" {
-        return crate::errors::method_not_allowed(req, &["POST", "GET"]);
+        return crate::http::method_not_allowed(req, &["POST", "GET"]);
     }
     let mut body = match req.json_body() {
         Ok(b) => b,
@@ -2114,7 +2114,7 @@ fn handle_count_visible(store: &mut Store, req: &Req, name: &str) -> Response {
             ..Default::default()
         },
     );
-    let names = match crate::shared::resolve_spec2(store, name, &o) {
+    let names = match crate::http::shared::resolve_spec2(store, name, &o) {
         Ok(n) => n,
         Err(e) => return err_response(e),
     };
@@ -2314,7 +2314,7 @@ fn check_meta_seq(meta: &Option<Map<String, Value>>, idx: &Index, id: &str) -> O
 
 pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
     if req.method != "POST" && req.method != "PUT" {
-        return crate::errors::method_not_allowed(req, &["POST", "PUT"]);
+        return crate::http::method_not_allowed(req, &["POST", "PUT"]);
     }
     let raw = String::from_utf8_lossy(&req.body).to_string();
     if raw.is_empty() {
@@ -2619,11 +2619,11 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
                     "delete",
                     &idx_name,
                     &doc_id,
-                    &crate::shared::err_index_closed(idx),
+                    &crate::http::shared::err_index_closed(idx),
                 ));
                 continue;
             }
-            if let Some(e) = crate::shared::write_block_error(idx) {
+            if let Some(e) = crate::http::shared::write_block_error(idx) {
                 has_errors = true;
                 items.push(bulk_err_api("delete", &idx_name, &doc_id, &e));
                 continue;
@@ -2706,10 +2706,10 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
             let idx = store.indices.get_mut(&target).unwrap();
             if idx.closed {
                 has_errors = true;
-                items.push(bulk_err_api("update", &idx_name, &doc_id, &crate::shared::err_index_closed(idx)));
+                items.push(bulk_err_api("update", &idx_name, &doc_id, &crate::http::shared::err_index_closed(idx)));
                 continue;
             }
-            if let Some(e) = crate::shared::write_block_error(idx) {
+            if let Some(e) = crate::http::shared::write_block_error(idx) {
                 has_errors = true;
                 items.push(bulk_err_api("update", &idx_name, &doc_id, &e));
                 continue;
@@ -2876,7 +2876,7 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
             Ok(t) => t.name.clone(),
             Err(e) => {
                 if e.typ == "index_not_found_exception" && !idx_name.contains('*') && !idx_name.contains(',') {
-                    if crate::admin::create_index_internal(store, &idx_name, &Map::new(), false).is_ok() {
+                    if crate::http::admin::create_index_internal(store, &idx_name, &Map::new(), false).is_ok() {
                         idx_name.clone()
                     } else {
                         has_errors = true;
@@ -2898,11 +2898,11 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
                     &op,
                     &idx_name,
                     &doc_id,
-                    &crate::shared::err_index_closed(idx),
+                    &crate::http::shared::err_index_closed(idx),
                 ));
                 continue;
             }
-            if let Some(e) = crate::shared::write_block_error(idx) {
+            if let Some(e) = crate::http::shared::write_block_error(idx) {
                 has_errors = true;
                 items.push(bulk_err_api(&op, &idx_name, &doc_id, &e));
                 continue;
@@ -3005,7 +3005,7 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
             doc_id = pipeline_id;
         }
         if !store.indices.contains_key(&target) {
-            let _ = crate::admin::create_index_internal(store, &target, &Map::new(), false);
+            let _ = crate::http::admin::create_index_internal(store, &target, &Map::new(), false);
         }
         if let Some(fpname) = crate::ingest::final_ingest_pipeline(store, &target) {
             let mut fm = Map::new();
@@ -3355,7 +3355,7 @@ fn termvectors_one(
     let idx = store
         .indices
         .get(index_name)
-        .ok_or_else(|| crate::shared::err_index_not_found_named(index_name))?;
+        .ok_or_else(|| crate::http::shared::err_index_not_found_named(index_name))?;
     let existing = id.and_then(|i| idx.docs.get(i).cloned());
     if let Some(i) = id {
         if existing.is_none() {
@@ -3548,7 +3548,7 @@ pub fn handle_explain(store: &mut Store, req: &Req, name: &str, id: &str) -> Res
     };
     let idx = match store.indices.get(name) {
         Some(i) => i,
-        None => return err_response(crate::shared::err_index_not_found_named(name)),
+        None => return err_response(crate::http::shared::err_index_not_found_named(name)),
     };
     let Some(doc) = idx.docs.get(id).cloned() else {
         return json_response(404, json!({"_index": name, "_id": id, "matched": false}));
@@ -3804,10 +3804,10 @@ fn custom_analyzer_tokens(idx: &Index, analyzer: &str, text: &str) -> Option<Vec
 
 pub fn handle_analyze(store: &mut Store, req: &Req, name: &str) -> Response {
     if req.method != "POST" && req.method != "GET" {
-        return crate::errors::method_not_allowed(req, &["POST", "GET"]);
+        return crate::http::method_not_allowed(req, &["POST", "GET"]);
     }
     if !name.is_empty() && !store.indices.contains_key(name) {
-        return err_response(crate::shared::err_index_not_found_named(name));
+        return err_response(crate::http::shared::err_index_not_found_named(name));
     }
     let body = match req.json_body() {
         Ok(b) => b,
@@ -3927,7 +3927,7 @@ fn byq_matched(store: &Store, target: &str, req: &Req, body: &Map<String, Value>
 
 pub fn handle_delete_by_query(store: &mut Store, req: &Req, name: &str) -> Response {
     if req.method != "POST" {
-        return crate::errors::method_not_allowed(req, &["POST"]);
+        return crate::http::method_not_allowed(req, &["POST"]);
     }
     if let Some(v) = req.param("conflicts") {
         if v != "proceed" && v != "abort" {
@@ -3987,7 +3987,7 @@ pub fn handle_delete_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
 
 pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Response {
     if req.method != "POST" {
-        return crate::errors::method_not_allowed(req, &["POST"]);
+        return crate::http::method_not_allowed(req, &["POST"]);
     }
     let target = match resolve_write_target(store, name) {
         Ok(t) => t.name.clone(),

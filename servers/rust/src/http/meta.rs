@@ -1,6 +1,6 @@
 use crate::errors::{json_response, no_handler};
 use crate::model::Store;
-use crate::Req;
+use crate::http::Req;
 use axum::response::Response;
 use serde_json::{json, Value};
 
@@ -13,18 +13,18 @@ pub fn route_server_endpoints(store: &mut Store, req: &Req, segs: &[String]) -> 
             return Some(crate::ingest::handle_ingest(store, req, &segs[1..]));
         }
         "_scripts" => {
-            return Some(crate::scripts::handle_scripts(store, req, &segs[1..]));
+            return Some(crate::http::scripts::handle_scripts(store, req, &segs[1..]));
         }
         "_script_context" if segs.len() == 1 => {
             return Some(crate::errors::json_response(
                 200,
-                crate::script_meta::script_context_listing(),
+                crate::http::script_meta::script_context_listing(),
             ));
         }
         "_script_language" if segs.len() == 1 => {
             return Some(crate::errors::json_response(
                 200,
-                crate::script_meta::script_language_listing(),
+                crate::http::script_meta::script_language_listing(),
             ));
         }
         "_cluster" => {
@@ -40,7 +40,7 @@ pub fn route_server_endpoints(store: &mut Store, req: &Req, segs: &[String]) -> 
                     } else {
                         ""
                     };
-                    Some(crate::cluster::handle_health(store, req, spec))
+                    Some(crate::http::cluster::handle_health(store, req, spec))
                 }
                 "state" => {
                     let (metrics, spec) = match segs.len() {
@@ -49,7 +49,7 @@ pub fn route_server_endpoints(store: &mut Store, req: &Req, segs: &[String]) -> 
                         _ if segs.len() > 4 => return Some(no_handler(&req.method, &req.path)),
                         _ => ("", ""),
                     };
-                    Some(crate::cluster::handle_cluster_state(
+                    Some(crate::http::cluster::handle_cluster_state(
                         store, req, metrics, spec,
                     ))
                 }
@@ -63,73 +63,73 @@ pub fn route_server_endpoints(store: &mut Store, req: &Req, segs: &[String]) -> 
                     } else {
                         String::new()
                     };
-                    Some(crate::cluster::handle_cluster_stats(store, req, &spec))
+                    Some(crate::http::cluster::handle_cluster_stats(store, req, &spec))
                 }
                 "settings" => {
                     if segs.len() > 2 {
                         return Some(no_handler(&req.method, &req.path));
                     }
-                    Some(crate::cluster::handle_cluster_settings(store, req))
+                    Some(crate::http::cluster::handle_cluster_settings(store, req))
                 }
                 "allocation" => {
                     if segs.len() == 3 && segs[2] == "explain" {
-                        Some(crate::cluster::handle_allocation_explain(store, req))
+                        Some(crate::http::cluster::handle_allocation_explain(store, req))
                     } else {
                         Some(no_handler(&req.method, &req.path))
                     }
                 }
-                "pending_tasks" => Some(crate::cluster::handle_pending_tasks(store, req)),
+                "pending_tasks" => Some(crate::http::cluster::handle_pending_tasks(store, req)),
                 "voting_config_exclusions" => {
                     Some(json_response(200, Value::Object(serde_json::Map::new())))
                 }
                 "reroute" => Some(json_response(
                     200,
-                    json!({"acknowledged": true, "state": crate::cluster::snapshot_state(store)}),
+                    json!({"acknowledged": true, "state": crate::http::cluster::snapshot_state(store)}),
                 )),
                 _ => Some(no_handler(&req.method, &req.path)),
             };
             return resp;
         }
-        "_nodes" => return Some(crate::nodes::handle_nodes(store, req, &segs[1..])),
-        "_tasks" => return Some(crate::nodes::handle_tasks(store, req, &segs[1..])),
+        "_nodes" => return Some(crate::http::nodes::handle_nodes(store, req, &segs[1..])),
+        "_tasks" => return Some(crate::http::nodes::handle_tasks(store, req, &segs[1..])),
         "_remote" => {
             return Some(if segs.len() == 2 && segs[1] == "info" {
-                crate::cluster::handle_remote_info(store, req)
+                crate::http::cluster::handle_remote_info(store, req)
             } else {
                 no_handler(&req.method, &req.path)
             });
         }
-        "_template" => return Some(crate::templates::handle_legacy_template(store, req, &segs[1..])),
+        "_template" => return Some(crate::http::templates::handle_legacy_template(store, req, &segs[1..])),
         "_index_template" => {
             return Some(
                 if segs.len() >= 2 && (segs[1] == "_simulate" || segs[1] == "_simulate_index") {
-                    crate::templates::handle_index_template_simulate(store, req, &segs[1..])
+                    crate::http::templates::handle_index_template_simulate(store, req, &segs[1..])
                 } else {
-                    crate::templates::handle_composable_template(store, req, &segs[1..])
+                    crate::http::templates::handle_composable_template(store, req, &segs[1..])
                 },
             );
         }
         "_component_template" => {
-            return Some(crate::templates::handle_component_template(store, req, &segs[1..]));
+            return Some(crate::http::templates::handle_component_template(store, req, &segs[1..]));
         }
         "_data_stream" => {
             return Some(match segs.len() {
-                1 => crate::datastreams::handle_data_stream(store, req, "*"),
-                2 => crate::datastreams::handle_data_stream(store, req, &segs[1]),
+                1 => crate::http::datastreams::handle_data_stream(store, req, "*"),
+                2 => crate::http::datastreams::handle_data_stream(store, req, &segs[1]),
                 3 if segs[2] == "_stats" => {
-                    crate::datastreams::handle_data_stream_stats(store, req, &segs[1])
+                    crate::http::datastreams::handle_data_stream_stats(store, req, &segs[1])
                 }
                 _ => no_handler(&req.method, &req.path),
             });
         }
         "_resolve" => {
             return Some(if segs.len() == 3 && segs[1] == "index" {
-                crate::resolve_index::handle_resolve_index(store, req, &segs[2])
+                crate::http::resolve_index::handle_resolve_index(store, req, &segs[2])
             } else {
                 no_handler(&req.method, &req.path)
             });
         }
-        "_reindex" => return Some(crate::reindex::handle_reindex(store, req)),
+        "_reindex" => return Some(crate::http::reindex::handle_reindex(store, req)),
         _ => None,
     }
 }

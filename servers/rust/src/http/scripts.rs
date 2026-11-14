@@ -1,6 +1,6 @@
 use crate::errors::{json_response, ApiError};
 use crate::model::Store;
-use crate::Req;
+use crate::http::Req;
 use axum::response::Response;
 use serde_json::{json, Map, Value};
 
@@ -83,7 +83,7 @@ fn handle_scripts_inner(store: &mut Store, req: &Req, segs: &[String]) -> Respon
         return json_response(200, json!({}));
     }
     if segs.len() >= 2 && segs[1] == "_execute" {
-        return crate::painless_exec::handle_execute(store, req, &segs[0]);
+        return crate::http::painless_exec::handle_execute(store, req, &segs[0]);
     }
     let id = &segs[0];
     let context = if segs.len() >= 2 {

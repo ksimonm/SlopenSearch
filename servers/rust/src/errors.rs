@@ -192,33 +192,6 @@ pub fn write_simple_error(status: u16, msg: &str) -> Response {
     json_response(status, json!({"error": msg, "status": status}))
 }
 
-pub fn method_not_allowed(req: &crate::Req, allowed: &[&str]) -> Response {
-    let allow = if allowed.is_empty() {
-        "GET,PUT,POST,DELETE,HEAD,OPTIONS".to_string()
-    } else {
-        allowed.join(",")
-    };
-    if req.method == "OPTIONS" {
-        // RestController answers OPTIONS with the allowed methods and no body
-        let mut resp = text_response(200, "text/plain; charset=UTF-8", String::new());
-        resp.headers_mut().insert(header::ALLOW, allow.parse().unwrap());
-        return resp;
-    }
-    let v = json!({
-        "error": format!(
-            "Incorrect HTTP method for uri [{}] and method [{}], allowed: [{}]",
-            req.path, req.method, allow.replace(',', ", ")
-        ),
-        "status": 405,
-    });
-    let mut resp = json_response(405, v);
-    resp.headers_mut().insert(
-        header::ALLOW,
-        allow.parse().unwrap(),
-    );
-    resp
-}
-
 pub fn no_handler(method: &str, path: &str) -> Response {
     json_response(
         400,

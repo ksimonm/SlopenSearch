@@ -1,12 +1,13 @@
 use axum::response::Response;
 use serde_json::{json, Map, Value};
 
-use crate::errors::{err_response, json_response, method_not_allowed, ApiError};
-use crate::shared::{resolve_spec2, validate_index_name, ResolveOpts2};
+use crate::errors::{err_response, json_response, ApiError};
+use crate::http::method_not_allowed;
+use crate::http::shared::{resolve_spec2, validate_index_name, ResolveOpts2};
 use crate::mapping::{ensure_properties, merge_mapping};
 use crate::model::Store;
 use crate::settings::settings_value_int;
-use crate::Req;
+use crate::http::Req;
 
 struct ReindexFailure {
     index: String,
@@ -333,7 +334,7 @@ pub fn handle_reindex(store: &mut Store, req: &Req) -> Response {
                 );
                 continue;
             }
-            match crate::admin::create_index_internal(store, &dest_name, &Map::new(), false) {
+            match crate::http::admin::create_index_internal(store, &dest_name, &Map::new(), false) {
                 Ok(()) => {
                     dest_created = true;
                     dest_uuid = store.indices[&dest_name].uuid.clone();

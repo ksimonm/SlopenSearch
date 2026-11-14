@@ -1,8 +1,9 @@
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
-use crate::cluster::{format_utc_millis, node_attributes, node_roles, NODE_HOST};
-use crate::errors::{err_response, json_response, method_not_allowed, ApiError};
+use crate::http::cluster::{format_utc_millis, node_attributes, node_roles, NODE_HOST};
+use crate::errors::{err_response, json_response, ApiError};
+use crate::http::method_not_allowed;
 
 fn bare_no_handler(req: &Req) -> Response {
     json_response(
@@ -13,9 +14,9 @@ fn bare_no_handler(req: &Req) -> Response {
     )
 }
 use crate::resp::glob_match;
-use crate::shared::resolve_indices;
+use crate::http::shared::resolve_indices;
 use crate::model::{CLUSTER_NAME, NODE_ID, NODE_NAME, NODE_VERSION, Store, now_millis};
-use crate::Req;
+use crate::http::Req;
 use axum::response::Response;
 
 const NODE_TRANSPORT: &str = "127.0.0.1:9300";
@@ -818,7 +819,7 @@ pub(crate) fn synthetic_tasks() -> Vec<Map<String, Value>> {
         json!("cluster:monitor/tasks/lists[n]"),
     );
     let mut out = vec![parent, child];
-    out.extend(crate::tasks_async::running_tasks());
+    out.extend(crate::http::tasks_async::running_tasks());
     out
 }
 
