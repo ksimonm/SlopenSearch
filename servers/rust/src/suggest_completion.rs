@@ -941,19 +941,13 @@ fn fuzzy_match(q: &[u32], key: &[u32], f: &Fuzzy) -> Option<f32> {
         return None;
     }
     let row = prefix_distances(&q[p..], &key[p..], f.transpositions);
-    let mut best: Option<usize> = None;
-    for (j, d) in row.iter().enumerate() {
-        if *d <= edits {
-            let len = p + j;
-            if len == 0 {
-                continue;
-            }
-            let path = &key[..len - 1];
-            let common = q.iter().zip(path.iter()).take_while(|(a, b)| a == b).count();
-            best = Some(best.map_or(common, |b: usize| b.max(common)));
-        }
+    if !row.iter().any(|d| *d <= edits) {
+        return None;
     }
-    best.map(|b| b as f32)
+    // FuzzyCompletionWeight boosts by the exact prefix shared with the
+    // query; the last letter of the query never counts.
+    let common = q.iter().zip(key.iter()).take_while(|(a, b)| a == b).count();
+    Some(common.min(q.len().saturating_sub(1)) as f32)
 }
 
 /// Lucene RegExp syntax (default flags) to a Rust regex.

@@ -127,13 +127,11 @@ enum Mode {
 }
 
 struct Generator {
-    field: String,
     stats: FieldStats,
     mode: Mode,
     size: usize,
     accuracy: f32,
     max_edits: usize,
-    max_inspections: usize,
     max_term_freq: f32,
     prefix_length: usize,
     min_word_length: usize,
@@ -393,7 +391,7 @@ impl<'a> WordScorer<'a> {
     }
     fn score(&self, path: &[Cand], sets: &[CandSet], at: usize, gram: usize) -> f64 {
         let ch = self.channel(&path[at]);
-        let _ = &sets[at].original;
+        debug_assert!(at < sets.len());
         if at == 0 || gram == 1 {
             (ch * self.unigram(&path[at])).log10()
         } else if at == 1 || gram == 2 {
@@ -705,13 +703,11 @@ fn build_generator(
     let mode = parse_mode(spec.get("suggest_mode").and_then(|v| v.as_str()).unwrap_or("missing"))?;
     let gnum = |keys: &[&str]| keys.iter().find_map(|k| num(spec, k));
     Ok(Some(Generator {
-        field,
         stats,
         mode,
         size: gnum(&["size"]).unwrap_or(5.0) as usize,
         accuracy: gnum(&["accuracy"]).unwrap_or(0.5) as f32,
         max_edits: gnum(&["max_edits"]).unwrap_or(2.0) as usize,
-        max_inspections: gnum(&["max_inspections"]).unwrap_or(5.0) as usize,
         max_term_freq: gnum(&["max_term_freq"]).unwrap_or(0.01) as f32,
         prefix_length: gnum(&["prefix_length", "prefix_len"]).unwrap_or(1.0) as usize,
         min_word_length: gnum(&["min_word_length", "min_word_len"]).unwrap_or(4.0) as usize,
@@ -818,13 +814,11 @@ pub fn phrase_suggest(
         // candidate sets from the analyzed text
         let stream = analyzer.run(&text);
         let mut sets: Vec<CandSet> = vec![];
-        let mut any_unigram = false;
         let mut prev_pos: Option<usize> = None;
         for t in &stream.tokens {
             if require_unigram && t.typ == "shingle" {
                 continue;
             }
-            any_unigram = true;
             if prev_pos == Some(t.pos) && t.typ == "SYNONYM" {
                 if let Some(cur) = sets.last_mut() {
                     let st = gens[0].term_stats(&t.term);
@@ -838,14 +832,11 @@ pub fn phrase_suggest(
             let st = gens[0].term_stats(&t.term);
             sets.push(CandSet { original: gens[0].create(&t.term, st, 1.0, true), cands: vec![] });
         }
-        let _ = any_unigram;
         if sets.is_empty() || sets.len() >= token_limit {
             continue;
         }
         for set in sets.iter_mut() {
             for g in &gens {
-                let _ = &g.field;
-                let _ = g.max_inspections;
                 g.draw(set);
             }
             if set.cands.len() > shard_size {
