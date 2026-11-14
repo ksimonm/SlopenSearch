@@ -157,7 +157,7 @@ func (h MultiHit) SortValue(field string, desc bool, mode string) (any, bool) {
 			if len(list) == 1 {
 				if s, ok := jsonv.ScalarString(list[0]); ok {
 					if ip := net.ParseIP(s); ip != nil {
-						return IpSortKey{key: string(ip.To16()), Out: CanonicalIP(s)}, true
+						return IPSortKey{key: string(ip.To16()), Out: CanonicalIP(s)}, true
 					}
 				}
 			}
@@ -189,14 +189,14 @@ func (h MultiHit) SortValue(field string, desc bool, mode string) (any, bool) {
 	return ReduceSortValues(list, desc, mode), true
 }
 
-type IpSortKey struct {
+type IPSortKey struct {
 	key string
 	Out string
 }
 
 func CompareSortValues(a, b any) int {
-	if aip, ok := a.(IpSortKey); ok {
-		if bip, ok2 := b.(IpSortKey); ok2 {
+	if aip, ok := a.(IPSortKey); ok {
+		if bip, ok2 := b.(IPSortKey); ok2 {
 			return strings.Compare(aip.key, bip.key)
 		}
 	}

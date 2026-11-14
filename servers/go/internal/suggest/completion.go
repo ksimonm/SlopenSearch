@@ -7,7 +7,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"slopensearch/internal/aggs"
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
@@ -119,27 +118,6 @@ func IsSuggestOnly(body map[string]any) bool {
 		}
 	}
 	return true
-}
-
-// OrderSearchResponse renders the top-level search response keys in the
-// order OpenSearch writes them.
-func OrderSearchResponse(resp map[string]any) ojson.Object {
-	first := []string{"_scroll_id", "took", "timed_out", "terminated_early", "_shards", "hits",
-		"aggregations", "suggest", "profile"}
-	out := ojson.Object{}
-	seen := map[string]bool{}
-	for _, k := range first {
-		if v, ok := resp[k]; ok {
-			out = append(out, ojson.KV{k, v})
-			seen[k] = true
-		}
-	}
-	for _, k := range mapping.SortedAnyKeys(resp) {
-		if !seen[k] {
-			out = append(out, ojson.KV{k, resp[k]})
-		}
-	}
-	return out
 }
 
 // ---------------------------------------------------------------- mapping
@@ -425,7 +403,7 @@ func geohashNeighbors(hash string) []string {
 			} else if nlon < -180 {
 				nlon += 360
 			}
-			out = append(out, aggs.GeohashEncode(nlat, nlon, len(hash)))
+			out = append(out, mapping.EncodeGeohash(nlat, nlon, len(hash)))
 		}
 	}
 	return out
@@ -475,7 +453,7 @@ func parseGeoQueryContexts(v any, mappingPrecision int) []completionQueryCtx {
 			continue
 		}
 		minPrecision := min(precision, mappingPrecision)
-		hash := aggs.GeohashEncode(lat, lon, minPrecision)
+		hash := mapping.EncodeGeohash(lat, lon, minPrecision)
 		locations := []string{hash}
 		if len(neighbours) == 0 && len(hash) == mappingPrecision {
 			locations = append(locations, geohashNeighbors(hash)...)
@@ -521,7 +499,7 @@ func indexedContexts(ctxs []mapping.CompletionContextDef, e completionEntry, doc
 			}
 			for _, p := range points {
 				if lat, lon, ok := geoContextPoint(p); ok {
-					out[cd.Name] = append(out[cd.Name], aggs.GeohashEncode(lat, lon, cd.Precision))
+					out[cd.Name] = append(out[cd.Name], mapping.EncodeGeohash(lat, lon, cd.Precision))
 				}
 			}
 			continue

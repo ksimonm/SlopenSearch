@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"slopensearch/internal/apierr"
-
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/settings"

@@ -11,7 +11,7 @@ import (
 	"slopensearch/internal/jsonv"
 )
 
-type SearchSortSpec struct {
+type SortSpec struct {
 	Field        string
 	Desc         bool
 	Missing      any
@@ -34,18 +34,18 @@ type SearchSortSpec struct {
 	GeoIgnore    bool
 }
 
-func ParseSortSpecs(bodySort any, uriSort string) ([]SearchSortSpec, *apierr.Error) {
-	var out []SearchSortSpec
+func ParseSortSpecs(bodySort any, uriSort string) ([]SortSpec, *apierr.Error) {
+	var out []SortSpec
 	add := func(raw any, uri bool) *apierr.Error {
 		switch t := raw.(type) {
 		case string:
 			if t == "" {
 				return nil
 			}
-			out = append(out, SearchSortSpec{Field: t})
+			out = append(out, SortSpec{Field: t})
 		case map[string]any:
 			for field, v := range t {
-				sp := SearchSortSpec{Field: field}
+				sp := SortSpec{Field: field}
 				switch ov := v.(type) {
 				case string:
 					if !validSortOrder(ov) {
@@ -179,7 +179,7 @@ func ParseSortSpecs(bodySort any, uriSort string) ([]SearchSortSpec, *apierr.Err
 	}
 	if uriSort != "" {
 		valid := true
-		var uriSpecs []SearchSortSpec
+		var uriSpecs []SortSpec
 		for _, part := range strings.Split(uriSort, ",") {
 			part = strings.TrimSpace(part)
 			if part == "" {
@@ -196,7 +196,7 @@ func ParseSortSpecs(bodySort any, uriSort string) ([]SearchSortSpec, *apierr.Err
 				}
 				desc = ord == "desc"
 			}
-			uriSpecs = append(uriSpecs, SearchSortSpec{Field: field, Desc: desc})
+			uriSpecs = append(uriSpecs, SortSpec{Field: field, Desc: desc})
 		}
 		if valid {
 			out = append(out, uriSpecs...)

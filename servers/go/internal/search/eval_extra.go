@@ -642,7 +642,7 @@ func nestedSortCompare(a, b any) int {
 	return strings.Compare(as, bs)
 }
 
-func nestedSortOutput(obj map[string]any, path string, sp SearchSortSpec) any {
+func nestedSortOutput(obj map[string]any, path string, sp SortSpec) any {
 	if sp.Field == "_score" {
 		return nil
 	}
@@ -1121,7 +1121,7 @@ func joinInnerSource(doc map[string]any, spec any) map[string]any {
 	return FilterSourceDoc(doc, inc, exc)
 }
 
-func joinSortOutput(ctx *QueryCtx, sp SearchSortSpec) any {
+func joinSortOutput(ctx *QueryCtx, sp SortSpec) any {
 	if sp.Field == "_score" {
 		return nil
 	}
@@ -1132,7 +1132,7 @@ func joinSortOutput(ctx *QueryCtx, sp SearchSortSpec) any {
 	return vals[0]
 }
 
-func joinInnerHitEntry(c *QueryCtx, ctx *QueryCtx, doc map[string]any, spec map[string]any, sortSpecs []SearchSortSpec, score float64, includeRouting bool) (map[string]any, []any) {
+func joinInnerHitEntry(c *QueryCtx, ctx *QueryCtx, doc map[string]any, spec map[string]any, sortSpecs []SortSpec, score float64, includeRouting bool) (map[string]any, []any) {
 	entry := map[string]any{
 		"_index": c.Idx.Name,
 		"_id":    ctx.ID,
@@ -1162,7 +1162,7 @@ func joinInnerHitEntry(c *QueryCtx, ctx *QueryCtx, doc map[string]any, spec map[
 	return entry, sortVals
 }
 
-func joinInnerHitsSortAndPage(matched []map[string]any, sortVals [][]any, specs []SearchSortSpec, from, size int) []any {
+func joinInnerHitsSortAndPage(matched []map[string]any, sortVals [][]any, specs []SortSpec, from, size int) []any {
 	if len(specs) > 0 {
 		idx := make([]int, len(matched))
 		for i := range idx {

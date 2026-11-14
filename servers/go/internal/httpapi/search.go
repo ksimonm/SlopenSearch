@@ -1517,7 +1517,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		return
 	}
 	if _, ok := resp["suggest"]; ok {
-		writeJSON(w, 200, suggest.OrderSearchResponse(resp))
+		writeJSON(w, 200, orderSearchResponse(resp))
 		return
 	}
 	writeJSON(w, 200, resp)
@@ -1650,7 +1650,7 @@ func matchedDocs(matched []hit) []map[string]any {
 	return out
 }
 
-func searchSortSpecValue(h search.MultiHit, sp search.SearchSortSpec) (any, bool, bool) {
+func searchSortSpecValue(h search.MultiHit, sp search.SortSpec) (any, bool, bool) {
 	v, ok, missing := searchSortSpecValueRaw(h, sp)
 	if ok && !missing && sp.NumericType != "" {
 		v = convertSortNumeric(v, sp.NumericType)
@@ -1674,7 +1674,7 @@ func convertSortNumeric(v any, numericType string) any {
 	return v
 }
 
-func searchSortSpecValueRaw(h search.MultiHit, sp search.SearchSortSpec) (any, bool, bool) {
+func searchSortSpecValueRaw(h search.MultiHit, sp search.SortSpec) (any, bool, bool) {
 	switch sp.Field {
 	case "_score":
 		return h.Score, true, false
@@ -1755,7 +1755,7 @@ func searchSortSpecValueRaw(h search.MultiHit, sp search.SearchSortSpec) (any, b
 	return nil, false, true
 }
 
-func compareSortSpec(a, b search.MultiHit, sp search.SearchSortSpec) int {
+func compareSortSpec(a, b search.MultiHit, sp search.SortSpec) int {
 	av, aok, amissing := searchSortSpecValue(a, sp)
 	bv, bok, bmissing := searchSortSpecValue(b, sp)
 	if amissing || bmissing {
@@ -1803,9 +1803,9 @@ func compareSortSpec(a, b search.MultiHit, sp search.SearchSortSpec) int {
 	return search.CompareSortValues(av, bv)
 }
 
-func sortOutputValue(h search.MultiHit, sp search.SearchSortSpec) any {
+func sortOutputValue(h search.MultiHit, sp search.SortSpec) any {
 	v, ok, missing := searchSortSpecValue(h, sp)
-	if ik, isIP := v.(search.IpSortKey); isIP {
+	if ik, isIP := v.(search.IPSortKey); isIP {
 		return ik.Out
 	}
 	if f, isF := v.(float64); isF && math.IsInf(f, 0) {
@@ -2660,7 +2660,7 @@ func shardStatusObject(total, failed int, failures []any) map[string]any {
 	return out
 }
 
-func nestedSortValues(h search.MultiHit, sp search.SearchSortSpec) []any {
+func nestedSortValues(h search.MultiHit, sp search.SortSpec) []any {
 	pathParts := strings.Split(sp.NestedPath, ".")
 	fieldParts := strings.Split(sp.Field, ".")
 	rel := fieldParts
@@ -2767,7 +2767,7 @@ func parseGeoOrigins(v any) [][2]float64 {
 	return nil
 }
 
-func geoSortDistance(h search.MultiHit, sp search.SearchSortSpec) any {
+func geoSortDistance(h search.MultiHit, sp search.SortSpec) any {
 	origins := parseGeoOrigins(sp.GeoPoint)
 	if len(origins) == 0 {
 		return math.Inf(1)
@@ -2827,7 +2827,7 @@ func geoSortDistance(h search.MultiHit, sp search.SearchSortSpec) any {
 	return best
 }
 
-func hitAfterSearchAfter(h search.MultiHit, specs []search.SearchSortSpec, after []any) bool {
+func hitAfterSearchAfter(h search.MultiHit, specs []search.SortSpec, after []any) bool {
 	for i, sp := range specs {
 		if i >= len(after) {
 			break
@@ -2845,7 +2845,7 @@ func hitAfterSearchAfter(h search.MultiHit, specs []search.SearchSortSpec, after
 	return false
 }
 
-func compareSearchAfterValue(h search.MultiHit, sp search.SearchSortSpec, av, bv any) int {
+func compareSearchAfterValue(h search.MultiHit, sp search.SortSpec, av, bv any) int {
 	def, _ := mapping.FieldDef(h.Idx, sp.Field)
 	ft, _ := def["type"].(string)
 	if ft == "date" || ft == "date_nanos" {
@@ -3108,7 +3108,7 @@ func applyCollapse(matched []search.MultiHit, body map[string]any) ([]search.Mul
 			if v, ok := spec["_source"].(bool); ok && !v {
 				srcFalse = true
 			}
-			var specs2 []search.SearchSortSpec
+			var specs2 []search.SortSpec
 			if rawSort, has := spec["sort"]; has {
 				var serr *apierr.Error
 				specs2, serr = search.ParseSortSpecs(rawSort, "")
@@ -3257,4 +3257,25 @@ func applyRescore(matched []search.MultiHit, body map[string]any) *apierr.Error 
 		}
 	}
 	return nil
+}
+
+// orderSearchResponse renders the top-level search response keys in the
+// order OpenSearch writes them.
+func orderSearchResponse(resp map[string]any) ojson.Object {
+	first := []string{"_scroll_id", "took", "timed_out", "terminated_early", "_shards", "hits",
+		"aggregations", "suggest", "profile"}
+	out := ojson.Object{}
+	seen := map[string]bool{}
+	for _, k := range first {
+		if v, ok := resp[k]; ok {
+			out = append(out, ojson.KV{k, v})
+			seen[k] = true
+		}
+	}
+	for _, k := range mapping.SortedAnyKeys(resp) {
+		if !seen[k] {
+			out = append(out, ojson.KV{k, resp[k]})
+		}
+	}
+	return out
 }

@@ -32,7 +32,7 @@ func scriptToString(raw any) string {
 
 // scriptSortValue evaluates a _script sort for one hit outside the main sort
 // pass (e.g. for search_after); errors yield no value.
-func scriptSortValue(sp search.SearchSortSpec, h search.MultiHit) any {
+func scriptSortValue(sp search.SortSpec, h search.MultiHit) any {
 	ctxName := "number_sort"
 	if sp.ScriptType == "string" {
 		ctxName = "string_sort"
