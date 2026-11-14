@@ -63,20 +63,12 @@ func writeError(w http.ResponseWriter, e *apiError) {
 	if e.RootCause != nil {
 		rcType, rcReason = e.RootCause.Type, e.RootCause.Reason
 	}
-	rootCause := map[string]any{"type": rcType, "reason": rcReason}
-	err := map[string]any{
-		"root_cause": []any{rootCause},
-		"type":       e.Type,
-		"reason":     e.Reason,
-	}
+	errType, errReason := e.Type, e.Reason
 	if e.TopType != "" {
-		err["type"] = e.TopType
+		errType = e.TopType
 	}
 	if e.TopReason != "" {
-		err["reason"] = e.TopReason
-	}
-	if e.Phase != "" {
-		err["phase"] = e.Phase
+		errReason = e.TopReason
 	}
 	fields := map[string]any{}
 	for k, v := range e.Fields {
@@ -102,21 +94,42 @@ func writeError(w http.ResponseWriter, e *apiError) {
 	if e.Type == "shard_not_found_exception" {
 		fields["shard"] = e.Extra
 	}
-	for k, v := range fields {
-		err[k] = v
-		rootCause[k] = v
+	meta := errorMetadata(fields)
+	rootCause := append(orderedJSON{{"type", rcType}, {"reason", rcReason}}, meta...)
+	err := orderedJSON{{"root_cause", []any{rootCause}}, {"type", errType}, {"reason", errReason}}
+	err = append(err, meta...)
+	if e.Phase != "" {
+		err = append(err, orderedKV{"phase", e.Phase})
 	}
 	if e.CausedBy != nil {
-		err["caused_by"] = causedByObject(e.CausedBy)
+		err = append(err, orderedKV{"caused_by", causedByObject(e.CausedBy)})
 	}
 	if len(e.Suppressed) > 0 {
 		sup := make([]any, 0, len(e.Suppressed))
 		for _, s := range e.Suppressed {
 			sup = append(sup, causedByObject(s))
 		}
-		err["suppressed"] = sup
+		err = append(err, orderedKV{"suppressed", sup})
 	}
-	writeJSON(w, e.Status, map[string]any{"error": err, "status": e.Status})
+	writeJSON(w, e.Status, orderedJSON{{"error", err}, {"status", e.Status}})
+}
+
+// errorMetadata orders exception metadata the way OpenSearch prints it.
+func errorMetadata(fields map[string]any) orderedJSON {
+	out := orderedJSON{}
+	for _, k := range []string{"index", "resource.id", "resource.type", "index_uuid", "shard"} {
+		if v, ok := fields[k]; ok {
+			out = append(out, orderedKV{k, v})
+		}
+	}
+	for _, k := range sortedKeys(fields) {
+		switch k {
+		case "index", "resource.id", "resource.type", "index_uuid", "shard":
+			continue
+		}
+		out = append(out, orderedKV{k, fields[k]})
+	}
+	return out
 }
 
 func causedByObject(e *apiError) map[string]any {
@@ -290,66 +303,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if status == 0 {
 		status = 200
 	}
-	q := r.URL.Query()
 	body := cw.buf.Bytes()
 	if cw.h.Get("Content-Type") == "" {
 		cw.h.Set("Content-Type", "application/json; charset=UTF-8")
 	}
 	if strings.HasPrefix(cw.h.Get("Content-Type"), "application/json") {
-		fp := q.Get("filter_path")
-		_, hasPretty := q["pretty"]
-		pretty := (hasPretty && q.Get("pretty") != "false") || q.Get("pretty") == "true"
-		reencoded := false
-		if fp != "" && status < 400 {
-			var v any
-			if json.Unmarshal(body, &v) == nil {
-				body = jsonMustMarshal(filterPathValue(v, fp))
-				reencoded = true
-			}
-		}
-		if !cw.ordered || reencoded {
-			if pretty && status < 400 {
-				var v any
-				if json.Unmarshal(body, &v) == nil {
-					body = prettyJSON(v)
-				}
-			} else {
-				body = bytes.TrimRight(body, "\n")
-			}
-		}
-		if status >= 400 && q.Get("error_trace") == "true" {
-			var v map[string]any
-			if json.Unmarshal(body, &v) == nil {
-				if errObj, ok := v["error"].(map[string]any); ok {
-					st := []any{
-						fmt.Sprintf("%s: %v", "java.lang.IllegalArgumentException", errObj["reason"]),
-						"	at org.opensearch.action.support.master.TransportMasterNodeAction$AsyncSingleAction.doExecute(TransportMasterNodeAction.java:210)",
-					}
-					errObj["stack_trace"] = st
-					if rc, ok := errObj["root_cause"].([]any); ok {
-						for _, c := range rc {
-							if cm, ok := c.(map[string]any); ok {
-								cm["stack_trace"] = st
-							}
-						}
-					}
-					body = jsonMustMarshal(v)
-				}
-			}
-		}
-		acc := r.Header.Get("Accept")
-		switch {
-		case q.Get("format") == "yaml" || strings.Contains(acc, "yaml"):
-			var v any
-			if json.Unmarshal(body, &v) == nil {
-				cw.h.Set("Content-Type", "application/yaml")
-				body = toYAML(v)
-			}
-		case strings.Contains(acc, "application/smile"):
-			cw.h.Set("Content-Type", "application/smile")
-		case strings.Contains(acc, "application/cbor"):
-			cw.h.Set("Content-Type", "application/cbor")
-		}
+		body = postProcessJSON(cw, r, status, body)
 	}
 	cw.h.Set("X-OpenSearch-Version", "OpenSearch/3.9.0 (opensearch)")
 	writeFinal(w, r, status, body)

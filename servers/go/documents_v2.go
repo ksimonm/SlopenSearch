@@ -33,8 +33,7 @@ func (o orderedJSON) MarshalJSON() ([]byte, error) {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		kb, _ := json.Marshal(kv.k)
-		b.Write(kb)
+		b.Write(jsonMustMarshal(kv.k))
 		b.WriteByte(':')
 		switch t := kv.v.(type) {
 		case verbatimJSON:
@@ -42,11 +41,13 @@ func (o orderedJSON) MarshalJSON() ([]byte, error) {
 		case json.RawMessage:
 			b.Write(t)
 		default:
-			vb, err := json.Marshal(kv.v)
-			if err != nil {
+			var vb bytes.Buffer
+			enc := json.NewEncoder(&vb)
+			enc.SetEscapeHTML(false)
+			if err := enc.Encode(kv.v); err != nil {
 				return nil, err
 			}
-			b.Write(vb)
+			b.Write(bytes.TrimRight(vb.Bytes(), "\n"))
 		}
 	}
 	b.WriteByte('}')
