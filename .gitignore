@@ -11,6 +11,8 @@ servers/rust/target/
 servers/rust/target-*/
 servers/go/slopensearch
 servers/go/slopsearch
+# default data directory of the servers (persistence)
+data/
 *.pprof
 *.prof
 

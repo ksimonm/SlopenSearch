@@ -1,10 +1,13 @@
-//! Optional durable state (enabled with `SLOP_DATA_DIR`, `--data-dir <dir>` or
-//! `-Epath.data=<dir>`; without it the server keeps everything in memory only).
+//! Durable state. By default the server persists to `./data` (relative to the working
+//! directory); `SLOP_DATA_DIR`, `--data-dir <dir>` or `-Epath.data=<dir>` choose another
+//! directory, and `SLOP_IN_MEMORY=true` (or `--in-memory`) keeps everything in memory only.
 //!
-//! Layout of the data directory:
-//! - `state.json`: an atomic snapshot (write to a temp file, fsync, rename, fsync dir) of
+//! Layout of the data directory (file names carry a `rust-` prefix so that the Go server
+//! can share a directory name without clashing; `rust.lock` keeps a second Rust server
+//! off the same directory):
+//! - `rust-state.json`: an atomic snapshot (write to a temp file, fsync, rename, fsync dir) of
 //!   the durable cluster state, tagged with a generation number `G`;
-//! - `journal-G.log`: the write-ahead journal on top of that snapshot. After every
+//! - `rust-journal-G.log`: the write-ahead journal on top of that snapshot. After every
 //!   request that changed durable state, one line holding all of the request's changes
 //!   is appended and fsynced before the response leaves the server, so acknowledged
 //!   writes survive a crash (`kill -9`). A torn last line (crash mid-write) belongs to a
@@ -34,7 +37,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-const SNAPSHOT: &str = "state.json";
+const SNAPSHOT: &str = "rust-state.json";
+const LOCK: &str = "rust.lock";
 /// Compact the journal into a new snapshot once it grows past this size.
 const COMPACT_BYTES: u64 = 64 << 20;
 
@@ -51,38 +55,56 @@ struct Persister {
     journal_bytes: u64,
     global: String,
     indices: HashMap<String, Tracked>,
+    /// Held (locked) for the lifetime of the process.
+    _lock: File,
 }
 
 static PERSISTER: OnceLock<Mutex<Persister>> = OnceLock::new();
 
-/// The configured data directory, if any.
+fn truthy(v: &str) -> bool {
+    matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "on")
+}
+
+/// The data directory, or `None` in in-memory mode.
 fn data_dir() -> Option<PathBuf> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut dir = None;
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
-        if let Some(v) = a.strip_prefix("--data-dir=").or_else(|| a.strip_prefix("-Epath.data=")) {
-            return Some(PathBuf::from(v));
+        if a == "--in-memory" {
+            return None;
         }
-        if a == "--data-dir" && i + 1 < args.len() {
-            return Some(PathBuf::from(&args[i + 1]));
+        if let Some(v) = a.strip_prefix("--data-dir=").or_else(|| a.strip_prefix("-Epath.data=")) {
+            dir = Some(PathBuf::from(v));
+        } else if a == "--data-dir" && i + 1 < args.len() {
+            dir = Some(PathBuf::from(&args[i + 1]));
+            i += 1;
         }
         i += 1;
     }
-    match std::env::var("SLOP_DATA_DIR") {
+    if std::env::var("SLOP_IN_MEMORY").map(|v| truthy(&v)).unwrap_or(false) {
+        return None;
+    }
+    dir.or_else(|| match std::env::var("SLOP_DATA_DIR") {
         Ok(v) if !v.is_empty() => Some(PathBuf::from(v)),
         _ => None,
-    }
+    })
+    .or_else(|| Some(PathBuf::from("data")))
 }
 
-/// Builds the store: empty without a data directory, else recovered from disk.
+/// Builds the store: empty in in-memory mode, else recovered from the data directory
+/// (created when missing).
 pub fn open() -> Store {
     let dir = match data_dir() {
         Some(d) => d,
         None => return Store::new(),
     };
     match recover(&dir) {
-        Ok(store) => store,
+        Ok(store) => {
+            println!("slopensearch (rust): data directory {}", dir.display());
+            store
+        }
         Err(e) => {
             eprintln!("slopensearch (rust): cannot use data directory {}: {}", dir.display(), e);
             std::process::exit(1);
@@ -92,6 +114,14 @@ pub fn open() -> Store {
 
 fn recover(dir: &Path) -> Result<Store, String> {
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(LOCK))
+        .map_err(|e| e.to_string())?;
+    lock.try_lock()
+        .map_err(|_| "it is in use by another slopensearch (rust) process".to_string())?;
     let mut store = Store::new();
     let mut gen = 0u64;
     let snap_path = dir.join(SNAPSHOT);
@@ -143,6 +173,7 @@ fn recover(dir: &Path) -> Result<Store, String> {
         journal_bytes: 0,
         global: String::new(),
         indices: HashMap::new(),
+        _lock: lock,
     };
     p.write_snapshot(&store)?;
     remove_stale_journals(dir, p.gen);
@@ -151,7 +182,7 @@ fn recover(dir: &Path) -> Result<Store, String> {
 }
 
 fn journal_name(gen: u64) -> String {
-    format!("journal-{}.log", gen)
+    format!("rust-journal-{}.log", gen)
 }
 
 fn create_journal(dir: &Path, gen: u64) -> Result<File, String> {
@@ -171,7 +202,7 @@ fn remove_stale_journals(dir: &Path, keep: u64) {
     if let Ok(entries) = fs::read_dir(dir) {
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().to_string();
-            if name.starts_with("journal-") && name.ends_with(".log") && name != keep {
+            if name.starts_with("rust-journal-") && name.ends_with(".log") && name != keep {
                 let _ = fs::remove_file(e.path());
             }
         }
@@ -186,8 +217,8 @@ fn sync_dir(dir: &Path) {
 
 /// Records what the request changed. Called with the store lock held, before the
 /// response is sent.
-pub fn after_request(store: &Store, method: &str) {
-    if method == "GET" || method == "HEAD" {
+pub fn after_request(store: &Store, method: &str, path: &str) {
+    if method == "GET" || method == "HEAD" || read_only_post(path) {
         return;
     }
     let cell = match PERSISTER.get() {
@@ -212,6 +243,20 @@ pub fn after_request(store: &Store, method: &str) {
             eprintln!("slopensearch (rust): journal compaction failed: {}", e);
         }
     }
+}
+
+/// Read APIs that are often sent as POST and never change durable state; skipping
+/// them saves the comparison of the whole store.
+fn read_only_post(path: &str) -> bool {
+    let last = path.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+    let prev = path.trim_end_matches('/').rsplit('/').nth(1).unwrap_or("");
+    matches!(
+        last,
+        "_search" | "_msearch" | "_count" | "_mget" | "_analyze" | "_field_caps" | "_validate"
+            | "_termvectors" | "_mtermvectors" | "_search_shards" | "_rank_eval"
+    ) || matches!(prev, "_explain" | "_termvectors" | "_validate" | "_render")
+        || (prev == "_search" && last == "template")
+        || (prev == "_msearch" && last == "template")
 }
 
 impl Persister {

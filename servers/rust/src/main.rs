@@ -432,7 +432,7 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
             } else {
                 dispatch(&mut guard, &req)
             };
-            persist::after_request(&guard, &req.method);
+            persist::after_request(&guard, &req.method, &req.path);
             resp
         };
         (resp, req)
