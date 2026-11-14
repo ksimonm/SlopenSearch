@@ -116,7 +116,7 @@ pub fn resolve_indices<'a>(
 ) -> Result<Vec<&'a Index>, ApiError> {
     let spec = if spec.is_empty() { "*" } else { spec };
     let mut seen: Vec<String> = vec![];
-    let mut add = |name: &str, seen: &mut Vec<String>| {
+    let add = |name: &str, seen: &mut Vec<String>| {
         if !seen.iter().any(|n| n == name) {
             seen.push(name.to_string());
         }
@@ -282,7 +282,7 @@ pub fn resolve_spec2(store: &Store, spec: &str, o: &ResolveOpts2) -> Result<Vec<
     let expand = o.expand.as_ref().unwrap_or(&empty_expand);
     let allow_no = o.allow_no_indices.unwrap_or(true);
     let mut seen: Vec<String> = vec![];
-    let mut add = |name: &str, seen: &mut Vec<String>| {
+    let add = |name: &str, seen: &mut Vec<String>| {
         if !seen.iter().any(|n| n == name) {
             seen.push(name.to_string());
         }
@@ -1906,10 +1906,6 @@ fn validate_props_shared(props: &Map<String, Value>) -> Result<(), String> {
 pub fn param_int(req: &Req, name: &str) -> Option<i64> {
     req.param(name)
         .and_then(|v| if v.is_empty() { None } else { v.parse::<i64>().ok() })
-}
-
-pub fn wildcard_match(pat: &str, s: &str) -> bool {
-    glob_match(pat, s)
 }
 
 pub fn float_setting(idx: &Index, key: &str) -> Option<f64> {

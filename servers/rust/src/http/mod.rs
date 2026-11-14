@@ -24,6 +24,7 @@ pub(crate) mod resolve_index;
 pub(crate) mod rollover;
 pub(crate) mod script_meta;
 pub(crate) mod scripts;
+pub(crate) mod search;
 pub(crate) mod search_templates;
 pub(crate) mod shared;
 pub(crate) mod tasks_async;
@@ -38,7 +39,7 @@ use serde_json::{json, Map, Value};
 use std::sync::{Arc, Mutex};
 use crate::errors::{self, ApiError};
 use crate::model::Store;
-use crate::{persist, resp, search};
+use crate::{persist, resp};
 
 use crate::jsonv::fix_exponent_literals;
 use errors::{json_response, no_handler, text_response};
@@ -297,7 +298,7 @@ async fn handle_plain(store: Shared, request: axum::extract::Request) -> axum::r
             let scripted = req.body.windows(6).any(|w| w == b"script") || !guard.pipelines.is_empty();
             let resp = if scripted {
                 let store: &mut Store = &mut guard;
-                crate::pl_api::run_with_stack(|| dispatch(store, &req))
+                crate::painless::api::run_with_stack(|| dispatch(store, &req))
             } else {
                 dispatch(&mut guard, &req)
             };

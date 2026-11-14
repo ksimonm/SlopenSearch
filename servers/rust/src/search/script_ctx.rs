@@ -7,11 +7,10 @@
 // else here is engine independent.
 
 use crate::errors::ApiError;
-use crate::eval::QueryCtx;
-use crate::expressions;
+use crate::search::eval::QueryCtx;
+use crate::search::expressions;
 use crate::model::{Index, NODE_ID};
 use serde_json::{json, Map, Value};
-use crate::pl_api;
 use crate::painless::value::{from_json, to_json, MapKind, PV};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -371,7 +370,7 @@ impl From<ApiError> for PrepErr {
 
 #[derive(Clone)]
 enum Engine {
-    Painless(Rc<pl_api::Script>),
+    Painless(Rc<crate::painless::api::Script>),
     Expr(expressions::Expr),
 }
 
@@ -496,7 +495,7 @@ pub fn script_to_string(raw: &Value) -> String {
         Ok(s) => s,
         Err(_) => return String::new(),
     };
-    let params = crate::script_env::format_script_value(&Value::Object(spec.params.clone()));
+    let params = crate::search::script_env::format_script_value(&Value::Object(spec.params.clone()));
     match &spec.id {
         Some(id) => format!("Script{{type=stored, lang='null', idOrCode='{}', options=null, params={}}}", id, params),
         None => format!(
@@ -623,7 +622,7 @@ pub fn script_score_query(qc: &QueryCtx, body: &Value) -> Result<(bool, f64), Ap
         None => return Ok((true, 1.0)),
     };
     let s = if raw.get("lang").and_then(|l| l.as_str()) == Some("knn") {
-        crate::knn_query::knn_score_script(qc, &raw)?
+        crate::search::knn_query::knn_score_script(qc, &raw)?
     } else {
         run_score_script(qc, &raw, base, false)?
     };
@@ -922,15 +921,15 @@ fn now_millis() -> i64 {
 // ---- painless backend ----------------------------------------------------
 //
 // The functions below are the only ones that talk to the Painless engine
-// (pl_api): compiling, binding the context variables and converting values
+// (crate::painless::api): compiling, binding the context variables and converting values
 // between JSON and the engine.
 
 thread_local! {
-    static COMPILED: RefCell<HashMap<(String, String), Rc<pl_api::Script>>> = RefCell::new(HashMap::new());
+    static COMPILED: RefCell<HashMap<(String, String), Rc<crate::painless::api::Script>>> = RefCell::new(HashMap::new());
     static SKELETONS: RefCell<HashMap<String, Rc<Index>>> = RefCell::new(HashMap::new());
 }
 
-fn from_pl_err(e: pl_api::ScriptErr) -> ScriptErr {
+fn from_pl_err(e: crate::painless::api::ScriptErr) -> ScriptErr {
     ScriptErr {
         compile: e.compile,
         link: e.link_err,
@@ -945,12 +944,12 @@ fn from_pl_err(e: pl_api::ScriptErr) -> ScriptErr {
     }
 }
 
-fn painless_compile(spec: &ScriptSpec, ctx_name: &str) -> Result<Rc<pl_api::Script>, ScriptErr> {
+fn painless_compile(spec: &ScriptSpec, ctx_name: &str) -> Result<Rc<crate::painless::api::Script>, ScriptErr> {
     let key = (ctx_name.to_string(), spec.src.clone());
     if let Some(s) = COMPILED.with(|c| c.borrow().get(&key).cloned()) {
         return Ok(s);
     }
-    let script = Rc::new(pl_api::compile_script(&spec.src, ctx_name, &spec.err_name()).map_err(from_pl_err)?);
+    let script = Rc::new(crate::painless::api::compile_script(&spec.src, ctx_name, &spec.err_name()).map_err(from_pl_err)?);
     COMPILED.with(|c| c.borrow_mut().insert(key, script.clone()));
     Ok(script)
 }
@@ -980,7 +979,7 @@ fn map_get(m: &PV, key: &str) -> Option<PV> {
 
 fn painless_backend(
     cs: &Compiled,
-    script: &pl_api::Script,
+    script: &crate::painless::api::Script,
     qc: Option<&QueryCtx>,
     o: &mut RunOpts,
 ) -> Result<Value, ScriptErr> {
@@ -992,7 +991,7 @@ fn painless_backend(
     if let (Some(src), PV::Map(m)) = (&o.source, &params) {
         m.borrow_mut().put(PV::str("_source"), from_json(src, MapKind::Linked));
     }
-    let mut b = pl_api::Bindings::default();
+    let mut b = crate::painless::api::Bindings::default();
     b.vars.insert("params".into(), params.clone());
     b.vars.insert("_score".into(), PV::Double(o.score));
     if let Some(v) = &o.value {
@@ -1006,9 +1005,9 @@ fn painless_backend(
     }
     if let Some(q) = qc {
         let values = q.values_map().cloned();
-        b.vars.insert("doc".into(), pl_api::doc_lookup(skeleton(q.idx), &q.id, values));
+        b.vars.insert("doc".into(), crate::search::painless_doc::doc_lookup(skeleton(q.idx), &q.id, values));
         if cs.ctx == "score" {
-            b.funcs = pl_api::score_bindings(q.id.clone());
+            b.funcs = crate::search::painless_doc::score_bindings(q.id.clone());
         }
     }
     let r = script.exec(&b, &cs.spec.err_name()).map_err(from_pl_err)?;

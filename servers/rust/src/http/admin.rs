@@ -246,7 +246,7 @@ pub fn create_index_internal(
     }
 
     let mut aliases: Map<String, Value> = Map::new();
-    let mut add_alias = |store: &Store,
+    let add_alias = |store: &Store,
                          aliases: &mut Map<String, Value>,
                          alias_name: &str,
                          def_raw: Option<&Value>|
@@ -268,7 +268,7 @@ pub fn create_index_internal(
                 if let Some(fq) = filt.as_object() {
                     let dummy = Index::skeleton("");
                     if let Err(err) =
-                        crate::search::validate_query(&dummy, &Value::Object(fq.clone()))
+                        crate::search::validate::validate_query(&dummy, &Value::Object(fq.clone()))
                     {
                         let mut e = ApiError::bad(&format!(
                             "failed to parse filter for alias [{}]",

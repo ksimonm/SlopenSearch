@@ -1007,7 +1007,7 @@ struct QueryCtx {
 
 fn shard_err(index: &str, reason: &str) -> ApiError {
     let o = json!({"type": "illegal_argument_exception", "reason": reason});
-    crate::script_ctx::shard_failure(index, 400, o.clone(), o.clone(), o, "query")
+    crate::search::script_ctx::shard_failure(index, 400, o.clone(), o.clone(), o, "query")
 }
 
 fn parse_query_contexts(maps: &[CtxMapping], q: &Map<String, Value>, index: &str) -> Result<Vec<QueryCtx>, ApiError> {
@@ -1125,7 +1125,7 @@ pub fn completion_suggest(
     let query_contexts = body.get("contexts").and_then(|v| v.as_object());
     let mut hits: Vec<Hit> = vec![];
     for (ii, idx) in indices.iter().enumerate() {
-        let def = match crate::eval::mapping_field_def(idx, &field) {
+        let def = match crate::search::eval::mapping_field_def(idx, &field) {
             Some(d) => d.clone(),
             None => return Err(shard_err(&idx.name, &format!("no mapping found for field [{}]", field))),
         };
@@ -1282,11 +1282,11 @@ pub fn completion_suggest(
                     o.insert("_source".into(), doc.clone());
                 }
                 Some(spec) => {
-                    o.insert("_source".into(), crate::search::filter_source(doc, spec));
+                    o.insert("_source".into(), crate::search::source::filter_source(doc, spec));
                 }
             }
         }
-        let def = crate::eval::mapping_field_def(idx, &field).cloned().unwrap_or_default();
+        let def = crate::search::eval::mapping_field_def(idx, &field).cloned().unwrap_or_default();
         let maps = context_mappings(&def);
         if !maps.is_empty() {
             o.insert("contexts".into(), named_contexts(&maps, &h.contexts));

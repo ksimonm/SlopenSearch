@@ -2,8 +2,8 @@
 // language. Everything is a double; variables are bound at link time to doc
 // values, _score, _value or numeric params. Port of servers/go/pl_expr.go.
 
-use crate::eval::{mapping_field_def, QueryCtx};
-use crate::script_ctx::ScriptErr;
+use crate::search::eval::{mapping_field_def, QueryCtx};
+use crate::search::script_ctx::ScriptErr;
 use crate::model::Index;
 use serde_json::{Map, Value};
 
@@ -583,7 +583,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 fn date_part(part: &str, ms: i64) -> f64 {
     let days = ms.div_euclid(86_400_000);
     let rem = ms.rem_euclid(86_400_000);
-    let (y, m, d) = crate::search::civil_from_days(days);
+    let (y, m, d) = crate::dates::civil_from_days(days);
     let jan1 = days_from_civil(y, 1, 1);
     match part {
         "year" => y as f64,

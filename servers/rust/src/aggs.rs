@@ -1,7 +1,8 @@
-use crate::eval::QueryCtx;
+use crate::search::eval::QueryCtx;
 use crate::fields::canonical_ip;
 use crate::resp::format_number;
-use crate::search::{apply_java_date_format, civil_from_days, field_type, format_epoch_ms};
+use crate::dates::{apply_java_date_format, civil_from_days, format_epoch_ms};
+use crate::search::fetch::field_type;
 use crate::dates::parse_date_string;
 use crate::errors::ApiError;
 use crate::jsonv::{doc_strings, field_value, to_f64, value_to_string};
@@ -51,11 +52,11 @@ fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<
         return vec![];
     }
     let base = resolve_field(field, prefix);
-    let rf = crate::eval::resolve_alias_field(idx, &base);
+    let rf = crate::search::eval::resolve_alias_field(idx, &base);
     if is_under_nested_path(&rf) {
         return vec![];
     }
-    if crate::eval::mapping_field_def(idx, &rf).is_none() {
+    if crate::search::eval::mapping_field_def(idx, &rf).is_none() {
         let dyn_off = match idx.mappings.get("dynamic") {
             Some(Value::Bool(false)) => true,
             Some(Value::String(s)) => s == "false" || s == "false_allow_templates",
@@ -100,7 +101,7 @@ fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<
             }
         }
     }
-    if let Some(def) = crate::eval::mapping_field_def(idx, &rf) {
+    if let Some(def) = crate::search::eval::mapping_field_def(idx, &rf) {
         if def.get("type").and_then(|v| v.as_str()) == Some("join") {
             vals = vals
                 .into_iter()
@@ -242,9 +243,9 @@ fn nested_leaf_values(
     out: &mut Map<String, Value>,
 ) {
     let def = if prefix.is_empty() {
-        crate::eval::mapping_field_def(idx, p0).cloned()
+        crate::search::eval::mapping_field_def(idx, p0).cloned()
     } else {
-        crate::eval::mapping_field_def(idx, &format!("{}.{}", p0, prefix)).cloned()
+        crate::search::eval::mapping_field_def(idx, &format!("{}.{}", p0, prefix)).cloned()
     };
     let def = match def {
         Some(d) => d,
@@ -332,7 +333,7 @@ fn is_mapped_field(idx: &Index, field: &str, prefix: &str) -> bool {
 
 fn field_kind(idx: &Index, field: &str, prefix: &str) -> String {
     let resolved = resolve_field(field, prefix);
-    field_type(idx, &crate::eval::resolve_alias_field(idx, &resolved))
+    field_type(idx, &crate::search::eval::resolve_alias_field(idx, &resolved))
 }
 
 #[derive(Clone, PartialEq)]
@@ -1902,7 +1903,7 @@ fn run_agg_script(
     value: Option<&Value>,
 ) -> Result<Value, ApiError> {
     let raw: Value = serde_json::from_str(src).unwrap_or_else(|_| Value::String(src.to_string()));
-    crate::script_ctx::agg_script_run(idx, doc, &raw, base, value, doc_script_vm(idx, doc))
+    crate::search::script_ctx::agg_script_run(idx, doc, &raw, base, value, doc_script_vm(idx, doc))
 }
 
 fn analyze_tokens(s: &str) -> Vec<String> {
@@ -2044,7 +2045,7 @@ fn metric_num_type_check(idx: &Index, field: &str, prefix: &str, agg: &str) -> R
     if field.is_empty() {
         return Ok(());
     }
-    let resolved = crate::eval::resolve_alias_field(idx, &resolve_field(field, prefix));
+    let resolved = crate::search::eval::resolve_alias_field(idx, &resolve_field(field, prefix));
     let ft = match idx.field_types.get(&resolved) {
         Some(f) => f.clone(),
         None => return Ok(()),
@@ -2470,7 +2471,7 @@ fn weighted_avg_type_check(idx: &Index, field: &str, prefix: &str) -> Result<(),
     if field.is_empty() {
         return Ok(());
     }
-    let resolved = crate::eval::resolve_alias_field(idx, &resolve_field(field, prefix));
+    let resolved = crate::search::eval::resolve_alias_field(idx, &resolve_field(field, prefix));
     let ft = match idx.field_types.get(&resolved) {
         Some(f) => f.clone(),
         None => return Ok(()),
@@ -2611,12 +2612,12 @@ fn th_sort_value(idx: &Index, doc: &Value, id: &str, field: &str, desc: bool) ->
     }
     let f = field.to_string();
     let mut is_date = false;
-    if let Some(def) = crate::eval::mapping_field_def(idx, &f) {
+    if let Some(def) = crate::search::eval::mapping_field_def(idx, &f) {
         let ft = def.get("type").and_then(|t| t.as_str()).unwrap_or("");
         is_date = ft == "date" || ft == "date_nanos";
     }
     let raw = idx.doc_values.get(id)?.get(&f)?;
-    let mut list = crate::eval::array_values(raw);
+    let mut list = crate::search::eval::array_values(raw);
     if list.is_empty() {
         return None;
     }
@@ -2892,7 +2893,7 @@ fn top_hits_agg(
                 .doc_values
                 .get(&c.id)
                 .and_then(|dv| dv.get(f))
-                .map(crate::eval::array_values)
+                .map(crate::search::eval::array_values)
             {
                 if !vals.is_empty() {
                     fields.insert(f.clone(), Value::Array(vals));
@@ -2919,7 +2920,7 @@ fn top_hits_agg(
                     if let Some(s) = value_to_string(v) {
                         hl.insert(
                             f.clone(),
-                            json!([crate::search::highlight_fragment(&s, &tokens)]),
+                            json!([crate::search::highlight::highlight_fragment(&s, &tokens)]),
                         );
                     }
                 }
@@ -2966,7 +2967,7 @@ fn scripted_metric_agg(
     docs: &[&Value],
     idx: &Index,
 ) -> Result<Value, ApiError> {
-    crate::script_ctx::scripted_metric(name, t, docs, idx, &|d| doc_script_vm(idx, d))
+    crate::search::script_ctx::scripted_metric(name, t, docs, idx, &|d| doc_script_vm(idx, d))
 }
 
 fn matrix_stats_agg(
@@ -4654,7 +4655,7 @@ fn compute_bucket_script(
             None => continue,
         };
         let raw = t.get("script").cloned().unwrap_or(Value::Null);
-        let res = crate::script_ctx::run_pipeline_script(&raw, "bucket_aggregation", &vars)?;
+        let res = crate::search::script_ctx::run_pipeline_script(&raw, "bucket_aggregation", &vars)?;
         let f = match res {
             Value::Null => continue,
             Value::Number(n) => n.as_f64().unwrap_or(f64::NAN),
@@ -4704,7 +4705,7 @@ fn apply_bucket_selector(
             None => continue,
         };
         let raw = t.get("script").cloned().unwrap_or(Value::Null);
-        let res = crate::script_ctx::run_pipeline_script(&raw, "aggregation_selector", &vars)?;
+        let res = crate::search::script_ctx::run_pipeline_script(&raw, "aggregation_selector", &vars)?;
         match res {
             Value::Bool(true) => kept.push(b),
             Value::Bool(false) => {}
@@ -5211,7 +5212,7 @@ fn terms_agg(
         return Err(e);
     }
     if !field.is_empty() {
-        if let Some(def) = crate::eval::mapping_field_def(idx, &field) {
+        if let Some(def) = crate::search::eval::mapping_field_def(idx, &field) {
             if def.get("type").and_then(|v| v.as_str()) == Some("search_as_you_type") {
                 let reason = format!(
                     "Fielddata is not supported on field [{}] of type [search_as_you_type]",
@@ -5259,9 +5260,9 @@ fn terms_agg(
         }
     }
     let field = map_str(t, "field");
-    let resolved = crate::eval::resolve_alias_field(idx, &resolve_field(&field, prefix));
+    let resolved = crate::search::eval::resolve_alias_field(idx, &resolve_field(&field, prefix));
     if let Some(ft) = idx.field_types.get(&resolved) {
-        let fd = crate::eval::mapping_field_def(idx, &resolved)
+        let fd = crate::search::eval::mapping_field_def(idx, &resolved)
             .and_then(|d| d.get("fielddata"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
@@ -6593,7 +6594,7 @@ fn bound_ms(v: &Value, format: &str) -> Option<i64> {
 }
 
 fn date_histogram(
-    name: &str,
+    _name: &str,
     t: &Map<String, Value>,
     def: &Map<String, Value>,
     docs: &[&Value],
@@ -6870,7 +6871,7 @@ fn date_histogram(
     let keyed = t.get("keyed").and_then(|v| v.as_bool()).unwrap_or(false);
     let (order_key, desc) = order_of(t);
     let mut buckets: Vec<(i64, Map<String, Value>)> = vec![];
-    let mut emit = |k: i64,
+    let emit = |k: i64,
                     n: usize,
                     bucket_docs: Option<&Vec<&Value>>,
                     buckets: &mut Vec<(i64, Map<String, Value>)>|

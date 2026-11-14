@@ -398,7 +398,7 @@ pub fn validate_query(idx: &Index, q: &Map<String, Value>) -> Result<(), ApiErro
                     let def = mapping_field_def(idx, &field).cloned().unwrap_or_default();
                     let ftype = def.get("type").and_then(|t| t.as_str()).unwrap_or("");
                     if ftype == "knn_vector" {
-                        return Err(crate::knn_query::exact_search_err(idx, &field));
+                        return Err(crate::search::knn_query::exact_search_err(idx, &field));
                     }
                     if def.get("index").and_then(|v| v.as_bool()) == Some(false) {
                         let dv = def.get("doc_values").and_then(|v| v.as_bool());
@@ -410,7 +410,7 @@ pub fn validate_query(idx: &Index, q: &Map<String, Value>) -> Result<(), ApiErro
                             String::new()
                         };
                         if !reason.is_empty() {
-                            return Err(crate::eval_extra::shard_error(
+                            return Err(crate::search::eval_extra::shard_error(
                                 400,
                                 "query_shard_exception",
                                 &reason,
@@ -472,7 +472,7 @@ pub fn validate_query(idx: &Index, q: &Map<String, Value>) -> Result<(), ApiErro
                             String::new()
                         };
                         if !reason.is_empty() {
-                            return Err(crate::eval_extra::shard_error(
+                            return Err(crate::search::eval_extra::shard_error(
                                 400,
                                 "query_shard_exception",
                                 &reason,
@@ -1090,14 +1090,14 @@ fn range_relation(
     upper_inclusive: bool,
     stored: &Map<String, Value>,
 ) -> bool {
-    let (mut s_lower, mut s_has_lower, mut s_lower_inc) = match stored.get("gte") {
+    let (mut s_lower, s_has_lower, mut s_lower_inc) = match stored.get("gte") {
         Some(l) => (l.clone(), true, true),
         None => match stored.get("gt") {
             Some(l) => (l.clone(), true, false),
             None => (Value::Null, false, true),
         },
     };
-    let (mut s_upper, mut s_has_upper, mut s_upper_inc) = match stored.get("lte") {
+    let (mut s_upper, s_has_upper, mut s_upper_inc) = match stored.get("lte") {
         Some(u) => (u.clone(), true, true),
         None => match stored.get("lt") {
             Some(u) => (u.clone(), true, false),
@@ -1284,13 +1284,13 @@ impl<'a> QueryCtx<'a> {
             if bdef.get("type").and_then(|t| t.as_str()) == Some("join") {
                 let want = value_scalar_string(&val).unwrap_or_default();
                 if self.id == want {
-                    let (jname, _) = crate::eval_extra::join_parts(self.doc.get(base));
+                    let (jname, _) = crate::search::eval_extra::join_parts(self.doc.get(base));
                     if jname == name {
                         return Ok((true, boost));
                     }
                 }
                 if self.idx.routing.get(&self.id).map(|r| r.as_str()) == Some(want.as_str()) {
-                    let (jname, _) = crate::eval_extra::join_parts(self.doc.get(base));
+                    let (jname, _) = crate::search::eval_extra::join_parts(self.doc.get(base));
                     if jname != name {
                         return Ok((true, boost));
                     }
@@ -2475,7 +2475,7 @@ impl<'a> QueryCtx<'a> {
         String::new()
     }
 
-    /// Query-time terms (see crate::analysis::search).
+    /// Query-time terms (see crate::search::analyzed).
     pub fn analyze_field(&self, field: &str, opts: Option<&Map<String, Value>>, text: &str) -> Vec<String> {
         self.query_tokens(field, opts, text)
     }
@@ -2515,8 +2515,8 @@ impl<'a> QueryCtx<'a> {
     ) -> Option<(bool, f64)> {
         // Synonym filters of analyzers the analysis module builds already
         // expand the query terms.
-        if let crate::analysis::search::FieldAnalyzer::Resolved(_) =
-            self.field_analyzer(field, None, crate::analysis::search::Side::Search)
+        if let crate::search::analyzed::FieldAnalyzer::Resolved(_) =
+            self.field_analyzer(field, None, crate::search::analyzed::Side::Search)
         {
             return None;
         }
@@ -3575,8 +3575,8 @@ impl<'a> QueryCtx<'a> {
                 "geo_bounding_box" => return self.eval_geo_bounding_box(body),
                 "geo_polygon" => return self.eval_geo_polygon(body),
                 "geo_shape" => return self.eval_geo_shape(body),
-                "script" => return crate::script_ctx::script_query(self, body),
-                "script_score" => return crate::script_ctx::script_score_query(self, body),
+                "script" => return crate::search::script_ctx::script_query(self, body),
+                "script_score" => return crate::search::script_ctx::script_score_query(self, body),
                 "function_score" => return self.eval_function_score(body),
                 "query_string" => return self.eval_query_string(body, false),
                 "simple_query_string" => return self.eval_simple_query_string(body),
@@ -3910,7 +3910,7 @@ fn phrase_positions_match(q: &[(String, usize)], d: &[(String, usize)], slop: us
         return false;
     }
     let mut prev: Vec<(usize, usize)> = Vec::new();
-    for (di, (tok, pos)) in d.iter().enumerate() {
+    for (di, (tok, _pos)) in d.iter().enumerate() {
         if tok == &q[0].0 {
             prev.push((di, 0));
         }

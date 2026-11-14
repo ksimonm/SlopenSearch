@@ -2,7 +2,7 @@ use axum::response::Response;
 use serde_json::{json, Map, Value};
 
 use crate::errors::{err_response, json_response, ApiError};
-use crate::search::{eval_doc, precompute_doc_values};
+use crate::search::fetch::{eval_doc, precompute_doc_values};
 use crate::http::shared::{
     parse_resolve_params, resolve_read_target, resolve_write_target, ResolveOpts2,
 };
@@ -248,7 +248,7 @@ fn percolator_query_fields(q: &Map<String, Value>, out: &mut Vec<String>) {
 }
 
 fn validate_percolator_fields(idx: &Index, q: &Map<String, Value>) -> Result<(), ApiError> {
-    if let Err(e) = crate::eval::validate_query(idx, q) {
+    if let Err(e) = crate::search::eval::validate_query(idx, q) {
         return Err(ApiError::new(
             "mapper_parsing_exception",
             "failed to parse",
@@ -259,7 +259,7 @@ fn validate_percolator_fields(idx: &Index, q: &Map<String, Value>) -> Result<(),
     let mut fields = Vec::new();
     percolator_query_fields(q, &mut fields);
     for f in fields {
-        if crate::eval::mapping_field_def(idx, &f).is_none() {
+        if crate::search::eval::mapping_field_def(idx, &f).is_none() {
             return Err(ApiError::new(
                 "mapper_parsing_exception",
                 "failed to parse",
@@ -655,7 +655,7 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
         id.to_string()
     };
     let idx = store.indices.get_mut(&target).unwrap();
-    if let Some(jf) = crate::eval_extra::find_join_field(idx) {
+    if let Some(jf) = crate::search::eval_extra::find_join_field(idx) {
         let is_child = body
             .get(&jf)
             .and_then(|v| v.as_object())
@@ -912,7 +912,7 @@ fn stored_fields_json(idx: &Index, doc: &Value, spec: &str) -> Map<String, Value
             if def.get("store").and_then(|v| v.as_bool()) == Some(true)
                 && patterns
                     .iter()
-                    .any(|p| p == "*" || p == &path || crate::http::shared::wildcard_match(p, &path))
+                    .any(|p| p == "*" || p == &path || crate::resp::glob_match(p, &path))
             {
                 out.push(path.clone());
             }
@@ -927,7 +927,7 @@ fn stored_fields_json(idx: &Index, doc: &Value, spec: &str) -> Map<String, Value
     let mut out = Map::new();
     for name in paths {
         if let Some(v) = crate::jsonv::field_value(doc, &name) {
-            let fdef = crate::eval::mapping_field_def(idx, &name);
+            let fdef = crate::search::eval::mapping_field_def(idx, &name);
             let ftype = fdef
                 .as_ref()
                 .and_then(|d| d.get("type"))
@@ -938,7 +938,7 @@ fn stored_fields_json(idx: &Index, doc: &Value, spec: &str) -> Map<String, Value
                     if let Some(s) = x.as_str() {
                         if let Some(d) = fdef.as_ref() {
                             if let Some(ms) = crate::fields::parse_date_any(d, s) {
-                                return crate::search::format_stored_value("date", &json!(ms));
+                                return crate::search::source::format_stored_value("date", &json!(ms));
                             }
                         }
                     }
@@ -1042,13 +1042,13 @@ pub fn handle_get_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> Res
     } else if req_filter {
         get_source_spec(req)
     } else {
-        crate::search::mapping_source_spec(idx).or_else(|| get_source_spec(req))
+        crate::search::source::mapping_source_spec(idx).or_else(|| get_source_spec(req))
     };
     let source_explicit = req.param("_source").map(|v| v == "true").unwrap_or(false);
     if source_enabled(idx) {
         if let Some(spec) = source_spec {
             if req.param("_source").map(|v| v != "false").unwrap_or(true) {
-                resp.insert("_source".to_string(), crate::search::filter_source(&doc, &spec));
+                resp.insert("_source".to_string(), crate::search::source::filter_source(&doc, &spec));
             }
         }
     }
@@ -1063,7 +1063,7 @@ pub fn handle_get_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> Res
     let has_filter = req.param("_source").is_some()
         || req.param("_source_includes").is_some()
         || req.param("_source_excludes").is_some()
-        || crate::search::mapping_source_spec(idx).is_some();
+        || crate::search::source::mapping_source_spec(idx).is_some();
     let has_routing = idx.routing.get(id).map(|r| !r.is_empty()).unwrap_or(false);
     if !has_filter
         && !has_routing
@@ -1139,7 +1139,7 @@ pub fn handle_get_source(store: &mut Store, req: &Req, name: &str, id: &str) -> 
             }
             match get_source_spec(req) {
                 Some(spec) => {
-                    let mut out = crate::search::filter_source(d, &spec);
+                    let mut out = crate::search::source::filter_source(d, &spec);
                     if explicit {
                         normalize_filtered_numbers(&mut out);
                     }
@@ -1319,8 +1319,8 @@ fn ctx_expr(
     p.insert("__ctx_id".to_string(), json!(id));
     p.insert("__ctx_version".to_string(), json!(version));
     let v = Value::Null;
-    let ctx = crate::eval::QueryCtx::new(idx, idx.name.as_str(), &v);
-    let env = crate::script_env::ScriptEnv { c: &ctx, params: p };
+    let ctx = crate::search::eval::QueryCtx::new(idx, idx.name.as_str(), &v);
+    let env = crate::search::script_env::ScriptEnv { c: &ctx, params: p };
     env.eval_script_expression(e)
 }
 
@@ -1360,7 +1360,7 @@ pub(crate) fn run_ctx_script(
             };
             let condv = ctx_expr(cond, idx, source, params, id, version)
                 .map_err(|_| (false, "compile error".into()))?;
-            let taken = crate::script_env::truthy(&condv);
+            let taken = crate::search::script_env::truthy(&condv);
             if taken {
                 run_ctx_script(then_block, idx, source, params, id, version, op, meta)?;
             }
@@ -1437,7 +1437,7 @@ pub(crate) fn run_ctx_script(
             };
             if !path.is_empty() {
                 let cur = src_path_get(source, path);
-                let n = crate::script_env::script_float(&cur) + delta;
+                let n = crate::search::script_env::script_float(&cur) + delta;
                 src_path_set(source, path, json!(n as i64));
                 continue;
             }
@@ -1448,10 +1448,10 @@ pub(crate) fn run_ctx_script(
                     .map_err(|_| (false, "compile error".into()))?;
                 let cur = src_path_get(source, path);
                 let nv = if let Value::String(ls) = &cur {
-                    let rs = crate::script_env::_value_to_script_string_public(&val).unwrap_or_default();
+                    let rs = crate::search::script_env::_value_to_script_string_public(&val).unwrap_or_default();
                     Value::String(format!("{}{}", ls, rs))
                 } else {
-                    json!(crate::script_env::script_float(&cur) + crate::script_env::script_float(&val))
+                    json!(crate::search::script_env::script_float(&cur) + crate::search::script_env::script_float(&val))
                 };
                 src_path_set(source, path, nv);
                 continue;
@@ -1462,7 +1462,7 @@ pub(crate) fn run_ctx_script(
                 let val = ctx_expr(rhs, idx, source, params, id, version)
                     .map_err(|_| (false, "compile error".into()))?;
                 let cur = src_path_get(source, path);
-                src_path_set(source, path, json!(crate::script_env::script_float(&cur) - crate::script_env::script_float(&val)));
+                src_path_set(source, path, json!(crate::search::script_env::script_float(&cur) - crate::search::script_env::script_float(&val)));
                 continue;
             }
             if let Some(pos) = rest.find('=') {
@@ -1500,7 +1500,7 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
             400,
         ));
     }
-    let mut target = match resolve_write_target(store, name) {
+    let target = match resolve_write_target(store, name) {
         Ok(t) => t.name.clone(),
         Err(e) => {
             if e.typ == "index_not_found_exception" && !name.contains('*') && !name.contains(',') {
@@ -1579,7 +1579,7 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
     let old_version = idx.versions.get(id).copied().unwrap_or(1);
     let mut op = String::new();
     let mut result;
-    let mut status;
+    let status;
     let mut new_version = old_version;
     let mut new_seq = idx.seq_nos.get(id).copied().unwrap_or(0);
     let mut out_source: Option<Map<String, Value>> = None;
@@ -1610,7 +1610,7 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
         }
         if let Some(raw) = &script_raw {
             let routing = idx.routing.get(id).cloned();
-            let res = match crate::script_ctx::run_update_script(
+            let res = match crate::search::script_ctx::run_update_script(
                 raw,
                 &cur,
                 &idx.name,
@@ -1620,7 +1620,7 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
                 routing.as_deref(),
             ) {
                 Ok(r) => r,
-                Err(e) => return err_response(crate::script_ctx::update_failure(&e)),
+                Err(e) => return err_response(crate::search::script_ctx::update_failure(&e)),
             };
             op = res.op.clone();
             if op == "delete" {
@@ -1694,12 +1694,12 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
         let scripted_upsert = body.get("scripted_upsert").and_then(|v| v.as_bool()).unwrap_or(false);
         if scripted_upsert {
             if let Some(raw) = &script_raw {
-                match crate::script_ctx::run_update_script(raw, &base, &idx.name, id, 0, "create", None) {
+                match crate::search::script_ctx::run_update_script(raw, &base, &idx.name, id, 0, "create", None) {
                     Ok(res) => {
                         op = res.op.clone();
                         base = res.source;
                     }
-                    Err(e) => return err_response(crate::script_ctx::update_failure(&e)),
+                    Err(e) => return err_response(crate::search::script_ctx::update_failure(&e)),
                 }
             }
             if op == "none" || op == "noop" {
@@ -1753,7 +1753,7 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
             if let Some(srcmap) = out_source {
                 let filtered = match &spec {
                     Value::Bool(true) => Value::Object(srcmap),
-                    other => crate::search::filter_source(&Value::Object(srcmap), other),
+                    other => crate::search::source::filter_source(&Value::Object(srcmap), other),
                 };
                 resp.insert("get".to_string(), json!({
                     "_seq_no": new_seq,
@@ -1923,8 +1923,8 @@ pub fn handle_mget(store: &mut Store, req: &Req, name: &str) -> Response {
             let filtered = match per_source {
                 Some(Value::Bool(true)) => Some(doc.clone()),
                 Some(Value::Bool(false)) => None,
-                Some(v) => Some(crate::search::filter_source(doc, v)),
-                None => get_source_spec(req).map(|sp| crate::search::filter_source(doc, &sp)),
+                Some(v) => Some(crate::search::source::filter_source(doc, v)),
+                None => get_source_spec(req).map(|sp| crate::search::source::filter_source(doc, &sp)),
             };
             if let Some(v) = filtered {
                 m.insert("_source".to_string(), v);
@@ -2150,7 +2150,7 @@ fn handle_count_visible(store: &mut Store, req: &Req, name: &str) -> Response {
     for n in &names {
         let idx = &store.indices[n];
         let qm = query.as_object().cloned().unwrap_or_default();
-        if let Err(e) = crate::eval::validate_query(idx, &qm) {
+        if let Err(e) = crate::search::eval::validate_query(idx, &qm) {
             if e.typ == "parsing_exception" && e.reason.starts_with("unknown query") {
                 return err_response(e);
             }
@@ -2186,7 +2186,7 @@ fn handle_count_visible(store: &mut Store, req: &Req, name: &str) -> Response {
         if let Some(tokens) = &routing_tokens {
             let mut used = std::collections::HashSet::new();
             for t in tokens {
-                used.insert(crate::search::routing_shard_of_pub(t, idx.num_shards()));
+                used.insert(crate::model::routing_shard_of_pub(t, idx.num_shards()));
             }
             shards += used.len() as i64;
         } else {
@@ -2205,9 +2205,9 @@ fn handle_count_visible(store: &mut Store, req: &Req, name: &str) -> Response {
             if let Some(tokens) = &routing_tokens {
                 let rid = idx.routing.get(id).map(|s| s.as_str()).unwrap_or("");
                 if !rid.is_empty() {
-                    let sh = crate::search::routing_shard_of_pub(rid, idx.num_shards());
+                    let sh = crate::model::routing_shard_of_pub(rid, idx.num_shards());
                     let ok = tokens.iter().any(|t| {
-                        crate::search::routing_shard_of_pub(t, idx.num_shards()) == sh
+                        crate::model::routing_shard_of_pub(t, idx.num_shards()) == sh
                     });
                     if !ok {
                         continue;
@@ -2691,9 +2691,9 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
                 Some(Value::Object(m)) => m.get("source").and_then(|v| v.as_str()).map(|s| s.to_string()),
                 _ => None,
             };
-            let mut sparams = script_val
+            let sparams = script_val
                 .and_then(|v| v.as_object())
-                .map(crate::script_env::script_params_of)
+                .map(crate::search::script_env::script_params_of)
                 .unwrap_or_default();
             let target = match resolve_write_target(store, &idx_name) {
                 Ok(t) => t.name.clone(),
@@ -2858,9 +2858,9 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
                     let sv = Value::Object(srcmap);
                     let filtered = match &spec {
                         Value::Bool(true) => sv,
-                        Value::String(s) => crate::search::filter_source(&sv, &json!({"includes": [s]})),
-                        Value::Array(a) => crate::search::filter_source(&sv, &json!({"includes": a})),
-                        other => crate::search::filter_source(&sv, other),
+                        Value::String(s) => crate::search::source::filter_source(&sv, &json!({"includes": [s]})),
+                        Value::Array(a) => crate::search::source::filter_source(&sv, &json!({"includes": a})),
+                        other => crate::search::source::filter_source(&sv, other),
                     };
                     item.insert("get".to_string(), json!({
                         "_index": idx.name, "_id": doc_id, "_version": version,
@@ -3554,11 +3554,11 @@ pub fn handle_explain(store: &mut Store, req: &Req, name: &str, id: &str) -> Res
         return json_response(404, json!({"_index": name, "_id": id, "matched": false}));
     };
     let query_map = query_val.as_object().cloned().unwrap_or_default();
-    let (matched, score) = match crate::search::eval_doc(idx, id, &doc, &crate::search::precompute_doc_values(idx), &query_map) {
+    let (matched, score) = match crate::search::fetch::eval_doc(idx, id, &doc, &crate::search::fetch::precompute_doc_values(idx), &query_map) {
         Ok(v) => v,
         Err(e) => return err_response(e),
     };
-    let (field, term) = explain_field_term(&query_val);
+    let (_field, _term) = explain_field_term(&query_val);
     let mut out = Map::new();
     out.insert("_index".to_string(), json!(name));
     out.insert("_id".to_string(), json!(id));
@@ -3584,7 +3584,7 @@ pub fn handle_explain(store: &mut Store, req: &Req, name: &str, id: &str) -> Res
         let src = if let Some(spec) = spec {
             match spec {
                 Value::Bool(true) => Some(doc.clone()),
-                other => Some(crate::search::filter_source(&doc, &other)),
+                other => Some(crate::search::source::filter_source(&doc, &other)),
             }
         } else {
             None
@@ -3625,7 +3625,7 @@ pub fn bm25_explanation(
         .and_then(|m| m.get(&field))
         .map(|v| {
             let mut out = Vec::new();
-            for val in crate::eval::array_values(v) {
+            for val in crate::search::eval::array_values(v) {
                 if let Some(s) = crate::fields::value_scalar_string(&val) {
                     out.extend(crate::analysis::basic::analyze(&s));
                 }
@@ -3645,7 +3645,7 @@ pub fn bm25_explanation(
             .and_then(|m| m.get(&field))
             .map(|v| {
                 let mut out = Vec::new();
-                for val in crate::eval::array_values(v) {
+                for val in crate::search::eval::array_values(v) {
                     if let Some(s) = crate::fields::value_scalar_string(&val) {
                         out.extend(crate::analysis::basic::analyze(&s));
                     }
@@ -3869,8 +3869,8 @@ fn validate_data_stream_doc(timestamp_field: &str, body: &Map<String, Value>) ->
 }
 
 
-fn byq_report(total: i64, updated: i64, deleted: i64, noops: i64, batches: i64, failures: &[Value]) -> Value {
-    let mut v = json!({
+fn byq_report(total: i64, _updated: i64, deleted: i64, noops: i64, batches: i64, failures: &[Value]) -> Value {
+    let v = json!({
         "took": 1, "timed_out": false, "total": total,
         "deleted": deleted, "batches": batches, "version_conflicts": 0,
         "noops": noops, "retries": {"bulk": 0, "search": 0},
@@ -3916,7 +3916,7 @@ fn byq_matched(store: &Store, target: &str, req: &Req, body: &Map<String, Value>
     for id in &idx.order {
         if idx.pending.contains_key(id) { continue; }
         let Some(doc) = idx.docs.get(id) else { continue; };
-        match crate::search::eval_doc(idx, id, doc, &extra, &qm) {
+        match crate::search::fetch::eval_doc(idx, id, doc, &extra, &qm) {
             Ok((true, _)) => ids.push(id.clone()),
             Ok(_) => {}
             Err(e) => return Err(e),
@@ -3942,7 +3942,7 @@ pub fn handle_delete_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
         Ok(t) => t.name.clone(),
         Err(e) => return err_response(e),
     };
-    let mut body = match req.json_body() {
+    let body = match req.json_body() {
         Ok(b) => b,
         Err(e) => return err_response(e),
     };
@@ -3993,7 +3993,7 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
         Ok(t) => t.name.clone(),
         Err(e) => return err_response(e),
     };
-    let mut body = match req.json_body() {
+    let body = match req.json_body() {
         Ok(b) => b,
         Err(e) => return err_response(e),
     };
@@ -4054,11 +4054,11 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
         if let Some(raw) = &script_raw {
             let idx = &store.indices[&target];
             let routing = idx.routing.get(id).cloned();
-            let res = match crate::script_ctx::run_update_script(raw, &cur, &idx.name, id, -1, "index", routing.as_deref()) {
+            let res = match crate::search::script_ctx::run_update_script(raw, &cur, &idx.name, id, -1, "index", routing.as_deref()) {
                 Ok(r) => r,
-                Err(e) => return err_response(crate::script_ctx::bulk_script_failure(&e)),
+                Err(e) => return err_response(crate::search::script_ctx::bulk_script_failure(&e)),
             };
-            if let Some(e) = crate::script_ctx::check_by_query_ctx(&res, &idx.name, id) {
+            if let Some(e) = crate::search::script_ctx::check_by_query_ctx(&res, &idx.name, id) {
                 return err_response(e);
             }
             op = res.op;

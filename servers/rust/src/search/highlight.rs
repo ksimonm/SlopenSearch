@@ -1,5 +1,8 @@
 use crate::errors::ApiError;
-use crate::eval::{mapping_field_def, single_entry, wildcard_regex};
+use std::collections::HashSet;
+use super::fetch::query_text;
+use super::eval::as_query_list;
+use crate::search::eval::{mapping_field_def, single_entry, wildcard_regex};
 use crate::analysis::basic::{analyze, simple_lower};
 use crate::jsonv::{field_value, value_to_string};
 use crate::model::Index;
@@ -248,7 +251,7 @@ fn collect_terms(
                             continue;
                         }
                         if target.map(|t| t == f).unwrap_or(true) {
-                            let (text, o) = crate::eval::query_text(val);
+                            let (text, o) = crate::search::eval::query_text(val);
                             terms.extend(an(&text, o, false));
                         }
                         if target == Some(f.as_str()) {
@@ -273,7 +276,7 @@ fn collect_terms(
                                     }
                                 }
                                 _ => {
-                                    if let Some(s) = crate::hl_analyzed::exact_value(val) {
+                                    if let Some(s) = crate::search::hl_analyzed::exact_value(val) {
                                         terms.extend(an(&s, None, true));
                                     }
                                 }
@@ -300,7 +303,7 @@ fn collect_terms(
                     };
                     if applies {
                         if let Some(qv) = m.get("query") {
-                            let (text, _) = crate::eval::query_text(qv);
+                            let (text, _) = crate::search::eval::query_text(qv);
                             terms.extend(an(&text, Some(m), false));
                         }
                         if target.is_some() {
@@ -335,7 +338,7 @@ fn collect_terms(
             "bool" => {
                 if let Some(bm) = raw.as_object() {
                     for key in ["must", "should", "filter"] {
-                        for item in crate::eval::as_query_list(bm.get(key)) {
+                        for item in crate::search::eval::as_query_list(bm.get(key)) {
                             if let Some(qm) = item.as_object() {
                                 collect_terms(qm, target, terms, touched, an);
                             }
@@ -359,7 +362,7 @@ fn collect_terms(
             }
             "dis_max" => {
                 if let Some(m) = raw.as_object() {
-                    for item in crate::eval::as_query_list(m.get("queries")) {
+                    for item in crate::search::eval::as_query_list(m.get("queries")) {
                         if let Some(qm) = item.as_object() {
                             collect_terms(qm, target, terms, touched, an);
                         }
@@ -754,7 +757,7 @@ pub fn render(
             names.push(pattern.clone());
         }
         for name in names {
-            let target = crate::eval::resolve_alias_field(idx, &name);
+            let target = crate::search::eval::resolve_alias_field(idx, &name);
             let ftype = mapping_type(idx, &target).unwrap_or_default();
             if !is_text_type(&ftype) {
                 continue;
@@ -795,7 +798,7 @@ pub fn render(
                 None => continue,
             };
             let fas = if ftype == "text" {
-                crate::hl_analyzed::FieldAnalyzers::new(idx, &target)
+                crate::search::hl_analyzed::FieldAnalyzers::new(idx, &target)
             } else {
                 None
             };
@@ -841,5 +844,74 @@ pub fn render(
         Ok(None)
     } else {
         Ok(Some(Value::Object(out)))
+    }
+}
+
+pub(crate) fn highlight_fields(body: &Value) -> Vec<String> {
+    let mut out = vec![];
+    if let Some(fields) = body
+        .get("highlight")
+        .and_then(|h| h.get("fields"))
+        .and_then(|f| f.as_object())
+    {
+        for f in fields.keys() {
+            out.push(f.clone());
+        }
+    }
+    out.sort();
+    out
+}
+
+pub(crate) fn highlight_fragment(text: &str, tokens: &HashSet<String>) -> String {
+    let words: Vec<String> = text
+        .split_whitespace()
+        .map(|w| {
+            let clean = w
+                .trim_matches(|c| matches!(c, '.' | ',' | '!' | '?'))
+                .to_string();
+            let clean = crate::analysis::basic::simple_lower(&clean);
+            if tokens.contains(&clean) {
+                format!("<em>{}</em>", w)
+            } else {
+                w.to_string()
+            }
+        })
+        .collect();
+    words.join(" ")
+}
+
+pub(crate) fn collect_tokens(query: &Map<String, Value>, out: &mut HashSet<String>) {
+    for (clause, raw) in query {
+        match clause.as_str() {
+            "match" | "match_phrase" => {
+                if let Some(mm) = raw.as_object() {
+                    if let Some((_, val)) = single_entry(mm) {
+                        let (text, _) = query_text(val);
+                        for t in analyze(&text) {
+                            out.insert(t);
+                        }
+                    }
+                }
+            }
+            "multi_match" => {
+                if let Some(q) = raw.as_object().and_then(|m| m.get("query")) {
+                    for t in analyze(&value_to_string(q).unwrap_or_default()) {
+                        out.insert(t);
+                    }
+                }
+            }
+            "bool" => {
+                if let Some(bm) = raw.as_object() {
+                    for key in ["must", "should", "filter"] {
+                        for q in as_query_list(bm.get(key)) {
+                            if let Some(qm) = q.as_object() {
+                                collect_tokens(qm, out);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 }

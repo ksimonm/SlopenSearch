@@ -5,9 +5,9 @@
 //! field's search analyzer like the query itself; term-level values are
 //! taken as they are.
 
-use crate::analysis::search::{FieldAnalyzer, Side};
+use crate::search::analyzed::{FieldAnalyzer, Side};
 use crate::analysis::Analyzer;
-use crate::eval::QueryCtx;
+use crate::search::eval::QueryCtx;
 use crate::jsonv::value_to_string;
 use crate::model::Index;
 use serde_json::{Map, Value};

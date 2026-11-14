@@ -265,7 +265,7 @@ fn validate_processor(p: &Value, _top: bool) -> Result<(), ApiError> {
         }
     }
     let mut required: Vec<&str> = Vec::new();
-    if let Some(mut r) = required_key(typ) {
+    if let Some(r) = required_key(typ) {
         required.push(r);
     }
     if typ == "set" {
@@ -499,13 +499,13 @@ fn validate_processor(p: &Value, _top: bool) -> Result<(), ApiError> {
                 .field("processor_type", json!(typ)));
             }
             if lang != "painless" {
-                let spec = crate::script_ctx::ScriptSpec {
+                let spec = crate::search::script_ctx::ScriptSpec {
                     src: cfg_str(c, "source").unwrap_or("").to_string(),
                     lang: lang.to_string(),
                     id: None,
                     params: Map::new(),
                 };
-                crate::script_ctx::check_lang(&spec, "ingest")?;
+                crate::search::script_ctx::check_lang(&spec, "ingest")?;
             }
         }
         if let Some(src) = cfg_str(c, "source") {
@@ -1385,7 +1385,7 @@ fn proc_set(
         .as_str()
         .map(|t| t.contains("{{"))
         .unwrap_or(false);
-    let mut val = resolve_value(&raw, meta, source);
+    let val = resolve_value(&raw, meta, source);
     if cfg_bool(cfg, "ignore_empty_value", false) && is_template && is_empty_value(&val) {
         return Ok(false);
     }
@@ -3001,7 +3001,7 @@ fn proc_date_index_name(
             )));
         }
     };
-    let mut ms = if strict_default {
+    let ms = if strict_default {
         let s = match &value {
             Value::String(s) => s.clone(),
             Value::Number(n) => n.to_string(),
@@ -3201,7 +3201,7 @@ fn proc_kv(
             continue;
         }
         let key = format!("{}{}{}", prefix, key, suffix);
-        if let Some(t) = &target {
+        if let Some(_t) = &target {
             let entry = parsed.iter_mut().find(|(k, _)| *k == key);
             if let Some((_, v)) = entry {
                 if let Value::Array(a) = v {

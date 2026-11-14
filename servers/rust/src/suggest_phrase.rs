@@ -56,7 +56,7 @@ fn search_analyzer_name(ctx: &Ctx, def: &Map<String, Value>) -> String {
 fn source_path(idx: &Index, field: &str) -> String {
     let mut path = field.to_string();
     while let Some((parent, child)) = path.rsplit_once('.') {
-        match crate::eval::mapping_field_def(idx, parent) {
+        match crate::search::eval::mapping_field_def(idx, parent) {
             Some(pd) if pd.get("fields").and_then(|f| f.get(child)).is_some() => path = parent.to_string(),
             _ => break,
         }
@@ -494,7 +494,7 @@ fn bad(reason: &str) -> ApiError {
 
 fn shard_err(index: &str, reason: &str) -> ApiError {
     let o = json!({"type": "illegal_argument_exception", "reason": reason});
-    crate::script_ctx::shard_failure(index, 400, o.clone(), o.clone(), o, "query")
+    crate::search::script_ctx::shard_failure(index, 400, o.clone(), o.clone(), o, "query")
 }
 
 const PHRASE_OPTIONS: &[&str] = &[
@@ -682,7 +682,7 @@ fn build_generator(
     rwel: f64,
 ) -> Result<Option<Generator>, ApiError> {
     let field = spec.get("field").and_then(value_to_string).unwrap_or_default();
-    let Some(def) = crate::eval::mapping_field_def(idx, &field) else {
+    let Some(def) = crate::search::eval::mapping_field_def(idx, &field) else {
         return Err(shard_err(&idx.name, &format!("no mapping found for field [{}]", field)));
     };
     if !has_terms(def) {
@@ -761,7 +761,7 @@ pub fn phrase_suggest(
         };
         entry_text = text.clone();
         let ctx = Ctx::for_index(idx);
-        let Some(def) = crate::eval::mapping_field_def(idx, &field).cloned() else {
+        let Some(def) = crate::search::eval::mapping_field_def(idx, &field).cloned() else {
             return Err(shard_err(&idx.name, &format!("no mapping found for field [{}]", field)));
         };
         let an_name = match body.get("analyzer").and_then(|v| v.as_str()) {
@@ -932,15 +932,15 @@ fn collate_matches(idx: &Index, template: &Value, params: &Value, phrase: &str) 
         .map_err(|_| ApiError::bad("failed to render collate query"))?;
     let q: Value = serde_json::from_str(&rendered).map_err(|_| ApiError::bad("failed to parse collate query"))?;
     let Some(qm) = q.as_object() else { return Ok(false) };
-    let extra = crate::search::precompute_doc_values(idx);
+    let extra = crate::search::fetch::precompute_doc_values(idx);
     for id in &idx.order {
         if idx.pending.contains_key(id) {
             continue;
         }
         let Some(doc) = idx.docs.get(id) else { continue };
         let ctx = match extra.get(id) {
-            Some(vals) => crate::eval::QueryCtx::with_values(idx, id, doc, vals.clone()),
-            None => crate::eval::QueryCtx::new(idx, id, doc),
+            Some(vals) => crate::search::eval::QueryCtx::with_values(idx, id, doc, vals.clone()),
+            None => crate::search::eval::QueryCtx::new(idx, id, doc),
         };
         if ctx.eval(qm).map(|(ok, _)| ok).unwrap_or(false) {
             return Ok(true);

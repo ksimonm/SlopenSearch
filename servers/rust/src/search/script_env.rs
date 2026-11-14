@@ -1,6 +1,6 @@
 // Scripting (minimal painless/expression subset). Port of servers/go/painless.go.
 
-use crate::eval::{compare_any, integer_of, QueryCtx};
+use crate::search::eval::{compare_any, integer_of, QueryCtx};
 use crate::resp::format_number;
 use crate::jsonv::to_f64;
 use serde_json::{Map, Number, Value};
@@ -681,7 +681,7 @@ impl<'a, 'b, 'c> ExprEval<'a, 'b, 'c> {
             "Math.pow" if args.len() == 2 => Ok(num_f64(
                 script_float(&args[0]).powf(script_float(&args[1])),
             )),
-            _ => match crate::script_ctx::score_function(fn_name, &args, self.env.c) {
+            _ => match crate::search::script_ctx::score_function(fn_name, &args, self.env.c) {
                 Some(f) => Ok(num_f64(f)),
                 None => Err(format!("unknown function [{}]", fn_name)),
             },

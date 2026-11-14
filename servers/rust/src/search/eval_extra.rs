@@ -2,9 +2,8 @@
 // query_string parser, function_score, more_like_this, knn.
 // Port of servers/go/eval_extra.go.
 
-use crate::eval::*;
-use crate::fields::{doc_values_for, preview_value, value_scalar_string};
-use crate::script_env::{script_float, ScriptEnv};
+use crate::search::eval::*;
+use crate::fields::{doc_values_for, value_scalar_string};
 use crate::analysis::basic::{analyze, auto_fuzziness, levenshtein};
 use crate::errors::ApiError;
 use crate::jsonv::{field_value, to_f64, value_to_string};
@@ -444,7 +443,7 @@ impl<'a> QueryCtx<'a> {
             .get("ignore_unmapped")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let def = crate::eval::mapping_field_def(self.idx, &path);
+        let def = crate::search::eval::mapping_field_def(self.idx, &path);
         let is_nested = def
             .map(|d| d.get("type").and_then(|t| t.as_str()) == Some("nested"))
             .unwrap_or(false);
@@ -542,7 +541,7 @@ impl<'a> QueryCtx<'a> {
                 ));
             }
         };
-        let def = crate::eval::mapping_field_def(self.idx, &field).cloned().unwrap_or_default();
+        let def = crate::search::eval::mapping_field_def(self.idx, &field).cloned().unwrap_or_default();
         if !child_type.is_empty() {
             let mut valid = false;
             if let Some(rels) = def.get("relations").and_then(|r| r.as_object()) {
@@ -764,7 +763,7 @@ impl<'a> QueryCtx<'a> {
         if field.is_empty() {
             return Err(err_parsing("[geo_distance] requires a field"));
         }
-        let def = crate::eval::mapping_field_def(self.idx, &field).cloned();
+        let def = crate::search::eval::mapping_field_def(self.idx, &field).cloned();
         let ftype = def
             .as_ref()
             .and_then(|d| d.get("type"))
@@ -853,7 +852,7 @@ impl<'a> QueryCtx<'a> {
             Some(s) if !field.is_empty() => s,
             _ => return Err(err_parsing("[geo_bounding_box] requires a field")),
         };
-        let def = crate::eval::mapping_field_def(self.idx, &field).cloned();
+        let def = crate::search::eval::mapping_field_def(self.idx, &field).cloned();
         if def.is_none() {
             if ignore_unmapped {
                 return Ok((false, 0.0));
@@ -992,7 +991,7 @@ impl<'a> QueryCtx<'a> {
         if field.is_empty() {
             return Err(err_parsing("[geo_shape] requires a field"));
         }
-        let def = crate::eval::mapping_field_def(self.idx, &field).cloned();
+        let def = crate::search::eval::mapping_field_def(self.idx, &field).cloned();
         if def.is_none() {
             if ignore_unmapped {
                 return Ok((false, 0.0));
@@ -1151,7 +1150,7 @@ impl<'a> QueryCtx<'a> {
             1.0 / f
         };
         let is_subfeature = exact_type != "rank_feature";
-        let mut sc;
+        let sc;
         if let Some(sat) = bm.get("saturation").and_then(|s| s.as_object()) {
             let pivot = sat.get("pivot").and_then(to_f64).unwrap_or(1.0);
             sc = f / (f + pivot);
@@ -2652,7 +2651,7 @@ impl<'a> QueryCtx<'a> {
                 .and_then(|m| m.as_str())
                 .unwrap_or("")
                 .to_string();
-            let mapped = crate::eval::mapping_field_def(self.idx, &field).is_some();
+            let mapped = crate::search::eval::mapping_field_def(self.idx, &field).is_some();
             let (vals, _) = self.values(&field);
             let mut val;
             if !vals.is_empty() {
@@ -2711,7 +2710,7 @@ impl<'a> QueryCtx<'a> {
         }
         if let Some(ss) = fno.get("script_score").and_then(|s| s.as_object()) {
             let raw = ss.get("script").cloned().unwrap_or(Value::Null);
-            return crate::script_ctx::run_score_script(self, &raw, base, true);
+            return crate::search::script_ctx::run_score_script(self, &raw, base, true);
         }
         for fn_name in ["gauss", "linear", "exp"] {
             if let Some(dec) = fno.get(fn_name).and_then(|d| d.as_object()) {
@@ -2737,7 +2736,7 @@ impl<'a> QueryCtx<'a> {
                 if vals.is_empty() {
                     return Ok(1.0);
                 }
-                let def = crate::eval::mapping_field_def(self.idx, &field).cloned().unwrap_or_default();
+                let def = crate::search::eval::mapping_field_def(self.idx, &field).cloned().unwrap_or_default();
                 let ftype = def
                     .get("type")
                     .and_then(|t| t.as_str())
@@ -2876,7 +2875,7 @@ impl<'a> QueryCtx<'a> {
             })
             && query.split_whitespace().count() > 1
         {
-            if let Some(def) = crate::eval::mapping_field_def(self.idx, &default_field) {
+            if let Some(def) = crate::search::eval::mapping_field_def(self.idx, &default_field) {
                 let ftype = def.get("type").and_then(|t| t.as_str()).unwrap_or("");
                 let split = def
                     .get("split_queries_on_whitespace")
@@ -4776,7 +4775,7 @@ impl<'a, 'b> QsParser<'a, 'b> {
         if cond1 {
             let i = tok.find(':').unwrap_or(0);
             let field = tok[..i].to_string();
-            let mut value = tok[i + 1..].to_string();
+            let value = tok[i + 1..].to_string();
             if value.is_empty() && self.pos < self.tokens.len() {
                 if self.tokens[self.pos] == "(" {
                     self.pos += 1;

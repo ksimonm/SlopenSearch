@@ -21,7 +21,6 @@ pub mod filters;
 mod fold_table;
 use crate::jregex;
 pub mod script;
-pub mod search;
 pub mod settings;
 pub mod stem;
 pub mod stopwords;

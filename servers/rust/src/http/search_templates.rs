@@ -238,7 +238,7 @@ pub fn handle_search_template(store: &mut Store, req: &Req, name: &str) -> Respo
         Err(e) => return err_response(e),
     };
     let view = crate::model::visibility::enter(store, &names);
-    let result = crate::search::run_search(store, name, &names, &rendered_body, req);
+    let result = crate::http::search::run_search(store, name, &names, &rendered_body, req);
     crate::model::visibility::leave(store, view);
     match result {
         Ok(v) => {
@@ -474,7 +474,7 @@ pub fn handle_msearch(store: &mut Store, req: &Req, path: &str, template: bool) 
         };
         let spec = if path.is_empty() { "_all".to_string() } else { path.to_string() };
         let view = crate::model::visibility::enter(store, &names);
-        let result = crate::search::run_search(store, &spec, &names, &body, req);
+        let result = crate::http::search::run_search(store, &spec, &names, &body, req);
         crate::model::visibility::leave(store, view);
         match result {
             Ok(v) => {

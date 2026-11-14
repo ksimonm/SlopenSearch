@@ -69,3 +69,66 @@ pub fn parse_date(v: &Value) -> Option<f64> {
     }
     parse_date_string(v.as_str()?)
 }
+
+pub(crate) fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+pub(crate) fn date_parts(ms: i64) -> (i64, i64, i64, i64, i64, i64, i64) {
+    let secs_total = ms.div_euclid(1000);
+    let millis = ms.rem_euclid(1000);
+    let days = secs_total.div_euclid(86400);
+    let rem = secs_total.rem_euclid(86400);
+    let (y, mo, d) = civil_from_days(days);
+    (y, mo, d, rem / 3600, (rem % 3600) / 60, rem % 60, millis)
+}
+
+pub(crate) fn format_epoch_ms(ms: i64) -> String {
+    let (y, mo, d, hh, mi, ss, millis) = date_parts(ms);
+    let ys = if y < 0 {
+        format!("-{:04}", -y)
+    } else {
+        format!("{:04}", y)
+    };
+    format!(
+        "{}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        ys, mo, d, hh, mi, ss, millis
+    )
+}
+
+pub(crate) fn apply_java_date_format(f: &str, ms: i64) -> Option<String> {
+    let excluded = [
+        "epoch_millis",
+        "epoch_second",
+        "date_optional_time",
+        "strict_date_optional_time",
+        "strict_date_optional_time_nanos",
+        "date_time",
+        "basic_date_time",
+        "strict_date_optional_time||epoch_millis",
+    ];
+    if f.is_empty() || excluded.contains(&f) {
+        return None;
+    }
+    let (y, mo, d, hh, mi, ss, millis) = date_parts(ms);
+    let mut out = f.replace("'T'", "T");
+    out = out.replace("SSSSSSSSS", &format!("{:09}", millis * 1_000_000));
+    out = out.replace("SSS", &format!("{:03}", millis));
+    out = out.replace("yyyy", &format!("{:04}", y));
+    out = out.replace("yy", &format!("{:02}", y.rem_euclid(100)));
+    out = out.replace("MM", &format!("{:02}", mo));
+    out = out.replace("dd", &format!("{:02}", d));
+    out = out.replace("HH", &format!("{:02}", hh));
+    out = out.replace("mm", &format!("{:02}", mi));
+    out = out.replace("ss", &format!("{:02}", ss));
+    Some(out)
+}

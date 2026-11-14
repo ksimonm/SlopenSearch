@@ -773,7 +773,7 @@ fn handle_node_usage(req: &Req) -> Response {
     )
 }
 
-fn handle_hot_threads(req: &Req) -> Response {
+fn handle_hot_threads(_req: &Req) -> Response {
     let ts = format_utc_millis(now_millis());
     let body = format!(
         "::: {{{}}}{{{}}}\n   Hot threads at {}, interval=500ms, busiestThreads=3, ignoreIdleThreads=true:\n\n",

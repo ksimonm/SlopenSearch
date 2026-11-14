@@ -13,7 +13,7 @@ fn f32v(x: f32) -> Value {
 
 fn term_shard_error(idx: &Index, reason: &str) -> ApiError {
     let o = json!({"type": "illegal_argument_exception", "reason": reason});
-    crate::script_ctx::shard_failure(&idx.name, 400, o.clone(), o.clone(), o, "query")
+    crate::search::script_ctx::shard_failure(&idx.name, 400, o.clone(), o.clone(), o, "query")
 }
 
 const TERM_OPTIONS: &[&str] = &[
@@ -201,7 +201,7 @@ fn term_suggester(
 
     let mut entries: Vec<TermEntry> = vec![];
     for (ii, idx) in indices.iter().enumerate() {
-        let def = match crate::eval::mapping_field_def(idx, &field) {
+        let def = match crate::search::eval::mapping_field_def(idx, &field) {
             Some(d) => d.clone(),
             None => return Err(term_shard_error(idx, &format!("no mapping found for field [{}]", field))),
         };

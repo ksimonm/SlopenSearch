@@ -208,7 +208,7 @@ pub fn handle_reindex(store: &mut Store, req: &Req) -> Response {
     let mut items: Vec<(String, String, Value)> = vec![];
     for sidx in &src_indices {
         let idx = &store.indices[sidx];
-        let extra = crate::search::precompute_doc_values(idx);
+        let extra = crate::search::fetch::precompute_doc_values(idx);
         for id in &idx.order {
             let doc = match idx.docs.get(id) {
                 Some(d) => d,
@@ -216,7 +216,7 @@ pub fn handle_reindex(store: &mut Store, req: &Req) -> Response {
             };
             if let Some(q) = &query {
                 if let Some(qm) = q.as_object() {
-                    match crate::search::eval_doc(idx, id, doc, &extra, qm) {
+                    match crate::search::fetch::eval_doc(idx, id, doc, &extra, qm) {
                         Ok((ok, _)) => {
                             if !ok {
                                 continue;
@@ -253,9 +253,9 @@ pub fn handle_reindex(store: &mut Store, req: &Req) -> Response {
         let mut dest_name = base_dest.clone();
         if let Some(raw) = &script_raw {
             let routing = store.indices.get(&it_idx).and_then(|i| i.routing.get(&it_id)).cloned();
-            let res = match crate::script_ctx::run_update_script(raw, &doc, &it_idx, &it_id, -1, "index", routing.as_deref()) {
+            let res = match crate::search::script_ctx::run_update_script(raw, &doc, &it_idx, &it_id, -1, "index", routing.as_deref()) {
                 Ok(r) => r,
-                Err(e) => return err_response(crate::script_ctx::bulk_script_failure(&e)),
+                Err(e) => return err_response(crate::search::script_ctx::bulk_script_failure(&e)),
             };
             match res.raw_op.as_str() {
                 "noop" => {
@@ -277,7 +277,7 @@ pub fn handle_reindex(store: &mut Store, req: &Req) -> Response {
             doc = res.source;
             id = match &res.id {
                 Value::Null => store.next_id(),
-                v => crate::script_ctx::value_text(v),
+                v => crate::search::script_ctx::value_text(v),
             };
             if let Value::String(n) = &res.index {
                 if *n != it_idx {

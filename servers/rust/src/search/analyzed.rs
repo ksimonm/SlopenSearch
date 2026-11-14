@@ -4,8 +4,8 @@
 
 use serde_json::{Map, Value};
 
-use super::{Analyzer, Ctx, Token};
-use crate::eval::{mapping_field_def, resolve_alias_field, QueryCtx};
+use crate::analysis::{Analyzer, Ctx, Token};
+use crate::search::eval::{mapping_field_def, resolve_alias_field, QueryCtx};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Side {
@@ -75,7 +75,7 @@ impl<'a> QueryCtx<'a> {
     fn positions_with(&self, fa: FieldAnalyzer, text: &str) -> Vec<(String, usize)> {
         match fa {
             FieldAnalyzer::Resolved(a) => a.run(text).tokens.into_iter().map(|t| (t.term, t.pos)).collect(),
-            FieldAnalyzer::Legacy(name) => crate::eval::analyze_positions(&name, text),
+            FieldAnalyzer::Legacy(name) => crate::search::eval::analyze_positions(&name, text),
         }
     }
 

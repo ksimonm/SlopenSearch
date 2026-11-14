@@ -2,6 +2,7 @@
 //! values with Java semantics, the class library, `java.time` and
 //! `java.util.regex`. A leaf library: it knows nothing about indices or HTTP.
 
+pub(crate) mod api;
 pub(crate) mod check;
 pub(crate) mod interp;
 pub(crate) mod lex;

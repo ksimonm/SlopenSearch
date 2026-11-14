@@ -87,7 +87,7 @@ pub fn handle_root(_store: &mut Store, req: &Req) -> Response {
                 .insert("allow", "DELETE,HEAD,GET".parse().unwrap());
             return resp;
         }
-        m => return method_not_allowed(req, &["DELETE", "HEAD", "GET"]),
+        _m => return method_not_allowed(req, &["DELETE", "HEAD", "GET"]),
     }
     let body = json!({
         "name": NODE_NAME,
@@ -1070,7 +1070,7 @@ fn apply_cluster_settings(
             ops.push((key.clone(), None));
             continue;
         }
-        let mut str_val = settings_value_string(val);
+        let str_val = settings_value_string(val);
         if key == "cluster.max_shards_per_node" {
             if str_val.parse::<i64>().is_err() {
                 return Err(ApiError::bad(&format!(

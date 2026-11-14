@@ -63,7 +63,7 @@ fn java_value(v: &Value) -> String {
 
 pub fn handle_scripts(store: &mut Store, req: &Req, segs: &[String]) -> Response {
     let resp = handle_scripts_inner(store, req, segs);
-    crate::script_ctx::sync_stored(&store.scripts);
+    crate::search::script_ctx::sync_stored(&store.scripts);
     resp
 }
 

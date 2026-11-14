@@ -2,7 +2,7 @@
 // and the knn_score script (lang "knn").
 
 use crate::errors::ApiError;
-use crate::eval::QueryCtx;
+use crate::search::eval::QueryCtx;
 use crate::knn::{f32r, field_def, raw, score, source_vector};
 use crate::jsonv::to_f64;
 use crate::model::Index;
@@ -36,7 +36,7 @@ pub fn shard_err(idx: &Index, reason: &str, cause_type: &str) -> ApiError {
         "index": idx.name,
         "index_uuid": idx.uuid,
     });
-    crate::script_ctx::shard_failure(&idx.name, 400, root, shard.clone(), shard, "query")
+    crate::search::script_ctx::shard_failure(&idx.name, 400, root, shard.clone(), shard, "query")
 }
 
 fn iae(reason: &str) -> ApiError {
@@ -554,7 +554,7 @@ pub fn knn_score_script(qc: &QueryCtx, script: &Value) -> Result<f64, ApiError> 
             "index_uuid": idx.uuid,
             "caused_by": cause,
         });
-        return Err(crate::script_ctx::shard_failure(&idx.name, 400, cause.clone(), shard, cause, "query"));
+        return Err(crate::search::script_ctx::shard_failure(&idx.name, 400, cause.clone(), shard, cause, "query"));
     }
     let params = script.get("params").and_then(|p| p.as_object()).cloned().unwrap_or_default();
     for p in ["field", "query_value", "space_type"] {
@@ -697,7 +697,7 @@ pub fn exact_search_err(idx: &Index, field: &str) -> ApiError {
         "index": idx.name,
         "index_uuid": idx.uuid,
     });
-    crate::script_ctx::shard_failure(&idx.name, 400, o.clone(), o.clone(), o, "query")
+    crate::search::script_ctx::shard_failure(&idx.name, 400, o.clone(), o.clone(), o, "query")
 }
 
 /// Sorting on a knn_vector field fails on the shard.
@@ -726,7 +726,7 @@ pub fn check_sort(idx: &Index, sort: Option<&Value>) -> Result<(), ApiError> {
                 "knn vector field doesn't support this operation",
                 500,
             );
-            return Err(crate::script_ctx::plain_shard_error(idx, &e));
+            return Err(crate::search::script_ctx::plain_shard_error(idx, &e));
         }
     }
     Ok(())

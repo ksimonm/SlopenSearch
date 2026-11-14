@@ -1,10 +1,10 @@
 // Painless engine: runtime values with Java semantics.
 //
-// The engine is split over the pl_*.rs files (a port of the Go server's
-// pl_*.go design): lexing (pl_lex), parsing (pl_parse), static checks
-// (pl_check), runtime values (this file), the interpreter (pl_interp), the
-// class library (pl_lib), java.time (pl_time), regexes (pl_regex) and the
-// script contexts / error rendering / _execute API (pl_api).
+// The engine is split over the files of crate::painless (a port of the Go
+// server's painless package): lexing (lex), parsing (parse), static checks
+// (check), runtime values (this file), the interpreter (interp), the class
+// library (lib), java.time (time), regexes (regex) and the script contexts /
+// compilation / error rendering (api).
 //
 // Boxed primitives keep their Java width: Int is java.lang.Integer, Long is
 // java.lang.Long, Char is java.lang.Character and so on.

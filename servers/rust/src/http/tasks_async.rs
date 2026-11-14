@@ -993,7 +993,7 @@ fn list_docs(
             Some(i) => i,
             None => continue,
         };
-        let extra = crate::search::precompute_doc_values(idx);
+        let extra = crate::search::fetch::precompute_doc_values(idx);
         for id in &idx.order {
             if job.kind != Kind::Reindex && idx.pending.contains_key(id) {
                 continue;
@@ -1003,7 +1003,7 @@ fn list_docs(
                 None => continue,
             };
             if let Some(qm) = qm {
-                if !crate::search::eval_doc(idx, id, doc, &extra, qm)?.0 {
+                if !crate::search::fetch::eval_doc(idx, id, doc, &extra, qm)?.0 {
                     continue;
                 }
             }

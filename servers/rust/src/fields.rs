@@ -421,7 +421,7 @@ impl IndexCtx {
             ));
         }
         let orig = s.to_string();
-        let mut st = if trim { s.trim().to_string() } else { s.to_string() };
+        let st = if trim { s.trim().to_string() } else { s.to_string() };
         if typ == "unsigned_long" {
             match st.parse::<u64>() {
                 Ok(u) => return Ok(num_u64(u)),
@@ -1303,7 +1303,7 @@ impl IndexCtx {
             .and_then(|v| v.as_str())
             .unwrap_or("object")
             .to_string();
-        let has_props = def
+        let _has_props = def
             .get("properties")
             .map(|p| p.is_object())
             .unwrap_or(false);
@@ -2183,7 +2183,7 @@ pub fn flat_object_root(idx: &Index, field: &str) -> Option<String> {
     let parts: Vec<&str> = field.split('.').collect();
     for i in (1..parts.len()).rev() {
         let prefix = parts[..i].join(".");
-        if let Some(def) = crate::eval::mapping_field_def(idx, &prefix) {
+        if let Some(def) = crate::search::eval::mapping_field_def(idx, &prefix) {
             if def.get("type").and_then(|t| t.as_str()) == Some("flat_object") {
                 return Some(prefix);
             }
@@ -2507,7 +2507,7 @@ pub fn apply_normalizer_idx(idx: &Index, name: &str, s: &str) -> String {
 }
 
 pub fn normalize_query_value(idx: &Index, field: &str, v: &Value) -> Value {
-    let def = match crate::eval::mapping_field_def(idx, field) {
+    let def = match crate::search::eval::mapping_field_def(idx, field) {
         Some(d) => d,
         None => return v.clone(),
     };
@@ -2786,7 +2786,7 @@ impl IndexCtx {
                     "GEOMETRYCOLLECTION",
                 ];
                 if known.iter().any(|k| up.starts_with(k)) {
-                    if crate::eval_extra::parse_wkt_shape(s).is_some() {
+                    if crate::search::eval_extra::parse_wkt_shape(s).is_some() {
                         Ok(v.clone())
                     } else {
                         Err(err("parse_exception", "Invalid WKT format"))
@@ -3240,7 +3240,7 @@ impl IndexCtx {
         let props_clone = props.clone();
         let targets: Vec<String> = self.copy_targets.iter().cloned().collect();
         for t in targets {
-            let def = crate::eval::mapping_field_def(idx, &t).cloned().unwrap_or_default();
+            let def = crate::search::eval::mapping_field_def(idx, &t).cloned().unwrap_or_default();
             let typ = def
                 .get("type")
                 .and_then(|v| v.as_str())

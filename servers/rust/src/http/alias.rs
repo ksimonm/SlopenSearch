@@ -213,12 +213,12 @@ pub fn put_alias_api(store: &mut Store, req: &Req, index_spec: &str, alias_name:
         Ok(n) => n,
         Err(e) => return err_response(e),
     };
-    let mut def = normalize_alias_def(&body);
+    let def = normalize_alias_def(&body);
     if let Some(filt) = def.get("filter") {
         if !filt.is_null() {
             if let Some(fq) = filt.as_object() {
                 let dummy = Index::skeleton("");
-                if let Err(err) = crate::search::validate_query(&dummy, &Value::Object(fq.clone())) {
+                if let Err(err) = crate::search::validate::validate_query(&dummy, &Value::Object(fq.clone())) {
                     let mut e = ApiError::bad(&format!(
                         "failed to parse filter for alias [{}]",
                         alias_name
@@ -323,7 +323,7 @@ struct AliasAction {
 fn expand_names(def: &Map<String, Value>) -> (Vec<String>, Vec<String>) {
     let mut index_names: Vec<String> = vec![];
     let mut alias_names: Vec<String> = vec![];
-    let mut push_strings = |v: Option<&Value>, out: &mut Vec<String>| {
+    let push_strings = |v: Option<&Value>, out: &mut Vec<String>| {
         match v {
             Some(Value::String(s)) => out.push(s.clone()),
             Some(Value::Array(a)) => {
@@ -478,7 +478,7 @@ pub fn post_aliases(store: &mut Store, req: &Req) -> Response {
                         if let Some(fq) = filt.as_object() {
                             let dummy = Index::skeleton("");
                             if let Err(err) =
-                                crate::search::validate_query(&dummy, &Value::Object(fq.clone()))
+                                crate::search::validate::validate_query(&dummy, &Value::Object(fq.clone()))
                             {
                                 let mut e = ApiError::bad(&format!(
                                     "failed to parse filter for alias [{}]",
