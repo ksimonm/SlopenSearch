@@ -14,8 +14,8 @@ import (
 func (s *Server) maintenanceOp(w http.ResponseWriter, r *http.Request, spec, op string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	o := s.parseResolveParams(r, resolveOpts2{})
-	indices, apiErr2 := s.resolveSpec2(spec, o)
+	o := s.parseResolveParams(r, specOpts{})
+	indices, apiErr2 := s.resolveSpec(spec, o)
 	if apiErr2 != nil {
 		writeError(w, apiErr2)
 		return
@@ -177,8 +177,8 @@ func (s *Server) handleStatsAPI(w http.ResponseWriter, r *http.Request, spec, me
 			Reason: "level parameter must be one of [cluster] or [indices] or [shards] but was [" + level + "]"})
 		return
 	}
-	o := s.parseResolveParams(r, resolveOpts2{})
-	indices, apiErr2 := s.resolveSpec2(spec, o)
+	o := s.parseResolveParams(r, specOpts{})
+	indices, apiErr2 := s.resolveSpec(spec, o)
 	if apiErr2 != nil {
 		writeError(w, apiErr2)
 		return
@@ -262,8 +262,8 @@ func mergeMetrics(dst, src map[string]any) {
 func (s *Server) handleSegmentsAPI(w http.ResponseWriter, r *http.Request, spec string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	o := s.parseResolveParams(r, resolveOpts2{})
-	indices, apiErr2 := s.resolveSpec2(spec, o)
+	o := s.parseResolveParams(r, specOpts{})
+	indices, apiErr2 := s.resolveSpec(spec, o)
 	if apiErr2 != nil {
 		writeError(w, apiErr2)
 		return
@@ -320,8 +320,8 @@ func (s *Server) handleRecoveryAPI(w http.ResponseWriter, r *http.Request, spec 
 		writeJSON(w, 200, map[string]any{})
 		return
 	}
-	o := s.parseResolveParams(r, resolveOpts2{})
-	indices, apiErr2 := s.resolveSpec2(spec, o)
+	o := s.parseResolveParams(r, specOpts{})
+	indices, apiErr2 := s.resolveSpec(spec, o)
 	if apiErr2 != nil {
 		writeError(w, apiErr2)
 		return

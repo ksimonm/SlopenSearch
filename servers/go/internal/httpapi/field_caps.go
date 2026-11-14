@@ -89,7 +89,7 @@ func fieldCapsFields(r *http.Request) []string {
 	return out
 }
 
-func (s *Server) handleFieldCapsImpl(w http.ResponseWriter, r *http.Request, indexSpec string) {
+func (s *Server) handleFieldCaps(w http.ResponseWriter, r *http.Request, indexSpec string) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		methodNotAllowed(w, r, "GET", "POST")
 		return

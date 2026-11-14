@@ -14,9 +14,9 @@ import (
 	"slopensearch/internal/painless"
 )
 
-// KnnShardFail renders a "failed to create query" shard failure whose
+// knnShardFail renders a "failed to create query" shard failure whose
 // cause is an illegal_argument_exception.
-func KnnShardFail(idx *model.Index, reason string) *apierr.Error {
+func knnShardFail(idx *model.Index, reason string) *apierr.Error {
 	return knnShardFailWith(idx, "failed to create query: "+reason, ojson.Object{
 		{"type", "illegal_argument_exception"}, {"reason", reason}}, true)
 }
@@ -52,43 +52,43 @@ func (c *QueryCtx) knnScriptScore(sm map[string]any) (float64, *apierr.Error) {
 	params, _ := sm["params"].(map[string]any)
 	for _, p := range []string{"field", "query_value", "space_type"} {
 		if _, ok := params[p]; !ok {
-			return 0, KnnShardFail(c.Idx, "Missing parameter ["+p+"]")
+			return 0, knnShardFail(c.Idx, "Missing parameter ["+p+"]")
 		}
 	}
 	field, _ := params["field"].(string)
 	space, _ := params["space_type"].(string)
-	qv, _ := FloatList(params["query_value"])
+	qv, _ := floatList(params["query_value"])
 	if !knnScriptSpaces[space] {
-		return 0, KnnShardFail(c.Idx, "Invalid space type. Please refer to the available space types.")
+		return 0, knnShardFail(c.Idx, "Invalid space type. Please refer to the available space types.")
 	}
-	def, _ := KnnFieldDef(c.Idx, field)
+	def, _ := knnFieldDef(c.Idx, field)
 	if t, _ := def["type"].(string); t != "knn_vector" {
-		return 0, KnnShardFail(c.Idx, fmt.Sprintf("Incompatible field_type for %s space. The field type must be knn_vector.", space))
+		return 0, knnShardFail(c.Idx, fmt.Sprintf("Incompatible field_type for %s space. The field type must be knn_vector.", space))
 	}
 	fi := mapping.KnnInfo(def)
 	dt := strings.ToUpper(fi.DataType)
 	if space == "hamming" && dt != "BINARY" {
-		return 0, KnnShardFail(c.Idx, "Incompatible field_type for hamming space. The data type should be [BINARY] but got "+dt)
+		return 0, knnShardFail(c.Idx, "Incompatible field_type for hamming space. The data type should be [BINARY] but got "+dt)
 	}
 	if space != "hamming" && dt == "BINARY" {
-		return 0, KnnShardFail(c.Idx, fmt.Sprintf("Incompatible field_type for %s space. The data type should be [HALF_FLOAT, BYTE, FLOAT] but got BINARY", space))
+		return 0, knnShardFail(c.Idx, fmt.Sprintf("Incompatible field_type for %s space. The data type should be [HALF_FLOAT, BYTE, FLOAT] but got BINARY", space))
 	}
 	want := fi.Dim
 	if dt == "BINARY" {
 		want = fi.Dim / 8
 	}
 	if len(qv) != want {
-		return 0, KnnShardFail(c.Idx, fmt.Sprintf("Object's length=%d does not match the expected length=%d.", len(qv), want))
+		return 0, knnShardFail(c.Idx, fmt.Sprintf("Object's length=%d does not match the expected length=%d.", len(qv), want))
 	}
-	dv, ok := c.DocVector(field)
+	dv, ok := c.docVector(field)
 	if !ok || len(dv) != len(qv) {
 		return 0, nil
 	}
 	if space == "l1" || space == "linf" {
-		d, _ := KnnDistanceScore(space, qv, dv)
+		d, _ := knnDistanceScore(space, qv, dv)
 		return float64(float32(1 / (1 + d))), nil
 	}
-	_, s := KnnDistanceScore(space, qv, dv)
+	_, s := knnDistanceScore(space, qv, dv)
 	return s, nil
 }
 

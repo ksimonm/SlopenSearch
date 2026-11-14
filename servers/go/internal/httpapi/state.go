@@ -92,7 +92,7 @@ func mergeMapping(idx *model.Index, props map[string]any, path, dyn string, src 
 		if k == "" {
 			k = rawK
 		}
-		if mapping.IsDocumentMetadataField(k) {
+		if mapping.IsMetadataField(k) {
 			continue
 		}
 		childPath := k

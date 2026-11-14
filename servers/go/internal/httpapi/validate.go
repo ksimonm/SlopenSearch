@@ -46,8 +46,8 @@ func (s *Server) handleValidateQuery(w http.ResponseWriter, r *http.Request, nam
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	o := s.parseResolveParams(r, resolveOpts2{closedError: true})
-	indices, apiErr := s.resolveSpec2(name, o)
+	o := s.parseResolveParams(r, specOpts{closedError: true})
+	indices, apiErr := s.resolveSpec(name, o)
 	if apiErr != nil {
 		writeError(w, apiErr)
 		return

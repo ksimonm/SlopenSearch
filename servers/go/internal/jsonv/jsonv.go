@@ -128,3 +128,59 @@ func Unmarshal(b []byte, v any) error {
 	dec.UseNumber()
 	return dec.Decode(v)
 }
+
+// ToInt64 returns an integral JSON value (int, int64, uint64 within range,
+// integral json.Number) as an int64.
+func ToInt64(v any) (int64, bool) {
+	switch t := v.(type) {
+	case int64:
+		return t, true
+	case int:
+		return int64(t), true
+	case uint64:
+		if t <= 1<<63-1 {
+			return int64(t), true
+		}
+		return 0, false
+	case json.Number:
+		if n, err := t.Int64(); err == nil {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+// Int reads body[key] as a number truncated to an int, or def when it is
+// missing or not numeric.
+func Int(body map[string]any, key string, def int) int {
+	if v, ok := body[key]; ok {
+		if f, ok := ToFloat(v); ok {
+			return int(f)
+		}
+	}
+	return def
+}
+
+// NormalizeNumbers replaces, in place, json.Numbers written with a fraction or
+// an exponent by Float values, so they render as doubles.
+func NormalizeNumbers(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, e := range t {
+			t[k] = NormalizeNumbers(e)
+		}
+		return t
+	case []any:
+		for i, e := range t {
+			t[i] = NormalizeNumbers(e)
+		}
+		return t
+	case json.Number:
+		if strings.ContainsAny(t.String(), ".eE") {
+			f, _ := t.Float64()
+			return Float(f)
+		}
+		return t
+	}
+	return v
+}

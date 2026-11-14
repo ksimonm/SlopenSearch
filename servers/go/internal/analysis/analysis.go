@@ -12,8 +12,7 @@ import (
 
 // Analysis framework: analyzers, tokenizers, token filters and the _analyze API.
 
-// analyzeWithIndex tokenizes text with a named analyzer, resolving custom
-// analyzers configured in index settings. Falls back to the built-in set.
+// englishStopWords is Lucene's English stop word set (_english_).
 var englishStopWords = map[string]bool{
 	"a": true, "an": true, "and": true, "are": true, "as": true, "at": true,
 	"be": true, "but": true, "by": true, "for": true, "if": true, "in": true,

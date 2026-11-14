@@ -348,7 +348,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if segs[0] == "_bulk" {
-		s.handleBulkV2(w, r, "")
+		s.handleBulk(w, r, "")
 		return
 	}
 	if segs[0] == "_msearch" {
@@ -617,7 +617,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		case "_analyze":
 			s.handleAnalyze(w, r, index)
 		case "_bulk":
-			s.handleBulkV2(w, r, index)
+			s.handleBulk(w, r, index)
 		case "_msearch":
 			s.handleMsearch(w, r, index)
 		case "_mget":
@@ -693,7 +693,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 			}
 		case "_doc":
 			if r.Method == http.MethodPost {
-				s.handleIndexDocV2(w, r, index, "", "index")
+				s.handleIndexDoc(w, r, index, "", "index")
 			} else {
 				methodNotAllowed(w, r, "POST")
 			}
@@ -727,11 +727,11 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		case "_doc":
 			switch r.Method {
 			case http.MethodPut, http.MethodPost:
-				s.handleIndexDocV2(w, r, index, segs[2], "index")
+				s.handleIndexDoc(w, r, index, segs[2], "index")
 			case http.MethodGet, http.MethodHead:
-				s.handleGetDocV2(w, r, index, segs[2])
+				s.handleGetDoc(w, r, index, segs[2])
 			case http.MethodDelete:
-				s.handleDeleteDocV2(w, r, index, segs[2])
+				s.handleDeleteDoc(w, r, index, segs[2])
 			case http.MethodOptions:
 				w.Header().Set("Allow", "PUT,POST,GET,HEAD,DELETE")
 				w.Header().Set("Content-Type", "text/plain; charset=UTF-8")
@@ -744,11 +744,11 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 				methodNotAllowed(w, r, "GET", "HEAD")
 				return
 			}
-			s.handleGetSourceV2(w, r, index, segs[2])
+			s.handleGetSource(w, r, index, segs[2])
 		case "_termvectors":
 			s.handleTermVectors(w, r, index, segs[2])
 		case "_update":
-			s.handleUpdateDocV2(w, r, index, segs[2])
+			s.handleUpdateDoc(w, r, index, segs[2])
 		case "_explain":
 			s.handleExplain(w, r, index, segs[2])
 		case "_rollover":
@@ -756,7 +756,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		case "_clone", "_shrink", "_split":
 			s.handleResize(w, r, index, strings.TrimPrefix(segs[1], "_"), segs[2])
 		case "_create":
-			s.handleIndexDocV2(w, r, index, segs[2], "create")
+			s.handleIndexDoc(w, r, index, segs[2], "create")
 		case "_alias", "_aliases":
 			switch r.Method {
 			case http.MethodGet, http.MethodHead:
@@ -1040,8 +1040,8 @@ func (s *Server) handleCount(w http.ResponseWriter, r *http.Request, name string
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	o := s.parseResolveParams(r, resolveOpts2{closedError: true})
-	indices, apiErr := s.resolveSpec2(name, o)
+	o := s.parseResolveParams(r, specOpts{closedError: true})
+	indices, apiErr := s.resolveSpec(name, o)
 	if apiErr != nil {
 		writeError(w, apiErr)
 		return

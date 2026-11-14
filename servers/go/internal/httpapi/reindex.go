@@ -160,7 +160,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	allowNo := false
-	srcIndices, apiErr := s.resolveSpec2(srcSpec, resolveOpts2{allowNoIndices: &allowNo})
+	srcIndices, apiErr := s.resolveSpec(srcSpec, specOpts{allowNoIndices: &allowNo})
 	if apiErr != nil {
 		writeError(w, apiErr)
 		return

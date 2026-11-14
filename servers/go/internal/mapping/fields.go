@@ -136,7 +136,7 @@ func ignoreAboveExceeded(def map[string]any, v any) bool {
 	return len([]rune(s)) > limit
 }
 
-// numericKind classifies the numeric field types.
+// IsIntegerKind reports whether t is an integer field type.
 func IsIntegerKind(t string) bool {
 	switch t {
 	case "byte", "short", "integer", "long", "unsigned_long":
@@ -1077,7 +1077,7 @@ func (c *ParseContext) indexObjectMap(path string, props map[string]any, src map
 		if k == "" {
 			k = rawK
 		}
-		if IsDocumentMetadataField(k) {
+		if IsMetadataField(k) {
 			if err := c.rejectMetadataField(k); err != nil {
 				return err
 			}
@@ -1149,7 +1149,7 @@ func (c *ParseContext) indexObjectMap(path string, props map[string]any, src map
 	return nil
 }
 
-func IsDocumentMetadataField(name string) bool {
+func IsMetadataField(name string) bool {
 	switch name {
 	case "_id", "_index", "_source", "_routing", "_field_names", "_ignored":
 		return true
@@ -1166,7 +1166,7 @@ func (c *ParseContext) rejectMetadataField(name string) *apierr.Error {
 
 func (c *ParseContext) bumpTotalFields() {}
 
-// constantKeywordDefault fills the fixed value for docs missing the field.
+// fillConstants fills the fixed constant_keyword value for docs missing the field.
 func (c *ParseContext) fillConstants(props map[string]any, src map[string]any) {
 	for name, raw := range props {
 		def, ok := raw.(map[string]any)

@@ -45,7 +45,7 @@ func CompletionContextNames(ctxs []CompletionContextDef) string {
 }
 
 // validateCompletionMapping checks the completion specific mapping parameters.
-func validateCompletionMapping(def map[string]any) *ValidationError {
+func validateCompletionMapping(def map[string]any) *validationError {
 	if v, has := def["max_input_length"]; has {
 		if n, ok := intFromAny(v); ok && n <= 0 {
 			return mve(fmt.Sprintf("[max_input_length] must be > 0 but was [%d]", n), "")
@@ -138,7 +138,7 @@ func (c *ParseContext) checkCompletionContexts(path string, def map[string]any, 
 			}
 		case map[string]any:
 			if cm, ok := t["contexts"].(map[string]any); ok {
-				for _, name := range SortedAnyKeys(cm) {
+				for _, name := range jsonv.SortedKeys(cm) {
 					if !known[name] {
 						return completionParseError("illegal_argument_exception",
 							"Unknown context name ["+name+"], must be one of ["+CompletionContextNames(ctxs)+"]")

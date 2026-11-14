@@ -8,8 +8,8 @@ import (
 	"slopensearch/internal/ojson"
 )
 
-// MustacheScriptError is the script_exception of a failed template.
-func MustacheScriptError(src string, e *mustache.Error) *apierr.Error {
+// MustacheError is the script_exception of a failed template.
+func MustacheError(src string, e *mustache.Error) *apierr.Error {
 	body := ojson.Object{{"error", ojson.Object{
 		{"root_cause", []any{ojson.Object{{"type", "script_exception"}, {"reason", e.Reason}, {"script_stack", []any{}}, {"script", src}, {"lang", "mustache"}}}},
 		{"type", "script_exception"}, {"reason", e.Reason}, {"script_stack", []any{}}, {"script", src}, {"lang", "mustache"},

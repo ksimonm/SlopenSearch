@@ -26,12 +26,12 @@ func init() {
 
 // ---- unsupported operations on vector fields ----
 
-// KnnUnsupportedSort reports a sort on a knn_vector field.
-func KnnUnsupportedSort(idx *model.Index, field string) *apierr.Error {
+// CheckKnnSort reports a sort on a knn_vector field.
+func CheckKnnSort(idx *model.Index, field string) *apierr.Error {
 	def, _ := mapping.FieldDef(idx, field)
 	if t, _ := def["type"].(string); t != "knn_vector" {
 		return nil
 	}
 	e := &apierr.Error{Type: "unsupported_operation_exception", Status: 500, Reason: "knn vector field doesn't support this operation"}
-	return PlainShardError(idx, e)
+	return ShardError(idx, e)
 }

@@ -27,7 +27,7 @@ func allIndexDocs(idx *model.Index) []map[string]any {
 		if !ok {
 			continue
 		}
-		d := search.DeepCopySource(doc).(map[string]any)
+		d := jsonv.DeepCopy(doc).(map[string]any)
 		d["__slop_id"] = id
 		out = append(out, d)
 	}
@@ -841,7 +841,7 @@ func multiTermsAgg(name string, spec map[string]any, docs []map[string]any, idx 
 		mi, hm := m["missing"]
 		infos = append(infos, fieldInfo{name: f, resolved: resolved, ft: ft, missing: mi, hasMiss: hm})
 	}
-	size := search.IntField(spec, "size", 10)
+	size := jsonv.Int(spec, "size", 10)
 	type mtBucket struct {
 		key   []any
 		kas   string
@@ -1207,7 +1207,7 @@ func compositeAgg(name string, spec map[string]any, docs []map[string]any, idx *
 		}
 		combos = filtered
 	}
-	size := search.IntField(spec, "size", 10)
+	size := jsonv.Int(spec, "size", 10)
 	if size < 0 {
 		size = 0
 	}
@@ -1455,7 +1455,7 @@ func geotileKey(lat, lon float64, precision int) string {
 
 func geoHashGridAgg(name string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool, tile bool) (any, *apierr.Error) {
 	field, _ := jsonv.ToString(spec["field"])
-	precision := search.IntField(spec, "precision", 5)
+	precision := jsonv.Int(spec, "precision", 5)
 	maxP := 12
 	minP := 1
 	aggName := "geohash aggregation"
@@ -1503,7 +1503,7 @@ func geoHashGridAgg(name string, spec map[string]any, docs []map[string]any, idx
 		}
 		return keys[i] > keys[j]
 	})
-	size := search.IntField(spec, "size", 10)
+	size := jsonv.Int(spec, "size", 10)
 	if size > 0 && len(keys) > size {
 		keys = keys[:size]
 	}
@@ -1704,7 +1704,7 @@ func samplerAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pa
 		return nil, &apierr.Error{Type: "aggregation_execution_exception", Status: 500,
 			Reason: "Sampler aggregation must be used with child aggregations."}
 	}
-	shardSize := search.IntField(spec, "shard_size", 100)
+	shardSize := jsonv.Int(spec, "shard_size", 100)
 	if shardSize <= 0 {
 		shardSize = 100
 	}
@@ -1723,7 +1723,7 @@ func samplerAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pa
 		selected = sorted
 	} else {
 		field, _ := jsonv.ToString(spec["field"])
-		maxPer := search.IntField(spec, "max_docs_per_value", 1)
+		maxPer := jsonv.Int(spec, "max_docs_per_value", 1)
 		if maxPer <= 0 {
 			maxPer = 1
 		}
@@ -1848,7 +1848,7 @@ func autoBucketStart(ms int64, iv autoInterval, loc *time.Location, origin int64
 }
 
 func autoDateHistogramAgg(field string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
-	target := search.IntField(spec, "buckets", 10)
+	target := jsonv.Int(spec, "buckets", 10)
 	if target <= 0 {
 		target = 10
 	}
@@ -1943,7 +1943,7 @@ func autoDateHistogramAgg(field string, spec map[string]any, docs []map[string]a
 }
 
 func variableWidthHistogramAgg(field string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
-	target := search.IntField(spec, "buckets", 10)
+	target := jsonv.Int(spec, "buckets", 10)
 	if target <= 0 {
 		target = 10
 	}

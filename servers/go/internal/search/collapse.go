@@ -119,7 +119,7 @@ func ApplyCollapse(matched []MultiHit, body map[string]any) ([]MultiHit, map[str
 				if len(specs2) > 0 {
 					sort.SliceStable(g, func(i, j int) bool {
 						for _, sp := range specs2 {
-							c := CompareSortSpec(g[i], g[j], sp)
+							c := compareSortSpec(g[i], g[j], sp)
 							if c != 0 {
 								if sp.Desc {
 									return c > 0
