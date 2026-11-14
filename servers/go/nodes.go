@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/ingest"
 	"slopensearch/internal/wildcard"
 )
 
@@ -157,8 +158,8 @@ func (s *Server) nodeInfoForMetric(metric string) map[string]any {
 	case "plugins":
 		return map[string]any{"plugins": pluginsList(), "modules": modulesList()}
 	case "ingest":
-		types := make([]string, 0, len(knownProcessorTypes))
-		for t := range knownProcessorTypes {
+		types := make([]string, 0, len(ingest.KnownProcessorTypes))
+		for t := range ingest.KnownProcessorTypes {
 			types = append(types, t)
 		}
 		sort.Strings(types)

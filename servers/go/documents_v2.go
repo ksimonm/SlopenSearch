@@ -1012,7 +1012,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 	if p := r.URL.Query().Get("pipeline"); p != "" {
 		params["pipeline"] = p
 	}
-	body, apiErr = s.applyPipelines(idx, body, params)
+	body, apiErr = s.ingest.Apply(idx, body, params)
 	if apiErr != nil {
 		if apiErr.Type == "drop_processor_exception" {
 			writeJSON(w, 200, map[string]any{"_index": idx.Name, "_id": id, "_version": -3,
@@ -1516,7 +1516,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		if p := r.URL.Query().Get("pipeline"); p != "" {
 			pparams["pipeline"] = p
 		}
-		src, apiErr = s.applyPipelines(idx, src, pparams)
+		src, apiErr = s.ingest.Apply(idx, src, pparams)
 		if apiErr != nil {
 			writeError(w, apiErr)
 			return
@@ -1603,7 +1603,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 	if p := r.URL.Query().Get("pipeline"); p != "" {
 		pparams["pipeline"] = p
 	}
-	newDoc, apiErr = s.applyPipelines(idx, newDoc, pparams)
+	newDoc, apiErr = s.ingest.Apply(idx, newDoc, pparams)
 	if apiErr != nil {
 		writeError(w, apiErr)
 		return

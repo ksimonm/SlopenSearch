@@ -1,4 +1,4 @@
-package main
+package ingest
 
 import (
 	"crypto/md5"
@@ -30,7 +30,7 @@ func parseIP(s string) (net.IP, bool) {
 	return ip, true
 }
 
-func (s *Server) procJSON(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procJSON(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok {
@@ -90,7 +90,7 @@ func normalizeJSONNumbers(v any) any {
 	return v
 }
 
-func (s *Server) procKV(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procKV(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok {
@@ -215,7 +215,7 @@ func stringSet(v any) map[string]bool {
 	return out
 }
 
-func (s *Server) procCSV(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procCSV(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok {
@@ -313,7 +313,7 @@ func parseCSVRecord(s string, sep, quote rune, trim bool) ([]string, *apierr.Err
 	return out, nil
 }
 
-func (s *Server) procURLDecode(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procURLDecode(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	if target == "" {
@@ -370,7 +370,7 @@ func stripHTML(s string) string {
 	return repl.Replace(s)
 }
 
-func (s *Server) procHTMLStrip(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procHTMLStrip(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	if target == "" {
@@ -402,7 +402,7 @@ func (s *Server) procHTMLStrip(cfg map[string]any, env *ingestEnv) *apierr.Error
 
 var bytesRE = regexp.MustCompile(`(?i)^([+-]?(?:\d+\.?\d*|\.\d+))\s*([a-z]*)$`)
 
-func (s *Server) procBytes(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procBytes(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	if target == "" {
@@ -437,7 +437,7 @@ func (s *Server) procBytes(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	return env.setField(target, int64(num*f), true)
 }
 
-func (s *Server) procSplitToFields(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procSplitToFields(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok {
@@ -464,7 +464,7 @@ func (s *Server) procSplitToFields(cfg map[string]any, env *ingestEnv) *apierr.E
 	return nil
 }
 
-func (s *Server) procFingerprint(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procFingerprint(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	fields := env.resolveFieldPath(cfg["fields"])
 	excludes := env.resolveFieldPath(cfg["exclude_fields"])
 	if len(fields) > 0 && len(excludes) > 0 {
@@ -571,7 +571,7 @@ func ingestFlattenMap(m map[string]any, prefix string, out map[string]any) {
 	}
 }
 
-func (s *Server) procCommunityID(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procCommunityID(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	get := func(key string) (any, bool) {
 		f := cfgString(cfg, key)
 		if f == "" {
@@ -679,7 +679,7 @@ var uaMacRE = regexp.MustCompile(`Mac OS X ([0-9_]+)`)
 var uaiOSRE = regexp.MustCompile(`OS ([0-9_]+) like Mac OS X`)
 var uaCurlRE = regexp.MustCompile(`^curl/([0-9.]+)`)
 
-func (s *Server) procUserAgent(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procUserAgent(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok {
@@ -766,7 +766,7 @@ func (s *Server) procUserAgent(cfg map[string]any, env *ingestEnv) *apierr.Error
 	return env.setField(target, result, true)
 }
 
-func (s *Server) procDate(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procDate(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok {
@@ -959,7 +959,7 @@ func formatISOMillis(t time.Time) string {
 	return t.Format("2006-01-02T15:04:05.000-07:00")
 }
 
-func (s *Server) procDateIndexName(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procDateIndexName(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok {
@@ -1005,61 +1005,6 @@ func ingestScriptSpec(cfg map[string]any) map[string]any {
 	return raw
 }
 
-// ingestScriptError converts a script exception into the error an ingest
-// processor reports.
-func ingestScriptError(se *plScriptErr, tag string) *apierr.Error {
-	fields := map[string]any{"script_stack": anySlice(se.stack), "script": se.script, "lang": map[bool]string{true: "expression", false: "painless"}[se.lang == "expression"]}
-	if se.pos != nil {
-		fields["position"] = map[string]any{"offset": se.pos[0], "start": se.pos[1], "end": se.pos[2]}
-	}
-	kind := "runtime error"
-	if se.compile {
-		kind = "compile error"
-		fields["processor_type"] = "script"
-		if tag != "" {
-			fields["processor_tag"] = tag
-		}
-	}
-	for _, kv := range se.extra {
-		fields[kv.K] = kv.V
-	}
-	return &apierr.Error{Type: "script_exception", Status: 400, Reason: kind, Fields: fields,
-		CausedBy: &apierr.Error{Type: se.causeType, Reason: se.reason}}
-}
-
-func anySlice(ss []string) []any {
-	out := make([]any, len(ss))
-	for i, s := range ss {
-		out[i] = s
-	}
-	return out
-}
-
-// compileIngestScript compiles a script processor's script.
-func compileIngestScript(raw map[string]any, ctxName, tag string) (*plScript, *scriptSpec, *apierr.Error) {
-	spec, ae := parseScriptSpec(raw)
-	if ae != nil {
-		return nil, nil, ae
-	}
-	if spec.lang == "expression" {
-		_, se, ae := exPrepare(spec.src, ctxName)
-		if se != nil {
-			return nil, nil, ingestScriptError(se, tag)
-		}
-		ae.ForceTop = true
-		return nil, nil, ae
-	}
-	if ae := checkScriptLang(spec, ctxName); ae != nil {
-		ae.ForceTop = true
-		return nil, nil, ae
-	}
-	script, se := compilePainless(spec, ctxName)
-	if se != nil {
-		return nil, nil, ingestScriptError(se, tag)
-	}
-	return script, spec, nil
-}
-
 var ingestMetaKeys = map[string]bool{"_index": true, "_id": true, "_routing": true, "_version": true,
 	"_version_type": true, "_if_seq_no": true, "_if_primary_term": true}
 
@@ -1078,15 +1023,14 @@ func ingestCtx(env *ingestEnv) *painless.Map {
 	return ctx
 }
 
-func (s *Server) procScript(cfg map[string]any, env *ingestEnv) *apierr.Error {
-	script, spec, err := compileIngestScript(ingestScriptSpec(cfg), "ingest", cfgString(cfg, "tag"))
+func (s *Engine) procScript(cfg map[string]any, env *ingestEnv) *apierr.Error {
+	script, err := s.scripts.Compile(ingestScriptSpec(cfg), "ingest", cfgString(cfg, "tag"))
 	if err != nil {
 		return err
 	}
 	ctx := ingestCtx(env)
-	_, se := script.exec(painless.Bindings{Vars: map[string]any{"params": scriptParams(spec.params), "ctx": ctx}}, spec.errName())
-	if se != nil {
-		return ingestScriptError(se, "")
+	if err := script.Run(ctx); err != nil {
+		return err
 	}
 	for k := range env.source {
 		delete(env.source, k)
@@ -1105,7 +1049,7 @@ func (s *Server) procScript(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	return nil
 }
 
-func (s *Server) procDissect(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procDissect(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok {
@@ -1307,7 +1251,8 @@ func dissectMatch(pattern, source, appendSep string) (map[string]any, *apierr.Er
 	return out, nil
 }
 
-func grokPatterns() map[string]any {
+// GrokPatterns returns the built-in grok patterns.
+func GrokPatterns() map[string]any {
 	patterns := map[string]string{
 		"WORD":              `\b\w+\b`,
 		"INT":               `[+-]?(?:[0-9]+)`,
@@ -1402,7 +1347,7 @@ func grokCompile(pattern string, defs map[string]string) (*regexp.Regexp, *apier
 	return re, nil
 }
 
-func (s *Server) procGrok(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procGrok(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok {
@@ -1418,7 +1363,7 @@ func (s *Server) procGrok(cfg map[string]any, env *ingestEnv) *apierr.Error {
 			Reason: "field [" + field + "] of type [" + javaTypeName(v) + "] cannot be cast to [java.lang.String]"}
 	}
 	defs := map[string]string{}
-	for k, vv := range grokPatterns() {
+	for k, vv := range GrokPatterns() {
 		defs[k] = vv.(string)
 	}
 	if pd, ok := cfg["pattern_definitions"].(map[string]any); ok {

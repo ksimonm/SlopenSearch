@@ -297,7 +297,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 		if pn, ok := destRaw["pipeline"].(string); ok && pn != "" {
 			pparams["pipeline"] = pn
 		}
-		doc, apiErr = s.applyPipelines(destIdx, doc, pparams)
+		doc, apiErr = s.ingest.Apply(destIdx, doc, pparams)
 		if apiErr != nil {
 			if existing {
 				updated--

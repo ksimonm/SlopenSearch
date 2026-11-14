@@ -1,4 +1,4 @@
-package main
+package ingest
 
 import (
 	"encoding/json"
@@ -13,7 +13,7 @@ import (
 	"slopensearch/internal/wildcard"
 )
 
-func (s *Server) runIngestProcessor(typ string, cfg map[string]any, env *ingestEnv) (bool, *apierr.Error) {
+func (s *Engine) runIngestProcessor(typ string, cfg map[string]any, env *ingestEnv) (bool, *apierr.Error) {
 	switch typ {
 	case "set":
 		return false, s.procSet(cfg, env)
@@ -99,7 +99,7 @@ func cfgBool(cfg map[string]any, key string, def bool) bool {
 	return def
 }
 
-func (s *Server) fieldMissing(field string, ignore bool) *apierr.Error {
+func (s *Engine) fieldMissing(field string, ignore bool) *apierr.Error {
 	if ignore {
 		return nil
 	}
@@ -120,7 +120,7 @@ func (e *ingestEnv) resolveFieldPath(raw any) []string {
 	return nil
 }
 
-func (s *Server) procSet(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procSet(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	value := cfg["value"]
 	if sv, ok := value.(string); ok {
@@ -132,7 +132,7 @@ func (s *Server) procSet(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	return env.setField(field, deepCopyValue(value), cfgBool(cfg, "override", true))
 }
 
-func (s *Server) procRemove(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procRemove(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	ignore := cfgBool(cfg, "ignore_missing", false)
 	fields := env.resolveFieldPath(cfg["field"])
 	for _, f := range fields {
@@ -175,7 +175,7 @@ func (s *Server) procRemove(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	return nil
 }
 
-func (s *Server) removeGlob(env *ingestEnv, pattern string, exclude []string) {
+func (s *Engine) removeGlob(env *ingestEnv, pattern string, exclude []string) {
 	keys := collectLeafPaths(env.source, "")
 	for _, k := range keys {
 		if wildcard.Match(pattern, k) {
@@ -215,7 +215,7 @@ func collectLeafPaths(v any, prefix string) []string {
 	return out
 }
 
-func (s *Server) procRemoveByPattern(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procRemoveByPattern(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	var patterns, excludes []string
 	if v, ok := cfg["field_pattern"]; ok {
 		patterns = env.resolveFieldPath(v)
@@ -252,7 +252,7 @@ func (s *Server) procRemoveByPattern(cfg map[string]any, env *ingestEnv) *apierr
 	return nil
 }
 
-func (s *Server) procRename(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procRename(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	ignore := cfgBool(cfg, "ignore_missing", false)
@@ -277,7 +277,7 @@ func (s *Server) procRename(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	return nil
 }
 
-func (s *Server) procCopy(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procCopy(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "source_field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	ignore := cfgBool(cfg, "ignore_missing", false)
@@ -307,7 +307,7 @@ func (s *Server) procCopy(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	return nil
 }
 
-func (s *Server) procAppend(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procAppend(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	values := []any{}
 	switch t := cfg["value"].(type) {
@@ -399,7 +399,7 @@ func numberFormatError(input string) *apierr.Error {
 	return &apierr.Error{Type: "number_format_exception", Status: 400, Reason: "For input string: \"" + input + "\""}
 }
 
-func (s *Server) convertOne(v any, typ string) (any, *apierr.Error) {
+func (s *Engine) convertOne(v any, typ string) (any, *apierr.Error) {
 	if v == nil {
 		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "Field is null, cannot be converted to type [" + typ + "]"}
 	}
@@ -490,7 +490,7 @@ func (s *Server) convertOne(v any, typ string) (any, *apierr.Error) {
 	return v, nil
 }
 
-func (s *Server) procConvert(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procConvert(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	typ := cfgString(cfg, "type")
 	target := env.render(cfgString(cfg, "target_field"))
@@ -535,7 +535,7 @@ func convertWrap(err *apierr.Error, v any, typ string) *apierr.Error {
 	return err
 }
 
-func (s *Server) procCase(cfg map[string]any, env *ingestEnv, fn func(string) string) *apierr.Error {
+func (s *Engine) procCase(cfg map[string]any, env *ingestEnv, fn func(string) string) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	if target == "" {
@@ -589,7 +589,7 @@ func (s *Server) procCase(cfg map[string]any, env *ingestEnv, fn func(string) st
 	return env.setField(target, tv, true)
 }
 
-func (s *Server) procSplit(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procSplit(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	if target == "" {
@@ -622,7 +622,7 @@ func (s *Server) procSplit(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	return env.setField(target, out, true)
 }
 
-func (s *Server) procJoin(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procJoin(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	if target == "" {
@@ -653,7 +653,7 @@ func javaRegexReplace(repl string) string {
 	return re.ReplaceAllString(repl, `${$1}`)
 }
 
-func (s *Server) procGsub(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procGsub(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	if target == "" {
@@ -694,7 +694,7 @@ func (s *Server) procGsub(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	return env.setField(target, tv, true)
 }
 
-func (s *Server) procSort(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procSort(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	target := env.render(cfgString(cfg, "target_field"))
 	if target == "" {
@@ -743,7 +743,7 @@ func (s *Server) procSort(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	return env.setField(target, out, true)
 }
 
-func (s *Server) procDotExpander(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procDotExpander(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := cfgString(cfg, "field")
 	if field == "" || !strings.Contains(field, ".") {
 		return nil
@@ -798,7 +798,7 @@ func (s *Server) procDotExpander(cfg map[string]any, env *ingestEnv) *apierr.Err
 	return nil
 }
 
-func (s *Server) procForeach(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procForeach(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	v, ok := env.lookup(field)
 	if !ok || v == nil {
@@ -841,12 +841,12 @@ func (s *Server) procForeach(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	return env.setField(field, list, true)
 }
 
-func (s *Server) procFail(cfg map[string]any, env *ingestEnv) *apierr.Error {
+func (s *Engine) procFail(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	msg := env.render(cfgString(cfg, "message"))
 	return &apierr.Error{Type: "fail_processor_exception", Status: 500, Reason: msg}
 }
 
-func (s *Server) procPipeline(cfg map[string]any, env *ingestEnv) (bool, *apierr.Error) {
+func (s *Engine) procPipeline(cfg map[string]any, env *ingestEnv) (bool, *apierr.Error) {
 	name := env.render(cfgString(cfg, "name"))
 	if name == "" {
 		return false, &apierr.Error{Type: "illegal_state_exception", Status: 400, Reason: "Pipeline processor configured for empty pipeline name"}
@@ -856,9 +856,9 @@ func (s *Server) procPipeline(cfg map[string]any, env *ingestEnv) (bool, *apierr
 			return false, &apierr.Error{Type: "illegal_state_exception", Status: 400, Reason: "Cycle detected for pipeline: " + name}
 		}
 	}
-	s.ingestMu.RLock()
-	p, ok := s.IngestPipelines[name]
-	s.ingestMu.RUnlock()
+	s.mu.RLock()
+	p, ok := s.state.IngestPipelines[name]
+	s.mu.RUnlock()
 	if !ok {
 		return false, &apierr.Error{Type: "illegal_state_exception", Status: 400,
 			Reason: "Pipeline processor configured for non-existent pipeline [" + name + "]"}

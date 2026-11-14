@@ -1,22 +1,50 @@
-package main
+// Package ingest runs ingest pipelines: pipeline validation, the processors,
+// on_failure handling, _simulate and the default/final pipelines of an index.
+package ingest
 
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/model"
+	"slopensearch/internal/painless"
 	"slopensearch/internal/settings"
-	"slopensearch/internal/wildcard"
 )
 
+// Engine runs ingest pipelines. The pipelines live in a model.State, guarded
+// by mu; script processors are compiled by scripts.
+type Engine struct {
+	state   *model.State
+	mu      *sync.RWMutex
+	scripts Scripts
+}
+
+// Scripts compiles the scripts of script processors.
+type Scripts interface {
+	// Compile compiles a script processor's script (raw holds source or id,
+	// lang and params) for the script context ctxName.
+	Compile(raw map[string]any, ctxName, tag string) (Script, *apierr.Error)
+}
+
+// Script is a compiled script of a script processor.
+type Script interface {
+	// Run executes the script with ctx as its ctx variable.
+	Run(ctx *painless.Map) *apierr.Error
+}
+
+// NewEngine returns an engine for the pipelines of state, guarded by mu.
+func NewEngine(state *model.State, mu *sync.RWMutex, scripts Scripts) *Engine {
+	return &Engine{state: state, mu: mu, scripts: scripts}
+}
+
 type ingestEnv struct {
-	s          *Server
+	s          *Engine
 	source     map[string]any
 	meta       map[string]any
 	pipeline   string
@@ -339,92 +367,6 @@ func apiCauseObject(e *apierr.Error) map[string]any {
 	return m
 }
 
-func (s *Server) handleIngestRoute(w http.ResponseWriter, r *http.Request, segs []string) bool {
-	if len(segs) < 2 || segs[1] != "pipeline" {
-		if len(segs) >= 3 && segs[1] == "processor" && segs[2] == "grok" && r.Method == http.MethodGet {
-			writeJSON(w, 200, map[string]any{"patterns": grokPatterns()})
-			return true
-		}
-		return false
-	}
-	rest := segs[2:]
-	if len(rest) == 1 && rest[0] == "_simulate" {
-		s.simulatePipeline(w, r, "")
-		return true
-	}
-	if len(rest) == 2 && rest[1] == "_simulate" {
-		s.simulatePipeline(w, r, rest[0])
-		return true
-	}
-	if len(rest) == 0 {
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, r, "GET")
-			return true
-		}
-		s.ingestMu.RLock()
-		out := map[string]any{}
-		for name, body := range s.IngestPipelines {
-			out[name] = body
-		}
-		s.ingestMu.RUnlock()
-		writeJSON(w, 200, out)
-		return true
-	}
-	nameExpr := rest[0]
-	switch r.Method {
-	case http.MethodGet:
-		names := s.resolvePipelineNames(nameExpr)
-		if len(names) == 0 {
-			if !strings.ContainsAny(nameExpr, "*,") {
-				writeJSON(w, 404, map[string]any{})
-			} else {
-				writeJSON(w, 200, map[string]any{})
-			}
-			return true
-		}
-		s.ingestMu.RLock()
-		out := map[string]any{}
-		for _, n := range names {
-			if b, ok := s.IngestPipelines[n]; ok {
-				out[n] = b
-			}
-		}
-		s.ingestMu.RUnlock()
-		writeJSON(w, 200, out)
-		return true
-	case http.MethodPut:
-		body, apiErr := readJSON(r)
-		if apiErr != nil {
-			writeError(w, apiErr)
-			return true
-		}
-		norm, apiErr := validatePipelineBody(nameExpr, body)
-		if apiErr != nil {
-			writeError(w, apiErr)
-			return true
-		}
-		s.ingestMu.Lock()
-		s.IngestPipelines[nameExpr] = norm
-		s.ingestMu.Unlock()
-		writeJSON(w, 200, map[string]any{"acknowledged": true})
-		return true
-	case http.MethodDelete:
-		s.ingestMu.Lock()
-		_, ok := s.IngestPipelines[nameExpr]
-		delete(s.IngestPipelines, nameExpr)
-		s.ingestMu.Unlock()
-		if !ok {
-			writeError(w, &apierr.Error{Type: "resource_not_found_exception", Status: 404,
-				Reason: "pipeline [" + nameExpr + "] is missing"})
-			return true
-		}
-		writeJSON(w, 200, map[string]any{"acknowledged": true})
-		return true
-	}
-	methodNotAllowed(w, r, "GET", "PUT", "DELETE")
-	return true
-}
-
 func envList(v any) []any {
 	if l, ok := v.([]any); ok {
 		return l
@@ -432,31 +374,10 @@ func envList(v any) []any {
 	return nil
 }
 
-func (s *Server) resolvePipelineNames(expr string) []string {
-	parts := strings.Split(expr, ",")
-	out := []string{}
-	seen := map[string]bool{}
-	s.ingestMu.RLock()
-	defer s.ingestMu.RUnlock()
-	for _, p := range parts {
-		if strings.Contains(p, "*") {
-			for n := range s.IngestPipelines {
-				if wildcard.Match(p, n) && !seen[n] {
-					seen[n] = true
-					out = append(out, n)
-				}
-			}
-		} else if _, ok := s.IngestPipelines[p]; ok && !seen[p] {
-			seen[p] = true
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
 var pipelineAllowedKeys = map[string]bool{"description": true, "version": true, "processors": true, "on_failure": true}
 
-func validatePipelineBody(name string, body map[string]any) (map[string]any, *apierr.Error) {
+// ValidatePipeline checks a pipeline definition and returns it normalized.
+func (s *Engine) ValidatePipeline(name string, body map[string]any) (map[string]any, *apierr.Error) {
 	for k := range body {
 		if k == "_meta" || !pipelineAllowedKeys[k] {
 			return nil, &apierr.Error{Type: "parse_exception", Status: 400,
@@ -473,7 +394,7 @@ func validatePipelineBody(name string, body map[string]any) (map[string]any, *ap
 		return nil, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "[processors] required property is missing",
 			Fields: map[string]any{"property_name": "processors"}}
 	}
-	if _, err := validateProcessors(list, name); err != nil {
+	if _, err := s.validateProcessors(list, name); err != nil {
 		return nil, err
 	}
 	if of, ok := body["on_failure"]; ok {
@@ -481,7 +402,7 @@ func validatePipelineBody(name string, body map[string]any) (map[string]any, *ap
 		if !ok || len(ofl) == 0 {
 			return nil, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "[on_failure] processors list cannot be empty"}
 		}
-		if _, err := validateProcessors(ofl, name); err != nil {
+		if _, err := s.validateProcessors(ofl, name); err != nil {
 			return nil, err
 		}
 	}
@@ -498,7 +419,7 @@ func validatePipelineBody(name string, body map[string]any) (map[string]any, *ap
 	return norm, nil
 }
 
-func validateProcessors(list []any, name string) ([]string, *apierr.Error) {
+func (s *Engine) validateProcessors(list []any, name string) ([]string, *apierr.Error) {
 	types := []string{}
 	for _, raw := range list {
 		def, ok := raw.(map[string]any)
@@ -510,7 +431,7 @@ func validateProcessors(list []any, name string) ([]string, *apierr.Error) {
 			return nil, err
 		}
 		types = append(types, typ)
-		if err := validateProcessorConfig(typ, cfg); err != nil {
+		if err := s.validateProcessorConfig(typ, cfg); err != nil {
 			return nil, err
 		}
 		if of, ok := procControl(def, cfg, "on_failure"); ok {
@@ -518,7 +439,7 @@ func validateProcessors(list []any, name string) ([]string, *apierr.Error) {
 			if !ok || len(ofl) == 0 {
 				return nil, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "[on_failure] processors list cannot be empty"}
 			}
-			if _, err := validateProcessors(ofl, name); err != nil {
+			if _, err := s.validateProcessors(ofl, name); err != nil {
 				return nil, err
 			}
 		}
@@ -546,14 +467,15 @@ func processorConfig(def map[string]any) (string, map[string]any, *apierr.Error)
 	if typ == "" {
 		return "", nil, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "processor must specify a processor type"}
 	}
-	if !knownProcessorTypes[typ] {
+	if !KnownProcessorTypes[typ] {
 		return "", nil, &apierr.Error{Type: "parse_exception", Status: 400,
 			Reason: "No processor type exists with name [" + typ + "]", Fields: map[string]any{"processor_type": typ}}
 	}
 	return typ, cfg, nil
 }
 
-var knownProcessorTypes = map[string]bool{
+// KnownProcessorTypes are the processor types this node supports.
+var KnownProcessorTypes = map[string]bool{
 	"set": true, "remove": true, "rename": true, "copy": true, "remove_by_pattern": true,
 	"append": true, "convert": true, "lowercase": true, "uppercase": true, "trim": true,
 	"split": true, "join": true, "gsub": true, "sort": true, "grok": true, "dissect": true,
@@ -600,7 +522,7 @@ var processorAllowed = map[string]map[string]bool{
 	"user_agent":        {"field": true, "target_field": true, "properties": true, "ignore_missing": true},
 }
 
-func validateProcessorConfig(typ string, cfg map[string]any) *apierr.Error {
+func (s *Engine) validateProcessorConfig(typ string, cfg map[string]any) *apierr.Error {
 	allowed := processorAllowed[typ]
 	for k := range cfg {
 		if k == "description" || k == "tag" || k == "if" || k == "on_failure" || k == "ignore_failure" {
@@ -714,7 +636,7 @@ func validateProcessorConfig(typ string, cfg map[string]any) *apierr.Error {
 	}
 	if typ == "grok" {
 		defs := map[string]string{}
-		for k, v := range grokPatterns() {
+		for k, v := range GrokPatterns() {
 			defs[k] = v.(string)
 		}
 		if pd, ok := cfg["pattern_definitions"].(map[string]any); ok {
@@ -753,7 +675,7 @@ func validateProcessorConfig(typ string, cfg map[string]any) *apierr.Error {
 	}
 	if typ == "script" {
 		if _, inline := cfg["source"]; inline {
-			if _, _, err := compileIngestScript(ingestScriptSpec(cfg), "ingest", cfgString(cfg, "tag")); err != nil {
+			if _, err := s.scripts.Compile(ingestScriptSpec(cfg), "ingest", cfgString(cfg, "tag")); err != nil {
 				return err
 			}
 		} else if lang, ok := cfg["lang"].(string); ok && lang == "mustache" {
@@ -782,75 +704,19 @@ func validateProcessorConfig(typ string, cfg map[string]any) *apierr.Error {
 	return nil
 }
 
-func (s *Server) simulatePipeline(w http.ResponseWriter, r *http.Request, stored string) {
-	body, apiErr := readJSON(r)
-	if apiErr != nil {
-		writeError(w, apiErr)
-		return
-	}
-	var pipeline map[string]any
-	name := stored
-	if stored != "" {
-		s.ingestMu.RLock()
-		p, ok := s.IngestPipelines[stored]
-		s.ingestMu.RUnlock()
-		if !ok {
-			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
-				Reason: "pipeline [" + stored + "] does not exist"})
-			return
-		}
-		pipeline = p
-	} else {
-		raw, ok := body["pipeline"]
-		if !ok {
-			writeError(w, &apierr.Error{Type: "parse_exception", Status: 400,
-				Reason: "[pipeline] required property is missing", Fields: map[string]any{"property_name": "pipeline"}})
-			return
-		}
-		pm, ok := raw.(map[string]any)
-		if !ok {
-			writeError(w, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "[pipeline] required property is missing",
-				Fields: map[string]any{"property_name": "pipeline"}})
-			return
-		}
-		var err *apierr.Error
-		pipeline, err = validatePipelineBody("_simulate", pm)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		name = "_simulate_pipeline"
-	}
-	rawDocs, ok := body["docs"]
-	if !ok {
-		writeError(w, &apierr.Error{Type: "parse_exception", Status: 400,
-			Reason: "[docs] required property is missing", Fields: map[string]any{"property_name": "docs"}})
-		return
-	}
-	docs, ok := rawDocs.([]any)
-	if !ok {
-		writeError(w, &apierr.Error{Type: "parse_exception", Status: 400,
-			Reason: "[docs] required property is missing", Fields: map[string]any{"property_name": "docs"}})
-		return
-	}
-	if len(docs) == 0 {
-		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
-			Reason: "must specify at least one document in [docs]"})
-		return
-	}
-	verbose := r.URL.Query().Get("verbose") == "true"
+// Simulate runs the documents of a _simulate request through pipeline
+// (named name) and returns their results; an error fails the whole request.
+func (s *Engine) Simulate(pipeline map[string]any, name string, docs []any, verbose bool) ([]any, *apierr.Error) {
 	out := make([]any, 0, len(docs))
 	for _, raw := range docs {
 		dm, ok := raw.(map[string]any)
 		if !ok {
-			writeError(w, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "[docs] required property is missing"})
-			return
+			return nil, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "[docs] required property is missing"}
 		}
 		srcRaw, ok := dm["_source"]
 		if !ok {
-			writeError(w, &apierr.Error{Type: "parse_exception", Status: 400,
-				Reason: "[_source] required property is missing", Fields: map[string]any{"property_name": "_source"}})
-			return
+			return nil, &apierr.Error{Type: "parse_exception", Status: 400,
+				Reason: "[_source] required property is missing", Fields: map[string]any{"property_name": "_source"}}
 		}
 		src, _ := srcRaw.(map[string]any)
 		if src == nil {
@@ -878,8 +744,7 @@ func (s *Server) simulatePipeline(w http.ResponseWriter, r *http.Request, stored
 		}
 		err, dropped := s.runIngestProcessors(pipeline, env)
 		if err != nil && ((err.Status >= 500 && err.Type != "fail_processor_exception") || err.Status == 404 || err.ForceTop) {
-			writeError(w, err)
-			return
+			return nil, err
 		}
 		if err != nil {
 			if verbose {
@@ -903,10 +768,10 @@ func (s *Server) simulatePipeline(w http.ResponseWriter, r *http.Request, stored
 			out = append(out, map[string]any{"doc": env.cloneDoc()})
 		}
 	}
-	writeJSON(w, 200, map[string]any{"docs": out})
+	return out, nil
 }
 
-func (s *Server) runIngestProcessors(pipeline map[string]any, env *ingestEnv) (*apierr.Error, bool) {
+func (s *Engine) runIngestProcessors(pipeline map[string]any, env *ingestEnv) (*apierr.Error, bool) {
 	list, _ := pipeline["processors"].([]any)
 	for _, raw := range list {
 		def, _ := raw.(map[string]any)
@@ -988,7 +853,7 @@ func procControl(def, cfg map[string]any, key string) (any, bool) {
 	return v, ok
 }
 
-func (s *Server) runPipelineFailureHandlers(handlers []any, env *ingestEnv, cause *apierr.Error) *apierr.Error {
+func (s *Engine) runPipelineFailureHandlers(handlers []any, env *ingestEnv, cause *apierr.Error) *apierr.Error {
 	env.onFailure = map[string]any{
 		"on_failure_message":        failureMessage(cause),
 		"on_failure_processor_type": env.processor,
@@ -1012,7 +877,7 @@ func (s *Server) runPipelineFailureHandlers(handlers []any, env *ingestEnv, caus
 	return nil
 }
 
-func (s *Server) handleProcessorFailure(def map[string]any, typ string, cfg map[string]any, env *ingestEnv, perr *apierr.Error) (*apierr.Error, bool) {
+func (s *Engine) handleProcessorFailure(def map[string]any, typ string, cfg map[string]any, env *ingestEnv, perr *apierr.Error) (*apierr.Error, bool) {
 	ignVal, _ := procControl(def, cfg, "ignore_failure")
 	if ign, _ := ignVal.(bool); ign {
 		if env.verbose {
@@ -1072,7 +937,10 @@ func (s *Server) handleProcessorFailure(def map[string]any, typ string, cfg map[
 	return nil, false
 }
 
-func (s *Server) applyPipelines(idx *model.Index, doc map[string]any, params map[string]any) (map[string]any, *apierr.Error) {
+// Apply runs doc through the pipeline of the request (params "pipeline")
+// or the index default pipeline, then the final pipeline; it may set _index,
+// _id, _routing and _version in params.
+func (s *Engine) Apply(idx *model.Index, doc map[string]any, params map[string]any) (map[string]any, *apierr.Error) {
 	pipeline, _ := params["pipeline"].(string)
 	if pipeline == "" {
 		if v, ok := settings.Find(idx.Settings, "default_pipeline"); ok {
@@ -1080,9 +948,9 @@ func (s *Server) applyPipelines(idx *model.Index, doc map[string]any, params map
 		}
 	}
 	if pipeline != "" && pipeline != "_none" {
-		s.ingestMu.RLock()
-		p, ok := s.IngestPipelines[pipeline]
-		s.ingestMu.RUnlock()
+		s.mu.RLock()
+		p, ok := s.state.IngestPipelines[pipeline]
+		s.mu.RUnlock()
 		if !ok {
 			return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "pipeline with id [" + pipeline + "] does not exist"}
@@ -1103,9 +971,9 @@ func (s *Server) applyPipelines(idx *model.Index, doc map[string]any, params map
 	if v, ok := settings.Find(idx.Settings, "final_pipeline"); ok {
 		fp := settings.ValueString(v)
 		if fp != "" && fp != "_none" {
-			s.ingestMu.RLock()
-			p, ok := s.IngestPipelines[fp]
-			s.ingestMu.RUnlock()
+			s.mu.RLock()
+			p, ok := s.state.IngestPipelines[fp]
+			s.mu.RUnlock()
 			if !ok {
 				return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "pipeline with id [" + fp + "] does not exist"}

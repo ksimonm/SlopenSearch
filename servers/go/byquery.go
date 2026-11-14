@@ -230,7 +230,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 		} else if pn, ok := body["pipeline"].(string); ok && pn != "" {
 			pparams["pipeline"] = pn
 		}
-		newDoc, apiErr = s.applyPipelines(idx, newDoc, pparams)
+		newDoc, apiErr = s.ingest.Apply(idx, newDoc, pparams)
 		if apiErr != nil {
 			failures = append(failures, byQueryFailure(idx.Name, id, apiErr))
 			continue

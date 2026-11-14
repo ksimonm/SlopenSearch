@@ -466,7 +466,7 @@ func (s *Server) runBulkIndex(idx *model.Index, a bulkAction, id, routing, rv, u
 	if pipeline != "" {
 		params["pipeline"] = pipeline
 	}
-	src, apiErr := s.applyPipelines(idx, deepCopyMap(a.source), params)
+	src, apiErr := s.ingest.Apply(idx, deepCopyMap(a.source), params)
 	if apiErr != nil {
 		if apiErr.Type == "drop_processor_exception" {
 			return map[string]any{a.op: map[string]any{"_index": idx.Name, "_id": id, "_version": -3,

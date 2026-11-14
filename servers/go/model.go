@@ -15,6 +15,7 @@ import (
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/dates"
+	"slopensearch/internal/ingest"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 	"slopensearch/internal/storage"
@@ -67,6 +68,7 @@ type Server struct {
 	pitMu         sync.Mutex
 	pitCounter    int64
 	persist       *storage.Store // nil in memory-only mode (SLOP_IN_MEMORY=true)
+	ingest        *ingest.Engine
 }
 
 var globalServer *Server
@@ -77,6 +79,7 @@ func NewServer() *Server {
 		scrolls: map[string]*scrollContext{},
 		pits:    map[string]*pitContext{},
 	}
+	s.ingest = ingest.NewEngine(&s.State, &s.ingestMu, ingestScripts{})
 	globalServer = s
 	return s
 }

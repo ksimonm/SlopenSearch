@@ -1093,7 +1093,7 @@ func (s *Server) handleIndexDoc(w http.ResponseWriter, r *http.Request, name, id
 	if p := r.URL.Query().Get("pipeline"); p != "" {
 		params["pipeline"] = p
 	}
-	body, apiErr = s.applyPipelines(idx, body, params)
+	body, apiErr = s.ingest.Apply(idx, body, params)
 	if apiErr != nil {
 		writeError(w, apiErr)
 		return
@@ -1631,7 +1631,7 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, name string)
 		if p, ok := meta["pipeline"].(string); ok && p != "" {
 			bulkParams["pipeline"] = p
 		}
-		source, apiErr = s.applyPipelines(idx, source, bulkParams)
+		source, apiErr = s.ingest.Apply(idx, source, bulkParams)
 		if apiErr != nil {
 			hasErrors = true
 			items = append(items, bulkErrAPI(op, idx.Name, docID, apiErr))
