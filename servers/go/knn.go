@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"reflect"
@@ -171,6 +172,9 @@ func knnValidateField(name string, def map[string]any) *apiError {
 	for _, k := range sortedAnyKeys(params) {
 		switch k {
 		case "m", "ef_construction", "ef_search":
+			if n, isNum := params[k].(json.Number); isNum && !strings.ContainsAny(n.String(), ".eE") {
+				continue
+			}
 			if _, ok := params[k].(float64); !ok {
 				if _, ok := params[k].(int64); !ok {
 					return knnValidation(fmt.Sprintf("value is not an instance of Integer for Integer parameter [%s].", k))
