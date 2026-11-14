@@ -639,6 +639,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				ensureFieldTypes(vidx)
 			}()
 		}
+		if kerr := knnParseCheck(bodyRaw); kerr != nil {
+			writeError(w, kerr)
+			return
+		}
 		if verr := validateQuery(vidx, query); verr != nil {
 			if verr.Clause != "" {
 				annotateQueryClause(verr, bodyRaw)
@@ -2385,6 +2389,10 @@ func validateQuery(idx *Index, query map[string]any) *apiError {
 		switch clause {
 		case "term":
 			if err := validateTermQuery(idx, raw); err != nil {
+				return err
+			}
+		case "knn":
+			if err := validateKnnQuery(idx, raw); err != nil {
 				return err
 			}
 		case "terms":
