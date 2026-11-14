@@ -89,8 +89,7 @@ relative to the repository root here, adjust it to your build.)
 
 ## Status
 
-99.99% of the suite passes (see the table in the [main README](../../README.md#status)).
-The open work is one `test_72_knn` test (a literal `NaN` in a vector). HTTP compression
+The whole suite passes (see the table in the [main README](../../README.md#status)). HTTP compression
 (gzip/deflate/snappy) uses the `flate2` and `snap` crates. The build still has many warnings; cleaning them up is welcome.
 
 ## Rules

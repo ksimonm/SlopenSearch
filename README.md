@@ -25,7 +25,7 @@ OpenSearch 3.9.0, pinning down status codes, error types, response shapes and qu
 
 ## Status
 
-Share of the suite passing (2026-11-14, `make go-score` / `make rust-score`):
+Share of the suite passing (2026-11-15, `make go-score` / `make rust-score`):
 
 | Area | Go | Rust |
 |---|---:|---:|
@@ -42,12 +42,11 @@ Share of the suite passing (2026-11-14, `make go-score` / `make rust-score`):
 | Suggesters | 100% | 100% |
 | Concurrency and load | 100% | 100% |
 | HTTP layer, async tasks | 100% | 100% |
-| Vector search (k-NN) | 99.5% | 99.5% |
+| Vector search (k-NN) | 100% | 100% |
 | Persistence (opt-in `test_95`) | 100% | 100% |
-| **Total** | **99.99%** | **99.99%** |
+| **Total** | **100%** | **100%** |
 
-Both servers miss one test (a literal `NaN` in a k-NN vector, which needs lenient JSON
-parsing). The multi-node and cross-DC suites (`test_96`, `test_97`) are not implemented:
+Both servers pass the whole suite (6,693 tests). The multi-node and cross-DC suites (`test_96`, `test_97`) are not implemented:
 both servers are single-node (see [ROADMAP.md](ROADMAP.md)).
 Both servers store their state on disk by default (`SLOP_DATA_DIR`, default `./data`; in Docker a named volume per server) and survive restarts and crashes; `SLOP_IN_MEMORY=true` keeps everything in memory instead (see [servers/go/README.md](servers/go/README.md#persistence) and [servers/rust/README.md](servers/rust/README.md)).
 
