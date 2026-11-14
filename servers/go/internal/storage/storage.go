@@ -1,8 +1,5 @@
-package main
-
-// Durable state (default): the server keeps its cluster state and documents in
-// SLOP_DATA_DIR (default ./data) and reloads them on start. SLOP_IN_MEMORY=true
-// keeps everything in memory only.
+// Package storage keeps a model.State durable in a data directory (snapshot
+// plus synced journal) and loads it back on start.
 //
 // Layout (files are prefixed so the Rust server can share the directory):
 // <dir>/go-snapshot holds the full state as of generation G and
@@ -17,6 +14,7 @@ package main
 // Not persisted, like in OpenSearch: transient cluster settings, scroll
 // contexts, point-in-time contexts and task results. Documents indexed but not
 // yet refreshed are visible after a restart (recovery refreshes the shard).
+package storage
 
 import (
 	"bytes"
@@ -81,7 +79,11 @@ type idxPersistState struct {
 	order []string
 }
 
-type persister struct {
+// Store keeps a model.State durable in a data directory.
+type Store struct {
+	st    *model.State
+	locks Locks
+
 	mu       sync.Mutex
 	dir      string
 	gen      uint64
@@ -102,129 +104,92 @@ type persister struct {
 	indices                    map[string]*idxPersistState
 }
 
-// processID is the node's process.id. Inside a container the server usually
-// runs as PID 1 on every start; a restart must still be observable, so PID 1
-// is replaced by a plausible PID derived from the start time.
-var processID = func() int {
-	if pid := os.Getpid(); pid > 1 {
-		return pid
-	}
-	return 2 + int(time.Now().UnixNano()/1000%4194000)
-}()
-
-// persistenceDir returns the data directory from the environment:
-// SLOP_DATA_DIR (default "data", relative to the working directory), or ""
-// when SLOP_IN_MEMORY is true.
-func persistenceDir() string {
-	if v := strings.TrimSpace(os.Getenv("SLOP_IN_MEMORY")); v != "" {
-		if on, err := strconv.ParseBool(v); err == nil && on {
-			return ""
-		}
-	}
-	if d := os.Getenv("SLOP_DATA_DIR"); d != "" {
-		return d
-	}
-	return "data"
+// Locks are the locks that guard the parts of a model.State.
+type Locks struct {
+	State   *sync.RWMutex // everything but IngestPipelines and Scripts
+	Ingest  *sync.RWMutex // IngestPipelines
+	Scripts *sync.RWMutex // Scripts
 }
 
-func persistenceDescription(s *Server) string {
-	if s.persist == nil {
-		return " (in memory)"
-	}
-	if abs, err := filepath.Abs(s.persist.dir); err == nil {
-		return " (data in " + abs + ")"
-	}
-	return " (data in " + s.persist.dir + ")"
-}
-
-// openPersistence loads the state stored in dir (creating it if needed) and
-// starts journaling. An empty dir disables persistence.
-func (s *Server) openPersistence(dir string) error {
-	if dir == "" {
-		return nil
-	}
+// Open loads the state stored in dir (creating it if needed) into st, writes
+// a fresh snapshot and starts journaling. recovered is called for every
+// loaded index (to rebuild derived data such as doc values). A background
+// goroutine persists changes made outside requests once a second.
+func Open(dir string, st *model.State, locks Locks, recovered func(*model.Index)) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+		return nil, err
 	}
-	p := &persister{dir: dir, indices: map[string]*idxPersistState{}}
+	p := &Store{dir: dir, st: st, locks: locks, indices: map[string]*idxPersistState{}}
 	lf, err := os.OpenFile(filepath.Join(dir, "go.lock"), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		lf.Close()
-		return fmt.Errorf("data directory %s is in use by another process: %w", dir, err)
+		return nil, fmt.Errorf("data directory %s is in use by another process: %w", dir, err)
 	}
 	p.lock = lf
-	if err := p.load(s); err != nil {
-		return err
+	if err := p.load(recovered); err != nil {
+		return nil, err
 	}
-	s.persist = p
-	p.pipelines = encodeNamedMaps(s.IngestPipelines)
-	p.scripts = encodeNamedMaps(s.Scripts)
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	p.pipelines = encodeNamedMaps(st.IngestPipelines)
+	p.scripts = encodeNamedMaps(st.Scripts)
+	locks.State.Lock()
+	defer locks.State.Unlock()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if err := p.compactLocked(s); err != nil {
-		return err
+	if err := p.compactLocked(); err != nil {
+		return nil, err
 	}
 	go func() {
 		// catches changes made outside a request (background tasks)
 		for range time.Tick(time.Second) {
-			s.persistNow()
+			p.Persist()
 		}
 	}()
-	return nil
+	return p, nil
 }
 
-// persistAfterRequest makes the changes of a finished request durable before
-// its response is sent.
-func (s *Server) persistAfterRequest(method, path string) {
-	if s.persist == nil || method == "GET" || method == "HEAD" || readOnlyPath(path) {
-		return
-	}
-	s.persistNow()
-}
+// Dir is the data directory.
+func (p *Store) Dir() string { return p.dir }
 
-func (s *Server) persistNow() {
-	p := s.persist
-	if p == nil {
-		return
-	}
+// Persist appends the changes since the last call to the journal and returns
+// once they are durable. It takes the state locks itself.
+func (p *Store) Persist() {
+	s := p.st
 	p.mu.Lock()
 	var buf pbuf
 	// pipelines and scripts have their own locks
-	s.ingestMu.RLock()
+	p.locks.Ingest.RLock()
 	pipes := encodeNamedMaps(s.IngestPipelines)
-	s.ingestMu.RUnlock()
+	p.locks.Ingest.RUnlock()
 	if !bytes.Equal(pipes, p.pipelines) {
 		buf.byte(recPipelines)
 		buf.bytes(pipes)
 		p.pipelines = pipes
 	}
-	s.scriptsMu.RLock()
+	p.locks.Scripts.RLock()
 	scripts := encodeNamedMaps(s.Scripts)
-	s.scriptsMu.RUnlock()
+	p.locks.Scripts.RUnlock()
 	if !bytes.Equal(scripts, p.scripts) {
 		buf.byte(recScripts)
 		buf.bytes(scripts)
 		p.scripts = scripts
 	}
-	s.mu.Lock()
-	p.diffLocked(s, &buf)
+	p.locks.State.Lock()
+	p.diffLocked(&buf)
 	if len(buf.b) > 0 {
 		if err := p.appendFrame(buf.b); err != nil {
 			fmt.Fprintln(os.Stderr, "persistence: journal write failed:", err)
 		}
 	}
 	if p.jsize > persistMinCompact && p.jsize > 2*p.snapSize {
-		if err := p.compactLocked(s); err != nil {
+		if err := p.compactLocked(); err != nil {
 			fmt.Fprintln(os.Stderr, "persistence: snapshot failed:", err)
 		}
 	}
 	target := p.written.Load()
-	s.mu.Unlock()
+	p.locks.State.Unlock()
 	p.mu.Unlock()
 	// other requests proceed while this one waits for its frame to be durable
 	if err := p.syncTo(target); err != nil {
@@ -234,7 +199,7 @@ func (s *Server) persistNow() {
 
 // syncTo returns once the first target journal bytes are durable. One sync
 // covers every frame written before it starts (group commit).
-func (p *persister) syncTo(target int64) error {
+func (p *Store) syncTo(target int64) error {
 	if p.synced.Load() >= target {
 		return nil
 	}
@@ -253,27 +218,10 @@ func (p *persister) syncTo(target int64) error {
 	return nil
 }
 
-// readOnlyPath reports requests that never change durable state.
-func readOnlyPath(path string) bool {
-	segs := strings.Split(strings.Trim(path, "/"), "/")
-	for i := 0; i < len(segs) && i < 2; i++ {
-		switch segs[i] {
-		case "_search", "_msearch", "_count", "_analyze", "_mget", "_explain",
-			"_field_caps", "_validate", "_termvectors", "_mtermvectors", "_rank_eval",
-			"_render", "_refresh", "_cache", "_search_shards":
-			// /_search/pipeline/<id> stores a search pipeline
-			if segs[i] == "_search" && i+1 < len(segs) && segs[i+1] == "pipeline" {
-				return false
-			}
-			return true
-		}
-	}
-	return false
-}
-
 // diffLocked appends the records that bring the stored state up to date with
-// the in-memory state. Caller holds s.mu and p.mu.
-func (p *persister) diffLocked(s *Server, buf *pbuf) {
+// the in-memory state. Caller holds the state lock and p.mu.
+func (p *Store) diffLocked(buf *pbuf) {
+	s := p.st
 	g := encodeGlobal(s)
 	if !bytes.Equal(g, p.global) {
 		buf.byte(recGlobal)
@@ -338,7 +286,7 @@ func (p *persister) diffLocked(s *Server, buf *pbuf) {
 	}
 }
 
-func (p *persister) diffOrder(buf *pbuf, name string, st *idxPersistState, order []string) {
+func (p *Store) diffOrder(buf *pbuf, name string, st *idxPersistState, order []string) {
 	old := st.order
 	if len(order) == len(old) && sameStrings(order, old) {
 		return
@@ -408,7 +356,7 @@ func encodeDocPut(buf *pbuf, idx *model.Index, name, id string) {
 	buf.val(idx.Docs[id])
 }
 
-func encodeGlobal(s *Server) []byte {
+func encodeGlobal(s *model.State) []byte {
 	var b pbuf
 	b.varint(s.Counter)
 	b.varint(s.StateVersion)
@@ -431,7 +379,7 @@ func encodeGlobal(s *Server) []byte {
 	return b.b
 }
 
-func decodeGlobal(s *Server, data []byte) error {
+func decodeGlobal(s *model.State, data []byte) error {
 	r := &preader{b: data}
 	s.Counter = r.varint()
 	s.StateVersion = r.varint()
@@ -550,7 +498,7 @@ func decodeNamedMaps(data []byte) map[string]map[string]any {
 }
 
 // apply replays one frame of records into s.
-func applyFrame(s *Server, data []byte) error {
+func applyFrame(s *model.State, data []byte) error {
 	r := &preader{b: data}
 	get := func(name string) *model.Index {
 		idx := s.Indices[name]
@@ -623,7 +571,8 @@ func applyFrame(s *Server, data []byte) error {
 }
 
 // load reads the snapshot and replays its journal.
-func (p *persister) load(s *Server) error {
+func (p *Store) load(recovered func(*model.Index)) error {
+	s := p.st
 	snap, err := os.ReadFile(filepath.Join(p.dir, persistSnapshotName))
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -662,12 +611,12 @@ func (p *persister) load(s *Server) error {
 		}
 		// recovery refreshes the shard: translog operations become searchable
 		idx.Pending = map[string]map[string]any{}
-		recomputeAllDocValues(idx)
+		recovered(idx)
 	}
 	return nil
 }
 
-func (p *persister) journalPath(gen uint64) string {
+func (p *Store) journalPath(gen uint64) string {
 	return filepath.Join(p.dir, persistJournalPrefix+strconv.FormatUint(gen, 10))
 }
 
@@ -711,7 +660,7 @@ const journalChunk = 16 << 20
 
 // appendFrame writes a frame after the last one; syncTo makes it durable.
 // Caller holds p.mu.
-func (p *persister) appendFrame(body []byte) error {
+func (p *Store) appendFrame(body []byte) error {
 	f := frame(body)
 	if end := p.jsize + int64(len(f)); end > p.jalloc {
 		size := p.jalloc + journalChunk
@@ -738,11 +687,11 @@ func (p *persister) appendFrame(body []byte) error {
 }
 
 // compactLocked writes the whole state as the next snapshot generation and
-// starts a new journal. Caller holds s.mu and p.mu and has just encoded
-// p.pipelines and p.scripts.
-func (p *persister) compactLocked(s *Server) error {
+// starts a new journal. Caller holds the state lock and p.mu and has just
+// encoded p.pipelines and p.scripts.
+func (p *Store) compactLocked() error {
 	// pipelines and scripts as last encoded by the caller (their locks are not
-	// taken here, s.mu is held)
+	// taken here, the state lock is held)
 	var buf pbuf
 	buf.byte(recPipelines)
 	buf.bytes(p.pipelines)
@@ -750,7 +699,7 @@ func (p *persister) compactLocked(s *Server) error {
 	buf.bytes(p.scripts)
 	p.global = nil
 	p.indices = map[string]*idxPersistState{}
-	p.diffLocked(s, &buf)
+	p.diffLocked(&buf)
 
 	next := p.gen + 1
 	jf, err := os.OpenFile(p.journalPath(next), os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o644)

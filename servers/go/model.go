@@ -17,6 +17,7 @@ import (
 	"slopensearch/internal/dates"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
+	"slopensearch/internal/storage"
 	"slopensearch/internal/wildcard"
 )
 
@@ -65,7 +66,7 @@ type Server struct {
 	pits          map[string]*pitContext
 	pitMu         sync.Mutex
 	pitCounter    int64
-	persist       *persister // nil in memory-only mode (SLOP_IN_MEMORY=true)
+	persist       *storage.Store // nil in memory-only mode (SLOP_IN_MEMORY=true)
 }
 
 var globalServer *Server
