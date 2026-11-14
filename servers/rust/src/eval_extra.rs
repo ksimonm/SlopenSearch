@@ -2467,66 +2467,6 @@ impl<'a> QueryCtx<'a> {
         Ok((true, sim))
     }
 
-    fn eval_knn_field(&self, field: &str, spec: &Map<String, Value>) -> Result<(bool, f64), ApiError> {
-        let q: Vec<f64> = spec
-            .get("vector")
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(to_f64).collect())
-            .unwrap_or_default();
-        let vf = match crate::knn::field_def(&self.idx.mappings, field).and_then(crate::knn::vec_field) {
-            Some(vf) => vf,
-            None => return Ok((false, 0.0)),
-        };
-        let boost = spec.get("boost").and_then(to_f64).unwrap_or(1.0);
-        let (sc, r) = match crate::knn::doc_score(&vf, self.doc, field, &q) {
-            Some(x) => x,
-            None => return Ok((false, 0.0)),
-        };
-        let filter = spec.get("filter").and_then(|f| f.as_object());
-        if let Some(f) = filter {
-            if !self.eval(f)?.0 {
-                return Ok((false, 0.0));
-            }
-        }
-        if let Some(ms) = spec.get("min_score").and_then(to_f64) {
-            return Ok((sc >= ms, sc * boost));
-        }
-        if let Some(md) = spec.get("max_distance").and_then(to_f64) {
-            let dist = match vf.space.as_str() {
-                "cosinesimil" => 1.0 - r,
-                "innerproduct" => -r,
-                _ => r,
-            };
-            return Ok((dist <= md, sc * boost));
-        }
-        let k = spec.get("k").and_then(to_f64).unwrap_or(10.0) as usize;
-        let me = self.idx.order.iter().position(|x| x == &self.id).unwrap_or(0);
-        let mut better = 0usize;
-        for (pos, id) in self.idx.order.iter().enumerate() {
-            if pos == me {
-                continue;
-            }
-            let doc = match self.idx.docs.get(id) {
-                Some(d) => d,
-                None => continue,
-            };
-            let osc = match crate::knn::doc_score(&vf, doc, field, &q) {
-                Some((s, _)) => s,
-                None => continue,
-            };
-            if osc < sc || (osc == sc && pos > me) {
-                continue;
-            }
-            if let Some(f) = filter {
-                if !QueryCtx::new(self.idx, id, doc).eval(f)?.0 {
-                    continue;
-                }
-            }
-            better += 1;
-        }
-        Ok((better < k, sc * boost))
-    }
-
     // -----------------------------------------------------------------------
     // function_score
     // -----------------------------------------------------------------------

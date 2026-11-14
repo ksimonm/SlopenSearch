@@ -361,19 +361,6 @@ pub fn source_vector(doc: &Value, path: &str) -> Option<Vec<f64>> {
         .collect()
 }
 
-/// Score and raw value of a document vector, or None when it has no usable vector.
-pub fn doc_score(vf: &VecField, doc: &Value, path: &str, q: &[f64]) -> Option<(f64, f64)> {
-    let v = source_vector(doc, path)?;
-    if v.len() != q.len() {
-        return None;
-    }
-    let r = raw(&vf.space, q, &v);
-    if !r.is_finite() {
-        return None;
-    }
-    Some((score(&vf.space, r), r))
-}
-
 /// Rounds a score to the float precision Lucene scores have, as the shortest
 /// decimal of the f32 value (so it renders like Java's Float.toString digits).
 pub fn f32r(x: f64) -> f64 {
