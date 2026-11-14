@@ -10,10 +10,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/dates"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 	"slopensearch/internal/settings"
@@ -507,306 +507,19 @@ func (c *indexCtx) parseDateValue(name, typ string, def map[string]any, v any) (
 		}
 	}
 	if typ == "date_nanos" {
-		if ns, rangeErr, ok := parseDateNanosAny(def, s); ok {
+		if ns, rangeErr, ok := dates.ParseNanosAny(def, s); ok {
 			return ns, nil
 		} else if rangeErr != "" {
 			return nil, c.fieldValueError(name, typ, v, "illegal_argument_exception", rangeErr)
 		}
-	} else if ms, ok := parseDateAny(def, s); ok {
+	} else if ms, ok := dates.ParseAny(def, s); ok {
 		return ms, nil
 	}
-	reason := fmt.Sprintf("failed to parse date field [%s] with format [%s]", s, dateFormatOf(def))
+	reason := fmt.Sprintf("failed to parse date field [%s] with format [%s]", s, dates.FormatOf(def))
 	e := c.fieldValueError(name, typ, v, "illegal_argument_exception", reason)
 	e.CausedBy.CausedBy = &apierr.Error{Type: "date_time_parse_exception", Status: 400,
 		Reason: "Failed to parse with all enclosed parsers"}
 	return nil, e
-}
-
-func dateFormatOf(def map[string]any) string {
-	if f, ok := def["format"].(string); ok {
-		return f
-	}
-	return "strict_date_optional_time||epoch_millis"
-}
-
-// javaDateFormatToGo converts the common subset of Java date format letters.
-func javaDateFormatToGo(f string) string {
-	repl := []struct{ from, to string }{
-		{"yyyy", "2006"}, {"yy", "06"},
-		{"MM", "01"},
-		{"dd", "02"},
-		{"HH", "15"}, {"mm", "04"}, {"ss", "05"},
-		{"SSSSSSSSS", "000000000"}, {"SSS", "000"},
-	}
-	out := f
-	if strings.Contains(out, "'T'") {
-		out = strings.ReplaceAll(out, "'T'", "T")
-	}
-	for _, r := range repl {
-		out = strings.ReplaceAll(out, r.from, r.to)
-	}
-	return out
-}
-
-func parseEpochNumber(s string, seconds bool) (int64, bool) {
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
-		return 0, false
-	}
-	if seconds {
-		return int64(f * 1000), true
-	}
-	return int64(f), true
-}
-
-func parseDateWithNamedFormat(name, s string) (int64, bool) {
-	switch name {
-	case "epoch_millis":
-		return parseEpochNumber(s, false)
-	case "epoch_second":
-		return parseEpochNumber(s, true)
-	case "date_optional_time", "strict_date_optional_time", "date_time",
-		"strict_date_optional_time_nanos":
-		return parseStrictDateOptionalTime(s)
-	case "strict_date":
-		if t, err := time.Parse("2006-01-02", s); err == nil {
-			return t.UnixMilli(), true
-		}
-		return 0, false
-	case "date":
-		if t, err := time.Parse("2006-1-2", s); err == nil {
-			return t.UnixMilli(), true
-		}
-		return 0, false
-	case "basic_date":
-		if t, err := time.Parse("20060102", s); err == nil {
-			return t.UnixMilli(), true
-		}
-		return 0, false
-	case "basic_date_time":
-		if t, err := time.Parse("20060102T150405.000Z0700", s); err == nil {
-			return t.UnixMilli(), true
-		}
-		if t, err := time.Parse("20060102T150405Z0700", s); err == nil {
-			return t.UnixMilli(), true
-		}
-		return 0, false
-	}
-	if layout := javaDateFormatToGo(name); layout != "" {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t.UnixMilli(), true
-		}
-		if t, err := time.ParseInLocation(layout, s, time.UTC); err == nil {
-			return t.UnixMilli(), true
-		}
-	}
-	return 0, false
-}
-
-func parseDateAny(def map[string]any, s string) (int64, bool) {
-	if f, ok := def["format"].(string); ok && f != "" {
-		for _, fmtPart := range strings.Split(f, "||") {
-			if ms, ok := parseDateWithNamedFormat(strings.TrimSpace(fmtPart), s); ok {
-				return ms, true
-			}
-		}
-		return 0, false
-	}
-	if ms, ok := parseStrictDateOptionalTime(s); ok {
-		return ms, true
-	}
-	if ms, ok := parseEpochNumber(s, false); ok {
-		return ms, true
-	}
-	return 0, false
-}
-
-func parseDateDefault(s string) (int64, bool) {
-	return parseStrictDateOptionalTime(s)
-}
-
-func parseStrictDateOptionalTime(s string) (int64, bool) {
-	sec, nsec, ok := parseStrictDateOptionalTimeParts(s)
-	if !ok {
-		return 0, false
-	}
-	return sec*1000 + int64(nsec)/int64(1e6), true
-}
-
-func parseStrictDateOptionalTimeParts(s string) (int64, int, bool) {
-	i := 0
-	neg := false
-	if i < len(s) && s[i] == '-' {
-		neg = true
-		i++
-	}
-	ystart := i
-	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
-		i++
-	}
-	if i == ystart {
-		return 0, 0, false
-	}
-	ydigits := s[ystart:i]
-	if !neg && len(ydigits) != 4 {
-		return 0, 0, false
-	}
-	year, err := strconv.ParseInt(ydigits, 10, 64)
-	if err != nil {
-		return 0, 0, false
-	}
-	if neg {
-		year = -year
-	}
-	month, day := 1, 1
-	hour, minute, second, nsec := 0, 0, 0, 0
-	loc := time.UTC
-	if i < len(s) {
-		if s[i] != '-' || i+3 > len(s) {
-			return 0, 0, false
-		}
-		m, err := strconv.Atoi(s[i+1 : i+3])
-		if err != nil {
-			return 0, 0, false
-		}
-		month = m
-		i += 3
-		if i < len(s) && s[i] == '-' {
-			if i+3 > len(s) {
-				return 0, 0, false
-			}
-			d, err := strconv.Atoi(s[i+1 : i+3])
-			if err != nil {
-				return 0, 0, false
-			}
-			day = d
-			i += 3
-		}
-	}
-	if i < len(s) {
-		if s[i] != 'T' || i+6 > len(s) {
-			return 0, 0, false
-		}
-		h, err := strconv.Atoi(s[i+1 : i+3])
-		if err != nil || s[i+3] != ':' {
-			return 0, 0, false
-		}
-		mi, err := strconv.Atoi(s[i+4 : i+6])
-		if err != nil {
-			return 0, 0, false
-		}
-		hour, minute = h, mi
-		i += 6
-		if i < len(s) && s[i] == ':' {
-			if i+3 > len(s) {
-				return 0, 0, false
-			}
-			se, err := strconv.Atoi(s[i+1 : i+3])
-			if err != nil {
-				return 0, 0, false
-			}
-			second = se
-			i += 3
-			if i < len(s) && s[i] == '.' {
-				i++
-				fstart := i
-				for i < len(s) && s[i] >= '0' && s[i] <= '9' {
-					i++
-				}
-				if i == fstart {
-					return 0, 0, false
-				}
-				frac := s[fstart:i]
-				for len(frac) < 9 {
-					frac += "0"
-				}
-				nsec, _ = strconv.Atoi(frac[:9])
-			}
-		}
-		if i < len(s) {
-			switch s[i] {
-			case 'Z':
-				i++
-			case '+', '-':
-				sign := 1
-				if s[i] == '-' {
-					sign = -1
-				}
-				if i+6 > len(s) {
-					return 0, 0, false
-				}
-				th, err1 := strconv.Atoi(s[i+1 : i+3])
-				tm, err2 := strconv.Atoi(s[i+4 : i+6])
-				if err1 != nil || err2 != nil || s[i+3] != ':' {
-					return 0, 0, false
-				}
-				loc = time.FixedZone("", sign*(th*3600+tm*60))
-				i += 6
-			default:
-				return 0, 0, false
-			}
-		}
-	}
-	if i != len(s) {
-		return 0, 0, false
-	}
-	if month < 1 || month > 12 || day < 1 || day > 31 ||
-		hour > 23 || minute > 59 || second > 59 {
-		return 0, 0, false
-	}
-	t := time.Date(int(year), time.Month(month), day, hour, minute, second, nsec, loc)
-	if int(t.Month()) != month || t.Day() != day {
-		return 0, 0, false
-	}
-	return t.Unix(), t.Nanosecond(), true
-}
-
-func parseDateNanosAny(def map[string]any, s string) (int64, string, bool) {
-	checkMs := func(ms int64) (int64, string, bool) {
-		if ms < 0 {
-			return 0, "date[" + s + "] is before the epoch in 1970 and cannot be stored in nanosecond resolution", false
-		}
-		if ms > math.MaxInt64/int64(1e6) {
-			return 0, "date[" + s + "] is after 2262-04-11T23:47:16.854775807 and cannot be stored in nanosecond resolution", false
-		}
-		return ms * int64(1e6), "", true
-	}
-	if f, ok := def["format"].(string); ok && f != "" {
-		for _, fmtPart := range strings.Split(f, "||") {
-			fmtPart = strings.TrimSpace(fmtPart)
-			switch fmtPart {
-			case "epoch_millis":
-				if ms, ok := parseEpochNumber(s, false); ok {
-					return checkMs(ms)
-				}
-				continue
-			case "epoch_second":
-				if ms, ok := parseEpochNumber(s, true); ok {
-					return checkMs(ms)
-				}
-				continue
-			}
-			if ms, ok := parseDateWithNamedFormat(fmtPart, s); ok {
-				return checkMs(ms)
-			}
-		}
-		return 0, "", false
-	}
-	if sec, nsec, ok := parseStrictDateOptionalTimeParts(s); ok {
-		if sec < 0 {
-			return 0, "date[" + s + "] is before the epoch in 1970 and cannot be stored in nanosecond resolution", false
-		}
-		maxSec := math.MaxInt64 / int64(1e9)
-		maxNsec := math.MaxInt64 % int64(1e9)
-		if sec > maxSec || (sec == maxSec && int64(nsec) > maxNsec) {
-			return 0, "date[" + s + "] is after 2262-04-11T23:47:16.854775807 and cannot be stored in nanosecond resolution", false
-		}
-		return sec*int64(1e9) + int64(nsec), "", true
-	}
-	if ms, ok := parseEpochNumber(s, false); ok {
-		return checkMs(ms)
-	}
-	return 0, "", false
 }
 
 // parseIPValue canonicalizes an IPv4/IPv6 string or CIDR.
@@ -2350,7 +2063,7 @@ func (c *indexCtx) parseRangeValue(path, typ string, def map[string]any, v any) 
 		case "date_range":
 			rv, err := c.parseDateValue(path, "date", def, raw)
 			if err != nil {
-				reason := fmt.Sprintf("failed to parse date field [%s] with format [%s]", previewValue(raw), dateFormatOf(def))
+				reason := fmt.Sprintf("failed to parse date field [%s] with format [%s]", previewValue(raw), dates.FormatOf(def))
 				if err.CausedBy != nil && err.CausedBy.Reason != "" {
 					reason += ": [" + err.CausedBy.Reason + "]"
 				}

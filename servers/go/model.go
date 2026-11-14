@@ -10,11 +10,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 	"unicode"
 
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/dates"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 	"slopensearch/internal/settings"
@@ -480,32 +480,6 @@ func fieldValue(doc map[string]any, path string) (any, bool) {
 	return nil, false
 }
 
-var datePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$`)
-
-func parseDate(v any) (float64, bool) {
-	if f, ok := jsonv.ToFloat(v); ok {
-		return f, true
-	}
-	s, ok := v.(string)
-	if !ok {
-		return 0, false
-	}
-	s = strings.TrimSpace(s)
-	for _, layout := range []string{
-		time.RFC3339Nano,
-		"2006-01-02T15:04:05.000Z07:00",
-		"2006-01-02T15:04:05Z07:00",
-		"2006-01-02T15:04:05",
-		"2006-01-02 15:04:05",
-		"2006-01-02",
-	} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return float64(t.UnixMilli()), true
-		}
-	}
-	return 0, false
-}
-
 func inferType(v any) map[string]any {
 	switch t := v.(type) {
 	case bool:
@@ -521,7 +495,7 @@ func inferType(v any) map[string]any {
 		}
 		return map[string]any{"type": "long"}
 	case string:
-		if datePattern.MatchString(t) {
+		if dates.Pattern.MatchString(t) {
 			return map[string]any{"type": "date"}
 		}
 		return map[string]any{
@@ -638,7 +612,7 @@ func inferDynamicString(idx *model.Index, s string) map[string]any {
 		if fmts, ok := idx.Mappings["dynamic_date_formats"].([]any); ok && len(fmts) > 0 {
 			for _, f := range fmts {
 				fs, _ := f.(string)
-				if fs != "" && dateFormatMatches(fs, s) {
+				if fs != "" && dates.FormatMatches(fs, s) {
 					print := fs
 					if i := strings.Index(fs, "||"); i >= 0 {
 						print = fs[:i]
@@ -646,9 +620,9 @@ func inferDynamicString(idx *model.Index, s string) map[string]any {
 					return map[string]any{"type": "date", "format": fs, "print_format": print}
 				}
 			}
-		} else if isISODateLike(s) {
+		} else if dates.IsISOLike(s) {
 			return map[string]any{"type": "date"}
-		} else if isSlashDateLike(s) {
+		} else if dates.IsSlashLike(s) {
 			return map[string]any{"type": "date",
 				"format":       "yyyy/MM/dd HH:mm:ss||yyyy/MM/dd||epoch_millis",
 				"print_format": "yyyy/MM/dd HH:mm:ss"}
@@ -660,112 +634,6 @@ func inferDynamicString(idx *model.Index, s string) map[string]any {
 			"keyword": map[string]any{"type": "keyword", "ignore_above": 256},
 		},
 	}
-}
-
-func isISODateLike(s string) bool {
-	b := []byte(s)
-	if len(b) < 7 || len(b) > 30 {
-		return false
-	}
-	for _, c := range b[0:4] {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	if b[4] != '-' {
-		return false
-	}
-	for _, c := range b[5:7] {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	if len(b) == 7 {
-		return true
-	}
-	if b[7] != '-' || len(b) < 10 {
-		return false
-	}
-	for _, c := range b[8:10] {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	if len(b) == 10 {
-		return true
-	}
-	if b[10] != 'T' {
-		return false
-	}
-	for _, c := range b[11:] {
-		if (c >= '0' && c <= '9') || c == ':' || c == '.' || c == 'Z' || c == '+' || c == '-' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func isSlashDateLike(s string) bool {
-	b := []byte(s)
-	if len(b) < 8 {
-		return false
-	}
-	for _, c := range b[0:4] {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return b[4] == '/' && b[5] >= '0' && b[5] <= '9' && b[6] >= '0' && b[6] <= '9' && b[7] == '/'
-}
-
-func dateFormatMatches(format, s string) bool {
-	for _, alt := range strings.Split(format, "||") {
-		var pat strings.Builder
-		pat.WriteString("^")
-		runes := []rune(alt)
-		for i := 0; i < len(runes); {
-			c := runes[i]
-			tok := string(c)
-			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
-				j := i + 1
-				for j < len(runes) {
-					n := runes[j]
-					if (n >= 'a' && n <= 'z') || (n >= 'A' && n <= 'Z') {
-						j++
-						continue
-					}
-					break
-				}
-				tok = string(runes[i:j])
-				i = j
-			} else {
-				i++
-			}
-			switch tok {
-			case "yyyy":
-				pat.WriteString(`\d{4}`)
-			case "MM", "dd", "HH", "mm", "ss":
-				pat.WriteString(`\d{2}`)
-			case "epoch_millis", "epoch_second":
-				pat.WriteString(`\d+`)
-			case "T":
-				pat.WriteString("T")
-			default:
-				for _, ch := range tok {
-					if strings.ContainsRune(`\.+*?()|[]{}^$`, ch) {
-						pat.WriteByte('\\')
-					}
-					pat.WriteRune(ch)
-				}
-			}
-		}
-		pat.WriteString("$")
-		if re, err := regexp.Compile(pat.String()); err == nil && re.MatchString(s) {
-			return true
-		}
-	}
-	return false
 }
 
 func dynamicTypeNameOf(def map[string]any) string {

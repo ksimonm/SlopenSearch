@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/dates"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
@@ -265,7 +266,7 @@ func parseRangeDateValue(v any, def map[string]any, format, tz string, now time.
 		if format != "" {
 			tmp = map[string]any{"type": "date", "format": format}
 		}
-		if ms, ok := parseDateAny(tmp, s); ok {
+		if ms, ok := dates.ParseAny(tmp, s); ok {
 			if tz != "" {
 				if off, err := parseTZOffset(tz); err == nil {
 					ms -= off
@@ -414,7 +415,7 @@ func dateRangeAgg(name, field string, spec map[string]any, docs []map[string]any
 		}
 		t := time.UnixMilli(ms).In(loc)
 		if format != "" {
-			if layout := javaDateFormatToGo(format); layout != "" {
+			if layout := dates.JavaFormatToGo(format); layout != "" {
 				return t.Format(layout)
 			}
 		}

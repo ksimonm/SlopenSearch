@@ -1,18 +1,16 @@
-package main
+package dates
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
-
-	"slopensearch/internal/apierr"
 )
 
-type dateResolution int
+// Resolution is the precision of a date anchor, used to round range bounds up.
+type Resolution int
 
 const (
-	resMillis dateResolution = iota
+	resMillis Resolution = iota
 	resSecond
 	resMinute
 	resHour
@@ -22,7 +20,7 @@ const (
 	resYear
 )
 
-func dateMathUnitResolution(unit byte) (dateResolution, bool) {
+func dateMathUnitResolution(unit byte) (Resolution, bool) {
 	switch unit {
 	case 's':
 		return resSecond, true
@@ -90,7 +88,8 @@ func truncateDateMathUnit(t time.Time, unit byte) time.Time {
 	return t
 }
 
-func applyRangeDateMath(t time.Time, expr string) (time.Time, dateResolution, bool) {
+// ApplyMath applies a date math expression ("+1d/d") to t.
+func ApplyMath(t time.Time, expr string) (time.Time, Resolution, bool) {
 	res := resMillis
 	i := 0
 	for i < len(expr) {
@@ -142,7 +141,8 @@ func applyRangeDateMath(t time.Time, expr string) (time.Time, dateResolution, bo
 	return t, res, true
 }
 
-func roundUpDateMath(t time.Time, res dateResolution) time.Time {
+// RoundUp moves t to the last millisecond of its unit of resolution res.
+func RoundUp(t time.Time, res Resolution) time.Time {
 	var unit byte
 	switch res {
 	case resSecond:
@@ -166,7 +166,7 @@ func roundUpDateMath(t time.Time, res dateResolution) time.Time {
 	return addDateMathUnit(trunc, unit, 1).Add(-time.Millisecond)
 }
 
-func dateResolutionOfString(s string) dateResolution {
+func dateResolutionOfString(s string) Resolution {
 	body := s
 	if i := strings.Index(body, "||"); i >= 0 {
 		body = body[:i]
@@ -203,7 +203,7 @@ func dateResolutionOfString(s string) dateResolution {
 	}
 }
 
-func dateResolutionOfFormat(f string) dateResolution {
+func dateResolutionOfFormat(f string) Resolution {
 	switch {
 	case strings.Contains(f, "S"):
 		return resMillis
@@ -221,7 +221,7 @@ func dateResolutionOfFormat(f string) dateResolution {
 	return resYear
 }
 
-func parseDefaultDateAnchor(s string, loc *time.Location) (time.Time, dateResolution, bool) {
+func parseDefaultDateAnchor(s string, loc *time.Location) (time.Time, Resolution, bool) {
 	res := dateResolutionOfString(s)
 	for _, layout := range []string{
 		time.RFC3339Nano,
@@ -254,7 +254,9 @@ func parseDefaultDateAnchor(s string, loc *time.Location) (time.Time, dateResolu
 	return time.Time{}, resMillis, false
 }
 
-func parseRangeDateAnchor(s, defFormat, queryFormat string, loc *time.Location) (time.Time, dateResolution, bool) {
+// ParseAnchor parses the anchor of a range bound ("now" or a date in the
+// query or field format).
+func ParseAnchor(s, defFormat, queryFormat string, loc *time.Location) (time.Time, Resolution, bool) {
 	if s == "now" {
 		return time.Now().In(loc), resMillis, true
 	}
@@ -280,7 +282,7 @@ func parseRangeDateAnchor(s, defFormat, queryFormat string, loc *time.Location) 
 					return t, res, true
 				}
 			default:
-				layout := javaDateFormatToGo(part)
+				layout := JavaFormatToGo(part)
 				if layout == "" {
 					continue
 				}
@@ -294,7 +296,8 @@ func parseRangeDateAnchor(s, defFormat, queryFormat string, loc *time.Location) 
 	return parseDefaultDateAnchor(s, loc)
 }
 
-func parseRangeLocation(tz string) (*time.Location, error) {
+// ParseLocation resolves a time_zone parameter (zone ID or offset).
+func ParseLocation(tz string) (*time.Location, error) {
 	tz = strings.TrimSpace(tz)
 	if tz == "" || tz == "UTC" || tz == "utc" || tz == "Z" {
 		return time.UTC, nil
@@ -316,70 +319,4 @@ func parseRangeLocation(tz string) (*time.Location, error) {
 		return time.FixedZone(tz, sign*(h*3600+m*60)), nil
 	}
 	return time.LoadLocation(tz)
-}
-
-func rangeDateParseError(value, queryFormat string, def map[string]any) *apierr.Error {
-	format := queryFormat
-	if format == "" {
-		format = dateFormatOf(def)
-	}
-	return &apierr.Error{Type: "parse_exception", Status: 400,
-		Reason: fmt.Sprintf("failed to parse date field [%s] with format [%s]", value, format)}
-}
-
-func parseRangeDateBound(def map[string]any, v any, tz, queryFormat string, roundUp bool) (any, *apierr.Error) {
-	if m, ok := v.(map[string]any); ok {
-		if mv, ok := m["value"]; ok {
-			v = mv
-		}
-	}
-	if s, ok := v.(string); ok {
-		isNanos := false
-		if t, _ := def["type"].(string); t == "date_nanos" {
-			isNanos = true
-		}
-		anchor := s
-		mathExpr := ""
-		if strings.HasPrefix(s, "now") {
-			anchor = "now"
-			mathExpr = s[3:]
-		} else if i := strings.Index(s, "||"); i >= 0 {
-			anchor = s[:i]
-			mathExpr = s[i+2:]
-		}
-		loc := time.UTC
-		if tz != "" {
-			if l, err := parseRangeLocation(tz); err == nil {
-				loc = l
-			}
-		}
-		t, res, ok := parseRangeDateAnchor(anchor, dateFormatOf(def), queryFormat, loc)
-		if !ok {
-			return nil, rangeDateParseError(s, queryFormat, def)
-		}
-		if mathExpr != "" {
-			var mok bool
-			t, res, mok = applyRangeDateMath(t, mathExpr)
-			if !mok {
-				return nil, rangeDateParseError(s, queryFormat, def)
-			}
-		}
-		if roundUp {
-			t = roundUpDateMath(t, res)
-		}
-		if isNanos {
-			return t.Unix()*int64(1e9) + int64(t.Nanosecond()), nil
-		}
-		return t.UnixMilli(), nil
-	}
-	ctx := &indexCtx{indexCoerce: true}
-	typ := "date"
-	if t, _ := def["type"].(string); t == "date_nanos" {
-		typ = "date_nanos"
-	}
-	parsed, err := ctx.parseDateValue("_value", typ, def, v)
-	if err != nil {
-		return nil, err
-	}
-	return parsed, nil
 }

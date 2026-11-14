@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/dates"
 	"slopensearch/internal/model"
 	"slopensearch/internal/wildcard"
 )
@@ -317,7 +318,7 @@ func (s *Server) handleDataStreamStats(w http.ResponseWriter, r *http.Request, s
 			for _, id := range idx.Order {
 				doc := idx.Docs[id]
 				if v, ok := fieldValue(doc, ds.TimestampField); ok {
-					if t, ok := parseDate(v); ok {
+					if t, ok := dates.ParseMillis(v); ok {
 						if int64(t) > maxTs {
 							maxTs = int64(t)
 						}
@@ -363,7 +364,7 @@ func (s *Server) validateDataStreamDoc(idx *model.Index, ds *dataStreamInfo, bod
 				Reason: "documents must contain a single-valued timestamp field '" + ds.TimestampField + "' of date type"}}
 	}
 	if str, ok := v.(string); ok {
-		if _, ok := parseDate(str); !ok {
+		if _, ok := dates.ParseMillis(str); !ok {
 			return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 				Reason: "failed to parse",
 				CausedBy: &apierr.Error{Type: "mapper_parsing_exception",

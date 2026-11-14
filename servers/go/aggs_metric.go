@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/dates"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
@@ -73,7 +74,7 @@ func numericFromRaw(idx *model.Index, field string, v any) (float64, bool) {
 		case float64:
 			return t, true
 		case string:
-			if ms, ok := parseDateAny(def, t); ok {
+			if ms, ok := dates.ParseAny(def, t); ok {
 				return float64(ms), true
 			}
 			return 0, false

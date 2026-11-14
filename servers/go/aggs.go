@@ -13,6 +13,7 @@ import (
 
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/dates"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
@@ -674,7 +675,7 @@ func termKeyFor(v any, ft, valueType, format string, idx *model.Index, field str
 		}
 		kas := time.UnixMilli(ms).UTC().Format("2006-01-02T15:04:05.000Z")
 		if format != "" {
-			if layout := javaDateFormatToGo(format); layout != "" {
+			if layout := dates.JavaFormatToGo(format); layout != "" {
 				kas = time.UnixMilli(ms).UTC().Format(layout)
 			}
 		}
@@ -1464,7 +1465,7 @@ func formatDateHistKey(ms int64, format string, loc *time.Location, withZone boo
 		return t.Format(layout)
 	}
 	if format != "" {
-		if layout := javaDateFormatToGo(format); layout != "" {
+		if layout := dates.JavaFormatToGo(format); layout != "" {
 			return t.Format(layout)
 		}
 	}
@@ -1837,9 +1838,9 @@ func parseDateHistBound(v any, ft string, idx *model.Index, field, format string
 		def = map[string]any{"type": "date", "format": format}
 	}
 	if ft == "date" || ft == "date_nanos" || ft == "" {
-		return parseDateAny(def, s)
+		return dates.ParseAny(def, s)
 	}
-	if ms, ok := parseDateAny(def, s); ok {
+	if ms, ok := dates.ParseAny(def, s); ok {
 		return ms, true
 	}
 	return 0, false
@@ -1858,7 +1859,7 @@ func dateMillisFor(idx *model.Index, field, ft string, v any) (int64, bool) {
 		return n, err == nil
 	case string:
 		def, _ := mappingFieldDef(idx, field)
-		return parseDateAny(def, t)
+		return dates.ParseAny(def, t)
 	}
 	return 0, false
 }

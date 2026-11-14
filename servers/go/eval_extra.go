@@ -14,6 +14,7 @@ import (
 
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/dates"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 	"slopensearch/internal/painless"
@@ -4049,7 +4050,7 @@ func parseDecayDurationMillis(v any) (float64, bool) {
 
 func decayDateMillis(def map[string]any, v any) (int64, bool) {
 	if s, ok := v.(string); ok {
-		return parseDateAny(def, s)
+		return dates.ParseAny(def, s)
 	}
 	return integerOf(v)
 }

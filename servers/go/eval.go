@@ -12,6 +12,7 @@ import (
 
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/dates"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 	"slopensearch/internal/settings"
@@ -1636,7 +1637,7 @@ func parseQueryDate(def map[string]any, v any, tz string) (any, *apierr.Error) {
 		if i := strings.Index(s, "||"); i >= 0 {
 			s = s[:i]
 		}
-		if abs, ok := parseDateAny(def, s); ok {
+		if abs, ok := dates.ParseAny(def, s); ok {
 			if tz != "" {
 				if offset, err := parseTZOffset(tz); err == nil {
 					abs -= offset
@@ -2667,7 +2668,7 @@ func (c *queryCtx) evalMatch(field string, raw any, boost float64) (bool, float6
 			switch {
 			case ftype == "date" || ftype == "date_nanos":
 				return false, 0, matchSearchError("parse_exception",
-					"failed to parse date field ["+text+"] with format ["+dateFormatOf(def)+"]")
+					"failed to parse date field ["+text+"] with format ["+dates.FormatOf(def)+"]")
 			case isNumericType(ftype):
 				me := matchSearchError("query_shard_exception",
 					"failed to create query: For input string: \""+text+"\"")

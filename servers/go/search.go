@@ -15,6 +15,7 @@ import (
 
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/dates"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
@@ -261,18 +262,18 @@ func formatDocValue(idx *model.Index, field, ftype string, v any, format string)
 		}
 		switch eff {
 		case "", "strict_date_optional_time", "date_optional_time":
-			return formatEpochMillis(ms)
+			return dates.FormatEpochMillis(ms)
 		case "strict_date_optional_time_nanos":
 			if nanosValue {
-				return formatEpochNanos(raw)
+				return dates.FormatEpochNanos(raw)
 			}
-			return formatEpochMillis(ms)
+			return dates.FormatEpochMillis(ms)
 		case "epoch_millis":
 			return strconv.FormatInt(ms, 10)
 		case "epoch_second":
 			return strconv.FormatInt(ms/1000, 10)
 		default:
-			if layout := javaDateFormatToGo(eff); layout != "" {
+			if layout := dates.JavaFormatToGo(eff); layout != "" {
 				if nanosValue {
 					return time.Unix(0, raw).UTC().Format(layout)
 				}
@@ -291,26 +292,6 @@ func formatDocValue(idx *model.Index, field, ftype string, v any, format string)
 		}
 	}
 	return v
-}
-
-func formatEpochMillis(ms int64) string {
-	return time.UnixMilli(ms).UTC().Format("2006-01-02T15:04:05.000Z")
-}
-
-func formatEpochNanos(ns int64) string {
-	sec := ns / int64(1e9)
-	frac := ns % int64(1e9)
-	if frac < 0 {
-		sec--
-		frac += int64(1e9)
-	}
-	base := time.Unix(sec, frac).UTC().Format("2006-01-02T15:04:05")
-	s := fmt.Sprintf("%09d", frac)
-	end := len(s)
-	for end > 3 && s[end-1] == '0' {
-		end--
-	}
-	return base + "." + s[:end] + "Z"
 }
 
 func (h multiHit) sortValue(field string, desc bool, mode string) (any, bool) {
@@ -3297,11 +3278,11 @@ func evalRange(idx *model.Index, raw any, doc map[string]any) (bool, float64, *a
 	}
 	ft := fieldType(idx, field)
 	if ft == "date" {
-		dv, ok := parseDate(v)
+		dv, ok := dates.ParseMillis(v)
 		if !ok {
 			return false, 0, nil
 		}
-		return compareRange(dv, cond, field, parseDate)
+		return compareRange(dv, cond, field, dates.ParseMillis)
 	}
 	if isNumericType(ft) {
 		dv, ok := jsonv.ToFloat(v)
