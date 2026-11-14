@@ -371,3 +371,13 @@ pub fn doc_score(vf: &VecField, doc: &Value, path: &str, q: &[f64]) -> Option<(f
     }
     Some((score(&vf.space, r), r))
 }
+
+/// Rounds a score to the float precision Lucene scores have, as the shortest
+/// decimal of the f32 value (so it renders like Java's Float.toString digits).
+pub fn f32r(x: f64) -> f64 {
+    if !x.is_finite() {
+        return x;
+    }
+    let f = x as f32;
+    format!("{}", f).parse::<f64>().unwrap_or(x)
+}

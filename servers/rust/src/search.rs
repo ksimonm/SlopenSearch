@@ -2914,7 +2914,7 @@ pub fn run_search(
                     idx_name: n.clone(),
                     id: id.clone(),
                     doc: doc.clone(),
-                    score,
+                    score: crate::knn::f32r(score),
                     pos,
                     named,
                 });
