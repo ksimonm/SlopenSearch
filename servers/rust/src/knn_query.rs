@@ -647,6 +647,45 @@ pub fn explanation(idx: &Index, id: &str, q: &Value, score_v: f64) -> Option<Val
     }))
 }
 
+// ---------------------------------------------------------------- fetch
+
+pub fn is_vector_field(idx: &Index, field: &str) -> bool {
+    field_def(&idx.mappings, field).and_then(|d| d.get("type")).and_then(|t| t.as_str()) == Some("knn_vector")
+}
+
+/// Values of a knn_vector field for `fields` (the float array) or
+/// `docvalue_fields` (the stored little-endian floats, base64 encoded).
+/// None when `def` is not a knn_vector field.
+pub fn docvalue_output(
+    idx: &Index,
+    id: &str,
+    field: &str,
+    def: Option<&Map<String, Value>>,
+    fields_api: bool,
+) -> Option<Option<Vec<Value>>> {
+    if def?.get("type").and_then(|t| t.as_str()) != Some("knn_vector") {
+        return None;
+    }
+    let vals: Vec<f64> = idx
+        .doc_values
+        .get(id)
+        .and_then(|m| m.get(field))
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(to_f64).collect())
+        .unwrap_or_default();
+    if vals.is_empty() {
+        return Some(None);
+    }
+    if fields_api {
+        return Some(Some(vals.into_iter().map(|x| json!(f32r(x))).collect()));
+    }
+    let mut bytes = Vec::with_capacity(vals.len() * 4);
+    for x in vals {
+        bytes.extend_from_slice(&(x as f32).to_le_bytes());
+    }
+    Some(Some(vec![json!(base64::encode(bytes))]))
+}
+
 // ---------------------------------------------------------------- unsupported operations
 
 /// A term query on a knn_vector field.

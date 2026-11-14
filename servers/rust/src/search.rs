@@ -411,6 +411,9 @@ fn doc_values_output(
         }
     }
     let def = mapping_field_def(idx, field);
+    if let Some(out) = crate::knn_query::docvalue_output(idx, id, field, def, fallback_source) {
+        return Ok(out);
+    }
     let (ftype, has_dv) = match def {
         Some(d) => (
             d.get("type")
@@ -3724,7 +3727,11 @@ pub fn run_search(
                             if let Some(existing) =
                                 out.get_mut(&fname).and_then(|v| v.as_array_mut())
                             {
-                                existing.extend(vals);
+                                if crate::knn_query::is_vector_field(idx, &fname) {
+                                    *existing = vals;
+                                } else {
+                                    existing.extend(vals);
+                                }
                             } else {
                                 out.insert(fname, Value::Array(vals));
                             }
