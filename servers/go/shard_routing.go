@@ -24,7 +24,7 @@ func newShardFilter(r *http.Request, indices []*Index) *shardFilter {
 				if part == "" {
 					continue
 				}
-				set[shardOf(part, idx.numShards())] = true
+				set[shardOf(part, numShards(idx))] = true
 			}
 			f.allowed[idx] = set
 		}
@@ -35,7 +35,7 @@ func newShardFilter(r *http.Request, indices []*Index) *shardFilter {
 			set := map[int]bool{}
 			for _, part := range strings.Split(spec, ",") {
 				n, err := strconv.Atoi(strings.TrimSpace(part))
-				if err == nil && n >= 0 && n < idx.numShards() {
+				if err == nil && n >= 0 && n < numShards(idx) {
 					set[n] = true
 				}
 			}
@@ -66,11 +66,11 @@ func (f *shardFilter) allows(idx *Index, id string) bool {
 	if routing == "" {
 		routing = id
 	}
-	return f.allowsShard(idx, shardOf(routing, idx.numShards()))
+	return f.allowsShard(idx, shardOf(routing, numShards(idx)))
 }
 
 func searchShardMultiplier(idx *Index, id string, query map[string]any, dfs bool) float64 {
-	if idx.numShards() <= 1 {
+	if numShards(idx) <= 1 {
 		return 1
 	}
 	field, text := "", ""
@@ -97,7 +97,7 @@ func searchShardMultiplier(idx *Index, id string, query map[string]any, dfs bool
 			return rv
 		}
 		return id
-	}(), idx.numShards())
+	}(), numShards(idx))
 	n, df := 0, 0
 	for _, did := range idx.Order {
 		doc, live := idx.Docs[did]
@@ -109,7 +109,7 @@ func searchShardMultiplier(idx *Index, id string, query map[string]any, dfs bool
 				return rv
 			}
 			return did
-		}(), idx.numShards())
+		}(), numShards(idx))
 		if !dfs && ds != docShard {
 			continue
 		}

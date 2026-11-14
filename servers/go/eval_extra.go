@@ -11,6 +11,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"slopensearch/internal/analysis"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/painless"
 )
 
 // ---------------------------------------------------------------------------
@@ -49,8 +53,8 @@ func (c *queryCtx) fieldMatchedCount(field string, terms []string) int {
 	tf := map[string]int{}
 	for _, v := range vals {
 		s, _ := valueScalarString(v)
-		for _, t := range analyzeTokensWithIndex(c.idx, analyzer, s) {
-			tf[t.term]++
+		for _, t := range analysis.Tokens(analysisIndex(c.idx), analyzer, s) {
+			tf[t.Term]++
 		}
 	}
 	n := 0
@@ -76,8 +80,8 @@ func (c *queryCtx) bm25FieldScore(field string, qtokens []string, operator strin
 		out := []string{}
 		for _, v := range vals {
 			s, _ := valueScalarString(v)
-			for _, t := range analyzeTokensWithIndex(c.idx, analyzer, s) {
-				out = append(out, t.term)
+			for _, t := range analysis.Tokens(analysisIndex(c.idx), analyzer, s) {
+				out = append(out, t.Term)
 			}
 		}
 		return out
@@ -1651,7 +1655,7 @@ func (c *queryCtx) evalGeoBoundingBox(body any) (bool, float64, *apiError) {
 	}
 	if top < bottom {
 		return false, 0, &apiError{Type: "illegal_argument_exception", Status: 400,
-			Reason: "top is below bottom corner: " + formatNumber(top) + " vs. " + formatNumber(bottom)}
+			Reason: "top is below bottom corner: " + jsonv.FormatNumber(top) + " vs. " + jsonv.FormatNumber(bottom)}
 	}
 	boost := 1.0
 	if b, ok := toFloat(bm["boost"]); ok {
@@ -2879,8 +2883,8 @@ func (c *queryCtx) spanTermSpans(bm map[string]any) ([]intervalSpan, string, *ap
 	}
 	spans := []intervalSpan{}
 	for _, p := range c.intervalPositions(field) {
-		if p.term == term {
-			spans = append(spans, intervalSpan{p.pos, p.pos})
+		if p.Term == term {
+			spans = append(spans, intervalSpan{p.Pos, p.Pos})
 		}
 	}
 	return spans, field, nil
@@ -3095,15 +3099,15 @@ func (c *queryCtx) spanQuery(body any) ([]intervalSpan, string, *apiError) {
 		case "prefix":
 			val = strings.ToLower(val)
 			for _, p := range positions {
-				if strings.HasPrefix(p.term, val) {
-					spans = append(spans, intervalSpan{p.pos, p.pos})
+				if strings.HasPrefix(p.Term, val) {
+					spans = append(spans, intervalSpan{p.Pos, p.Pos})
 				}
 			}
 		case "wildcard":
 			re := wildcardRegex(strings.ToLower(val))
 			for _, p := range positions {
-				if re.MatchString(p.term) {
-					spans = append(spans, intervalSpan{p.pos, p.pos})
+				if re.MatchString(p.Term) {
+					spans = append(spans, intervalSpan{p.Pos, p.Pos})
 				}
 			}
 		case "regexp":
@@ -3112,14 +3116,14 @@ func (c *queryCtx) spanQuery(body any) ([]intervalSpan, string, *apiError) {
 				return nil, "", errParsing("invalid regexp")
 			}
 			for _, p := range positions {
-				if re.MatchString(p.term) {
-					spans = append(spans, intervalSpan{p.pos, p.pos})
+				if re.MatchString(p.Term) {
+					spans = append(spans, intervalSpan{p.Pos, p.Pos})
 				}
 			}
 		case "fuzzy":
 			for _, p := range positions {
-				if fuzzyDistance(p.term, val, true) <= autoFuzziness(val) {
-					spans = append(spans, intervalSpan{p.pos, p.pos})
+				if fuzzyDistance(p.Term, val, true) <= autoFuzziness(val) {
+					spans = append(spans, intervalSpan{p.Pos, p.Pos})
 				}
 			}
 		}
@@ -3293,39 +3297,39 @@ func isKnownIntervalType(k string) bool {
 	return false
 }
 
-func (c *queryCtx) intervalPositions(field string) []analyzedToken {
+func (c *queryCtx) intervalPositions(field string) []analysis.Token {
 	vals := c.mustValues(field)
 	def, _ := mappingFieldDef(c.idx, field)
 	gap := 100
 	if g, ok := toFloat(def["position_increment_gap"]); ok {
 		gap = int(g)
 	}
-	out := []analyzedToken{}
+	out := []analysis.Token{}
 	last := -1
 	for _, v := range vals {
 		s, _ := valueScalarString(v)
-		toks := analyzeTokensWithIndex(c.idx, c.indexAnalyzerName(field), s)
+		toks := analysis.Tokens(analysisIndex(c.idx), c.indexAnalyzerName(field), s)
 		base := 0
 		if last >= 0 {
 			base = last + gap + 1
 		}
 		for _, t := range toks {
-			out = append(out, analyzedToken{term: t.term, pos: t.pos + base})
-			if t.pos+base > last {
-				last = t.pos + base
+			out = append(out, analysis.Token{Term: t.Term, Pos: t.Pos + base})
+			if t.Pos+base > last {
+				last = t.Pos + base
 			}
 		}
 	}
 	return out
 }
 
-func intervalTermSpans(positions []analyzedToken, terms []string) [][]intervalSpan {
+func intervalTermSpans(positions []analysis.Token, terms []string) [][]intervalSpan {
 	out := make([][]intervalSpan, 0, len(terms))
 	for _, term := range terms {
 		list := []intervalSpan{}
 		for _, p := range positions {
-			if p.term == term {
-				list = append(list, intervalSpan{p.pos, p.pos})
+			if p.Term == term {
+				list = append(list, intervalSpan{p.Pos, p.Pos})
 			}
 		}
 		if len(list) == 0 {
@@ -3392,7 +3396,7 @@ func combineUnorderedIntervals(lists [][]intervalSpan, maxGaps int) []intervalSp
 	return cur
 }
 
-func (c *queryCtx) intervalRule(rule map[string]any, positions []analyzedToken, field string) ([]intervalSpan, *apiError) {
+func (c *queryCtx) intervalRule(rule map[string]any, positions []analysis.Token, field string) ([]intervalSpan, *apiError) {
 	kind := ""
 	var bm map[string]any
 	for k, v := range rule {
@@ -3416,10 +3420,10 @@ func (c *queryCtx) intervalRule(rule map[string]any, positions []analyzedToken, 
 		} else {
 			analyzer = c.searchAnalyzerName(field, bm)
 		}
-		toks := analyzeTokensWithIndex(c.idx, analyzer, q)
+		toks := analysis.Tokens(analysisIndex(c.idx), analyzer, q)
 		terms := []string{}
 		for _, t := range toks {
-			terms = append(terms, t.term)
+			terms = append(terms, t.Term)
 		}
 		lists := intervalTermSpans(positions, terms)
 		if lists == nil {
@@ -3439,16 +3443,16 @@ func (c *queryCtx) intervalRule(rule map[string]any, positions []analyzedToken, 
 		pat, _ := bm["prefix"].(string)
 		pat = strings.ToLower(pat)
 		for _, p := range positions {
-			if strings.HasPrefix(p.term, pat) {
-				spans = append(spans, intervalSpan{p.pos, p.pos})
+			if strings.HasPrefix(p.Term, pat) {
+				spans = append(spans, intervalSpan{p.Pos, p.Pos})
 			}
 		}
 	case "wildcard":
 		pat, _ := bm["pattern"].(string)
 		re := wildcardRegex(strings.ToLower(pat))
 		for _, p := range positions {
-			if re.MatchString(p.term) {
-				spans = append(spans, intervalSpan{p.pos, p.pos})
+			if re.MatchString(p.Term) {
+				spans = append(spans, intervalSpan{p.Pos, p.Pos})
 			}
 		}
 	case "regexp":
@@ -3458,8 +3462,8 @@ func (c *queryCtx) intervalRule(rule map[string]any, positions []analyzedToken, 
 			return nil, errParsing("invalid regexp")
 		}
 		for _, p := range positions {
-			if re.MatchString(p.term) {
-				spans = append(spans, intervalSpan{p.pos, p.pos})
+			if re.MatchString(p.Term) {
+				spans = append(spans, intervalSpan{p.Pos, p.Pos})
 			}
 		}
 	case "fuzzy":
@@ -3475,14 +3479,14 @@ func (c *queryCtx) intervalRule(rule map[string]any, positions []analyzedToken, 
 			prefixLen = int(pl)
 		}
 		for _, p := range positions {
-			if len(p.term) <= prefixLen || len(term) <= prefixLen {
+			if len(p.Term) <= prefixLen || len(term) <= prefixLen {
 				continue
 			}
-			if p.term[:prefixLen] != term[:prefixLen] {
+			if p.Term[:prefixLen] != term[:prefixLen] {
 				continue
 			}
-			if fuzzyDistance(p.term, term, true) <= fuzz {
-				spans = append(spans, intervalSpan{p.pos, p.pos})
+			if fuzzyDistance(p.Term, term, true) <= fuzz {
+				spans = append(spans, intervalSpan{p.Pos, p.Pos})
 			}
 		}
 	case "all_of":
@@ -3529,7 +3533,7 @@ func (c *queryCtx) intervalRule(rule map[string]any, positions []analyzedToken, 
 	return spans, nil
 }
 
-func (c *queryCtx) filterIntervalSpans(spans []intervalSpan, filter map[string]any, positions []analyzedToken, field string) ([]intervalSpan, *apiError) {
+func (c *queryCtx) filterIntervalSpans(spans []intervalSpan, filter map[string]any, positions []analysis.Token, field string) ([]intervalSpan, *apiError) {
 	if len(spans) == 0 {
 		return spans, nil
 	}
@@ -4255,9 +4259,9 @@ func (c *queryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 		if rerr != nil {
 			return 0, scriptShardError(c.idx, rerr)
 		}
-		score := plF64(v)
+		score := painless.F64(v)
 		if score < 0 {
-			return 0, plainShardError(c.idx, errBad("script score function must not produce negative scores, but got: ["+plFmtDouble(score)+"]"))
+			return 0, plainShardError(c.idx, errBad("script score function must not produce negative scores, but got: ["+painless.FormatDouble(score)+"]"))
 		}
 		return float64(float32(score)), nil
 	}
@@ -5513,10 +5517,10 @@ func termStatsFor(idx *Index, field, analyzer string, docTerms func([]any) []str
 	termStatsMu.Lock()
 	st := termStatsCache[key]
 	termStatsMu.Unlock()
-	if st != nil && st.gen == idx.dvGen && st.mapVer == idx.MappingVersion && st.settings == len(idx.Settings) {
+	if st != nil && st.gen == idx.DVGen && st.mapVer == idx.MappingVersion && st.settings == len(idx.Settings) {
 		return st
 	}
-	st = &fieldTermStats{gen: idx.dvGen, mapVer: idx.MappingVersion, settings: len(idx.Settings),
+	st = &fieldTermStats{gen: idx.DVGen, mapVer: idx.MappingVersion, settings: len(idx.Settings),
 		df: map[string]int{}, docTokens: map[string][]string{}}
 	for id, dv := range idx.DocValues {
 		vals := dv[field]

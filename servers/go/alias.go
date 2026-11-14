@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+
+	"slopensearch/internal/wildcard"
 )
 
 // indexAliasesView renders the indexed alias form: {index: {"aliases": {...}}}
@@ -12,7 +14,7 @@ func indexAliasesView(indices []*Index, nameSpec string, includeAll bool) map[st
 	for _, idx := range indices {
 		aliases := map[string]any{}
 		for an, def := range idx.Aliases {
-			if nameSpec == "" || includeAll || globMatch(nameSpec, an) {
+			if nameSpec == "" || includeAll || wildcard.Match(nameSpec, an) {
 				entry := map[string]any{}
 				for k, v := range def {
 					entry[k] = v
@@ -48,7 +50,7 @@ func (s *Server) getAliasesIndexed(w http.ResponseWriter, r *http.Request, index
 		aliases := map[string]any{}
 		for _, want := range names {
 			for an, def := range idx.Aliases {
-				if an == want || globMatch(want, an) {
+				if an == want || wildcard.Match(want, an) {
 					entry := map[string]any{}
 					for k, v := range def {
 						entry[k] = v
@@ -108,7 +110,7 @@ func (s *Server) getAliasesGlobal(w http.ResponseWriter, r *http.Request, aliasS
 		aliases := map[string]any{}
 		for _, want := range names {
 			for an, def := range idx.Aliases {
-				if an == want || globMatch(want, an) {
+				if an == want || wildcard.Match(want, an) {
 					entry := map[string]any{}
 					for k, v := range def {
 						entry[k] = v
@@ -149,7 +151,7 @@ func (s *Server) headAliasesGlobal(w http.ResponseWriter, r *http.Request, alias
 	defer s.mu.RUnlock()
 	for _, idx := range s.indices {
 		for an := range idx.Aliases {
-			if an == aliasSpec || globMatch(aliasSpec, an) {
+			if an == aliasSpec || wildcard.Match(aliasSpec, an) {
 				w.WriteHeader(200)
 				return
 			}
@@ -284,7 +286,7 @@ func (s *Server) deleteAliasAPI(w http.ResponseWriter, r *http.Request, indexSpe
 		deleted := false
 		for _, idx := range indices {
 			for an := range idx.Aliases {
-				if an == want || globMatch(want, an) {
+				if an == want || wildcard.Match(want, an) {
 					delete(idx.Aliases, an)
 					deleted = true
 					anyDeleted = true
@@ -435,12 +437,12 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 		} else if strings.ContainsAny(name, "*?") {
 			for _, n := range sortedIndexNames(s) {
 				idx := s.indices[n]
-				if globMatch(name, idx.Name) {
+				if wildcard.Match(name, idx.Name) {
 					matched = append(matched, idx)
 					continue
 				}
 				for an := range idx.Aliases {
-					if globMatch(name, an) {
+					if wildcard.Match(name, an) {
 						matched = append(matched, idx)
 						break
 					}

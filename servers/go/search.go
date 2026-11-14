@@ -12,6 +12,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/analysis"
+	"slopensearch/internal/painless"
 )
 
 type multiHit struct {
@@ -192,7 +195,7 @@ func docValuesOutput(idx *Index, id, field string, spec fieldSpec, fallbackSourc
 				if fallbackSource {
 					res[i] = map[string]any{"type": "Point", "coordinates": []any{lon, lat}}
 				} else {
-					res[i] = plFmtDouble(lat) + ", " + plFmtDouble(lon)
+					res[i] = painless.FormatDouble(lat) + ", " + painless.FormatDouble(lon)
 				}
 			}
 		}
@@ -344,8 +347,8 @@ func (h multiHit) sortValue(field string, desc bool, mode string) (any, bool) {
 				toks := []string{}
 				for _, v := range list {
 					s, _ := valueScalarString(v)
-					for _, t := range analyzeTokensWithIndex(h.idx, analyzer, s) {
-						toks = append(toks, t.term)
+					for _, t := range analysis.Tokens(analysisIndex(h.idx), analyzer, s) {
+						toks = append(toks, t.Term)
 					}
 				}
 				if len(toks) == 0 {
@@ -643,7 +646,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				} else {
 					delete(vidx.Mappings, "derived")
 				}
-				vidx.recomputeAllDocValues()
+				recomputeAllDocValues(vidx)
 				ensureFieldTypes(vidx)
 			}()
 		}
@@ -819,7 +822,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			if sf != nil {
 				shards += len(sf.allowed[idx])
 			} else {
-				shards += idx.numShards()
+				shards += numShards(idx)
 			}
 			for _, id := range idx.Order {
 				if !sf.allows(idx, id) {
@@ -1159,7 +1162,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 					return
 				}
 				if ctxName == "number_sort" {
-					v = plF64(v)
+					v = painless.F64(v)
 				}
 				sp.scriptVals[h.idx.Name+"\x00"+h.id] = v
 			}
@@ -1732,21 +1735,21 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		resp["_scroll_id"] = scrollID
 	}
 	if pitID != "" {
-		ordered := orderedJSON{{k: "pit_id", v: pitID}}
+		ordered := orderedJSON{{K: "pit_id", V: pitID}}
 		for k, v := range resp {
-			ordered = append(ordered, orderedKV{k: k, v: v})
+			ordered = append(ordered, orderedKV{K: k, V: v})
 		}
 		writeJSON(w, 200, ordered)
 		return
 	}
 
 	if terminateAfter > 0 {
-		ordered := orderedJSON{{k: "took", v: resp["took"]}, {k: "timed_out", v: resp["timed_out"]}, {k: "terminated_early", v: terminatedEarly}}
+		ordered := orderedJSON{{K: "took", V: resp["took"]}, {K: "timed_out", V: resp["timed_out"]}, {K: "terminated_early", V: terminatedEarly}}
 		for k, v := range resp {
 			if k == "took" || k == "timed_out" || k == "terminated_early" {
 				continue
 			}
-			ordered = append(ordered, orderedKV{k: k, v: v})
+			ordered = append(ordered, orderedKV{K: k, V: v})
 		}
 		writeJSON(w, 200, ordered)
 		return
@@ -2140,7 +2143,7 @@ func searchSortSpecValueRaw(h multiHit, sp searchSortSpec) (any, bool, bool) {
 				break
 			}
 		}
-		ns := h.idx.numShards()
+		ns := numShards(h.idx)
 		if ns < 1 {
 			ns = 1
 		}
@@ -2885,7 +2888,7 @@ func jsonClauseEndPos(body []byte, key string) (int, int) {
 
 func writeQueryShardError(w http.ResponseWriter, idx *Index, cause *apiError) {
 	if cause.Shard != nil {
-		writeJSON(w, cause.Shard.status, cause.Shard.body())
+		writeJSON(w, cause.Shard.StatusCode(), cause.Shard.ResponseBody())
 		return
 	}
 	if cause.SearchFailure != "" {

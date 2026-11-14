@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/painless"
 )
 
 var byQueryParams = map[string]bool{
@@ -171,7 +173,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 			seq := nextSeq(idx)
 			delete(idx.Docs, id)
 			delete(idx.Pending, id)
-			idx.removeDocValues(id)
+			removeDocValues(idx, id)
 			idx.DeleteTotal++
 			idx.Versions[id] = base + 1
 			idx.SeqNos[id] = seq
@@ -209,7 +211,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 			seq := nextSeq(idx)
 			delete(idx.Docs, id)
 			delete(idx.Pending, id)
-			idx.removeDocValues(id)
+			removeDocValues(idx, id)
 			idx.DeleteTotal++
 			idx.Versions[id] = base + 1
 			idx.SeqNos[id] = seq
@@ -247,7 +249,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 			continue
 		}
 		ensureFieldTypes(idx)
-		if derr := idx.computeDocValues(id, newDoc); derr != nil {
+		if derr := computeDocValues(idx, id, newDoc); derr != nil {
 			failures = append(failures, byQueryFailure(idx.Name, id, derr))
 			continue
 		}
@@ -257,7 +259,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 		idx.SeqNos[id] = seq
 		idx.PrimaryTerms[id] = 1
 		idx.IndexTotal++
-		if rv == "true" || rv == "wait_for" || !idx.refreshDisabled() {
+		if rv == "true" || rv == "wait_for" || !refreshDisabled(idx) {
 			delete(idx.Pending, id)
 		} else {
 			markPending(idx, id, newDoc, true)
@@ -268,23 +270,23 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 		}
 	}
 	if total > 0 {
-		report[3].v = deleted
-		report[4].v = int64(1)
+		report[3].V = deleted
+		report[4].V = int64(1)
 	} else {
-		report[3].v = deleted
-		report[4].v = int64(0)
+		report[3].V = deleted
+		report[4].V = int64(0)
 	}
-	report[2].v = total
-	report[5].v = versionConflicts
-	report[6].v = noops
+	report[2].V = total
+	report[5].V = versionConflicts
+	report[6].V = noops
 	if failures == nil {
 		failures = []any{}
 	}
-	report[11].v = failures
+	report[11].V = failures
 	if !isDelete {
 		report = append(report, orderedKV{"updated", updated})
 	}
-	report[0].v = time.Since(start).Milliseconds()
+	report[0].V = time.Since(start).Milliseconds()
 	if sliceCount > 0 {
 		arr := make([]any, sliceCount)
 		for i, st := range slices {
@@ -342,10 +344,10 @@ func checkByQueryCtx(res updateScriptResult, index, id string) *apiError {
 	default:
 		return errBad("Operation type [" + res.rawOp + "] not allowed, only [noop, index, delete] are allowed")
 	}
-	if plToString(res.id) != id {
+	if painless.ToString(res.id) != id {
 		return errBad("Modifying [_id] not allowed")
 	}
-	if plToString(res.index) != index {
+	if painless.ToString(res.index) != index {
 		return errBad("Modifying [_index] not allowed")
 	}
 	return nil

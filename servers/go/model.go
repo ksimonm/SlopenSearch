@@ -12,6 +12,13 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"slopensearch/internal/analysis"
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/settings"
+	"slopensearch/internal/wildcard"
 )
 
 var validTypes = map[string]bool{
@@ -29,43 +36,12 @@ var validTypes = map[string]bool{
 	"xy_point": true, "knn_vector": true,
 }
 
-type Index struct {
-	Name           string
-	UUID           string
-	CreationDate   int64
-	Mappings       map[string]any
-	Settings       map[string]any // canonical flat form, keys prefixed "index."
-	Docs           map[string]map[string]any
-	Order          []string
-	FieldTypes     map[string]string
-	Closed         bool
-	Aliases        map[string]map[string]any
-	MappingVersion int64
-	Pending        map[string]map[string]any // indexed but not yet refreshed (search_interval=-1)
-	Routing        map[string]string         // doc id -> routing value
-	SegGen         int64
-	Deletes        int64
-	DataStream     string // non-empty when this index backs a data stream
-	Verified       bool
-	IndexTotal     int64
-	DeleteTotal    int64
-	ForceMerged    bool
-	DocValues      map[string]map[string][]any // doc id -> field path -> indexed values
-	DocIgnored     map[string][]string         // doc id -> ignored (malformed) fields
-	RawDocs        map[string][]byte           // doc id -> original _source bytes
-	Versions       map[string]int64
-	SeqNos         map[string]int64
-	PrimaryTerms   map[string]int64
-	NextSeq        int64
-
-	dvGen uint64 // bumped whenever DocValues changes; validates derived caches
-
-	stale map[string]staleMark // unrefreshed overwrites of searchable docs
-}
+// Index is the in-memory state of an index (internal/model).
+type Index = model.Index
 
 const versionCreated = "137307827"
 
-func (idx *Index) isHidden() bool {
+func isHidden(idx *Index) bool {
 	v, ok := findSetting(idx.Settings, "hidden")
 	if !ok {
 		return false
@@ -73,7 +49,7 @@ func (idx *Index) isHidden() bool {
 	return settingsValueString(v) == "true"
 }
 
-func (idx *Index) blockOn(name string) bool {
+func blockOn(idx *Index, name string) bool {
 	v, ok := findSetting(idx.Settings, "blocks."+name)
 	if !ok {
 		return false
@@ -81,7 +57,7 @@ func (idx *Index) blockOn(name string) bool {
 	return settingsValueString(v) == "true"
 }
 
-func (idx *Index) refreshDisabled() bool {
+func refreshDisabled(idx *Index) bool {
 	v, ok := findSetting(idx.Settings, "refresh_interval")
 	if !ok {
 		return false
@@ -96,7 +72,7 @@ func settingsValueString(v any) string {
 	case json.Number:
 		return t.String()
 	case float64:
-		return formatNumber(t)
+		return jsonv.FormatNumber(t)
 	case bool:
 		return strconv.FormatBool(t)
 	case nil:
@@ -133,76 +109,32 @@ const (
 	nodeVersion = "3.9.0"
 )
 
-func (idx *Index) numShards() int {
+func numShards(idx *Index) int {
 	if v, ok := settingInt(idx.Settings, "number_of_shards"); ok {
 		return v
 	}
 	return 1
 }
 
-func (idx *Index) numReplicas() int {
+func numReplicas(idx *Index) int {
 	if v, ok := settingInt(idx.Settings, "number_of_replicas"); ok {
 		return v
 	}
 	return 1
 }
 
-func settingInt(settings map[string]any, key string) (int, bool) {
-	v, ok := findSetting(settings, key)
-	if !ok {
-		return 0, false
-	}
-	f, ok := toFloat(v)
-	if !ok {
-		return 0, false
-	}
-	return int(f), true
-}
+func settingInt(m map[string]any, key string) (int, bool) { return settings.Int(m, key) }
 
-func findSetting(settings map[string]any, key string) (any, bool) {
-	if v, ok := settings["index."+key]; ok {
-		return v, true
-	}
-	if v, ok := settings[key]; ok {
-		return v, true
-	}
-	if m, ok := settings["index"].(map[string]any); ok {
-		if v, ok := m[key]; ok {
-			return v, true
-		}
-	}
-	return nil, false
-}
+func findSetting(m map[string]any, key string) (any, bool) { return settings.Find(m, key) }
 
-type apiError struct {
-	Type          string
-	Reason        string
-	Status        int
-	Extra         any
-	Fields        map[string]any
-	CausedBy      *apiError
-	TopType       string
-	TopReason     string
-	RootCause     *apiError
-	ForceTop      bool
-	Phase         string
-	Clause        string
-	ClauseEnd     bool
-	NoCausedBy    bool
-	SearchFailure string
-	Shard         *shardFailure // pre-rendered search shard failure
-	Suppressed    []*apiError
-}
-
-func (e *apiError) Error() string { return e.Type + ": " + e.Reason }
+// apiError is the API error type (internal/apierr).
+type apiError = apierr.Error
 
 func errNotFound(index string) *apiError {
 	return &apiError{Type: "index_not_found_exception", Reason: "no such index [" + index + "]", Status: 404}
 }
 
-func errBad(reason string) *apiError {
-	return &apiError{Type: "illegal_argument_exception", Reason: reason, Status: 400}
-}
+func errBad(reason string) *apiError { return apierr.BadRequest(reason) }
 
 func errParsing(reason string) *apiError {
 	return &apiError{Type: "parsing_exception", Reason: reason, Status: 400}
@@ -362,36 +294,7 @@ func autoFuzziness(term string) int {
 	}
 }
 
-func toFloat(v any) (float64, bool) {
-	switch t := v.(type) {
-	case float64:
-		return t, true
-	case float32:
-		return float64(t), true
-	case rawFloat:
-		return float64(t), true
-	case int:
-		return float64(t), true
-	case int64:
-		return float64(t), true
-	case uint64:
-		return float64(t), true
-	case json.Number:
-		f, err := t.Float64()
-		return f, err == nil
-	case bool:
-		if t {
-			return 1, true
-		}
-		return 0, true
-	case string:
-		f, err := strconv.ParseFloat(strings.TrimSpace(t), 64)
-		return f, err == nil
-	case nil:
-		return 0, false
-	}
-	return 0, false
-}
+func toFloat(v any) (float64, bool) { return jsonv.ToFloat(v) }
 
 func toString(v any) (string, bool) {
 	switch t := v.(type) {
@@ -982,7 +885,7 @@ func matchDynamicTemplate(idx *Index, path, name, dynType string) (map[string]an
 				re, err := regexp.Compile(p)
 				return err == nil && re.MatchString(s)
 			}
-			return globMatch(p, s)
+			return wildcard.Match(p, s)
 		}
 		if p, ok := spec["match"].(string); ok && !matchOne(p, name) {
 			continue
@@ -990,10 +893,10 @@ func matchDynamicTemplate(idx *Index, path, name, dynType string) (map[string]an
 		if p, ok := spec["unmatch"].(string); ok && matchOne(p, name) {
 			continue
 		}
-		if p, ok := spec["path_match"].(string); ok && !globMatch(p, path) {
+		if p, ok := spec["path_match"].(string); ok && !wildcard.Match(p, path) {
 			continue
 		}
-		if p, ok := spec["path_unmatch"].(string); ok && globMatch(p, path) {
+		if p, ok := spec["path_unmatch"].(string); ok && wildcard.Match(p, path) {
 			continue
 		}
 		if mt, ok := spec["match_mapping_type"].(string); ok && mt != dynType {
@@ -1052,7 +955,7 @@ func dynamicDefFor(idx *Index, path, name string, raw any) (map[string]any, bool
 	tmpl, matched := matchDynamicTemplate(idx, path, name, dynType)
 	var def map[string]any
 	if tmpl != nil {
-		def, _ = deepCopyJSON(tmpl).(map[string]any)
+		def, _ = jsonv.DeepCopy(tmpl).(map[string]any)
 		if def == nil {
 			def = map[string]any{}
 		}
@@ -1202,4 +1105,12 @@ func httpPortNum() int {
 		return 9200
 	}
 	return n
+}
+
+// analysisIndex is the analysis view of idx (nil for nil).
+func analysisIndex(idx *Index) *analysis.Index {
+	if idx == nil {
+		return nil
+	}
+	return &analysis.Index{Settings: idx.Settings}
 }

@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"slopensearch/internal/analysis"
 )
 
 // Completion suggester: a model of Lucene's NRT completion suggester as used by
@@ -360,22 +362,22 @@ func completionEntriesOf(v any) []completionEntry {
 // completionKey concatenates analyzed tokens the way Lucene's
 // ConcatenateGraphFilter does: positions joined by the separator, holes left
 // by removed tokens kept as empty labels.
-func completionKey(toks []analyzedToken, preserveSep, preservePos bool) (string, bool) {
+func completionKey(toks []analysis.Token, preserveSep, preservePos bool) (string, bool) {
 	var labels []string
 	last := -1
 	for _, t := range toks {
-		if t.pos <= last {
+		if t.Pos <= last {
 			continue // stacked token: keep the first path only
 		}
-		gap := t.pos - last
+		gap := t.Pos - last
 		if !preservePos && gap > 1 {
 			gap = 1
 		}
 		for i := 1; i < gap; i++ {
 			labels = append(labels, "")
 		}
-		labels = append(labels, t.term)
-		last = t.pos
+		labels = append(labels, t.Term)
+		last = t.Pos
 	}
 	if len(labels) == 0 {
 		return "", false
@@ -851,7 +853,7 @@ func completionSuggest(spec, body map[string]any, indices []*Index, globalText a
 		var qkey string
 		var qunits []int
 		if regex == nil {
-			k, ok := completionKey(analyzeTokensWithIndex(ix, searchAnalyzer, text), preserveSep, preservePos)
+			k, ok := completionKey(analysis.Tokens(analysisIndex(ix), searchAnalyzer, text), preserveSep, preservePos)
 			if !ok {
 				continue
 			}
@@ -872,8 +874,8 @@ func completionSuggest(spec, body map[string]any, indices []*Index, globalText a
 			}
 			var hit *completionHit
 			for _, e := range completionEntriesOf(v) {
-				input := truncateUTF16(e.input, maxLen)
-				key, ok := completionKey(analyzeTokensWithIndex(ix, analyzer, input), preserveSep, preservePos)
+				input := analysis.TruncateUTF16(e.input, maxLen)
+				key, ok := completionKey(analysis.Tokens(analysisIndex(ix), analyzer, input), preserveSep, preservePos)
 				if !ok {
 					continue
 				}
@@ -991,7 +993,7 @@ func completionSuggest(spec, body map[string]any, indices []*Index, globalText a
 					ctxOut = append(ctxOut, orderedKV{ch.name, []any{ch.value}})
 					continue
 				}
-				vals := ctxOut[pos].v.([]any)
+				vals := ctxOut[pos].V.([]any)
 				dup := false
 				for _, x := range vals {
 					if x == ch.value {
@@ -999,14 +1001,14 @@ func completionSuggest(spec, body map[string]any, indices []*Index, globalText a
 					}
 				}
 				if !dup {
-					ctxOut[pos].v = append(vals, ch.value)
+					ctxOut[pos].V = append(vals, ch.value)
 				}
 			}
 			opt = append(opt, orderedKV{"contexts", ctxOut})
 		}
 		options = append(options, opt)
 	}
-	entry := orderedJSON{{"text", text}, {"offset", 0}, {"length", utf16Len([]rune(text))}, {"options", options}}
+	entry := orderedJSON{{"text", text}, {"offset", 0}, {"length", analysis.UTF16Len([]rune(text))}, {"options", options}}
 	return []any{entry}, nil
 }
 

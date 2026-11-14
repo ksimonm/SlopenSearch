@@ -7,6 +7,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"slopensearch/internal/analysis"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mustache"
+	"slopensearch/internal/painless"
 )
 
 // The phrase suggester, ported from OpenSearch's PhraseSuggester: a noisy
@@ -53,11 +58,11 @@ func phraseSearchAnalyzer(idx *Index, def map[string]any) string {
 	if a, ok := def["analyzer"].(string); ok && a != "" {
 		return a
 	}
-	sc := analysisScope{idx: idx}
-	if sc.indexHasAnalyzer("default_search") {
+	sc := analysis.Scope{Index: analysisIndex(idx)}
+	if sc.IndexHasAnalyzer("default_search") {
 		return "default_search"
 	}
-	if sc.indexHasAnalyzer("default") {
+	if sc.IndexHasAnalyzer("default") {
 		return "default"
 	}
 	return "standard"
@@ -110,7 +115,7 @@ func phraseFieldTerms(idx *Index, field string) *phTerms {
 				}
 				toks = []string{s}
 			} else {
-				toks = analyzeWithIndex(idx, analyzer, s)
+				toks = analysis.Terms(analysisIndex(idx), analyzer, s)
 			}
 			for _, tok := range toks {
 				st := t.stats[tok]
@@ -232,8 +237,8 @@ func (g *phGen) preFilter(term string) string {
 	if g.spec.preFilter == "" {
 		return term
 	}
-	for _, tok := range analyzeTokensWithIndex(g.idx, g.spec.preFilter, term) {
-		g.spare = tok.term
+	for _, tok := range analysis.Tokens(analysisIndex(g.idx), g.spec.preFilter, term) {
+		g.spare = tok.Term
 	}
 	return g.spare
 }
@@ -297,15 +302,15 @@ func (g *phGen) postFilter(c *phCand, out []*phCand) []*phCand {
 		return append(out, c)
 	}
 	prev := -1
-	for _, tok := range analyzeTokensWithIndex(g.idx, g.spec.postFilter, c.term) {
-		posInc := tok.pos - prev
-		prev = tok.pos
-		g.spare = tok.term
-		if posInc > 0 && tok.term == c.term {
-			st := g.terms.get(tok.term)
-			out = append(out, &phCand{term: tok.term, stats: st, dist: c.dist, score: g.candScore(c.stats, c.dist)})
+	for _, tok := range analysis.Tokens(analysisIndex(g.idx), g.spec.postFilter, c.term) {
+		posInc := tok.Pos - prev
+		prev = tok.Pos
+		g.spare = tok.Term
+		if posInc > 0 && tok.Term == c.term {
+			st := g.terms.get(tok.Term)
+			out = append(out, &phCand{term: tok.Term, stats: st, dist: c.dist, score: g.candScore(c.stats, c.dist)})
 		} else {
-			out = append(out, &phCand{term: tok.term, stats: c.stats, dist: g.nonErrorLikelihood, score: g.candScore(c.stats, c.dist)})
+			out = append(out, &phCand{term: tok.Term, stats: c.stats, dist: g.nonErrorLikelihood, score: g.candScore(c.stats, c.dist)})
 		}
 	}
 	return out
@@ -1230,28 +1235,28 @@ func phAnalyzerExists(idx *Index, name string) bool {
 	if name == "" {
 		return false
 	}
-	if idx != nil && (analysisScope{idx: idx}).indexHasAnalyzer(name) {
+	if idx != nil && (analysis.Scope{Index: analysisIndex(idx)}).IndexHasAnalyzer(name) {
 		return true
 	}
-	if _, ok := globalAnalyzerTokens(name, ""); ok {
+	if _, ok := analysis.GlobalAnalyzerTokens(name, ""); ok {
 		return true
 	}
-	return prebuiltChain(name) != nil
+	return analysis.PrebuiltChain(name) != nil
 }
 
 // phShingle returns the first shingle filter of an analyzer.
 func phShingle(idx *Index, analyzer string) (minS, maxS int, unigrams, found bool) {
-	if idx == nil || !(analysisScope{idx: idx}).indexHasAnalyzer(analyzer) {
+	if idx == nil || !(analysis.Scope{Index: analysisIndex(idx)}).IndexHasAnalyzer(analyzer) {
 		return
 	}
-	c, err := (analysisScope{idx: idx}).indexAnalyzerChain(analyzer)
+	c, err := (analysis.Scope{Index: analysisIndex(idx)}).IndexAnalyzerChain(analyzer)
 	if err != nil || c == nil {
 		return
 	}
-	for _, f := range c.filters {
-		if f.spec.typ == "shingle" {
-			p := f.spec.params
-			return fsInt(p, "min_shingle_size", 2), fsInt(p, "max_shingle_size", 2), fsBool(p, "output_unigrams", true), true
+	for _, f := range c.Filters {
+		if f.Spec.Type == "shingle" {
+			p := f.Spec.Params
+			return analysis.ParamInt(p, "min_shingle_size", 2), analysis.ParamInt(p, "max_shingle_size", 2), analysis.ParamBool(p, "output_unigrams", true), true
 		}
 	}
 	return
@@ -1362,13 +1367,13 @@ func phraseSuggest(spec, body map[string]any, indices []*Index, globalText any) 
 		if o.highlighted != nil {
 			oj = append(oj, orderedKV{"highlighted", *o.highlighted})
 		}
-		oj = append(oj, orderedKV{"score", plJSONFloat32(o.score)})
+		oj = append(oj, orderedKV{"score", painless.JSONFloat32(o.score)})
 		if o.collate != nil {
 			oj = append(oj, orderedKV{"collate_match", *o.collate})
 		}
 		opts = append(opts, oj)
 	}
-	return []any{orderedJSON{{"text", text}, {"offset", 0}, {"length", utf16Offset(text)}, {"options", opts}}}, nil
+	return []any{orderedJSON{{"text", text}, {"offset", 0}, {"length", analysis.UTF16Offset(text)}, {"options", opts}}}, nil
 }
 
 func phraseSuggestIndex(req *phraseRequest, idx *Index, text string) (*phEntry, *apiError) {
@@ -1431,25 +1436,25 @@ func phraseSuggestIndex(req *phraseRequest, idx *Index, text string) (*phEntry, 
 	var cur *phSet
 	anyUnigram, anyTokens := false, false
 	prev := -1
-	for _, tok := range analyzeTokensWithIndex(idx, analyzer, text) {
-		posInc := tok.pos - prev
-		prev = tok.pos
+	for _, tok := range analysis.Tokens(analysisIndex(idx), analyzer, text) {
+		posInc := tok.Pos - prev
+		prev = tok.Pos
 		anyTokens = true
-		if req.forceUnigrams && tok.typ == "shingle" {
+		if req.forceUnigrams && tok.Type == "shingle" {
 			continue
 		}
 		anyUnigram = true
-		if posInc == 0 && tok.typ == "SYNONYM" && cur != nil {
-			st := multi.termStats(tok.term)
+		if posInc == 0 && tok.Type == "SYNONYM" && cur != nil {
+			st := multi.termStats(tok.Term)
 			if st.df > 0 {
-				cur.cands = append(cur.cands, multi.createCandidate(tok.term, st, realWord, false))
+				cur.cands = append(cur.cands, multi.createCandidate(tok.Term, st, realWord, false))
 			}
 			continue
 		}
 		if cur != nil {
 			sets = append(sets, cur)
 		}
-		cur = &phSet{orig: multi.createCandidate(tok.term, multi.termStats(tok.term), 1.0, true)}
+		cur = &phSet{orig: multi.createCandidate(tok.Term, multi.termStats(tok.Term), 1.0, true)}
 	}
 	if cur != nil {
 		sets = append(sets, cur)
@@ -1510,7 +1515,7 @@ func phraseSuggestIndex(req *phraseRequest, idx *Index, text string) (*phEntry, 
 // phCollateMatches renders the collate template for a suggestion and reports
 // whether its query matches any document of the index.
 func phCollateMatches(idx *Index, req *phraseRequest, suggestion string) (bool, *apiError) {
-	tpl, ok := mustacheTemplateText(req.collateSource)
+	tpl, ok := mustache.TemplateText(req.collateSource)
 	if !ok {
 		return false, nil
 	}
@@ -1519,12 +1524,12 @@ func phCollateMatches(idx *Index, req *phraseRequest, suggestion string) (bool, 
 		vars[k] = v
 	}
 	vars["suggestion"] = suggestion
-	src, merr := mustacheRender(tpl, vars)
+	src, merr := mustache.Render(tpl, vars)
 	if merr != nil {
 		return false, mustacheScriptError(tpl, merr)
 	}
 	var q map[string]any
-	if err := unmarshalJSON([]byte(src), &q); err != nil {
+	if err := jsonv.Unmarshal([]byte(src), &q); err != nil {
 		return false, &apiError{Type: "parsing_exception", Status: 400, Reason: "Failed to parse collate query"}
 	}
 	for _, id := range idx.Order {

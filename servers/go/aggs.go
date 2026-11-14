@@ -10,6 +10,10 @@ import (
 	"strings"
 	"time"
 	_ "time/tzdata"
+
+	"slopensearch/internal/analysis"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/painless"
 )
 
 func resolveField(field, pathPrefix string) string {
@@ -101,8 +105,8 @@ func injectAggDocValues(h aggHit, doc map[string]any) {
 			toks := []any{}
 			for _, v := range vals {
 				s, _ := valueScalarString(v)
-				for _, t := range analyzeTokensWithIndex(h.idx, analyzer, s) {
-					toks = append(toks, t.term)
+				for _, t := range analysis.Tokens(analysisIndex(h.idx), analyzer, s) {
+					toks = append(toks, t.Term)
 				}
 			}
 			if len(toks) > 0 {
@@ -461,7 +465,7 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *Ind
 			return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
 				Reason: "Failed to parse aggregation [a]",
 				CausedBy: &apiError{Type: "illegal_argument_exception",
-					Reason: fmt.Sprintf("[precisionThreshold] must be greater than or equal to 0. Found [%s] in [a]", formatNumber(v))}}
+					Reason: fmt.Sprintf("[precisionThreshold] must be greater than or equal to 0. Found [%s] in [a]", jsonv.FormatNumber(v))}}
 		}
 		return cardinalityAgg(t, docs, idx, pathPrefix)
 	}
@@ -1283,25 +1287,25 @@ func murmur3x86_32(data []byte, seed int32) int32 {
 // value_type, script values are terms (strings, Java formatting); value
 // scripts keep the numeric type of the field.
 func termsScriptKey(r any, valueScript bool, valueType string, expression bool) any {
-	if dv, ok := r.(*plDocValues); ok {
-		r = dv.vals
+	if dv, ok := r.(*painless.DocValues); ok {
+		r = dv.Values
 	}
 	if valueScript || valueType != "" {
-		if plIsNumber(r) {
+		if painless.IsNumber(r) {
 			if valueScript {
-				return plF64(r)
+				return painless.F64(r)
 			}
-			return plToJSON(r)
+			return painless.ToJSON(r)
 		}
-		return plToJSON(r)
+		return painless.ToJSON(r)
 	}
-	if plIsNumber(r) || expression {
-		return plToString(r)
+	if painless.IsNumber(r) || expression {
+		return painless.ToString(r)
 	}
 	if s, ok := r.(string); ok {
 		return s
 	}
-	return plToString(r)
+	return painless.ToString(r)
 }
 
 func loadAggLocation(tz string) (*time.Location, *apiError) {

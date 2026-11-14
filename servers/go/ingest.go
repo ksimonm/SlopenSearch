@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/wildcard"
 )
 
 type ingestEnv struct {
@@ -436,7 +438,7 @@ func (s *Server) resolvePipelineNames(expr string) []string {
 	for _, p := range parts {
 		if strings.Contains(p, "*") {
 			for n := range s.ingestPipelines {
-				if globMatch(p, n) && !seen[n] {
+				if wildcard.Match(p, n) && !seen[n] {
 					seen[n] = true
 					out = append(out, n)
 				}

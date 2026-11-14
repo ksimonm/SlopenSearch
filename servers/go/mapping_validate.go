@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/jsonv"
 )
 
 // mappingValidationError carries the OpenSearch mapper validation message and
@@ -84,7 +86,7 @@ func javaMetaRepr(v any) string {
 		if t == float64(int64(t)) {
 			return "Integer[" + strconv.FormatInt(int64(t), 10) + "]"
 		}
-		return "Double[" + formatNumber(t) + "]"
+		return "Double[" + jsonv.FormatNumber(t) + "]"
 	case map[string]any:
 		return "LinkedHashMap[" + javaMapDebug(v) + "]"
 	case []any:

@@ -3,6 +3,9 @@ package main
 import (
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/analysis"
+	"slopensearch/internal/jsonv"
 )
 
 // ---------------------------------------------------------------------------
@@ -124,7 +127,7 @@ func expandDottedObject(src map[string]any) (map[string]any, *apiError) {
 		keys = append(keys, k)
 	}
 	// Stable order keeps conflict reporting deterministic.
-	sortStrings(keys)
+	jsonv.SortStrings(keys)
 	out := map[string]any{}
 	for _, key := range keys {
 		if err := insertDottedObject(out, key, src[key]); err != nil {
@@ -221,30 +224,6 @@ func mergeDottedDocs(a, b map[string]any) map[string]any {
 
 // builtinAnalyzer reports whether name is an analyzer that OpenSearch ships
 // with, so a mapping may reference it without declaring it in settings.
-func builtinAnalyzer(name string) bool {
-	switch name {
-	case "standard", "simple", "whitespace", "keyword", "stop", "english",
-		"lowercase", "pattern", "fingerprint",
-		// Language analyzers.
-		"arabic", "armenian", "basque", "bengali", "brazilian", "bulgarian",
-		"catalan", "cjk", "czech", "danish", "dutch", "estonian", "finnish",
-		"french", "galician", "german", "greek", "hindi", "hungarian",
-		"indonesian", "irish", "italian", "latvian", "lithuanian",
-		"norwegian", "persian", "portuguese", "romanian", "russian",
-		"sorani", "spanish", "swedish", "thai", "turkish", "chinese":
-		return true
-	}
-	return false
-}
-
-func builtinNormalizer(name string) bool {
-	switch name {
-	case "lowercase", "uppercase", "asciifolding":
-		return true
-	}
-	return false
-}
-
 func settingsHasAnalyzer(settings map[string]any, key, name string) bool {
 	if _, ok := findSetting(settings, "analysis."+key+"."+name); ok {
 		return true
@@ -259,14 +238,14 @@ func settingsHasAnalyzer(settings map[string]any, key, name string) bool {
 }
 
 func settingsAnalyzerExists(settings map[string]any, name string) bool {
-	if builtinAnalyzer(name) || name == "default" {
+	if analysis.BuiltinAnalyzer(name) || name == "default" {
 		return true
 	}
 	return settingsHasAnalyzer(settings, "analyzer", name)
 }
 
 func normalizerFound(settings map[string]any, name string) bool {
-	if builtinNormalizer(name) {
+	if analysis.BuiltinNormalizer(name) {
 		return true
 	}
 	return settingsHasAnalyzer(settings, "normalizer", name)

@@ -7,6 +7,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/painless"
 )
 
 func metricParamError(name, key string) *apiError {
@@ -141,8 +144,8 @@ func scriptNumericValuesErr(docs []map[string]any, idx *Index, script any, field
 			return nil, err
 		}
 		for _, r := range res {
-			if plIsNumber(r) {
-				out = append(out, plF64(r))
+			if painless.IsNumber(r) {
+				out = append(out, painless.F64(r))
 			} else if f, ok := toFloat(r); ok {
 				out = append(out, f)
 			}
@@ -208,7 +211,7 @@ func countValues(spec map[string]any, docs []map[string]any, idx *Index, pathPre
 
 func fmtMetricNumber(f float64, format string) string {
 	if format == "" {
-		return formatNumber(f)
+		return jsonv.FormatNumber(f)
 	}
 	decimals := 0
 	if i := strings.Index(format, "."); i >= 0 {
@@ -473,7 +476,7 @@ func cardinalityAgg(spec map[string]any, docs []map[string]any, idx *Index, path
 		if script, ok := spec["script"]; ok {
 			seen := map[string]bool{}
 			for _, v := range scriptNumericValues(docs, idx, script, "", pathPrefix) {
-				seen[formatNumber(v)] = true
+				seen[jsonv.FormatNumber(v)] = true
 			}
 			return map[string]any{"value": len(seen)}, nil
 		}

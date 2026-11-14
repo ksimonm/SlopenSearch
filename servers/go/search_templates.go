@@ -7,6 +7,10 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mustache"
+	"slopensearch/internal/painless"
 )
 
 // resolveTemplate finds the template text of a render / search template
@@ -18,7 +22,7 @@ func (s *Server) resolveTemplate(body map[string]any) (text string, rendered boo
 		source, hasSource = body["inline"]
 	}
 	if hasSource {
-		text, ok := mustacheTemplateText(source)
+		text, ok := mustache.TemplateText(source)
 		if !ok {
 			return "", false, errParsing("template source must be a string or object")
 		}
@@ -41,12 +45,12 @@ func (s *Server) resolveTemplate(body map[string]any) (text string, rendered boo
 				return "", false, &apiError{Type: "script_exception", Status: 400, Reason: "compile error",
 					Shard: &shardFailure{raw: se.errorBody(), status: 400}}
 			}
-			v, se := script.exec(plBindings{vars: map[string]any{"params": scriptParams(templateParams(body))}}, id)
+			v, se := script.exec(painless.Bindings{Vars: map[string]any{"params": scriptParams(templateParams(body))}}, id)
 			if se != nil {
 				return "", false, &apiError{Type: "script_exception", Status: 400, Reason: "runtime error",
 					Shard: &shardFailure{raw: se.errorBody(), status: 400}}
 			}
-			return plToString(v), true, nil
+			return painless.ToString(v), true, nil
 		}
 		return "", false, errBad(lang + " engine does not know how to handle context [template]")
 	}
@@ -67,7 +71,7 @@ func (s *Server) renderTemplateText(body map[string]any) (string, *apiError) {
 	if err != nil || rendered {
 		return text, err
 	}
-	out, merr := mustacheRender(text, templateParams(body))
+	out, merr := mustache.Render(text, templateParams(body))
 	if merr != nil {
 		return "", mustacheScriptError(text, merr)
 	}
@@ -84,7 +88,7 @@ func (s *Server) renderTemplateBody(body map[string]any) (map[string]any, *apiEr
 		return nil, err
 	}
 	var out map[string]any
-	if uerr := unmarshalJSON([]byte(text), &out); uerr != nil || out == nil {
+	if uerr := jsonv.Unmarshal([]byte(text), &out); uerr != nil || out == nil {
 		reason := "Unexpected character: expected a value"
 		if uerr != nil {
 			reason = uerr.Error()
@@ -137,7 +141,7 @@ func (s *Server) handleSearchTemplate(w http.ResponseWriter, r *http.Request, na
 		writeError(w, apiErr)
 		return
 	}
-	for _, k := range sortedKeys(body) {
+	for _, k := range jsonv.SortedKeys(body) {
 		if !searchTemplateKeys[k] {
 			col := strings.Index(string(raw), `"`+k+`"`) + 1
 			writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400,

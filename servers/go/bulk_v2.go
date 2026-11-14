@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/jsonv"
 )
 
 type bulkAction struct {
@@ -129,7 +131,7 @@ func (s *Server) handleBulkV2(w http.ResponseWriter, r *http.Request, pathIndex 
 			i++
 			srcLine := strings.TrimSpace(strings.TrimSuffix(lines[i], "\r"))
 			var srcAny any
-			if err := unmarshalJSON([]byte(srcLine), &srcAny); err != nil {
+			if err := jsonv.Unmarshal([]byte(srcLine), &srcAny); err != nil {
 				a.sourceErr = &apiError{Type: "mapper_parsing_exception", Status: 400,
 					Reason:   "Failed to parse request body",
 					CausedBy: &apiError{Type: "json_parse_exception", Reason: err.Error()}}
@@ -211,7 +213,7 @@ func parseBulkActionLine(line string) (string, map[string]any, *apiError) {
 	}
 	op, _ := kt.(string)
 	var all map[string]any
-	if err := unmarshalJSON([]byte(line), &all); err != nil {
+	if err := jsonv.Unmarshal([]byte(line), &all); err != nil {
 		return "", nil, &apiError{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
 	}
 	meta, _ := all[op].(map[string]any)
@@ -424,7 +426,7 @@ func (s *Server) runBulkAction(a bulkAction, rv string, requireAliasURL bool, ur
 		delete(idx.Docs, id)
 		delete(idx.Pending, id)
 		delete(idx.RawDocs, id)
-		idx.removeDocValues(id)
+		removeDocValues(idx, id)
 		idx.DeleteTotal++
 		return bulkOKItem("delete", bulkItem("delete", idx.Name, id, ver, seq, 1, "deleted", 200, false)), false
 	case "update":
@@ -486,7 +488,7 @@ func (s *Server) runBulkIndex(idx *Index, a bulkAction, id, routing, rv, urlPipe
 		return bulkErrItem(a.op, idx.Name, id, derr), true
 	}
 	ensureFieldTypes(idx)
-	if derr := idx.computeDocValues(id, src); derr != nil {
+	if derr := computeDocValues(idx, id, src); derr != nil {
 		return bulkErrItem(a.op, idx.Name, id, derr), true
 	}
 	if !exists {
@@ -564,7 +566,7 @@ func (s *Server) runBulkUpdate(idx *Index, a bulkAction, id, routing, rv, urlSou
 			return bulkErrItem(a.op, idx.Name, id, derr), true
 		}
 		ensureFieldTypes(idx)
-		if derr := idx.computeDocValues(id, src); derr != nil {
+		if derr := computeDocValues(idx, id, src); derr != nil {
 			return bulkErrItem("update", idx.Name, id, derr), true
 		}
 		idx.Order = append(idx.Order, id)
@@ -606,7 +608,7 @@ func (s *Server) runBulkUpdate(idx *Index, a bulkAction, id, routing, rv, urlSou
 		delete(idx.Docs, id)
 		delete(idx.Pending, id)
 		delete(idx.RawDocs, id)
-		idx.removeDocValues(id)
+		removeDocValues(idx, id)
 		idx.DeleteTotal++
 		idx.Versions[id] = ver
 		idx.SeqNos[id] = seq
@@ -627,7 +629,7 @@ func (s *Server) runBulkUpdate(idx *Index, a bulkAction, id, routing, rv, urlSou
 		return bulkErrItem("update", idx.Name, id, derr), true
 	}
 	ensureFieldTypes(idx)
-	if derr := idx.computeDocValues(id, newDoc); derr != nil {
+	if derr := computeDocValues(idx, id, newDoc); derr != nil {
 		return bulkErrItem("update", idx.Name, id, derr), true
 	}
 	ver := currentVersion(idx, id) + 1

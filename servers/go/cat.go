@@ -8,6 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/wildcard"
 )
 
 const catRootListing = `=^.^=
@@ -251,7 +254,7 @@ func resolveCatColumns(h string, cols []catCol) []catRequestedCol {
 		}
 		if strings.ContainsAny(token, "*?") {
 			for _, c := range cols {
-				if globMatch(token, c.key) {
+				if wildcard.Match(token, c.key) {
 					out = append(out, catRequestedCol{key: c.key, display: c.key, numeric: c.numeric})
 				}
 			}
@@ -496,7 +499,7 @@ func writeCatJSONObject(buf *bytes.Buffer, cols []catRequestedCol, row catRow, i
 				buf.WriteString("  ")
 			}
 		}
-		buf.WriteString(encodeString(c.display))
+		buf.WriteString(jsonv.EncodeString(c.display))
 		if pretty {
 			buf.WriteString(" : ")
 		} else {
@@ -506,7 +509,7 @@ func writeCatJSONObject(buf *bytes.Buffer, cols []catRequestedCol, row catRow, i
 		if v == nil {
 			buf.WriteString("null")
 		} else {
-			buf.WriteString(encodeString(fmt.Sprintf("%v", v)))
+			buf.WriteString(jsonv.EncodeString(fmt.Sprintf("%v", v)))
 		}
 	}
 	if pretty && len(cols) > 0 {
@@ -532,7 +535,7 @@ func renderCatYAML(w http.ResponseWriter, cols []catRequestedCol, rows []catRow)
 			if v == nil {
 				buf.WriteString("null")
 			} else {
-				buf.WriteString(encodeString(fmt.Sprintf("%v", v)))
+				buf.WriteString(jsonv.EncodeString(fmt.Sprintf("%v", v)))
 			}
 			buf.WriteString("\n")
 		}
@@ -618,8 +621,8 @@ func (s *Server) catIndices(r *http.Request, spec, endpoint string) ([]catCol, [
 		row.values["status"] = status
 		row.values["index"] = idx.Name
 		row.values["uuid"] = idx.UUID
-		row.values["pri"] = strconv.Itoa(idx.numShards())
-		row.values["rep"] = strconv.Itoa(idx.numReplicas())
+		row.values["pri"] = strconv.Itoa(numShards(idx))
+		row.values["rep"] = strconv.Itoa(numReplicas(idx))
 		if idx.Closed {
 			row.values["docs.count"] = nil
 			row.values["docs.deleted"] = nil
@@ -628,8 +631,8 @@ func (s *Server) catIndices(r *http.Request, spec, endpoint string) ([]catCol, [
 		} else {
 			row.values["docs.count"] = strconv.Itoa(indexDocCount(idx))
 			row.values["docs.deleted"] = "0"
-			row.values["store.size"] = formatCatBytes(idx.storeBytes(), r.URL.Query().Get("bytes"))
-			row.values["pri.store.size"] = formatCatBytes(idx.storeBytes(), r.URL.Query().Get("bytes"))
+			row.values["store.size"] = formatCatBytes(storeBytes(idx), r.URL.Query().Get("bytes"))
+			row.values["pri.store.size"] = formatCatBytes(storeBytes(idx), r.URL.Query().Get("bytes"))
 		}
 		row.values["creation.date"] = strconv.FormatInt(idx.CreationDate, 10)
 		row.values["creation.date.string"] = time.UnixMilli(idx.CreationDate).UTC().Format("2006-01-02T15:04:05.000Z")
@@ -643,7 +646,7 @@ func (s *Server) catIndices(r *http.Request, spec, endpoint string) ([]catCol, [
 	return all, rows, nil
 }
 
-func (idx *Index) storeBytes() int64 {
+func storeBytes(idx *Index) int64 {
 	if len(idx.Docs) == 0 {
 		return 0
 	}
@@ -831,7 +834,7 @@ func (s *Server) catAliases(r *http.Request, spec string) ([]catCol, []catRow) {
 	}
 	for _, idx := range s.indices {
 		for alias, def := range idx.Aliases {
-			if !globMatch(spec, alias) {
+			if !wildcard.Match(spec, alias) {
 				continue
 			}
 			row := catRow{values: map[string]any{}}
@@ -893,8 +896,8 @@ func (s *Server) catShards(r *http.Request, spec string) ([]catCol, []catRow, *a
 	}
 	rows := []catRow{}
 	for _, idx := range indices {
-		perShard := distributeDocs(len(idx.Docs), idx.numShards())
-		for i := 0; i < idx.numShards(); i++ {
+		perShard := distributeDocs(len(idx.Docs), numShards(idx))
+		for i := 0; i < numShards(idx); i++ {
 			row := catRow{values: map[string]any{}}
 			row.values["index"] = idx.Name
 			row.values["shard"] = strconv.Itoa(i)
@@ -906,7 +909,7 @@ func (s *Server) catShards(r *http.Request, spec string) ([]catCol, []catRow, *a
 			row.values["node"] = nodeName
 			row.values["unassigned.reason"] = nil
 			rows = append(rows, row)
-			for rp := 0; rp < idx.numReplicas(); rp++ {
+			for rp := 0; rp < numReplicas(idx); rp++ {
 				replica := catRow{values: map[string]any{}}
 				replica.values["index"] = idx.Name
 				replica.values["shard"] = strconv.Itoa(i)
@@ -1061,7 +1064,7 @@ func catThreadPool(r *http.Request, spec string) ([]catCol, []catRow) {
 		if spec != "" {
 			matched := false
 			for _, pat := range strings.Split(spec, ",") {
-				if globMatch(pat, name) {
+				if wildcard.Match(pat, name) {
 					matched = true
 				}
 			}
@@ -1129,7 +1132,7 @@ func (s *Server) catAllocation(r *http.Request) ([]catCol, []catRow, *apiError) 
 		h := computeIndexHealth(idx)
 		shards += h.Active
 		unassigned += h.Unassigned
-		assignedBytes += idx.storeBytes()
+		assignedBytes += storeBytes(idx)
 	}
 	bytesParam := r.URL.Query().Get("bytes")
 	var unusedAPIErr *apiError
@@ -1201,7 +1204,7 @@ func (s *Server) catRecovery(r *http.Request, spec string) ([]catCol, []catRow, 
 		if idx.Closed {
 			continue
 		}
-		for i := 0; i < idx.numShards(); i++ {
+		for i := 0; i < numShards(idx); i++ {
 			row := catRow{values: map[string]any{
 				"index": idx.Name, "shard": strconv.Itoa(i),
 				"start_time": "2026-01-01T00:00:00.000Z", "time": "0ms",
@@ -1247,8 +1250,8 @@ func (s *Server) catSegments(r *http.Request, spec string) ([]catCol, []catRow, 
 		if idx.Closed {
 			continue
 		}
-		perShard := distributeDocs(len(idx.Docs), idx.numShards())
-		for i := 0; i < idx.numShards(); i++ {
+		perShard := distributeDocs(len(idx.Docs), numShards(idx))
+		for i := 0; i < numShards(idx); i++ {
 			if perShard[i] == 0 {
 				continue
 			}
@@ -1319,7 +1322,7 @@ func (s *Server) catTemplates(r *http.Request, spec string) ([]catCol, []catRow)
 			return true
 		}
 		for _, pat := range strings.Split(spec, ",") {
-			if globMatch(pat, name) {
+			if wildcard.Match(pat, name) {
 				return true
 			}
 		}

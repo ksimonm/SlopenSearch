@@ -9,6 +9,10 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"slopensearch/internal/analysis"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/wildcard"
 )
 
 // ---------------------------------------------------------------- name rules
@@ -316,23 +320,23 @@ func settingsSetNested(root map[string]any, path []string, v any) {
 
 func settingsToNested(flat map[string]any) map[string]any {
 	root := map[string]any{}
-	keys := sortedKeys(flat)
+	keys := jsonv.SortedKeys(flat)
 	for _, k := range keys {
 		settingsSetNested(root, strings.Split(k, "."), flat[k])
 	}
 	return root
 }
 
-func (idx *Index) materializedFlat() map[string]any {
+func materializedFlat(idx *Index) map[string]any {
 	out := map[string]any{}
 	for k, v := range idx.Settings {
 		out[k] = stringifyScalar(v)
 	}
 	if _, ok := out["index.number_of_shards"]; !ok {
-		out["index.number_of_shards"] = strconv.Itoa(idx.numShards())
+		out["index.number_of_shards"] = strconv.Itoa(numShards(idx))
 	}
 	if _, ok := out["index.number_of_replicas"]; !ok {
-		out["index.number_of_replicas"] = strconv.Itoa(idx.numReplicas())
+		out["index.number_of_replicas"] = strconv.Itoa(numReplicas(idx))
 	}
 	out["index.uuid"] = idx.UUID
 	out["index.creation_date"] = strconv.FormatInt(idx.CreationDate, 10)
@@ -353,7 +357,7 @@ func matchAnySettingPattern(patterns []string, key string) bool {
 		if p == "" {
 			continue
 		}
-		if globMatch(p, key) || strings.HasPrefix(key, strings.TrimSuffix(p, "*")) && strings.HasSuffix(p, "*") {
+		if wildcard.Match(p, key) || strings.HasPrefix(key, strings.TrimSuffix(p, "*")) && strings.HasSuffix(p, "*") {
 			return true
 		}
 	}
@@ -379,7 +383,7 @@ func parseSettingsFilter(filter string) []string {
 // when an explicit filter matched nothing.
 func settingsView(idx *Index, flat, includeDefaults bool, filter string) map[string]any {
 	patterns := parseSettingsFilter(filter)
-	flatAll := idx.materializedFlat()
+	flatAll := materializedFlat(idx)
 	matched := map[string]any{}
 	for k, v := range flatAll {
 		if matchAnySettingPattern(patterns, k) {
@@ -463,7 +467,7 @@ func acceptClass(idx *Index, expand map[string]bool) bool {
 	} else if !expand["open"] {
 		return false
 	}
-	if idx.isHidden() && !expand["hidden"] {
+	if isHidden(idx) && !expand["hidden"] {
 		return false
 	}
 	return true
@@ -522,7 +526,7 @@ func (s *Server) resolveSpec2(spec string, o resolveOpts2) ([]*Index, *apiError)
 		} else if strings.ContainsAny(token, "*?") {
 			for _, name := range sortedIndexNames(s) {
 				idx := s.indices[name]
-				if globMatch(token, name) && acceptClass(idx, expand) {
+				if wildcard.Match(token, name) && acceptClass(idx, expand) {
 					matched = append(matched, idx)
 				}
 			}
@@ -533,7 +537,7 @@ func (s *Server) resolveSpec2(spec string, o resolveOpts2) ([]*Index, *apiError)
 						continue
 					}
 					for alias := range idx.Aliases {
-						if globMatch(token, alias) {
+						if wildcard.Match(token, alias) {
 							matched = append(matched, idx)
 							break
 						}
@@ -634,7 +638,7 @@ func (s *Server) createIndex(w http.ResponseWriter, r *http.Request, name string
 	bodyBytes, _ := io.ReadAll(r.Body)
 	var body map[string]any
 	if len(strings.TrimSpace(string(bodyBytes))) > 0 {
-		if err := unmarshalJSON(bodyBytes, &body); err != nil {
+		if err := jsonv.Unmarshal(bodyBytes, &body); err != nil {
 			writeError(w, &apiError{Type: "not_x_content_exception", Status: 400,
 				Reason: "Compressor detection can only be called on some xcontent bytes or compressed xcontent bytes"})
 			return
@@ -746,7 +750,7 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 			Reason:   "Failed to parse mapping [_doc]: " + reason,
 			CausedBy: &apiError{Type: "illegal_argument_exception", Reason: reason}}
 	}
-	if err := validateAnalysisSettings(canonical); err != nil {
+	if err := analysis.ValidateSettings(canonical); err != nil {
 		return nil, err
 	}
 	if err := validateMappingFull(mergedMappings); err != nil {
@@ -1077,9 +1081,9 @@ func (s *Server) getIndexMeta(w http.ResponseWriter, r *http.Request, spec strin
 		}
 		var settings map[string]any
 		if flat {
-			settings = idx.materializedFlat()
+			settings = materializedFlat(idx)
 		} else {
-			settings = settingsToNested(idx.materializedFlat())
+			settings = settingsToNested(materializedFlat(idx))
 		}
 		mappings := idx.Mappings
 		if mappings == nil {
@@ -1133,7 +1137,7 @@ func (s *Server) deleteIndices(w http.ResponseWriter, r *http.Request, spec stri
 }
 
 func indexBlockError(idx *Index, block string, code int, status int) *apiError {
-	if !idx.blockOn(block) {
+	if !blockOn(idx, block) {
 		return nil
 	}
 	return &apiError{Type: "cluster_block_exception", Status: status,
@@ -1268,7 +1272,7 @@ func (s *Server) putSettingsAPI(w http.ResponseWriter, r *http.Request, spec str
 					merged[k] = v
 				}
 			}
-			if err := validateAnalysisSettings(merged); err != nil {
+			if err := analysis.ValidateSettings(merged); err != nil {
 				writeError(w, err)
 				return
 			}

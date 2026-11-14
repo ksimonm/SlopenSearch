@@ -11,6 +11,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/analysis"
+	"slopensearch/internal/jsonv"
 )
 
 // ---------------------------------------------------------------------------
@@ -91,7 +94,7 @@ func previewValue(v any) string {
 	case bool:
 		return strconv.FormatBool(t)
 	case float64:
-		return formatNumber(t)
+		return jsonv.FormatNumber(t)
 	case json.Number:
 		return t.String()
 	case map[string]any:
@@ -209,8 +212,8 @@ func (c *indexCtx) parseIntValue(name, typ string, def map[string]any, v any) (a
 func (c *indexCtx) parseIntFloat(name, typ string, def map[string]any, f float64, coerce bool) (any, *apiError) {
 	if !coerce {
 		if f != math.Trunc(f) {
-			return nil, c.fieldValueError(name, typ, formatNumber(f), "illegal_argument_exception",
-				fmt.Sprintf("%s cannot be converted to Integer without data loss", formatNumber(f)))
+			return nil, c.fieldValueError(name, typ, jsonv.FormatNumber(f), "illegal_argument_exception",
+				fmt.Sprintf("%s cannot be converted to Integer without data loss", jsonv.FormatNumber(f)))
 		}
 	}
 	iv := int64(f)
@@ -381,13 +384,13 @@ func (c *indexCtx) parseFloatValue(name, typ string, def map[string]any, v any) 
 	case "float":
 		if f > math.MaxFloat32 || f < -math.MaxFloat32 {
 			return nil, c.fieldValueError(name, typ, v, "input_coercion_exception",
-				fmt.Sprintf("Value [%s] is out of range for a float", formatNumber(f)))
+				fmt.Sprintf("Value [%s] is out of range for a float", jsonv.FormatNumber(f)))
 		}
 		return float64(float32(f)), nil
 	case "half_float":
 		if f > 65504 || f < -65504 {
 			return nil, c.fieldValueError(name, typ, v, "input_coercion_exception",
-				fmt.Sprintf("Value [%s] is out of range for a half_float", formatNumber(f)))
+				fmt.Sprintf("Value [%s] is out of range for a half_float", jsonv.FormatNumber(f)))
 		}
 		return float64(float32FromHalf(float32Half(f))), nil
 	case "scaled_float":
@@ -1290,7 +1293,7 @@ func valueScalarString(v any) (string, bool) {
 	case string:
 		return t, true
 	case float64:
-		return formatNumber(t), true
+		return jsonv.FormatNumber(t), true
 	case json.Number:
 		return t.String(), true
 	case bool:
@@ -1689,14 +1692,14 @@ func applyRequestDerived(idx *Index, defs any) *apiError {
 		norm[name] = cp
 	}
 	idx.Mappings["derived"] = norm
-	idx.recomputeAllDocValues()
+	recomputeAllDocValues(idx)
 	ensureFieldTypes(idx)
 	return nil
 }
 
 // computeDocValues validates and indexes a document, storing normalized field
 // values used by search, sort, aggregations and docvalue_fields.
-func (idx *Index) computeDocValues(id string, doc map[string]any) *apiError {
+func computeDocValues(idx *Index, id string, doc map[string]any) *apiError {
 	if reason := invalidDocFieldName(doc); reason != "" {
 		return mapperErr("mapper_parsing_exception", reason, "illegal_argument_exception", reason)
 	}
@@ -1726,7 +1729,7 @@ func (idx *Index) computeDocValues(id string, doc map[string]any) *apiError {
 		idx.DocValues = map[string]map[string][]any{}
 	}
 	idx.DocValues[id] = c.values
-	idx.dvGen++
+	idx.DVGen++
 	if len(c.ignored) > 0 {
 		if idx.DocIgnored == nil {
 			idx.DocIgnored = map[string][]string{}
@@ -1748,16 +1751,16 @@ func ignoredValues(fields []string) []any {
 	return out
 }
 
-func (idx *Index) removeDocValues(id string) {
+func removeDocValues(idx *Index, id string) {
 	delete(idx.DocValues, id)
 	delete(idx.DocIgnored, id)
-	idx.dvGen++
+	idx.DVGen++
 }
 
 // recomputeAllDocValues rebuilds doc values for every document (used when
 // mappings change).
-func (idx *Index) recomputeAllDocValues() {
-	idx.dvGen++
+func recomputeAllDocValues(idx *Index) {
+	idx.DVGen++
 	idx.DocValues = map[string]map[string][]any{}
 	idx.DocIgnored = map[string][]string{}
 	for _, id := range idx.Order {
@@ -1765,7 +1768,7 @@ func (idx *Index) recomputeAllDocValues() {
 		if !live {
 			continue
 		}
-		_ = idx.computeDocValues(id, doc)
+		_ = computeDocValues(idx, id, doc)
 	}
 }
 
@@ -1790,14 +1793,14 @@ func asciiLower(s string) string {
 func applyNormalizerWithIndex(idx *Index, name, s string) string {
 	if idx != nil {
 		if rawFilters, ok := findSetting(idx.Settings, "analysis.normalizer."+name+".filter"); ok {
-			for _, f := range filterNames(rawFilters) {
+			for _, f := range analysis.FilterNames(rawFilters) {
 				switch f {
 				case "lowercase":
 					s = strings.ToLower(s)
 				case "uppercase":
 					s = strings.ToUpper(s)
 				case "asciifolding":
-					s = asciiFoldReplacer.Replace(s)
+					s = analysis.ASCIIFoldReplacer.Replace(s)
 				}
 			}
 			return s
@@ -1824,7 +1827,7 @@ func (c *indexCtx) parseTokenCount(path string, def map[string]any, v any) (any,
 		return nil, c.fieldValueError(path, "token_count", v, "illegal_argument_exception", "malformed")
 	}
 	analyzer, _ := def["analyzer"].(string)
-	tokens := analyzeTokensWithIndex(c.idx, analyzer, s)
+	tokens := analysis.Tokens(analysisIndex(c.idx), analyzer, s)
 	epi := true
 	if b, ok := def["enable_position_increments"].(bool); ok {
 		epi = b
@@ -1833,7 +1836,7 @@ func (c *indexCtx) parseTokenCount(path string, def map[string]any, v any) (any,
 		if len(tokens) == 0 {
 			return int64(0), nil
 		}
-		return int64(tokens[len(tokens)-1].pos + 1), nil
+		return int64(tokens[len(tokens)-1].Pos + 1), nil
 	}
 	return int64(len(tokens)), nil
 }
@@ -2414,7 +2417,7 @@ func (c *indexCtx) parseRangeValue(path, typ string, def map[string]any, v any) 
 func boundsValue(v any) string {
 	switch t := v.(type) {
 	case float64:
-		return formatNumber(t)
+		return jsonv.FormatNumber(t)
 	case int64:
 		return strconv.FormatInt(t, 10)
 	case uint64:

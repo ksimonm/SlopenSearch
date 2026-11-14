@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/painless"
 )
 
 func aggTypeOf(def map[string]any) string {
@@ -323,8 +325,8 @@ func metricScalar(v any) (any, bool) {
 
 func orderedGet(o orderedJSON, key string) (any, bool) {
 	for _, kv := range o {
-		if kv.k == key {
-			return kv.v, true
+		if kv.K == key {
+			return kv.V, true
 		}
 	}
 	return nil, false
@@ -601,10 +603,10 @@ func applyBucketScript(name string, body map[string]any, buckets []map[string]an
 			continue
 		}
 		var r any = res
-		if plIsNumber(res) {
-			r = plF64(res)
+		if painless.IsNumber(res) {
+			r = painless.F64(res)
 		} else if _, isStr := res.(string); !isStr {
-			r = plToJSON(res)
+			r = painless.ToJSON(res)
 		}
 		if _, ok := toFloat(r); !ok {
 			reason := "Cannot cast from [java.lang.String] to [java.lang.Number]."

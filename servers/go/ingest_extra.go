@@ -16,6 +16,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/painless"
 )
 
 func parseIP(s string) (net.IP, bool) {
@@ -1017,7 +1020,7 @@ func ingestScriptError(se *plScriptErr, tag string) *apiError {
 		}
 	}
 	for _, kv := range se.extra {
-		fields[kv.k] = kv.v
+		fields[kv.K] = kv.V
 	}
 	return &apiError{Type: "script_exception", Status: 400, Reason: kind, Fields: fields,
 		CausedBy: &apiError{Type: se.causeType, Reason: se.reason}}
@@ -1061,15 +1064,15 @@ var ingestMetaKeys = map[string]bool{"_index": true, "_id": true, "_routing": tr
 
 // ingestCtx builds the ctx map of an ingest document: source fields plus
 // metadata.
-func ingestCtx(env *ingestEnv) *plMap {
-	ctx := newPlMap(plHash)
+func ingestCtx(env *ingestEnv) *painless.Map {
+	ctx := painless.NewMap(painless.Hash)
 	for k, v := range env.meta {
 		if ingestMetaKeys[k] && v != nil {
-			ctx.put(k, plFromJSON(v, plLinked))
+			ctx.Put(k, painless.FromJSON(v, painless.Linked))
 		}
 	}
-	for _, k := range sortedKeys(env.source) {
-		ctx.put(k, plFromJSON(env.source[k], plLinked))
+	for _, k := range jsonv.SortedKeys(env.source) {
+		ctx.Put(k, painless.FromJSON(env.source[k], painless.Linked))
 	}
 	return ctx
 }
@@ -1080,7 +1083,7 @@ func (s *Server) procScript(cfg map[string]any, env *ingestEnv) *apiError {
 		return err
 	}
 	ctx := ingestCtx(env)
-	_, se := script.exec(plBindings{vars: map[string]any{"params": scriptParams(spec.params), "ctx": ctx}}, spec.errName())
+	_, se := script.exec(painless.Bindings{Vars: map[string]any{"params": scriptParams(spec.params), "ctx": ctx}}, spec.errName())
 	if se != nil {
 		return ingestScriptError(se, "")
 	}
@@ -1090,12 +1093,12 @@ func (s *Server) procScript(cfg map[string]any, env *ingestEnv) *apiError {
 	for k := range ingestMetaKeys {
 		delete(env.meta, k)
 	}
-	for _, e := range ctx.entries {
-		k := plToString(e.k)
+	for _, e := range ctx.Entries() {
+		k := painless.ToString(e.Key)
 		if ingestMetaKeys[k] {
-			env.meta[k] = plToJSON(e.v)
+			env.meta[k] = painless.ToJSON(e.Value)
 		} else {
-			env.source[k] = plToJSON(e.v)
+			env.source[k] = painless.ToJSON(e.Value)
 		}
 	}
 	return nil

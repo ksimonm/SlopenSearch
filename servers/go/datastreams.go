@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/wildcard"
 )
 
 // ------------------------------------------------------------- data streams
@@ -221,7 +223,7 @@ func (s *Server) handleDataStream(w http.ResponseWriter, r *http.Request, spec s
 			if strings.ContainsAny(n, "*?") {
 				for _, dsName := range sortedDataStreamNames(s) {
 					ds := s.dataStreams[dsName]
-					if globMatch(n, dsName) && !matched[dsName] {
+					if wildcard.Match(n, dsName) && !matched[dsName] {
 						out = append(out, s.dataStreamView(ds))
 						matched[dsName] = true
 					}
@@ -257,7 +259,7 @@ func (s *Server) handleDataStream(w http.ResponseWriter, r *http.Request, spec s
 			}
 			if strings.ContainsAny(n, "*?") {
 				for _, dsName := range sortedDataStreamNames(s) {
-					if globMatch(n, dsName) {
+					if wildcard.Match(n, dsName) {
 						ds := s.dataStreams[dsName]
 						for _, bn := range ds.BackingIndices {
 							delete(s.indices, bn)
@@ -298,7 +300,7 @@ func (s *Server) handleDataStreamStats(w http.ResponseWriter, r *http.Request, s
 	count := 0
 	backing := 0
 	for _, n := range sortedDataStreamNames(s) {
-		if !globMatch(spec, n) {
+		if !wildcard.Match(spec, n) {
 			continue
 		}
 		ds := s.dataStreams[n]

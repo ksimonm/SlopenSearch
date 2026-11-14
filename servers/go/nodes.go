@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/wildcard"
 )
 
 var nodeInfoMetrics = map[string]bool{
@@ -305,7 +307,7 @@ func nodesSelectorMatches(selector string) bool {
 		if strings.HasPrefix(token, "_") {
 			continue
 		}
-		if strings.ContainsAny(token, "*?") && (globMatch(token, nodeID) || globMatch(token, nodeName)) {
+		if strings.ContainsAny(token, "*?") && (wildcard.Match(token, nodeID) || wildcard.Match(token, nodeName)) {
 			return true
 		}
 	}
@@ -614,7 +616,7 @@ func taskActionMatches(task map[string]any, actions string) bool {
 	}
 	action, _ := task["action"].(string)
 	for _, pat := range strings.Split(actions, ",") {
-		if globMatch(pat, action) {
+		if wildcard.Match(pat, action) {
 			return true
 		}
 	}
@@ -709,7 +711,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request, rest []stri
 			list = append(list, taskJSON(t, detailed))
 		}
 		for _, kv := range running {
-			list = append(list, kv.v)
+			list = append(list, kv.V)
 		}
 		writeJSON(w, 200, map[string]any{"tasks": list})
 	case "parents":
@@ -723,7 +725,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request, rest []stri
 			}
 		}
 		for _, kv := range running {
-			parents[kv.k] = kv.v
+			parents[kv.K] = kv.V
 		}
 		for pid, kids := range children {
 			if parent, ok := parents[pid].(map[string]any); ok {
@@ -737,7 +739,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request, rest []stri
 			tasksOut[t["node"].(string)+":"+t["id"].(string)] = taskJSON(t, detailed)
 		}
 		for _, kv := range running {
-			tasksOut[kv.k] = kv.v
+			tasksOut[kv.K] = kv.V
 		}
 		writeJSON(w, 200, map[string]any{
 			"nodes": map[string]any{nodeID: map[string]any{"name": nodeName, "tasks": tasksOut}},

@@ -4,6 +4,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/painless"
 )
 
 type reindexFailure struct {
@@ -194,7 +197,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 	destIdx := s.indices[destName]
 	destNameErr := validateIndexName(destName)
 	for _, it := range items {
-		doc := deepCopyJSON(it.doc).(map[string]any)
+		doc := jsonv.DeepCopy(it.doc).(map[string]any)
 		id := it.id
 		targetName := destName
 		if hasScript {
@@ -227,9 +230,9 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 			if res.id == nil {
 				id = s.nextID()
 			} else {
-				id = plToString(res.id)
+				id = painless.ToString(res.id)
 			}
-			if n := plToString(res.index); n != it.idx.Name && res.index != nil {
+			if n := painless.ToString(res.index); n != it.idx.Name && res.index != nil {
 				targetName = n
 			}
 		}
@@ -313,7 +316,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 		}
 		destIdx.FieldTypes = map[string]string{}
 		buildFieldTypes(destIdx.Mappings, "", destIdx.FieldTypes)
-		if derr := destIdx.computeDocValues(id, doc); derr != nil {
+		if derr := computeDocValues(destIdx, id, doc); derr != nil {
 			if existing {
 				updated--
 			} else {

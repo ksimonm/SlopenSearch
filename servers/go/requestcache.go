@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"slopensearch/internal/jsonv"
 )
 
 // Shard request cache (IndicesRequestCache). OpenSearch caches the result
@@ -57,7 +59,7 @@ func (s *Server) dataFingerprint() string {
 		if idx.Pending != nil {
 			pp = reflect.ValueOf(idx.Pending).Pointer()
 		}
-		fmt.Fprintf(&b, "|%s:%p:%d:%d:%d:%d:%x:%d:%d:%d:%d:%t:%d", n, idx, idx.dvGen, idx.NextSeq, len(idx.Docs),
+		fmt.Fprintf(&b, "|%s:%p:%d:%d:%d:%d:%x:%d:%d:%d:%d:%t:%d", n, idx, idx.DVGen, idx.NextSeq, len(idx.Docs),
 			len(idx.Pending), pp, idx.MappingVersion, idx.IndexTotal, idx.DeleteTotal, idx.Deletes, idx.Closed, len(idx.Order))
 	}
 	return b.String()
@@ -90,7 +92,7 @@ func (s *Server) requestCacheKey(r *http.Request, raw []byte) string {
 	}
 	var body map[string]any
 	if len(bytes.TrimSpace(raw)) > 0 {
-		if err := unmarshalJSON(raw, &body); err != nil {
+		if err := jsonv.Unmarshal(raw, &body); err != nil {
 			return ""
 		}
 	}
