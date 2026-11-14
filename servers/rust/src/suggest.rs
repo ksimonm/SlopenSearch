@@ -3,34 +3,7 @@ use crate::store::*;
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 
-fn collect_field_terms(idx: &Index, field: &str) -> (HashMap<String, usize>, Vec<String>) {
-    let mut freq: HashMap<String, usize> = HashMap::new();
-    let mut order: Vec<String> = vec![];
-    for id in &idx.order {
-        let doc = match idx.docs.get(id) { Some(d) => d, None => continue };
-        if let Some(v) = field_value(doc, field) {
-            for s in doc_strings(v) {
-                for tok in analyze(&s) {
-                    if !freq.contains_key(&tok) {
-                        order.push(tok.clone());
-                    }
-                    *freq.entry(tok).or_insert(0) += 1;
-                }
-            }
-        }
-    }
-    (freq, order)
-}
 
-fn suggest_text(spec: &Map<String, Value>) -> String {
-    if let Some(v) = spec.get("text") {
-        return value_to_string(v).unwrap_or_default();
-    }
-    if let Some(v) = spec.get("prefix") {
-        return value_to_string(v).unwrap_or_default();
-    }
-    String::new()
-}
 
 fn f32v(x: f32) -> Value {
     format!("{}", x).parse::<f64>().map(|f| json!(f)).unwrap_or(json!(0))
@@ -65,9 +38,10 @@ pub fn eval_suggest(
         if let Some(t) = spec.get("term").and_then(|v| v.as_object()) {
             out.insert(name.clone(), term_suggester(spec, t, indices, global_text.as_deref())?);
         } else if let Some(t) = spec.get("phrase").and_then(|v| v.as_object()) {
-            if let Some(idx) = indices.first() {
-                out.insert(name.clone(), json!([phrase_suggester(spec, t, idx)]));
-            }
+            out.insert(
+                name.clone(),
+                crate::suggest_phrase::phrase_suggest(spec, t, indices, global_text.as_deref())?,
+            );
         } else if let Some(t) = spec.get("completion").and_then(|v| v.as_object()) {
             out.insert(
                 name.clone(),
@@ -80,7 +54,7 @@ pub fn eval_suggest(
 
 /// Optimal string alignment distance (Damerau-Levenshtein with adjacent
 /// transpositions), over code points.
-fn osa(a: &[char], b: &[char]) -> usize {
+pub(crate) fn osa(a: &[char], b: &[char]) -> usize {
     let (n, m) = (a.len(), b.len());
     let mut d = vec![vec![0usize; m + 1]; n + 1];
     for (i, row) in d.iter_mut().enumerate() {
@@ -102,7 +76,7 @@ fn osa(a: &[char], b: &[char]) -> usize {
     d[n][m]
 }
 
-fn plain_lev(a: &[char], b: &[char]) -> usize {
+pub(crate) fn plain_lev(a: &[char], b: &[char]) -> usize {
     let mut prev: Vec<usize> = (0..=b.len()).collect();
     for i in 1..=a.len() {
         let mut cur = vec![i; b.len() + 1];
@@ -116,7 +90,7 @@ fn plain_lev(a: &[char], b: &[char]) -> usize {
 }
 
 /// Lucene's JaroWinklerDistance (threshold 0.7, unbounded prefix).
-fn jaro_winkler(s1: &[char], s2: &[char]) -> f32 {
+pub(crate) fn jaro_winkler(s1: &[char], s2: &[char]) -> f32 {
     let (max, min) = if s1.len() > s2.len() { (s1, s2) } else { (s2, s1) };
     let range = (max.len() / 2).saturating_sub(1);
     let mut match_idx = vec![false; min.len()];
@@ -309,6 +283,7 @@ fn term_suggester(
                 let score = match distance.as_str() {
                     "levenshtein" => 1.0 - plain_lev(&qc, &cc) as f32 / qc.len().max(cc.len()) as f32,
                     "jaro_winkler" => jaro_winkler(&qc, &cc),
+                    "ngram" => ngram_distance(&qc, &cc),
                     _ => 1.0 - ed as f32 / qc.len().min(cc.len()) as f32,
                 };
                 if score < accuracy {
@@ -352,37 +327,53 @@ fn sort_term_options(v: &mut [(String, f32, usize)], by_freq: bool) {
     });
 }
 
-fn phrase_suggester(spec: &Map<String, Value>, body: &Map<String, Value>, idx: &Index) -> Value {
-    let field = body.get("field").and_then(value_to_string).unwrap_or_default();
-    let input = suggest_text(spec);
-    let (_, order) = collect_field_terms(idx, &field);
 
-    let tokens = analyze(&input);
-    let mut corrected: Vec<String> = vec![];
-    let mut changed = false;
-    for tok in &tokens {
-        let mut best = tok.clone();
-        let mut best_dist = usize::MAX;
-        for c in &order {
-            let d = levenshtein(tok, c);
-            if d == 0 {
-                best = tok.clone();
-                break;
-            }
-            if d <= 2 && d < best_dist {
-                best_dist = d;
-                best = c.clone();
-            }
-        }
-        if &best != tok {
-            changed = true;
-        }
-        corrected.push(best);
+/// Lucene's NGramDistance with n = 2.
+pub(crate) fn ngram_distance(source: &[char], target: &[char]) -> f32 {
+    let n = 2usize;
+    let (sl, tl) = (source.len(), target.len());
+    if sl == 0 || tl == 0 {
+        return if sl == tl { 1.0 } else { 0.0 };
     }
-
-    let mut options: Vec<Value> = vec![];
-    if changed {
-        options.push(json!({"text": corrected.join(" "), "score": 0.9}));
+    if sl < n || tl < n {
+        let cost = source.iter().zip(target.iter()).filter(|(a, b)| a == b).count();
+        return cost as f32 / sl.max(tl) as f32;
     }
-    json!({"text": input, "offset": 0, "length": input.len(), "options": options})
+    let mut sa = vec!['\0'; sl + n - 1];
+    for (i, c) in sa.iter_mut().enumerate() {
+        if i >= n - 1 {
+            *c = source[i + 1 - n];
+        }
+    }
+    let mut p: Vec<f32> = (0..=sl).map(|i| i as f32).collect();
+    let mut d = vec![0f32; sl + 1];
+    let mut t_j = vec!['\0'; n];
+    for j in 1..=tl {
+        if j < n {
+            for ti in 0..n - j {
+                t_j[ti] = '\0';
+            }
+            for ti in n - j..n {
+                t_j[ti] = target[ti - (n - j)];
+            }
+        } else {
+            t_j.copy_from_slice(&target[j - n..j]);
+        }
+        d[0] = j as f32;
+        for i in 1..=sl {
+            let mut cost = 0;
+            let mut tn = n;
+            for ni in 0..n {
+                if sa[i - 1 + ni] != t_j[ni] {
+                    cost += 1;
+                } else if sa[i - 1 + ni] == '\0' {
+                    tn -= 1;
+                }
+            }
+            let ec = cost as f32 / tn as f32;
+            d[i] = (d[i - 1] + 1.0).min(p[i] + 1.0).min(p[i - 1] + ec);
+        }
+        std::mem::swap(&mut p, &mut d);
+    }
+    1.0 - p[sl] / tl.max(sl) as f32
 }

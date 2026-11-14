@@ -49,7 +49,14 @@ pub fn java_hash_order(keys: &[String], initial_capacity: usize) -> Vec<usize> {
 /// document, the way Jackson reports token locations.
 pub fn locate(raw: &str, path: &[&str]) -> Option<(usize, usize)> {
     let chars: Vec<char> = raw.chars().collect();
-    let mut sc = Scan { s: &chars, i: 0, line: 1, col: 1 };
+    let mut sc = Scan { s: &chars, i: 0, line: 1, col: 1, key_mode: false };
+    sc.value(path)
+}
+
+/// Like `locate`, but reports the position of the last member's name.
+pub fn locate_key(raw: &str, path: &[&str]) -> Option<(usize, usize)> {
+    let chars: Vec<char> = raw.chars().collect();
+    let mut sc = Scan { s: &chars, i: 0, line: 1, col: 1, key_mode: true };
     sc.value(path)
 }
 
@@ -58,6 +65,7 @@ struct Scan<'a> {
     i: usize,
     line: usize,
     col: usize,
+    key_mode: bool,
 }
 
 impl<'a> Scan<'a> {
@@ -119,6 +127,7 @@ impl<'a> Scan<'a> {
                         '"' => {}
                         _ => return None,
                     }
+                    let key_pos = (self.line, self.col);
                     let key = self.string();
                     self.ws();
                     if self.peek()? == ':' {
@@ -127,7 +136,7 @@ impl<'a> Scan<'a> {
                     self.ws();
                     if !path.is_empty() && key == path[0] {
                         if path.len() == 1 {
-                            return Some((self.line, self.col));
+                            return Some(if self.key_mode { key_pos } else { (self.line, self.col) });
                         }
                         if let Some(p) = self.value(&path[1..]) {
                             return Some(p);
@@ -139,6 +148,7 @@ impl<'a> Scan<'a> {
             }
             '[' => {
                 self.bump();
+                let mut n = 0usize;
                 loop {
                     self.ws();
                     match self.peek()? {
@@ -146,9 +156,21 @@ impl<'a> Scan<'a> {
                             self.bump();
                             return None;
                         }
-                        ',' => self.bump(),
+                        ',' => {
+                            self.bump();
+                            n += 1;
+                        }
                         _ => {
-                            self.value(&[]);
+                            if !path.is_empty() && path[0] == n.to_string() {
+                                if path.len() == 1 {
+                                    return Some((self.line, self.col));
+                                }
+                                if let Some(p) = self.value(&path[1..]) {
+                                    return Some(p);
+                                }
+                            } else {
+                                self.value(&[]);
+                            }
                         }
                     }
                 }
@@ -196,6 +218,11 @@ pub fn check_suggest_body(body: &Map<String, Value>, raw: &str) -> Option<ApiErr
                 return Some(ApiError::new("named_object_not_found_exception", &reason, 400));
             }
             found = true;
+            if k == "phrase" {
+                if let Some(e) = v.as_object().and_then(|m| crate::suggest_phrase::check_body(name, m, raw)) {
+                    return Some(e);
+                }
+            }
             if k == "completion" {
                 if let Some(size) = v.get("size") {
                     if to_f64(size).map(|s| s <= 0.0).unwrap_or(false) {
