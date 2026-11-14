@@ -8,9 +8,8 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 FROM alpine:3.22
 COPY --from=build /slopensearch /usr/local/bin/slopensearch
 # state lives in $SLOP_DATA_DIR (mount a volume there); SLOP_IN_MEMORY=true disables it
-RUN mkdir -p /var/lib/slopensearch/data && chown -R nobody:nobody /var/lib/slopensearch
-WORKDIR /var/lib/slopensearch
-ENV HOST=0.0.0.0 PORT=9200 SLOP_DATA_DIR=/var/lib/slopensearch/data
+RUN mkdir -p /data && chown nobody:nobody /data
+ENV HOST=0.0.0.0 PORT=9200 SLOP_DATA_DIR=/data
 EXPOSE 9200
 USER nobody
 ENTRYPOINT ["slopensearch"]

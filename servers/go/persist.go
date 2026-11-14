@@ -4,8 +4,9 @@ package main
 // SLOP_DATA_DIR (default ./data) and reloads them on start. SLOP_IN_MEMORY=true
 // keeps everything in memory only.
 //
-// Layout: <dir>/snapshot holds the full state as of generation G and
-// <dir>/journal-G holds every change made since. After each request that may
+// Layout (files are prefixed so the Rust server can share the directory):
+// <dir>/go-snapshot holds the full state as of generation G and
+// <dir>/go-journal-G holds every change made since. After each request that may
 // have changed state the server diffs the in-memory state against what it has
 // already written, appends the difference to the journal as one checksummed
 // frame and fsyncs it before the response leaves, so an acknowledged write
@@ -39,9 +40,10 @@ import (
 )
 
 const (
-	persistSnapshotName = "snapshot"
-	persistMagic        = "SLOPGO1\n"
-	persistMinCompact   = 64 << 20
+	persistSnapshotName  = "go-snapshot"
+	persistJournalPrefix = "go-journal-"
+	persistMagic         = "SLOPGO1\n"
+	persistMinCompact    = 64 << 20
 )
 
 // record kinds
@@ -143,7 +145,7 @@ func (s *Server) openPersistence(dir string) error {
 		return err
 	}
 	p := &persister{dir: dir, indices: map[string]*idxPersistState{}}
-	lf, err := os.OpenFile(filepath.Join(dir, "lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	lf, err := os.OpenFile(filepath.Join(dir, "go.lock"), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return err
 	}
@@ -677,7 +679,7 @@ func (p *persister) load(s *Server) error {
 }
 
 func (p *persister) journalPath(gen uint64) string {
-	return filepath.Join(p.dir, "journal-"+strconv.FormatUint(gen, 10))
+	return filepath.Join(p.dir, persistJournalPrefix+strconv.FormatUint(gen, 10))
 }
 
 // readFrames splits data into checksummed frames, stopping at the first
@@ -798,7 +800,7 @@ func (p *persister) compactLocked(s *Server) error {
 	// drop journals of older generations
 	if entries, err := os.ReadDir(p.dir); err == nil {
 		for _, e := range entries {
-			if strings.HasPrefix(e.Name(), "journal-") && e.Name() != filepath.Base(p.journalPath(next)) {
+			if strings.HasPrefix(e.Name(), persistJournalPrefix) && e.Name() != filepath.Base(p.journalPath(next)) {
 				os.Remove(filepath.Join(p.dir, e.Name()))
 			}
 		}

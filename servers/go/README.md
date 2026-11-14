@@ -68,8 +68,9 @@ SLOP_DATA_DIR=/var/tmp/slop PORT=9291 ./slopensearch     # durable, other direct
 SLOP_IN_MEMORY=true PORT=9291 ./slopensearch             # in memory only
 ```
 
-The startup line says which mode is active. The Docker image stores state in
-`/var/lib/slopensearch/data`; `compose.yaml` mounts the named volume `go-data` there, so
+The startup line says which mode is active. Files are prefixed (`go-snapshot`,
+`go-journal-<gen>`, `go.lock`), so the Rust server can use the same directory. The
+Docker image stores state in `/data`; `compose.yaml` mounts the named volume `go-data` there, so
 data survives `docker compose restart go` (remove it with `docker compose down -v`).
 
 Durable: indices (settings incl. dynamic updates, mappings, aliases, open/closed state,
@@ -80,13 +81,13 @@ PIT contexts, task results. Documents that were acknowledged but not refreshed a
 searchable after a restart (recovery refreshes).
 
 Every request that may change state is followed by a diff of the in-memory state against
-what was already stored; the difference is appended to `journal-<gen>` as one CRC-checked
+what was already stored; the difference is appended to `go-journal-<gen>` as one CRC-checked
 frame and made durable (`fdatasync`) before the response is sent, so acknowledged writes
 survive `kill -9`. Concurrent requests share one sync (group commit), and the journal
 file is zero-filled ahead of the frames so a sync needs no metadata update.
 On start (and when the journal outgrows the snapshot) the full state is written to
-`snapshot` (temp file, fsync, rename) and a new journal generation begins. One process
-per directory (`flock` on `<dir>/lock`). Code: `persist.go`.
+`go-snapshot` (temp file, fsync, rename) and a new journal generation begins. One process
+per directory (`flock` on `<dir>/go.lock`; a second instance refuses to start). Code: `persist.go`.
 
 Cost: one sync per state-changing request, about 2-3 ms on a consumer NVMe disk, so
 sequential admin-heavy test files run several times slower than in memory (e.g.
