@@ -1144,7 +1144,7 @@ pub fn apply_mapper_defaults(props: &mut Map<String, Value>) {
             Some("wildcard") => {
                 m.entry("doc_values".to_string()).or_insert(Value::Bool(true));
             }
-            Some("completion") => crate::suggest_completion::normalize_completion_def(m),
+            Some("completion") => crate::suggest::completion::normalize_completion_def(m),
             Some("join") => {
                 m.entry("eager_global_ordinals".to_string())
                     .or_insert(Value::Bool(true));
@@ -1243,7 +1243,7 @@ pub fn validate_mapping_full(mappings: &Value) -> Result<(), ApiError> {
         None => return Ok(()),
     };
     validate_props_meta(props)?;
-    crate::suggest_completion::validate_completion_props(props)?;
+    crate::suggest::completion::validate_completion_props(props)?;
     if let Err(reason) = validate_props_shared(props) {
         let mut e = ApiError::new(
             "mapper_parsing_exception",

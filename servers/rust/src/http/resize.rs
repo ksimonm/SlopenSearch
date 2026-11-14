@@ -171,7 +171,7 @@ pub fn handle_resize(
         .collect();
     if let Some(new_idx) = store.indices.get_mut(target) {
         for (id, mut doc) in docs {
-            let _ = crate::fields::compute_doc_values(new_idx, &id, &mut doc);
+            let _ = crate::mapping::fields::compute_doc_values(new_idx, &id, &mut doc);
             new_idx.docs.insert(id.clone(), Value::Object(doc));
             new_idx.order.push(id);
         }

@@ -1,6 +1,6 @@
 // knn_vector values at index time: validation, doc values and derived source.
 
-use crate::knn::f32r;
+use crate::mapping::knn::f32r;
 use serde_json::{json, Map, Value};
 
 /// Whether an index has `index.knn` enabled.

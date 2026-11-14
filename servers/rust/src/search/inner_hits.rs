@@ -301,7 +301,7 @@ pub(crate) fn build_query_inner_hits(
                         continue;
                     }
                     extra.insert("_index".to_string(), json!(idx.name));
-                    extra.insert("_score".to_string(), json!(crate::knn::f32r(sc)));
+                    extra.insert("_score".to_string(), json!(crate::mapping::knn::f32r(sc)));
                     let sub = build_query_inner_hits(
                         idx,
                         id,

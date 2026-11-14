@@ -3,7 +3,7 @@
 // Port of servers/go/eval_extra.go.
 
 use crate::search::eval::*;
-use crate::fields::{doc_values_for, value_scalar_string};
+use crate::mapping::fields::{doc_values_for, value_scalar_string};
 use crate::analysis::basic::{analyze, auto_fuzziness, levenshtein};
 use crate::errors::ApiError;
 use crate::jsonv::{field_value, to_f64, value_to_string};
@@ -2761,10 +2761,10 @@ impl<'a> QueryCtx<'a> {
                     )
                     .unwrap_or(1.0);
                 } else if ftype == "date" || ftype == "date_nanos" {
-                    let val = crate::fields::parse_date_any(&def, &value_to_string(&vals[0]).unwrap_or_default())
+                    let val = crate::mapping::fields::parse_date_any(&def, &value_to_string(&vals[0]).unwrap_or_default())
                         .unwrap_or(0) as f64;
                     let origin = if let Value::String(s) = &origin_raw {
-                        crate::fields::parse_date_any(&def, s).unwrap_or(0) as f64
+                        crate::mapping::fields::parse_date_any(&def, s).unwrap_or(0) as f64
                     } else {
                         origin_raw.as_f64().unwrap_or(0.0)
                     };

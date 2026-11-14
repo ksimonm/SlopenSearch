@@ -220,7 +220,7 @@ pub fn check_suggest_body(body: &Map<String, Value>, raw: &str) -> Option<ApiErr
             }
             found = true;
             if k == "phrase" {
-                if let Some(e) = v.as_object().and_then(|m| crate::suggest_phrase::check_body(name, m, raw)) {
+                if let Some(e) = v.as_object().and_then(|m| crate::suggest::phrase::check_body(name, m, raw)) {
                     return Some(e);
                 }
             }
@@ -688,7 +688,7 @@ fn parse_weight(w: &Value) -> Result<i64, ApiError> {
         )),
         None => Err(failed_to_parse(
             "illegal_argument_exception",
-            &format!("weight must be an integer, but was [{}]", crate::fields::preview_value(w)),
+            &format!("weight must be an integer, but was [{}]", crate::mapping::fields::preview_value(w)),
         )),
     }
 }

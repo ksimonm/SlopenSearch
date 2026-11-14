@@ -700,7 +700,7 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
         }
     }
     crate::model::visibility::before_write(idx, &doc_id);
-    if let Err(e) = crate::fields::compute_doc_values(idx, &doc_id, &mut body) {
+    if let Err(e) = crate::mapping::fields::compute_doc_values(idx, &doc_id, &mut body) {
         return err_response(e);
     }
     let field_limit = crate::settings::setting_int(&idx.settings, "mapping.total_fields.limit")
@@ -774,7 +774,7 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
     idx.versions.insert(doc_id.clone(), planned_version);
     idx.seq_nos.insert(doc_id.clone(), seq);
     idx.docs.insert(doc_id.clone(), Value::Object(body.clone()));
-    let raw_store = if !pipeline_applied && !req.body.is_empty() && !crate::knn_index::index_knn(idx) {
+    let raw_store = if !pipeline_applied && !req.body.is_empty() && !crate::mapping::knn_index::index_knn(idx) {
         req.body.clone()
     } else {
         serde_json::to_vec(&Value::Object(body.clone())).unwrap_or_default()
@@ -937,7 +937,7 @@ fn stored_fields_json(idx: &Index, doc: &Value, spec: &str) -> Map<String, Value
                 if matches!(ftype, "date" | "date_nanos") {
                     if let Some(s) = x.as_str() {
                         if let Some(d) = fdef.as_ref() {
-                            if let Some(ms) = crate::fields::parse_date_any(d, s) {
+                            if let Some(ms) = crate::mapping::fields::parse_date_any(d, s) {
                                 return crate::search::source::format_stored_value("date", &json!(ms));
                             }
                         }
@@ -1192,7 +1192,7 @@ pub fn handle_delete_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
     idx.docs.remove(id);
     idx.pending.remove(id);
     idx.routing.remove(id);
-    crate::fields::remove_doc_values(idx, id);
+    crate::mapping::fields::remove_doc_values(idx, id);
     let seq = idx.index_total;
     idx.versions.insert(id.to_string(), planned);
     idx.seq_nos.insert(id.to_string(), seq);
@@ -1635,7 +1635,7 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
         if result == "deleted" {
             store.indices.get_mut(&target).unwrap().docs.remove(id);
             store.indices.get_mut(&target).unwrap().raw_sources.remove(id);
-            crate::fields::remove_doc_values(store.indices.get_mut(&target).unwrap(), id);
+            crate::mapping::fields::remove_doc_values(store.indices.get_mut(&target).unwrap(), id);
             let idx = store.indices.get_mut(&target).unwrap();
             new_version = old_version + 1;
             new_seq = idx.index_total;
@@ -1663,7 +1663,7 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
             }
             let idx = store.indices.get_mut(&target).unwrap();
             crate::model::visibility::before_write(idx, id);
-            if let Err(e) = crate::fields::compute_doc_values(idx, id, &mut cur) {
+            if let Err(e) = crate::mapping::fields::compute_doc_values(idx, id, &mut cur) {
                 return err_response(e);
             }
             new_version = old_version + 1;
@@ -1708,7 +1708,7 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
             }
         }
         let idx = store.indices.get_mut(&target).unwrap();
-        if let Err(e) = crate::fields::compute_doc_values(idx, id, &mut base) {
+        if let Err(e) = crate::mapping::fields::compute_doc_values(idx, id, &mut base) {
             return err_response(e);
         }
         idx.order.push(id.to_string());
@@ -2645,7 +2645,7 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
             let existed = idx.docs.remove(&doc_id).is_some();
             idx.pending.remove(&doc_id);
             idx.routing.remove(&doc_id);
-            crate::fields::remove_doc_values(idx, &doc_id);
+            crate::mapping::fields::remove_doc_values(idx, &doc_id);
             let seq = idx.index_total;
             idx.versions.insert(doc_id.clone(), planned);
             idx.seq_nos.insert(doc_id.clone(), seq);
@@ -2800,7 +2800,7 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
             if deleted {
                 idx.docs.remove(&doc_id);
                 idx.raw_sources.remove(&doc_id);
-                crate::fields::remove_doc_values(idx, &doc_id);
+                crate::mapping::fields::remove_doc_values(idx, &doc_id);
                 seq = idx.index_total;
                 version = old_ver + 1;
                 idx.versions.insert(doc_id.clone(), version);
@@ -2809,7 +2809,7 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
                 idx.delete_total += 1;
             } else if changed {
                 crate::model::visibility::before_write(idx, &doc_id);
-                if let Err(e) = crate::fields::compute_doc_values(idx, &doc_id, &mut new_doc) {
+                if let Err(e) = crate::mapping::fields::compute_doc_values(idx, &doc_id, &mut new_doc) {
                     has_errors = true;
                     items.push(bulk_err_api("update", &idx.name, &doc_id, &e));
                     continue;
@@ -3065,7 +3065,7 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
         }
         let idx = store.indices.get_mut(&target).unwrap();
         crate::model::visibility::before_write(idx, &doc_id);
-        if let Err(e) = crate::fields::compute_doc_values(idx, &doc_id, &mut source) {
+        if let Err(e) = crate::mapping::fields::compute_doc_values(idx, &doc_id, &mut source) {
             has_errors = true;
             items.push(bulk_err_api(&op, &idx.name, &doc_id, &e));
             continue;
@@ -3626,7 +3626,7 @@ pub fn bm25_explanation(
         .map(|v| {
             let mut out = Vec::new();
             for val in crate::search::eval::array_values(v) {
-                if let Some(s) = crate::fields::value_scalar_string(&val) {
+                if let Some(s) = crate::mapping::fields::value_scalar_string(&val) {
                     out.extend(crate::analysis::basic::analyze(&s));
                 }
             }
@@ -3646,7 +3646,7 @@ pub fn bm25_explanation(
             .map(|v| {
                 let mut out = Vec::new();
                 for val in crate::search::eval::array_values(v) {
-                    if let Some(s) = crate::fields::value_scalar_string(&val) {
+                    if let Some(s) = crate::mapping::fields::value_scalar_string(&val) {
                         out.extend(crate::analysis::basic::analyze(&s));
                     }
                 }
@@ -3958,7 +3958,7 @@ pub fn handle_delete_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
     for id in &ids {
         let idx = store.indices.get_mut(&target).unwrap();
         if idx.docs.remove(id).is_some() {
-            crate::fields::remove_doc_values(idx, id);
+            crate::mapping::fields::remove_doc_values(idx, id);
             let old_ver = idx.versions.get(id).copied().unwrap_or(1);
             let seq = idx.index_total;
             idx.versions.insert(id.clone(), old_ver + 1);
@@ -4067,7 +4067,7 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
         if op == "delete" {
             let idx = store.indices.get_mut(&target).unwrap();
             idx.docs.remove(id);
-            crate::fields::remove_doc_values(idx, id);
+            crate::mapping::fields::remove_doc_values(idx, id);
             let seq = idx.index_total;
             idx.versions.insert(id.clone(), old_ver + 1);
             idx.seq_nos.insert(id.clone(), seq);
@@ -4092,7 +4092,7 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
                         let idx = store.indices.get_mut(&target).unwrap();
                         idx.docs.remove(id);
                         idx.raw_sources.remove(id);
-                        crate::fields::remove_doc_values(idx, id);
+                        crate::mapping::fields::remove_doc_values(idx, id);
                         deleted += 1;
                         continue;
                     }
@@ -4109,7 +4109,7 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
         }
         let idx = store.indices.get_mut(&target).unwrap();
         crate::model::visibility::before_write(idx, id);
-        if let Err(e) = crate::fields::compute_doc_values(idx, id, &mut newdoc) {
+        if let Err(e) = crate::mapping::fields::compute_doc_values(idx, id, &mut newdoc) {
             failure_status = e.status;
             failures.push(json!({"id": id, "index": target,
                 "cause": {"type": e.typ, "reason": e.reason}}));

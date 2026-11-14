@@ -275,7 +275,7 @@ pub(crate) fn sort_mapping_def(idx: &Index, field: &str) -> Option<Map<String, V
     if let Some(d) = mapping_field_def(idx, field) {
         return Some(d.clone());
     }
-    if crate::fields::flat_object_root(idx, field).is_some() {
+    if crate::mapping::fields::flat_object_root(idx, field).is_some() {
         let mut d = Map::new();
         d.insert("type".to_string(), json!("keyword"));
         return Some(d);
@@ -365,7 +365,7 @@ pub(crate) fn convert_sort_scalar(sp: &SortSpec, ftype: &str, v: &Value) -> Valu
             return json!(n);
         }
         if let Some(s) = v.as_str() {
-            if let Some(ns) = crate::fields::parse_date_nanos_any(&Map::new(), s) {
+            if let Some(ns) = crate::mapping::fields::parse_date_nanos_any(&Map::new(), s) {
                 return json!(ns);
             }
         }
@@ -380,7 +380,7 @@ pub(crate) fn convert_sort_scalar(sp: &SortSpec, ftype: &str, v: &Value) -> Valu
     }
     if ftype == "ip" {
         if let Some(s) = v.as_str() {
-            if let Ok(c) = crate::fields::canonical_ip(s) {
+            if let Ok(c) = crate::mapping::fields::canonical_ip(s) {
                 return Value::String(c);
             }
         }

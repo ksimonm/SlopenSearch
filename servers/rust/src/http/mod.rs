@@ -39,7 +39,7 @@ use serde_json::{json, Map, Value};
 use std::sync::{Arc, Mutex};
 use crate::errors::{self, ApiError};
 use crate::model::Store;
-use crate::{persist, resp};
+use crate::{resp, storage};
 
 use crate::jsonv::fix_exponent_literals;
 use errors::{json_response, no_handler, text_response};
@@ -302,7 +302,7 @@ async fn handle_plain(store: Shared, request: axum::extract::Request) -> axum::r
             } else {
                 dispatch(&mut guard, &req)
             };
-            persist::after_request(&guard, &req.method, &req.path);
+            storage::after_request(&guard, &req.method, &req.path);
             resp
         };
         (resp, req)

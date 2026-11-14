@@ -2,6 +2,10 @@
 
 use serde_json::{json, Map, Value};
 
+pub(crate) mod fields;
+pub(crate) mod knn;
+pub(crate) mod knn_index;
+
 use crate::dates::parse_date_string;
 
 pub fn valid_type(t: &str) -> bool {

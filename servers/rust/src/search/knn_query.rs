@@ -3,7 +3,7 @@
 
 use crate::errors::ApiError;
 use crate::search::eval::QueryCtx;
-use crate::knn::{f32r, field_def, raw, score, source_vector};
+use crate::mapping::knn::{f32r, field_def, raw, score, source_vector};
 use crate::jsonv::to_f64;
 use crate::model::Index;
 use serde_json::{json, Map, Value};
@@ -274,7 +274,7 @@ struct KnnField {
 }
 
 fn knn_field(def: &Value) -> KnnField {
-    let vf = crate::knn::vec_field(def).map(|v| v.space).unwrap_or_else(|| "l2".into());
+    let vf = crate::mapping::knn::vec_field(def).map(|v| v.space).unwrap_or_else(|| "l2".into());
     KnnField {
         space: vf,
         data_type: def.get("data_type").and_then(|d| d.as_str()).unwrap_or("float").to_lowercase(),
@@ -346,7 +346,7 @@ impl<'a> QueryCtx<'a> {
                 ))
             }
         };
-        if !crate::knn_index::index_knn(self.idx) {
+        if !crate::mapping::knn_index::index_knn(self.idx) {
             return Err(shard_err(
                 self.idx,
                 &format!("Field '{}' is not built for ANN search.", field),
@@ -594,7 +594,7 @@ pub fn knn_score_script(qc: &QueryCtx, script: &Value) -> Result<f64, ApiError> 
     }
     let q: Vec<f64> = match &params["query_value"] {
         Value::Array(a) => a.iter().filter_map(to_f64).collect(),
-        Value::String(s) => crate::knn_index::base64_floats(&field, s).unwrap_or_default(),
+        Value::String(s) => crate::mapping::knn_index::base64_floats(&field, s).unwrap_or_default(),
         _ => Vec::new(),
     };
     let dim = def.get("dimension").and_then(|d| d.as_i64()).unwrap_or(0);

@@ -1,3 +1,6 @@
+pub(crate) mod completion;
+pub(crate) mod phrase;
+
 use crate::errors::ApiError;
 use crate::analysis::basic::analyze;
 use crate::jsonv::{doc_strings, field_value, to_f64, value_to_string};
@@ -42,12 +45,12 @@ pub fn eval_suggest(
         } else if let Some(t) = spec.get("phrase").and_then(|v| v.as_object()) {
             out.insert(
                 name.clone(),
-                crate::suggest_phrase::phrase_suggest(spec, t, indices, global_text.as_deref())?,
+                crate::suggest::phrase::phrase_suggest(spec, t, indices, global_text.as_deref())?,
             );
         } else if let Some(t) = spec.get("completion").and_then(|v| v.as_object()) {
             out.insert(
                 name.clone(),
-                crate::suggest_completion::completion_suggest(spec, t, indices, global_text.as_deref(), search_body)?,
+                crate::suggest::completion::completion_suggest(spec, t, indices, global_text.as_deref(), search_body)?,
             );
         }
     }

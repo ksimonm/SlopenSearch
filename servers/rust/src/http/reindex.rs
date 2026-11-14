@@ -405,7 +405,7 @@ pub fn handle_reindex(store: &mut Store, req: &Req) -> Response {
             }
             idx.ensure_field_types();
             let mut doc_mut = doc.clone();
-            let res = crate::fields::compute_doc_values(idx, &id, &mut doc_mut);
+            let res = crate::mapping::fields::compute_doc_values(idx, &id, &mut doc_mut);
             if res.is_ok() {
                 doc = doc_mut;
             }

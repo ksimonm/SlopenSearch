@@ -244,7 +244,7 @@ pub(crate) fn format_stored(idx: &Index, field: &str, v: &Value) -> Value {
     if matches!(ftype, "date" | "date_nanos") {
         if let Some(s) = v.as_str() {
             if let Some(d) = def.as_ref() {
-                if let Some(ms) = crate::fields::parse_date_any(d, s) {
+                if let Some(ms) = crate::mapping::fields::parse_date_any(d, s) {
                     return format_doc_value("date", &json!(ms), "");
                 }
             }

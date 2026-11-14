@@ -1,5 +1,6 @@
+pub(crate) mod script;
+
 use crate::errors::{err_response, json_response, ApiError};
-use crate::ingest_script;
 use crate::resp::format_number;
 use crate::model::Store;
 use crate::http::Req;
@@ -509,7 +510,7 @@ fn validate_processor(p: &Value, _top: bool) -> Result<(), ApiError> {
             }
         }
         if let Some(src) = cfg_str(c, "source") {
-            if let Err(mut e) = ingest_script::compile_check(src) {
+            if let Err(mut e) = script::compile_check(src) {
                 if src.trim_end().ends_with('=') {
                     e.fields.insert(
                         "script_stack".to_string(),
@@ -531,7 +532,7 @@ fn validate_processor(p: &Value, _top: bool) -> Result<(), ApiError> {
             None
         };
         if let Some(src) = src {
-            if let Err(mut e) = ingest_script::compile_check(&src) {
+            if let Err(mut e) = script::compile_check(&src) {
                 e.fields.insert("processor_type".to_string(), json!(typ));
                 attach_tag(&mut e, c);
                 return Err(e);
@@ -938,7 +939,7 @@ fn run_list(
         let cond_value = match cfg.get("if") {
             Some(v) => {
                 let (csrc, cparams) = condition_parts(v);
-                match ingest_script::eval_condition(&csrc, &cparams, meta, source) {
+                match script::eval_condition(&csrc, &cparams, meta, source) {
                     Ok(b) => Some((csrc, b)),
                     Err(e) => {
                         if cfg_bool(&cfg, "ignore_failure", false) {
@@ -4051,7 +4052,7 @@ fn proc_script(
             }
         }
     }
-    match ingest_script::run_source(&src, &params, meta, source) {
+    match script::run_source(&src, &params, meta, source) {
         Ok(()) => Ok(false),
         Err(mut e) => {
             e.fields.insert("lang".to_string(), json!("painless"));

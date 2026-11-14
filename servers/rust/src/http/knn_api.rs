@@ -81,7 +81,7 @@ fn warmup(store: &mut Store, req: &Req, spec: &str) -> Response {
     let mut shards = 0;
     for n in &names {
         let idx = &store.indices[n];
-        if !crate::knn_index::index_knn(idx) {
+        if !crate::mapping::knn_index::index_knn(idx) {
             return err_response(ApiError::new(
                 "k_n_n_invalid_indices_exception",
                 "Warm up request rejected. One or more indices have 'index.knn' set to false.",

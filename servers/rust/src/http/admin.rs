@@ -36,7 +36,7 @@ fn validate_normalizers(
                             "normalizer [{}] not found for field [{}]",
                             norm, name
                         );
-                        return Err(crate::fields::mapper_err(
+                        return Err(crate::mapping::fields::mapper_err(
                             "mapper_parsing_exception",
                             &format!("Failed to parse mapping [_doc]: {}", reason),
                             "mapper_parsing_exception",
@@ -207,7 +207,7 @@ pub fn create_index_internal(
         crate::http::shared::expand_mapping_properties(props)?;
         crate::http::shared::apply_mapper_defaults(props);
         let knn = canonical.get("index.knn").and_then(|v| v.as_str()) == Some("true");
-        crate::knn::normalize_knn_props(props, knn)?;
+        crate::mapping::knn::normalize_knn_props(props, knn)?;
     }
     validate_mapping_full(&Value::Object(merged_mappings.clone()))?;
     if let Some(props) = merged_mappings.get("properties").and_then(|p| p.as_object()) {
@@ -694,7 +694,7 @@ pub fn put_mapping_api(store: &mut Store, req: &Req, spec: &str) -> Response {
         {
             crate::http::shared::apply_mapper_defaults(props);
             let knn = idx.settings.get("index.knn").and_then(|v| v.as_str()) == Some("true");
-            if let Err(e) = crate::knn::normalize_knn_props(props, knn) {
+            if let Err(e) = crate::mapping::knn::normalize_knn_props(props, knn) {
                 return err_response(e);
             }
         }

@@ -768,7 +768,7 @@ fn run(shared: Shared, id: u64, job: Job, q_param: Option<String>, max_docs: Opt
             {
                 let r = read_response(crate::http::dispatch(&mut st, &req));
                 // background batches change state outside a request: journal them too
-                crate::persist::after_request(&st, &req.method, &req.path);
+                crate::storage::after_request(&st, &req.method, &req.path);
                 r
             }
         };
@@ -864,7 +864,7 @@ fn run(shared: Shared, id: u64, job: Job, q_param: Option<String>, max_docs: Opt
                 {
                 let r = read_response(crate::http::dispatch(&mut st, &req));
                 // background batches change state outside a request: journal them too
-                crate::persist::after_request(&st, &req.method, &req.path);
+                crate::storage::after_request(&st, &req.method, &req.path);
                 r
             }
             };
@@ -1024,7 +1024,7 @@ fn run_sliced(shared: &Shared, id: u64, job: &Job) {
         {
                 let r = read_response(crate::http::dispatch(&mut st, &req));
                 // background batches change state outside a request: journal them too
-                crate::persist::after_request(&st, &req.method, &req.path);
+                crate::storage::after_request(&st, &req.method, &req.path);
                 r
             }
     };

@@ -5,7 +5,7 @@ use crate::dates::*;
 use crate::search::eval::{
     integer_of, mapping_field_def, QueryCtx,
 };
-use crate::fields::doc_values_for;
+use crate::mapping::fields::doc_values_for;
 use crate::errors::ApiError;
 use crate::jsonv::{field_value, to_f64, value_to_string};
 use crate::model::Index;
@@ -200,7 +200,7 @@ pub(crate) fn format_doc_value(ftype: &str, v: &Value, format: &str) -> Value {
                 },
             }
         }
-        "ip" => match v.as_str().and_then(|s| crate::fields::canonical_ip(s).ok()) {
+        "ip" => match v.as_str().and_then(|s| crate::mapping::fields::canonical_ip(s).ok()) {
             Some(c) => Value::String(c),
             None => v.clone(),
         },

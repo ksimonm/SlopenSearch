@@ -320,7 +320,7 @@ pub fn run_search(
                     idx_name: n.clone(),
                     id: id.clone(),
                     doc: doc.clone(),
-                    score: crate::knn::f32r(score),
+                    score: crate::mapping::knn::f32r(score),
                     pos,
                     named,
                 });
@@ -1024,7 +1024,7 @@ pub fn run_search(
                     let mut hl_out = Map::new();
                     for (slot, input) in inputs {
                         let input_obj = Value::Object(input.clone());
-                        let vals = crate::fields::doc_values_for(idx, "_percolate", &input)
+                        let vals = crate::mapping::fields::doc_values_for(idx, "_percolate", &input)
                             .map(|v| v.0)
                             .unwrap_or_default();
                         let vals_map: Map<String, Value> = vals
@@ -1310,7 +1310,7 @@ pub fn run_search(
         && !bodym.contains_key("aggs")
         && !bodym.contains_key("aggregations")
     {
-        crate::suggest_completion::clear_hits(&mut resp);
+        crate::suggest::completion::clear_hits(&mut resp);
     }
 
     Ok(Value::Object(resp))
@@ -2440,7 +2440,7 @@ pub fn handle_search(store: &mut Store, req: &Req, name: &str) -> Response {
                 }
             }
         }
-        if let Some(e) = crate::suggest_completion::check_suggest_body(&body, &eff) {
+        if let Some(e) = crate::suggest::completion::check_suggest_body(&body, &eff) {
             return err_response(e);
         }
         if let Some(sv) = body.get("suggest") {
@@ -2613,7 +2613,7 @@ pub fn handle_search(store: &mut Store, req: &Req, name: &str) -> Response {
     if let Some(defs) = body.get("derived") {
         for n in &names {
             if let Some(idx) = store.indices.get_mut(n) {
-                if let Err(e) = crate::fields::apply_request_derived(idx, defs) {
+                if let Err(e) = crate::mapping::fields::apply_request_derived(idx, defs) {
                     return err_response(e);
                 }
             }

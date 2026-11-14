@@ -1,5 +1,7 @@
+pub(crate) mod hdr;
+
 use crate::search::eval::QueryCtx;
-use crate::fields::canonical_ip;
+use crate::mapping::fields::canonical_ip;
 use crate::resp::format_number;
 use crate::dates::{apply_java_date_format, civil_from_days, format_epoch_ms};
 use crate::search::fetch::field_type;
@@ -147,7 +149,7 @@ fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<
         if ftype == "ip" {
             vals = vals
                 .into_iter()
-                .map(|v| match v.as_str().and_then(|s| crate::fields::canonical_ip(s).ok()) {
+                .map(|v| match v.as_str().and_then(|s| crate::mapping::fields::canonical_ip(s).ok()) {
                     Some(c) => Value::String(c),
                     None => v,
                 })
@@ -182,7 +184,7 @@ fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<
                     .into_iter()
                     .map(|v| match v {
                         Value::String(s) => {
-                            Value::String(crate::fields::apply_normalizer_idx(idx, norm, &s))
+                            Value::String(crate::mapping::fields::apply_normalizer_idx(idx, norm, &s))
                         }
                         other => other,
                     })
@@ -297,7 +299,7 @@ fn doc_matches(idx: &Index, doc: &Value, query: &Map<String, Value>) -> bool {
     };
     let mut m2 = m.clone();
     m2.remove("_id");
-    match crate::fields::doc_values_for(idx, "", &m2) {
+    match crate::mapping::fields::doc_values_for(idx, "", &m2) {
         Ok((vals, _)) => {
             let mut vm = Map::new();
             for (k, v) in vals {
@@ -2949,7 +2951,7 @@ fn doc_script_vm(idx: &Index, doc: &Value) -> Map<String, Value> {
         }
         None => return Map::new(),
     };
-    match crate::fields::doc_values_for(idx, "", &dm2) {
+    match crate::mapping::fields::doc_values_for(idx, "", &dm2) {
         Ok((vals, _)) => {
             let mut vm = Map::new();
             for (k, v) in vals {
@@ -3227,7 +3229,7 @@ fn percentiles_agg(
     let script_params = agg_script_params(t);
     let mut vals = collect_metric_values(idx, docs, &field, prefix, &script, &script_params, is_date)?;
     let hdr = if t.contains_key("hdr") {
-        let mut h = crate::hdr::HdrHistogram::new(hdr_digits(t));
+        let mut h = crate::aggs::hdr::HdrHistogram::new(hdr_digits(t));
         for v in &vals {
             h.record_value(*v);
         }
@@ -3326,7 +3328,7 @@ fn percentile_ranks_agg(
     let script_params = agg_script_params(t);
     let mut vals = collect_metric_values(idx, docs, &field, prefix, &script, &script_params, is_date)?;
     let hdr = if t.contains_key("hdr") {
-        let mut h = crate::hdr::HdrHistogram::new(hdr_digits(t));
+        let mut h = crate::aggs::hdr::HdrHistogram::new(hdr_digits(t));
         for v in &vals {
             h.record_value(*v);
         }

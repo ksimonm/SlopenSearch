@@ -99,7 +99,7 @@ fn execute(store: &mut Store, req: &Req) -> Response {
         tmp.mappings = idx.mappings.clone();
         tmp.field_types = idx.field_types.clone();
         let id = "_execute";
-        let values: Map<String, Value> = match crate::fields::doc_values_for(&tmp, id, &doc) {
+        let values: Map<String, Value> = match crate::mapping::fields::doc_values_for(&tmp, id, &doc) {
             Ok((vals, _)) => vals.into_iter().map(|(k, v)| (k, Value::Array(v))).collect(),
             Err(e) => return err_response(e),
         };

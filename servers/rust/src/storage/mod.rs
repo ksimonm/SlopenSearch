@@ -159,7 +159,7 @@ fn recover(dir: &Path) -> Result<Store, String> {
     }
     for idx in store.indices.values_mut() {
         idx.ensure_field_types();
-        crate::fields::recompute_all_doc_values(idx);
+        crate::mapping::fields::recompute_all_doc_values(idx);
     }
     crate::search::script_ctx::sync_stored(&store.scripts);
     crate::model::reseed_uuid(crate::model::now_millis() as u64 ^ ((std::process::id() as u64) << 32));

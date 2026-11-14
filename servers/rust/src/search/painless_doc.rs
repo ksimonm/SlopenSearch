@@ -267,5 +267,5 @@ fn vector_function(name: &str, a: &[PV], off: usize) -> R<PV> {
         "cosineSimilarity" => "cosinesimil",
         _ => "hamming",
     };
-    Ok(PV::Double(crate::knn::raw(space, &query, &doc) as f32 as f64))
+    Ok(PV::Double(crate::mapping::knn::raw(space, &query, &doc) as f32 as f64))
 }

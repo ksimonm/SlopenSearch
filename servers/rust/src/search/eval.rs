@@ -1,7 +1,7 @@
 // Query evaluation against indexed (doc values) field values.
 // Port of servers/go/eval.go.
 
-use crate::fields::{preview_value, value_scalar_string, IndexCtx};
+use crate::mapping::fields::{preview_value, value_scalar_string, IndexCtx};
 use crate::resp::format_number;
 use crate::analysis::basic::{analyze, analyze_with, asciifold, auto_fuzziness, english_stem, levenshtein, simple_lower};
 use crate::errors::ApiError;
@@ -445,7 +445,7 @@ pub fn validate_query(idx: &Index, q: &Map<String, Value>) -> Result<(), ApiErro
                         "ip" => {
                             if let Some(s) = value_scalar_string(&val) {
                                 let bad = if s.contains('/') {
-                                    crate::fields::canonical_ip(&s).is_err()
+                                    crate::mapping::fields::canonical_ip(&s).is_err()
                                 } else {
                                     s.parse::<std::net::IpAddr>().is_err()
                                 };
@@ -579,7 +579,7 @@ fn typed_value_error(ftype: &str, v: &Value) -> ApiError {
         ),
         "ip" | "ip_range" => {
             let reason = if text.contains('/') {
-                match crate::fields::canonical_ip(&text) {
+                match crate::mapping::fields::canonical_ip(&text) {
                     Err(ones) if ones > 0 => format!(
                         "failed to create query: Illegal prefix length [{}] in [{}]. Must be 0-32 for IPv4 ranges, 0-128 for IPv6 ranges",
                         ones, text
@@ -756,7 +756,7 @@ pub fn ip_contains(host: &str, needle: &str) -> bool {
 }
 
 pub fn canonical_ip(s: &str) -> Result<String, i32> {
-    crate::fields::canonical_ip(s)
+    crate::mapping::fields::canonical_ip(s)
 }
 
 fn compare_ip_literal(a: &str, b: &str) -> i32 {
@@ -944,7 +944,7 @@ fn parse_date_math(def: &Map<String, Value>, raw: &str, tz: &str, round_up: bool
             .ok()?
             .as_millis() as i64
     } else {
-        crate::fields::parse_date_any(def, base)?
+        crate::mapping::fields::parse_date_any(def, base)?
     };
     if let Some(math) = math {
         let mut rest = math;
@@ -1278,7 +1278,7 @@ impl<'a> QueryCtx<'a> {
                 boost *= b;
             }
         }
-        val = crate::fields::normalize_query_value(self.idx, field, &val);
+        val = crate::mapping::fields::normalize_query_value(self.idx, field, &val);
         if let Some((base, name)) = field.split_once('#') {
             let bdef = mapping_field_def(self.idx, base).cloned().unwrap_or_default();
             if bdef.get("type").and_then(|t| t.as_str()) == Some("join") {
@@ -1430,13 +1430,13 @@ impl<'a> QueryCtx<'a> {
                     None => return Err(ApiError::parsing("failed to parse ip")),
                 };
                 let bad = if term.contains('/') {
-                    crate::fields::canonical_ip(&term).is_err()
+                    crate::mapping::fields::canonical_ip(&term).is_err()
                 } else {
                     term.parse::<std::net::IpAddr>().is_err()
                 };
                 if bad {
                     let reason = if term.contains('/') {
-                        match crate::fields::canonical_ip(&term) {
+                        match crate::mapping::fields::canonical_ip(&term) {
                             Err(ones) if ones > 0 => format!(
                                 "failed to create query: Illegal prefix length [{}] in [{}]. Must be 0-32 for IPv4 ranges, 0-128 for IPv6 ranges",
                                 ones, term
@@ -1634,7 +1634,7 @@ impl<'a> QueryCtx<'a> {
                     }
                 }
                 "keyword" | "constant_keyword" | "wildcard" | "flat_object" | "binary" | "" => {
-                    let norm_item = crate::fields::normalize_query_value(self.idx, field, item);
+                    let norm_item = crate::mapping::fields::normalize_query_value(self.idx, field, item);
                     let term = value_scalar_string(&norm_item).unwrap_or_default();
                     for v in &vals {
                         if value_scalar_string(v).unwrap_or_default() == term {
@@ -1790,7 +1790,7 @@ impl<'a> QueryCtx<'a> {
                         ctx.parseFloatValue(field, base, &def, v)
                     }
                 }
-                "keyword" => Ok(crate::fields::normalize_query_value(self.idx, field, v)),
+                "keyword" => Ok(crate::mapping::fields::normalize_query_value(self.idx, field, v)),
                 _ => Ok(v.clone()),
             };
             res.map_err(|_| typed_value_error(&ftype, v))
@@ -2031,7 +2031,7 @@ impl<'a> QueryCtx<'a> {
                 case_insensitive = ci;
             }
         }
-        let nval = crate::fields::normalize_query_value(self.idx, field, &val);
+        let nval = crate::mapping::fields::normalize_query_value(self.idx, field, &val);
         let prefix = match value_scalar_string(&nval) {
             Some(p) => {
                 if case_insensitive {
@@ -2110,7 +2110,7 @@ impl<'a> QueryCtx<'a> {
                 case_insensitive = ci;
             }
         }
-        let nval = crate::fields::normalize_query_value(self.idx, field, &val);
+        let nval = crate::mapping::fields::normalize_query_value(self.idx, field, &val);
         let pattern = match value_scalar_string(&nval) {
             Some(p) => {
                 if case_insensitive {
@@ -2679,9 +2679,9 @@ impl<'a> QueryCtx<'a> {
             || ftype == "constant_keyword"
             || ftype == "wildcard"
             || ftype == "flat_object"
-            || (ftype.is_empty() && crate::fields::flat_object_root(self.idx, field).is_some())
+            || (ftype.is_empty() && crate::mapping::fields::flat_object_root(self.idx, field).is_some())
         {
-            let text = value_scalar_string(&crate::fields::normalize_query_value(
+            let text = value_scalar_string(&crate::mapping::fields::normalize_query_value(
                 self.idx,
                 field,
                 &Value::String(text.clone()),
@@ -2702,7 +2702,7 @@ impl<'a> QueryCtx<'a> {
                 let required = if operator == "and" { tokens.len() } else { 1 };
                 let mut matched = 0usize;
                 for tok in &tokens {
-                    let norm = value_scalar_string(&crate::fields::normalize_query_value(
+                    let norm = value_scalar_string(&crate::mapping::fields::normalize_query_value(
                         self.idx,
                         field,
                         &Value::String(tok.clone()),

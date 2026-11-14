@@ -73,7 +73,7 @@ impl IndexCtx {
             dynamic_date_formats: Vec::new(),
             analyzers: HashSet::new(),
             copy_targets: HashSet::new(),
-            knn_index: crate::knn_index::index_knn(idx),
+            knn_index: crate::mapping::knn_index::index_knn(idx),
         };
         for (k, v) in &idx.settings {
             if let Some(rest) = k.strip_prefix("index.analysis.normalizer.") {
@@ -1311,7 +1311,7 @@ impl IndexCtx {
             return self.indexObject(path, def, raw);
         }
         if typ == "knn_vector" {
-            return match crate::knn_index::parse_doc_vector(path, def, raw, self.knn_index) {
+            return match crate::mapping::knn_index::parse_doc_vector(path, def, raw, self.knn_index) {
                 Ok(vals) => {
                     if !vals.is_empty() {
                         self.values.entry(path.to_string()).or_default().extend(vals);
@@ -1672,7 +1672,7 @@ impl IndexCtx {
             | "ip_range" => self.parseRangeValue(path, typ, def, v),
             "geo_point" => self.parseGeoPoint(path, def, v),
             "geo_shape" => self.parseGeoShape(path, v),
-            "completion" => crate::suggest_completion::parse_completion(path, def, v, &self.doc),
+            "completion" => crate::suggest::completion::parse_completion(path, def, v, &self.doc),
             "rank_feature" => self.parseRankFeature(path, v),
             "rank_features" => self.parseRankFeatures(path, v),
             "constant_keyword_default" => Ok(Value::Null),
@@ -3380,7 +3380,7 @@ pub fn compute_doc_values(
     c.doc = doc.clone();
     c.buildDocValues(idx)?;
     if c.knn_index {
-        crate::knn_index::derive_source(&idx.mappings, doc);
+        crate::mapping::knn_index::derive_source(&idx.mappings, doc);
     }
     add_derived_values(&derived_defs, &Value::Object(c.doc.clone()), &mut c.values);
     let values: Map<String, Value> = c

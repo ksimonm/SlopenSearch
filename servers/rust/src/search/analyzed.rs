@@ -121,7 +121,7 @@ impl<'a> QueryCtx<'a> {
     fn doc_value_positions(&self, field: &str) -> Vec<Vec<(String, usize)>> {
         self.must_values(field)
             .iter()
-            .map(|v| self.doc_positions(field, &crate::fields::value_scalar_string(v).unwrap_or_default()))
+            .map(|v| self.doc_positions(field, &crate::mapping::fields::value_scalar_string(v).unwrap_or_default()))
             .collect()
     }
 

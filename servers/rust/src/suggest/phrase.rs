@@ -664,7 +664,7 @@ pub fn check_body(name: &str, body: &Map<String, Value>, raw: &str) -> Option<Ap
                 } else {
                     vec!["suggest", name, "phrase", "direct_generator", k]
                 };
-                let pos = crate::suggest_completion::locate_key(raw, &path)
+                let pos = crate::suggest::completion::locate_key(raw, &path)
                     .map(|(l, c)| format!("[{}:{}] ", l, c))
                     .unwrap_or_default();
                 let reason = format!("{}[direct_generator] unknown field [{}]", pos, k);
@@ -891,7 +891,7 @@ pub fn phrase_suggest(
             if let Some(h) = hl {
                 o.insert("highlighted".into(), json!(h));
             }
-            o.insert("score".into(), crate::suggest_completion::f32_value(score));
+            o.insert("score".into(), crate::suggest::completion::f32_value(score));
             if let Some(m) = cm {
                 o.insert("collate_match".into(), json!(m));
             }
