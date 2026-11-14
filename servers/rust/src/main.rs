@@ -4,6 +4,7 @@ mod aggs;
 mod alias;
 mod cat;
 mod knn;
+mod knn_index;
 mod cluster;
 mod datastreams;
 mod docs;

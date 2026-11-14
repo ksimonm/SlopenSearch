@@ -23,6 +23,7 @@ pub struct IndexCtx {
     dynamic_date_formats: Vec<String>,
     analyzers: HashSet<String>,
     copy_targets: HashSet<String>,
+    knn_index: bool,
 }
 
 pub fn mapper_err(typ: &str, reason: &str, caused_type: &str, caused_reason: &str) -> ApiError {
@@ -68,6 +69,7 @@ impl IndexCtx {
             dynamic_date_formats: Vec::new(),
             analyzers: HashSet::new(),
             copy_targets: HashSet::new(),
+            knn_index: crate::knn_index::index_knn(idx),
         };
         for (k, v) in &idx.settings {
             if let Some(rest) = k.strip_prefix("index.analysis.normalizer.") {
@@ -150,6 +152,7 @@ impl IndexCtx {
             dynamic_date_formats: Vec::new(),
             analyzers: HashSet::new(),
             copy_targets: HashSet::new(),
+            knn_index: false,
         }
     }
 
@@ -1302,6 +1305,25 @@ impl IndexCtx {
             .unwrap_or(false);
         if typ == "object" || typ == "nested" {
             return self.indexObject(path, def, raw);
+        }
+        if typ == "knn_vector" {
+            return match crate::knn_index::parse_doc_vector(path, def, raw, self.knn_index) {
+                Ok(vals) => {
+                    if !vals.is_empty() {
+                        self.values.entry(path.to_string()).or_default().extend(vals);
+                    }
+                    Ok(())
+                }
+                Err(ve) => {
+                    let mut e = self.field_value_error(path, &typ, &Value::String(ve.preview), &ve.typ, &ve.reason);
+                    if ve.nested {
+                        if let Some(c) = e.caused_by.as_mut() {
+                            c.caused_by = Some(Box::new(ApiError::new(&ve.typ, &ve.reason, 400)));
+                        }
+                    }
+                    Err(e)
+                }
+            };
         }
         if typ == "alias" {
             let reason = format!("Cannot write to a field alias [{}].", path);
@@ -3558,6 +3580,9 @@ pub fn compute_doc_values(
     let mut c = IndexCtx::new(idx, id);
     c.doc = doc.clone();
     c.buildDocValues(idx)?;
+    if c.knn_index {
+        crate::knn_index::derive_source(&idx.mappings, doc);
+    }
     add_derived_values(&derived_defs, &Value::Object(c.doc.clone()), &mut c.values);
     let values: Map<String, Value> = c
         .values
