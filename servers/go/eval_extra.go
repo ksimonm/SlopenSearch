@@ -542,11 +542,11 @@ func (c *queryCtx) evalNested(body any) (bool, float64, *apiError) {
 	case "min":
 		return true, worst, nil
 	case "sum":
-		return true, total, nil
+		return true, float64(float32(total)), nil
 	case "avg":
-		return true, total / float64(count), nil
+		return true, float64(float32(total / float64(count))), nil
 	}
-	return true, total / float64(count), nil
+	return true, float64(float32(total / float64(count))), nil
 }
 
 func nestedObjectsForCtx(c *queryCtx, path string) ([]map[string]any, bool) {
