@@ -2887,7 +2887,7 @@ func jsonClauseEndPos(body []byte, key string) (int, int) {
 
 func writeQueryShardError(w http.ResponseWriter, idx *Index, cause *apiError) {
 	if cause.Shard != nil {
-		writeJSON(w, cause.Shard.status, cause.Shard.body())
+		writeJSON(w, cause.Shard.StatusCode(), cause.Shard.ResponseBody())
 		return
 	}
 	if cause.SearchFailure != "" {

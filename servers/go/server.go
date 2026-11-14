@@ -56,7 +56,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, e *apiError) {
 	if e.Shard != nil {
-		writeJSON(w, e.Shard.status, e.Shard.body())
+		writeJSON(w, e.Shard.StatusCode(), e.Shard.ResponseBody())
 		return
 	}
 	rcType, rcReason := e.Type, e.Reason

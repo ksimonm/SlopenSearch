@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/lucene"
 )
 
@@ -638,10 +639,7 @@ func fingerprintAnalyzedToken(text string) []analyzedToken {
 	return r.toks
 }
 
-func analyzeRequestError(etype, reason string) *apiError {
-	return &apiError{Type: etype, Status: 400, Reason: reason,
-		RootCause: &apiError{Type: etype, Status: 400, Reason: reason}}
-}
+func analyzeRequestError(etype, reason string) *apiError { return apierr.Request(etype, reason) }
 
 func analyzeStringValues(raw any) ([]string, bool) {
 	switch t := raw.(type) {

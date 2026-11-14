@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"slopensearch/internal/apierr"
 )
 
 var validTypes = map[string]bool{
@@ -174,35 +176,14 @@ func findSetting(settings map[string]any, key string) (any, bool) {
 	return nil, false
 }
 
-type apiError struct {
-	Type          string
-	Reason        string
-	Status        int
-	Extra         any
-	Fields        map[string]any
-	CausedBy      *apiError
-	TopType       string
-	TopReason     string
-	RootCause     *apiError
-	ForceTop      bool
-	Phase         string
-	Clause        string
-	ClauseEnd     bool
-	NoCausedBy    bool
-	SearchFailure string
-	Shard         *shardFailure // pre-rendered search shard failure
-	Suppressed    []*apiError
-}
-
-func (e *apiError) Error() string { return e.Type + ": " + e.Reason }
+// apiError is the API error type (internal/apierr).
+type apiError = apierr.Error
 
 func errNotFound(index string) *apiError {
 	return &apiError{Type: "index_not_found_exception", Reason: "no such index [" + index + "]", Status: 404}
 }
 
-func errBad(reason string) *apiError {
-	return &apiError{Type: "illegal_argument_exception", Reason: reason, Status: 400}
-}
+func errBad(reason string) *apiError { return apierr.BadRequest(reason) }
 
 func errParsing(reason string) *apiError {
 	return &apiError{Type: "parsing_exception", Reason: reason, Status: 400}

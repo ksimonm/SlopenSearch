@@ -135,6 +135,10 @@ type shardFailure struct {
 	phase  string
 }
 
+// StatusCode and ResponseBody implement apierr.Response.
+func (f *shardFailure) StatusCode() int   { return f.status }
+func (f *shardFailure) ResponseBody() any { return f.body() }
+
 func (f *shardFailure) body() orderedJSON {
 	if f.raw != nil {
 		return f.raw
