@@ -2081,6 +2081,7 @@ func errorObject(e *apiError) map[string]any {
 // it never makes an existing document disappear.
 func markPending(idx *Index, id string, doc map[string]any, existed bool) {
 	if _, pending := idx.Pending[id]; existed && !pending {
+		noteStaleOverwrite(idx, id)
 		return
 	}
 	idx.Pending[id] = doc

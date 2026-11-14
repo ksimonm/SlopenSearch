@@ -59,6 +59,8 @@ type Index struct {
 	NextSeq        int64
 
 	dvGen uint64 // bumped whenever DocValues changes; validates derived caches
+
+	stale map[string]staleMark // unrefreshed overwrites of searchable docs
 }
 
 const versionCreated = "137307827"
