@@ -28,6 +28,7 @@ mod meta;
 mod net_io;
 mod compression;
 mod nodes;
+mod nonstd_json;
 mod painless;
 mod persist;
 mod painless_exec;
