@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 
+	"slopensearch/internal/lucene"
 	"slopensearch/internal/snowball"
 )
 
@@ -21,7 +22,7 @@ func newLangWordSet(words []string, ignoreCase bool) langWordSet {
 	s := langWordSet{words: make(map[string]bool, len(words)), ignoreCase: ignoreCase}
 	for _, w := range words {
 		if ignoreCase {
-			w = luceneLower(w)
+			w = lucene.Lower(w)
 		}
 		s.words[w] = true
 	}
@@ -33,7 +34,7 @@ func (s langWordSet) contains(term string) bool {
 		return false
 	}
 	if s.ignoreCase {
-		term = luceneLower(term)
+		term = lucene.Lower(term)
 	}
 	return s.words[term]
 }
@@ -188,60 +189,60 @@ func languageAnalyzerTokens(name, text string, params map[string]any) ([]analyze
 	std := func() []analyzedToken { return tokenizePositionsCase(text, false, false, 255) }
 	// The common shape: standard, lowercase, stop, keyword marker, stemmer.
 	simple := func(stem func(string) string) []analyzedToken {
-		t := langMap(std(), luceneLower)
+		t := langMap(std(), lucene.Lower)
 		t = langStop(t, stop)
 		t = langKeywords(t, excl)
 		return langStem(t, stem)
 	}
 	switch name {
 	case "arabic":
-		t := langMap(std(), luceneLower)
-		t = langMap(t, decimalDigitLucene)
+		t := langMap(std(), lucene.Lower)
+		t = langMap(t, lucene.DecimalDigit)
 		t = langStop(t, stop)
-		t = langMap(t, arabicNormalizeLucene)
+		t = langMap(t, lucene.ArabicNormalize)
 		t = langKeywords(t, excl)
-		return langStem(t, arabicStemLucene), true
+		return langStem(t, lucene.ArabicStem), true
 	case "armenian", "basque", "danish", "estonian", "finnish", "hungarian", "lithuanian",
 		"norwegian", "russian", "swedish", "catalan":
 		if name == "catalan" {
 			t := langMap(std(), func(s string) string { return luceneElision(s, catalanArticles) })
-			t = langMap(t, luceneLower)
+			t = langMap(t, lucene.Lower)
 			t = langStop(t, stop)
 			t = langKeywords(t, excl)
 			return langStem(t, snowballStem("Catalan")), true
 		}
 		return simple(snowballStem(capitalizeFirst(name))), true
 	case "bengali", "hindi":
-		t := langMap(std(), luceneLower)
-		t = langMap(t, decimalDigitLucene)
+		t := langMap(std(), lucene.Lower)
+		t = langMap(t, lucene.DecimalDigit)
 		t = langKeywords(t, excl)
-		t = langMap(t, indicNormalizeLucene)
+		t = langMap(t, lucene.IndicNormalize)
 		if name == "bengali" {
-			t = langMap(t, bengaliNormalizeLucene)
+			t = langMap(t, lucene.BengaliNormalize)
 			t = langStop(t, stop)
-			return langStem(t, bengaliStemLucene), true
+			return langStem(t, lucene.BengaliStem), true
 		}
-		t = langMap(t, hindiNormalizeLucene)
+		t = langMap(t, lucene.HindiNormalize)
 		t = langStop(t, stop)
-		return langStem(t, hindiStemLucene), true
+		return langStem(t, lucene.HindiStem), true
 	case "brazilian":
-		return simple(brazilianStem), true
+		return simple(lucene.BrazilianStem), true
 	case "bulgarian":
-		return simple(bulgarianStemLucene), true
+		return simple(lucene.BulgarianStem), true
 	case "czech":
-		return simple(czechStemLucene), true
+		return simple(lucene.CzechStem), true
 	case "galician":
-		return simple(galicianRSLPStem), true
+		return simple(lucene.GalicianRSLPStem), true
 	case "indonesian":
-		return simple(func(s string) string { return indonesianStemLucene(s, true) }), true
+		return simple(func(s string) string { return lucene.IndonesianStem(s, true) }), true
 	case "latvian":
-		return simple(latvianStemLucene), true
+		return simple(lucene.LatvianStem), true
 	case "portuguese":
-		return simple(portugueseLightStem), true
+		return simple(lucene.PortugueseLightStem), true
 	case "spanish":
-		return simple(spanishLightStem), true
+		return simple(lucene.SpanishLightStem), true
 	case "dutch":
-		t := langMap(std(), luceneLower)
+		t := langMap(std(), lucene.Lower)
 		t = langStop(t, stop)
 		t = langKeywords(t, excl)
 		for i := range t {
@@ -255,79 +256,79 @@ func languageAnalyzerTokens(name, text string, params map[string]any) ([]analyze
 		}
 		return langStem(t, snowballStem("Dutch")), true
 	case "english":
-		t := langMap(std(), englishPossessive)
-		t = langMap(t, luceneLower)
+		t := langMap(std(), lucene.EnglishPossessive)
+		t = langMap(t, lucene.Lower)
 		t = langStop(t, stop)
 		t = langKeywords(t, excl)
-		return langStem(t, porterStemLucene), true
+		return langStem(t, lucene.PorterStem), true
 	case "french", "italian":
-		articles, stem := frenchArticles, frenchLightStem
+		articles, stem := frenchArticles, lucene.FrenchLightStem
 		if name == "italian" {
-			articles, stem = italianArticles, italianLightStem
+			articles, stem = italianArticles, lucene.ItalianLightStem
 		}
 		t := langMap(std(), func(s string) string { return luceneElision(s, articles) })
-		t = langMap(t, luceneLower)
+		t = langMap(t, lucene.Lower)
 		t = langStop(t, stop)
 		t = langKeywords(t, excl)
 		return langStem(t, stem), true
 	case "german":
-		t := langMap(std(), luceneLower)
+		t := langMap(std(), lucene.Lower)
 		t = langStop(t, stop)
 		t = langKeywords(t, excl)
-		t = langMap(t, germanNormalizeLucene)
-		return langStem(t, germanLightStem), true
+		t = langMap(t, lucene.GermanNormalize)
+		return langStem(t, lucene.GermanLightStem), true
 	case "greek":
-		t := langMap(std(), greekLowerLucene)
+		t := langMap(std(), lucene.GreekLower)
 		t = langStop(t, stop)
-		return langStem(t, greekStemLucene), true
+		return langStem(t, lucene.GreekStem), true
 	case "irish":
 		t := langStop(std(), irishHyphenations)
 		t = langMap(t, func(s string) string { return luceneElision(s, irishArticles) })
-		t = langMap(t, irishLowerLucene)
+		t = langMap(t, lucene.IrishLower)
 		t = langStop(t, stop)
 		t = langKeywords(t, excl)
 		return langStem(t, snowballStem("Irish")), true
 	case "persian":
-		t := tokenizePositionsCase(persianCharFilter(text), false, false, 255)
-		t = langMap(t, luceneLower)
-		t = langMap(t, decimalDigitLucene)
-		t = langMap(t, arabicNormalizeLucene)
-		t = langMap(t, persianNormalizeLucene)
+		t := tokenizePositionsCase(lucene.PersianCharFilter(text), false, false, 255)
+		t = langMap(t, lucene.Lower)
+		t = langMap(t, lucene.DecimalDigit)
+		t = langMap(t, lucene.ArabicNormalize)
+		t = langMap(t, lucene.PersianNormalize)
 		t = langStop(t, stop)
 		t = langKeywords(t, excl)
-		return langStem(t, persianStemLucene), true
+		return langStem(t, lucene.PersianStem), true
 	case "romanian":
-		t := langMap(std(), luceneLower)
+		t := langMap(std(), lucene.Lower)
 		t = langStop(t, stop)
-		t = langMap(t, romanianNormalize)
+		t = langMap(t, lucene.RomanianNormalize)
 		t = langKeywords(t, excl)
 		return langStem(t, snowballStem("Romanian")), true
 	case "sorani":
-		t := langMap(std(), soraniNormalizeLucene)
-		t = langMap(t, luceneLower)
-		t = langMap(t, decimalDigitLucene)
+		t := langMap(std(), lucene.SoraniNormalize)
+		t = langMap(t, lucene.Lower)
+		t = langMap(t, lucene.DecimalDigit)
 		t = langStop(t, stop)
 		t = langKeywords(t, excl)
-		return langStem(t, soraniStemLucene), true
+		return langStem(t, lucene.SoraniStem), true
 	case "turkish":
-		t := langMap(std(), apostropheLucene)
-		t = langMap(t, turkishLowerLucene)
+		t := langMap(std(), lucene.Apostrophe)
+		t = langMap(t, lucene.TurkishLower)
 		t = langStop(t, stop)
 		t = langKeywords(t, excl)
 		return langStem(t, snowballStem("Turkish")), true
 	case "cjk":
-		t := langMap(std(), cjkWidthLucene)
-		t = langMap(t, luceneLower)
+		t := langMap(std(), lucene.CJKWidth)
+		t = langMap(t, lucene.Lower)
 		t = cjkBigramLucene(t, cjkBigramAll, false)
 		return langStop(t, stop), true
 	case "thai":
 		t := thaiAnalyzedTokens(text)
-		t = langMap(t, luceneLower)
-		t = langMap(t, decimalDigitLucene)
+		t = langMap(t, lucene.Lower)
+		t = langMap(t, lucene.DecimalDigit)
 		return langStop(t, stop), true
 	case "chinese":
 		// OpenSearch maps "chinese" to a StandardAnalyzer with English stopwords.
-		t := langMap(std(), luceneLower)
+		t := langMap(std(), lucene.Lower)
 		return langStop(t, stop), true
 	}
 	return nil, false
@@ -346,7 +347,7 @@ func languageAnalyzerPositions(name, text string, toks []analyzedToken) int {
 		}
 		return n
 	case "persian":
-		text = persianCharFilter(text)
+		text = lucene.PersianCharFilter(text)
 	}
 	if m := len(tokenizePositionsCase(text, false, false, 255)); m > n {
 		n = m
@@ -357,16 +358,16 @@ func languageAnalyzerPositions(name, text string, toks []analyzedToken) int {
 // standardTokenizerTokens runs Lucene's StandardTokenizer (uax_standard.go),
 // optionally lowercasing like the standard analyzer's LowerCaseFilter.
 func standardTokenizerTokens(text string, lower bool, maxLen int) []analyzedToken {
-	ut := uaxStandardTokens(text, maxLen)
+	ut := lucene.StandardTokens(text, maxLen)
 	out := make([]analyzedToken, len(ut))
 	pos := -1
 	for i, t := range ut {
-		pos += t.posInc
-		term := t.term
+		pos += t.PosInc
+		term := t.Term
 		if lower {
-			term = luceneLower(term)
+			term = lucene.Lower(term)
 		}
-		out[i] = analyzedToken{term: term, start: t.start, end: t.end, pos: pos, typ: t.typ}
+		out[i] = analyzedToken{term: term, start: t.Start, end: t.End, pos: pos, typ: t.Type}
 	}
 	return out
 }

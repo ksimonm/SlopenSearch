@@ -1,6 +1,10 @@
 package main
 
-import "slopensearch/internal/snowball"
+import (
+	"slopensearch/internal/snowball"
+
+	"slopensearch/internal/lucene"
+)
 
 // Language-specific token filters (stemmers, normalizers, language
 // lowercasing, elision), mapped the way OpenSearch's analysis-common module
@@ -9,37 +13,37 @@ import "slopensearch/internal/snowball"
 // langTermFilters are filters that rewrite every token's term and ignore the
 // keyword attribute.
 var langTermFilters = map[string]func(string) string{
-	"uppercase":                  luceneUpper,
-	"german_normalization":       germanNormalizeLucene,
-	"scandinavian_folding":       scandinavianFoldLucene,
-	"scandinavian_normalization": scandinavianNormalizeLucene,
-	"arabic_normalization":       arabicNormalizeLucene,
-	"persian_normalization":      persianNormalizeLucene,
-	"sorani_normalization":       soraniNormalizeLucene,
-	"hindi_normalization":        hindiNormalizeLucene,
-	"indic_normalization":        indicNormalizeLucene,
-	"bengali_normalization":      bengaliNormalizeLucene,
-	"serbian_normalization":      serbianNormalizeLucene,
-	"decimal_digit":              decimalDigitLucene,
-	"cjk_width":                  cjkWidthLucene,
-	"apostrophe":                 apostropheLucene,
-	"turkish_lowercase":          turkishLowerLucene,
-	"irish_lowercase":            irishLowerLucene,
-	"greek_lowercase":            greekLowerLucene,
+	"uppercase":                  lucene.Upper,
+	"german_normalization":       lucene.GermanNormalize,
+	"scandinavian_folding":       lucene.ScandinavianFold,
+	"scandinavian_normalization": lucene.ScandinavianNormalize,
+	"arabic_normalization":       lucene.ArabicNormalize,
+	"persian_normalization":      lucene.PersianNormalize,
+	"sorani_normalization":       lucene.SoraniNormalize,
+	"hindi_normalization":        lucene.HindiNormalize,
+	"indic_normalization":        lucene.IndicNormalize,
+	"bengali_normalization":      lucene.BengaliNormalize,
+	"serbian_normalization":      lucene.SerbianNormalize,
+	"decimal_digit":              lucene.DecimalDigit,
+	"cjk_width":                  lucene.CJKWidth,
+	"apostrophe":                 lucene.Apostrophe,
+	"turkish_lowercase":          lucene.TurkishLower,
+	"irish_lowercase":            lucene.IrishLower,
+	"greek_lowercase":            lucene.GreekLower,
 }
 
 // langStemFilters are stemming filters that skip keyword tokens.
 var langStemFilters = map[string]func(string) string{
-	"kstem":          kstemLucene,
-	"porter_stem":    porterStemLucene,
+	"kstem":          lucene.KStem,
+	"porter_stem":    lucene.PorterStem,
 	"russian_stem":   snowballStem("Russian"),
-	"czech_stem":     czechStemLucene,
+	"czech_stem":     lucene.CzechStem,
 	"french_stem":    snowballStem("French"),
 	"dutch_stem":     snowballStem("Dutch"),
-	"german_stem":    germanStemOld,
-	"brazilian_stem": brazilianStem,
-	"arabic_stem":    arabicStemLucene,
-	"persian_stem":   persianStemLucene,
+	"german_stem":    lucene.GermanStemOld,
+	"brazilian_stem": lucene.BrazilianStem,
+	"arabic_stem":    lucene.ArabicStem,
+	"persian_stem":   lucene.PersianStem,
 }
 
 func init() {
@@ -67,15 +71,15 @@ func langFilterOne(toks []analyzedToken, spec filterSpec) (out []analyzedToken, 
 	switch spec.typ {
 	case "lowercase":
 		lang, hasLang := p["language"].(string)
-		f := luceneLower
+		f := lucene.Lower
 		if hasLang {
 			switch {
 			case equalFoldASCII(lang, "greek"):
-				f = greekLowerLucene
+				f = lucene.GreekLower
 			case equalFoldASCII(lang, "irish"):
-				f = irishLowerLucene
+				f = lucene.IrishLower
 			case equalFoldASCII(lang, "turkish"):
-				f = turkishLowerLucene
+				f = lucene.TurkishLower
 			default:
 				return nil, filterError("language [" + lang + "] not support for lower case"), true
 			}

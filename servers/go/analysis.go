@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"slopensearch/internal/lucene"
 )
 
 // Analysis framework: analyzers, tokenizers, token filters and the _analyze API.
@@ -146,7 +148,7 @@ func tokenTypeForRunes(rs []rune) string {
 func simpleCaseFold(s string) string {
 	// Lucene's LowerCaseFilter maps each code point with Java's
 	// Character.toLowerCase (capital sigma always becomes medial sigma).
-	return luceneLower(s)
+	return lucene.Lower(s)
 }
 
 // splitLongToken splits a token at maxLen UTF-16 code units.
@@ -446,7 +448,7 @@ func (asciiFolder) Replace(s string) string {
 	changed := false
 	for _, r := range s {
 		if r >= 0x80 {
-			if v, ok := asciiFoldTable[r]; ok {
+			if v, ok := lucene.ASCIIFoldTable[r]; ok {
 				b.WriteString(v)
 				changed = true
 				continue

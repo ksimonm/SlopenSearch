@@ -1,4 +1,4 @@
-package main
+package lucene
 
 import "unicode/utf8"
 
@@ -40,8 +40,8 @@ func mscDeleteN(s []rune, pos, n, nChars int) int {
 	return n - nChars
 }
 
-// bulgarianStemLucene ports org.apache.lucene.analysis.bg.BulgarianStemFilter (BulgarianStemmer).
-func bulgarianStemLucene(term string) string {
+// BulgarianStem ports org.apache.lucene.analysis.bg.BulgarianStemFilter (BulgarianStemmer).
+func BulgarianStem(term string) string {
 	s := []rune(term)
 	n := mscBulgarianStem(s, len(s))
 	return string(s[:n])
@@ -136,9 +136,9 @@ func mscBulgarianRemovePlural(s []rune, n int) int {
 	return n
 }
 
-// czechStemLucene ports org.apache.lucene.analysis.cz.CzechStemFilter (CzechStemmer).
+// CzechStem ports org.apache.lucene.analysis.cz.CzechStemFilter (CzechStemmer).
 // Input is expected lowercase, with diacritics.
-func czechStemLucene(term string) string {
+func CzechStem(term string) string {
 	s := []rune(term)
 	n := mscCzechRemoveCase(s, len(s))
 	n = mscCzechRemovePossessives(s, n)
@@ -223,8 +223,8 @@ func mscCzechNormalize(s []rune, n int) int {
 	return n
 }
 
-// latvianStemLucene ports org.apache.lucene.analysis.lv.LatvianStemFilter (LatvianStemmer).
-func latvianStemLucene(term string) string {
+// LatvianStem ports org.apache.lucene.analysis.lv.LatvianStemFilter (LatvianStemmer).
+func LatvianStem(term string) string {
 	s := []rune(term)
 	n := len(s)
 	numVowels := 0
@@ -314,9 +314,9 @@ func mscLatvianUnpalatalize(s []rune, n int) int {
 	return n
 }
 
-// indonesianStemLucene ports org.apache.lucene.analysis.id.IndonesianStemFilter (IndonesianStemmer);
+// IndonesianStem ports org.apache.lucene.analysis.id.IndonesianStemFilter (IndonesianStemmer);
 // the filter's default is stemDerivational=true, false only strips particles and possessives.
-func indonesianStemLucene(term string, stemDerivational bool) string {
+func IndonesianStem(term string, stemDerivational bool) string {
 	st := mscIndonesianStemmer{text: []rune(term)}
 	n := st.stem(len(st.text), stemDerivational)
 	return string(st.text[:n])

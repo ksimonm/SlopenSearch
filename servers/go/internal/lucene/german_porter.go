@@ -1,4 +1,4 @@
-package main
+package lucene
 
 import (
 	"unicode"
@@ -8,10 +8,10 @@ import (
 // German (old, Caumanns-style) stemmer: org.apache.lucene.analysis.de.GermanStemmer
 // as applied by GermanStemFilter.
 
-// germanStemOld ports org.apache.lucene.analysis.de.GermanStemmer.stem (GermanStemFilter).
+// GermanStemOld ports org.apache.lucene.analysis.de.GermanStemmer.stem (GermanStemFilter).
 // The term is lowercased (Java String.toLowerCase semantics) and returned
 // unstemmed if it contains a non-letter.
-func germanStemOld(term string) string {
+func GermanStemOld(term string) string {
 	lower := gmcJavaLowerCase(term)
 	for _, c := range lower {
 		// Java checks UTF-16 chars: a supplementary code point is a surrogate pair, never a letter.
@@ -232,8 +232,8 @@ type gmcPorter struct {
 	j, k, k0 int
 }
 
-// porterStemLucene ports org.apache.lucene.analysis.en.PorterStemmer (PorterStemFilter).
-func porterStemLucene(term string) string {
+// PorterStem ports org.apache.lucene.analysis.en.PorterStemmer (PorterStemFilter).
+func PorterStem(term string) string {
 	p := &gmcPorter{b: []rune(term)}
 	p.k = len(p.b) - 1
 	p.k0 = 0

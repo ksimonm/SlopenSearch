@@ -1,6 +1,6 @@
 // Code generated from Apache Lucene 10.5.1 org/apache/lucene/analysis/en/KStemmer.java and KStemData1..8.java. DO NOT EDIT.
 
-package main
+package lucene
 
 var ksExceptionWords = []string{
 	"aide", "bathe", "caste", "cute", "dame", "dime", "doge", "done",

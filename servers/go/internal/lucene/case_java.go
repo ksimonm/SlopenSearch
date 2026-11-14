@@ -1,4 +1,4 @@
-package main
+package lucene
 
 import (
 	"strings"
@@ -82,8 +82,8 @@ func mscMapRunes(s string, f func(rune) rune) string {
 	return b.String()
 }
 
-// luceneLower ports org.apache.lucene.analysis.core.LowerCaseFilter (one token).
-func luceneLower(term string) string { return mscMapRunes(term, mscJavaLowerRune) }
+// Lower ports org.apache.lucene.analysis.core.LowerCaseFilter (one token).
+func Lower(term string) string { return mscMapRunes(term, mscJavaLowerRune) }
 
-// luceneUpper ports org.apache.lucene.analysis.core.UpperCaseFilter (one token).
-func luceneUpper(term string) string { return mscMapRunes(term, mscJavaUpperRune) }
+// Upper ports org.apache.lucene.analysis.core.UpperCaseFilter (one token).
+func Upper(term string) string { return mscMapRunes(term, mscJavaUpperRune) }

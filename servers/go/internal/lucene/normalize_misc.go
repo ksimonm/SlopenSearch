@@ -1,9 +1,9 @@
-package main
+package lucene
 
 // Language specific lowercase / normalization filters of Lucene 10.5.1 analysis-common.
 
-// greekLowerLucene ports org.apache.lucene.analysis.el.GreekLowerCaseFilter.
-func greekLowerLucene(term string) string {
+// GreekLower ports org.apache.lucene.analysis.el.GreekLowerCaseFilter.
+func GreekLower(term string) string {
 	return mscMapRunes(term, func(r rune) rune {
 		switch r {
 		case 'ς':
@@ -29,10 +29,10 @@ func greekLowerLucene(term string) string {
 	})
 }
 
-// irishLowerLucene ports org.apache.lucene.analysis.ga.IrishLowerCaseFilter: "nA..."/"tA..."
+// IrishLower ports org.apache.lucene.analysis.ga.IrishLowerCaseFilter: "nA..."/"tA..."
 // (n or t followed by an uppercase vowel) becomes "n-a..."/"t-a...", the rest is lowercased with
 // Character.toLowerCase(char), i.e. per UTF-16 unit, so supplementary characters stay unchanged.
-func irishLowerLucene(term string) string {
+func IrishLower(term string) string {
 	rs := []rune(term)
 	idx := 0
 	if len(rs) > 1 && (rs[0] == 'n' || rs[0] == 't') && mscIrishUpperVowel(rs[1]) {
@@ -55,8 +55,8 @@ func mscIrishUpperVowel(r rune) bool {
 	return false
 }
 
-// turkishLowerLucene ports org.apache.lucene.analysis.tr.TurkishLowerCaseFilter.
-func turkishLowerLucene(term string) string {
+// TurkishLower ports org.apache.lucene.analysis.tr.TurkishLowerCaseFilter.
+func TurkishLower(term string) string {
 	buf := []rune(term)
 	n := len(buf)
 	iOrAfter := false
@@ -98,9 +98,9 @@ func mscTurkishBeforeDot(s []rune) bool {
 	return false
 }
 
-// apostropheLucene ports org.apache.lucene.analysis.tr.ApostropheFilter: strips everything from
+// Apostrophe ports org.apache.lucene.analysis.tr.ApostropheFilter: strips everything from
 // the first apostrophe (U+0027 or U+2019) on.
-func apostropheLucene(term string) string {
+func Apostrophe(term string) string {
 	for i, r := range term {
 		if r == '\'' || r == '’' {
 			return term[:i]
@@ -109,9 +109,9 @@ func apostropheLucene(term string) string {
 	return term
 }
 
-// serbianNormalizeLucene ports org.apache.lucene.analysis.sr.SerbianNormalizationFilter
+// SerbianNormalize ports org.apache.lucene.analysis.sr.SerbianNormalizationFilter
 // (Cyrillic and Latin to "bald" Latin).
-func serbianNormalizeLucene(term string) string {
+func SerbianNormalize(term string) string {
 	return mscSerbian(term, mscSerbianBald)
 }
 
@@ -158,10 +158,10 @@ var mscSerbianRegular = map[rune]string{
 	'ф': "f", 'х': "h", 'ц': "c", 'ч': "č", 'џ': "dž", 'ш': "š",
 }
 
-// cjkWidthLucene ports org.apache.lucene.analysis.cjk.CJKWidthFilter: folds fullwidth ASCII
+// CJKWidth ports org.apache.lucene.analysis.cjk.CJKWidthFilter: folds fullwidth ASCII
 // variants to Basic Latin and halfwidth Katakana to standard Katakana (combining the halfwidth
 // voiced / semi-voiced sound marks into the preceding kana where possible).
-func cjkWidthLucene(term string) string {
+func CJKWidth(term string) string {
 	need := false
 	for _, r := range term {
 		if r >= 0xFF01 && r <= 0xFF9F {

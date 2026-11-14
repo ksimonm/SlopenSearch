@@ -1,4 +1,4 @@
-package main
+package lucene
 
 // Faithful ports of Lucene 10.5.1 light/minimal stemmers and normalization
 // filters for German, Swedish, Norwegian, Finnish, Hungarian, Russian and
@@ -36,9 +36,9 @@ func gmcDelete(s []rune, pos, n int) int {
 // ---------------------------------------------------------------------------
 // German
 
-// germanLightStem ports org.apache.lucene.analysis.de.GermanLightStemmer
+// GermanLightStem ports org.apache.lucene.analysis.de.GermanLightStemmer
 // (GermanLightStemFilter).
-func germanLightStem(term string) string {
+func GermanLightStem(term string) string {
 	s := []rune(term)
 	n := len(s)
 	for i := 0; i < n; i++ {
@@ -98,9 +98,9 @@ func gmcGermanLightStep2(s []rune, n int) int {
 	return n
 }
 
-// germanMinimalStem ports org.apache.lucene.analysis.de.GermanMinimalStemmer
+// GermanMinimalStem ports org.apache.lucene.analysis.de.GermanMinimalStemmer
 // (GermanMinimalStemFilter).
-func germanMinimalStem(term string) string {
+func GermanMinimalStem(term string) string {
 	s := []rune(term)
 	n := len(s)
 	if n < 5 {
@@ -142,8 +142,8 @@ func gmcGermanMinimalLen(s []rune, n int) int {
 	return n
 }
 
-// germanNormalizeLucene ports org.apache.lucene.analysis.de.GermanNormalizationFilter.
-func germanNormalizeLucene(term string) string {
+// GermanNormalize ports org.apache.lucene.analysis.de.GermanNormalizationFilter.
+func GermanNormalize(term string) string {
 	const (
 		stN = 0 // ordinary state
 		stV = 1 // stops 'u' from entering umlaut state
@@ -195,8 +195,8 @@ func germanNormalizeLucene(term string) string {
 // ---------------------------------------------------------------------------
 // Swedish
 
-// swedishLightStem ports org.apache.lucene.analysis.sv.SwedishLightStemmer.
-func swedishLightStem(term string) string {
+// SwedishLightStem ports org.apache.lucene.analysis.sv.SwedishLightStemmer.
+func SwedishLightStem(term string) string {
 	s := []rune(term)
 	n := len(s)
 	if n > 4 && s[n-1] == 's' {
@@ -282,20 +282,20 @@ func gmcSwedishMinimalLen(s []rune, n int) int {
 
 // Flags for norwegianLightStem / norwegianMinimalStem (NorwegianLightStemmer.BOKMAAL/NYNORSK).
 const (
-	gmcNorwegianBokmaal = 1
-	gmcNorwegianNynorsk = 2
+	NorwegianBokmaal = 1
+	NorwegianNynorsk = 2
 )
 
 func gmcNorwegianCheckFlags(flags int) (bokmaal, nynorsk bool) {
-	if flags <= 0 || flags > gmcNorwegianBokmaal+gmcNorwegianNynorsk {
+	if flags <= 0 || flags > NorwegianBokmaal+NorwegianNynorsk {
 		panic("invalid flags")
 	}
-	return flags&gmcNorwegianBokmaal != 0, flags&gmcNorwegianNynorsk != 0
+	return flags&NorwegianBokmaal != 0, flags&NorwegianNynorsk != 0
 }
 
-// norwegianLightStem ports org.apache.lucene.analysis.no.NorwegianLightStemmer.
+// NorwegianLightStem ports org.apache.lucene.analysis.no.NorwegianLightStemmer.
 // flags: 1 = bokmål, 2 = nynorsk, 3 = both (other values panic, as Lucene throws).
-func norwegianLightStem(term string, flags int) string {
+func NorwegianLightStem(term string, flags int) string {
 	bm, nn := gmcNorwegianCheckFlags(flags)
 	s := []rune(term)
 	n := len(s)
@@ -356,9 +356,9 @@ func gmcNorwegianLightLen(s []rune, n int, bm, nn bool) int {
 	return n
 }
 
-// norwegianMinimalStem ports org.apache.lucene.analysis.no.NorwegianMinimalStemmer.
+// NorwegianMinimalStem ports org.apache.lucene.analysis.no.NorwegianMinimalStemmer.
 // flags: 1 = bokmål, 2 = nynorsk, 3 = both (other values panic, as Lucene throws).
-func norwegianMinimalStem(term string, flags int) string {
+func NorwegianMinimalStem(term string, flags int) string {
 	_, nn := gmcNorwegianCheckFlags(flags)
 	s := []rune(term)
 	n := len(s)
@@ -390,8 +390,8 @@ func gmcNorwegianMinimalLen(s []rune, n int, nn bool) int {
 // ---------------------------------------------------------------------------
 // Finnish
 
-// finnishLightStem ports org.apache.lucene.analysis.fi.FinnishLightStemmer.
-func finnishLightStem(term string) string {
+// FinnishLightStem ports org.apache.lucene.analysis.fi.FinnishLightStemmer.
+func FinnishLightStem(term string) string {
 	s := []rune(term)
 	n := len(s)
 	if n < 4 {
@@ -575,8 +575,8 @@ func gmcFinnishNorm2(s []rune, n int) int {
 // ---------------------------------------------------------------------------
 // Hungarian
 
-// hungarianLightStem ports org.apache.lucene.analysis.hu.HungarianLightStemmer.
-func hungarianLightStem(term string) string {
+// HungarianLightStem ports org.apache.lucene.analysis.hu.HungarianLightStemmer.
+func HungarianLightStem(term string) string {
 	s := []rune(term)
 	n := len(s)
 	for i := 0; i < n; i++ {
@@ -715,8 +715,8 @@ func gmcHungarianNormalize(s []rune, n int) int {
 // ---------------------------------------------------------------------------
 // Russian
 
-// russianLightStem ports org.apache.lucene.analysis.ru.RussianLightStemmer.
-func russianLightStem(term string) string {
+// RussianLightStem ports org.apache.lucene.analysis.ru.RussianLightStemmer.
+func RussianLightStem(term string) string {
 	s := []rune(term)
 	n := gmcRussianRemoveCase(s, len(s))
 	n = gmcRussianNormalize(s, n)
@@ -778,8 +778,8 @@ func gmcRussianRemoveCase(s []rune, n int) int {
 // ---------------------------------------------------------------------------
 // English
 
-// englishMinimalStem ports org.apache.lucene.analysis.en.EnglishMinimalStemmer.
-func englishMinimalStem(term string) string {
+// EnglishMinimalStem ports org.apache.lucene.analysis.en.EnglishMinimalStemmer.
+func EnglishMinimalStem(term string) string {
 	s := []rune(term)
 	n := len(s)
 	if n < 3 || s[n-1] != 's' {
@@ -800,8 +800,8 @@ func englishMinimalStem(term string) string {
 	return string(s[:n-1])
 }
 
-// englishPossessive ports org.apache.lucene.analysis.en.EnglishPossessiveFilter.
-func englishPossessive(term string) string {
+// EnglishPossessive ports org.apache.lucene.analysis.en.EnglishPossessiveFilter.
+func EnglishPossessive(term string) string {
 	s := []rune(term)
 	n := len(s)
 	if n >= 2 && (s[n-2] == '\'' || s[n-2] == '’' || s[n-2] == '＇') &&
@@ -814,8 +814,8 @@ func englishPossessive(term string) string {
 // ---------------------------------------------------------------------------
 // Scandinavian
 
-// scandinavianFoldLucene ports org.apache.lucene.analysis.miscellaneous.ScandinavianFoldingFilter.
-func scandinavianFoldLucene(term string) string {
+// ScandinavianFold ports org.apache.lucene.analysis.miscellaneous.ScandinavianFoldingFilter.
+func ScandinavianFold(term string) string {
 	b := []rune(term)
 	n := len(b)
 	for i := 0; i < n; i++ {
@@ -842,10 +842,10 @@ func scandinavianFoldLucene(term string) string {
 	return string(b[:n])
 }
 
-// scandinavianNormalizeLucene ports
+// ScandinavianNormalize ports
 // org.apache.lucene.analysis.miscellaneous.ScandinavianNormalizationFilter
 // (ScandinavianNormalizer with ALL_FOLDINGS: AA, AO, AE, OE, OO).
-func scandinavianNormalizeLucene(term string) string {
+func ScandinavianNormalize(term string) string {
 	b := []rune(term)
 	n := len(b)
 	for i := 0; i < n; i++ {

@@ -1,12 +1,12 @@
-package main
+package lucene
 
 // Port of org.apache.lucene.analysis.el.GreekStemmer (Lucene 10.5.1), the stemmer behind
 // GreekStemFilter. Input is expected to be the output of GreekLowerCaseFilter (lowercase, no
 // tonos/dialytika, final sigma folded to σ). The rules are translated literally, including the
 // operator precedence quirks of rule0/rule8 and the in-place buffer rewrites.
 
-// greekStemLucene ports GreekStemFilter applied to one (non-keyword) token.
-func greekStemLucene(term string) string {
+// GreekStem ports GreekStemFilter applied to one (non-keyword) token.
+func GreekStem(term string) string {
 	s := []rune(term)
 	n := mscGreekStem(s, len(s))
 	return string(s[:n])

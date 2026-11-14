@@ -2,7 +2,7 @@
 // sun/text/resources/ext WordBreakIteratorData_th and thai_dict, and java.lang.Character.isLetterOrDigit
 // (as bundled with Apache Lucene 10.5.1 in OpenSearch 3.9.0). DO NOT EDIT.
 
-package main
+package lucene
 
 // thaiSentenceRulesGz is gzip+base64 of SentenceBreakIteratorData (19814 bytes).
 const thaiSentenceRulesGz = "" +
@@ -2682,9 +2682,9 @@ const thaiDictGz = "" +
 	"NEErFWf3a9YfDCLFVRmgSPtH0SgD1Z11Uc2DToRrlGG+4HtO8VF8rdcp/g6XlaFKgGo7810lKP9FYoRljkuDoldClTBleO7h1CDT" +
 	"BlXbCghWopRoZYQSE35KiVPilQQlUUnSVVr8v7yU3v/n4+7d5IejTP8FXgHlQpm0BAA="
 
-// thaiLetterOrDigitRanges lists inclusive code point ranges for which
+// ThaiLetterOrDigitRanges lists inclusive code point ranges for which
 // java.lang.Character.isLetterOrDigit is true (JDK 25).
-var thaiLetterOrDigitRanges = [...][2]int32{
+var ThaiLetterOrDigitRanges = [...][2]int32{
 	{0x30, 0x39}, {0x41, 0x5a}, {0x61, 0x7a}, {0xaa, 0xaa},
 	{0xb5, 0xb5}, {0xba, 0xba}, {0xc0, 0xd6}, {0xd8, 0xf6},
 	{0xf8, 0x2c1}, {0x2c6, 0x2d1}, {0x2e0, 0x2e4}, {0x2ec, 0x2ec},

@@ -1,4 +1,4 @@
-package main
+package lucene
 
 // Ports of Lucene 10.5.1 normalizers/stemmers for Arabic, Persian, Sorani, Hindi,
 // Bengali, the generic Indic normalizer and DecimalDigitFilter. Lucene works on the
@@ -104,8 +104,8 @@ func indArabicNormalize(s []uint16, n int) int {
 	return n
 }
 
-// arabicNormalizeLucene ports org.apache.lucene.analysis.ar.ArabicNormalizationFilter.
-func arabicNormalizeLucene(term string) string {
+// ArabicNormalize ports org.apache.lucene.analysis.ar.ArabicNormalizationFilter.
+func ArabicNormalize(term string) string {
 	s := indEncode(term)
 	return indDecode(s, indArabicNormalize(s, len(s)))
 }
@@ -167,8 +167,8 @@ func indArabicStartsWithCheckLength(s []uint16, n int, p []uint16) bool {
 	return true
 }
 
-// arabicStemLucene ports org.apache.lucene.analysis.ar.ArabicStemFilter (non-keyword token).
-func arabicStemLucene(term string) string {
+// ArabicStem ports org.apache.lucene.analysis.ar.ArabicStemFilter (non-keyword token).
+func ArabicStem(term string) string {
 	s := indEncode(term)
 	return indDecode(s, indArabicStem(s, len(s)))
 }
@@ -192,8 +192,8 @@ func indPersianNormalize(s []uint16, n int) int {
 	return n
 }
 
-// persianNormalizeLucene ports org.apache.lucene.analysis.fa.PersianNormalizationFilter.
-func persianNormalizeLucene(term string) string {
+// PersianNormalize ports org.apache.lucene.analysis.fa.PersianNormalizationFilter.
+func PersianNormalize(term string) string {
 	s := indEncode(term)
 	return indDecode(s, indPersianNormalize(s, len(s)))
 }
@@ -209,8 +209,8 @@ var indPersianSuffixes = indU16s(
 	"‌",    // zwnj
 )
 
-// persianStemLucene ports org.apache.lucene.analysis.fa.PersianStemFilter (non-keyword token).
-func persianStemLucene(term string) string {
+// PersianStem ports org.apache.lucene.analysis.fa.PersianStemFilter (non-keyword token).
+func PersianStem(term string) string {
 	s := indEncode(term)
 	n := len(s)
 	for _, suf := range indPersianSuffixes {
@@ -221,10 +221,10 @@ func persianStemLucene(term string) string {
 	return indDecode(s, n)
 }
 
-// persianCharFilter ports org.apache.lucene.analysis.fa.PersianCharFilter: every
+// PersianCharFilter ports org.apache.lucene.analysis.fa.PersianCharFilter: every
 // ZERO WIDTH NON-JOINER becomes a space. Both are one UTF-16 char, so the text length
 // never changes and offsets need no correction (Lucene's correct() is the identity).
-func persianCharFilter(text string) string {
+func PersianCharFilter(text string) string {
 	return strings.ReplaceAll(text, "‌", " ")
 }
 
@@ -271,8 +271,8 @@ func indSoraniNormalize(s []uint16, n int) int {
 	return n
 }
 
-// soraniNormalizeLucene ports org.apache.lucene.analysis.ckb.SoraniNormalizationFilter.
-func soraniNormalizeLucene(term string) string {
+// SoraniNormalize ports org.apache.lucene.analysis.ckb.SoraniNormalizationFilter.
+func SoraniNormalize(term string) string {
 	s := indEncode(term)
 	return indDecode(s, indSoraniNormalize(s, len(s)))
 }
@@ -359,8 +359,8 @@ func indSoraniStem(s []uint16, n int) int {
 	return n
 }
 
-// soraniStemLucene ports org.apache.lucene.analysis.ckb.SoraniStemFilter (non-keyword token).
-func soraniStemLucene(term string) string {
+// SoraniStem ports org.apache.lucene.analysis.ckb.SoraniStemFilter (non-keyword token).
+func SoraniStem(term string) string {
 	s := indEncode(term)
 	return indDecode(s, indSoraniStem(s, len(s)))
 }
@@ -527,8 +527,8 @@ func indIndicCompose(ch0, k int, s []uint16, pos, n int) int {
 	return n
 }
 
-// indicNormalizeLucene ports org.apache.lucene.analysis.in.IndicNormalizationFilter.
-func indicNormalizeLucene(term string) string {
+// IndicNormalize ports org.apache.lucene.analysis.in.IndicNormalizationFilter.
+func IndicNormalize(term string) string {
 	s := indEncode(term)
 	return indDecode(s, indIndicNormalize(s, len(s)))
 }
@@ -573,14 +573,14 @@ func indHindiNormalize(s []uint16, n int) int {
 	return n
 }
 
-// hindiNormalizeLucene ports org.apache.lucene.analysis.hi.HindiNormalizationFilter (non-keyword token).
-func hindiNormalizeLucene(term string) string {
+// HindiNormalize ports org.apache.lucene.analysis.hi.HindiNormalizationFilter (non-keyword token).
+func HindiNormalize(term string) string {
 	s := indEncode(term)
 	return indDecode(s, indHindiNormalize(s, len(s)))
 }
 
-// hindiStemLucene ports org.apache.lucene.analysis.hi.HindiStemFilter (non-keyword token).
-func hindiStemLucene(term string) string {
+// HindiStem ports org.apache.lucene.analysis.hi.HindiStemFilter (non-keyword token).
+func HindiStem(term string) string {
 	s := indEncode(term)
 	return indDecode(s, indStemGroups(indHindiSuffixGroups, s, len(s)))
 }
@@ -663,14 +663,14 @@ func indBengaliNormalize(s []uint16, n int) int {
 	return n
 }
 
-// bengaliNormalizeLucene ports org.apache.lucene.analysis.bn.BengaliNormalizationFilter (non-keyword token).
-func bengaliNormalizeLucene(term string) string {
+// BengaliNormalize ports org.apache.lucene.analysis.bn.BengaliNormalizationFilter (non-keyword token).
+func BengaliNormalize(term string) string {
 	s := indEncode(term)
 	return indDecode(s, indBengaliNormalize(s, len(s)))
 }
 
-// bengaliStemLucene ports org.apache.lucene.analysis.bn.BengaliStemFilter (non-keyword token).
-func bengaliStemLucene(term string) string {
+// BengaliStem ports org.apache.lucene.analysis.bn.BengaliStemFilter (non-keyword token).
+func BengaliStem(term string) string {
 	s := indEncode(term)
 	return indDecode(s, indStemGroups(indBengaliSuffixGroups, s, len(s)))
 }
@@ -687,9 +687,9 @@ func indDigitValue(cp rune) int {
 	return -1
 }
 
-// decimalDigitLucene ports org.apache.lucene.analysis.core.DecimalDigitFilter: every
+// DecimalDigit ports org.apache.lucene.analysis.core.DecimalDigitFilter: every
 // non-ASCII decimal digit becomes the ASCII digit of the same value.
-func decimalDigitLucene(term string) string {
+func DecimalDigit(term string) string {
 	s := indEncode(term)
 	n := len(s)
 	for i := 0; i < n; i++ {

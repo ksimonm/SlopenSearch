@@ -1,6 +1,6 @@
 // Code generated from Apache Lucene 10.5.1 pt/portuguese.rslp and gl/galician.rslp. DO NOT EDIT.
 
-package main
+package lucene
 
 // rslpRule is one RSLPStemmerBase rule. exceptWhole holds RuleWithSetExceptions
 // entries (whole-term match, step type 1); exceptSuffix holds RuleWithSuffixExceptions

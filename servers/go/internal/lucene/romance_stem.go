@@ -1,4 +1,4 @@
-package main
+package lucene
 
 // Ports of the Lucene 10.5.1 light/minimal stemmers for French, Spanish,
 // Italian, Portuguese and Galician, the RSLP stemmers (Portuguese, Galician),
@@ -38,7 +38,7 @@ func romDelete(s []rune, pos, n int) int {
 // ---------------------------------------------------------------------------
 // fr.FrenchLightStemmer
 
-func frenchLightStem(term string) string {
+func FrenchLightStem(term string) string {
 	s := []rune(term)
 	return string(s[:romFrLightStem(s, len(s))])
 }
@@ -239,7 +239,7 @@ func romFrLightNorm(s []rune, n int) int {
 // ---------------------------------------------------------------------------
 // fr.FrenchMinimalStemmer
 
-func frenchMinimalStem(term string) string {
+func FrenchMinimalStem(term string) string {
 	s := []rune(term)
 	n := len(s)
 	if n < 6 {
@@ -295,7 +295,7 @@ func romFoldVowels(s []rune, withEnye bool) {
 	}
 }
 
-func spanishLightStem(term string) string {
+func SpanishLightStem(term string) string {
 	s := []rune(term)
 	n := len(s)
 	if n < 5 {
@@ -344,7 +344,7 @@ func spanishMinimalStem(term string) string {
 	return string(s[:n])
 }
 
-func italianLightStem(term string) string {
+func ItalianLightStem(term string) string {
 	s := []rune(term)
 	n := len(s)
 	if n < 6 {
@@ -377,7 +377,7 @@ func italianLightStem(term string) string {
 // ---------------------------------------------------------------------------
 // pt.PortugueseLightStemmer
 
-func portugueseLightStem(term string) string {
+func PortugueseLightStem(term string) string {
 	s := []rune(term)
 	n := len(s)
 	if n < 4 {
@@ -562,22 +562,22 @@ func romRSLPStep(steps []rslpStep, name string) *rslpStep {
 	panic("rslp: missing step " + name)
 }
 
-// portugueseMinimalStem ports pt.PortugueseMinimalStemmer (RSLP plural step).
-func portugueseMinimalStem(term string) string {
+// PortugueseMinimalStem ports pt.PortugueseMinimalStemmer (RSLP plural step).
+func PortugueseMinimalStem(term string) string {
 	s := []rune(term)
 	s, n := romRSLPApply(romRSLPStep(rslpPortuguese, "Plural"), s, len(s))
 	return string(s[:n])
 }
 
-// galicianMinimalStem ports gl.GalicianMinimalStemmer (RSLP plural step).
-func galicianMinimalStem(term string) string {
+// GalicianMinimalStem ports gl.GalicianMinimalStemmer (RSLP plural step).
+func GalicianMinimalStem(term string) string {
 	s := []rune(term)
 	s, n := romRSLPApply(romRSLPStep(rslpGalician, "Plural"), s, len(s))
 	return string(s[:n])
 }
 
-// portugueseRSLPStem ports pt.PortugueseStemmer (PortugueseStemFilter).
-func portugueseRSLPStem(term string) string {
+// PortugueseRSLPStem ports pt.PortugueseStemmer (PortugueseStemFilter).
+func PortugueseRSLPStem(term string) string {
 	s := []rune(term)
 	n := len(s)
 	st := func(name string) {
@@ -618,8 +618,8 @@ func portugueseRSLPStem(term string) string {
 	return string(s[:n])
 }
 
-// galicianRSLPStem ports gl.GalicianStemmer (GalicianStemFilter).
-func galicianRSLPStem(term string) string {
+// GalicianRSLPStem ports gl.GalicianStemmer (GalicianStemFilter).
+func GalicianRSLPStem(term string) string {
 	s := []rune(term)
 	n := len(s)
 	st := func(name string) {
@@ -964,9 +964,9 @@ func romBrStem(term string) (string, bool) {
 	return ct, true
 }
 
-// brazilianStem reproduces BrazilianStemFilter on one non-keyword token: the
+// BrazilianStem reproduces BrazilianStemFilter on one non-keyword token: the
 // term is replaced only when the stemmer returns a non-null, different value.
-func brazilianStem(term string) string {
+func BrazilianStem(term string) string {
 	s, ok := romBrStem(term)
 	if !ok || s == term {
 		return term
@@ -977,7 +977,7 @@ func brazilianStem(term string) string {
 // ---------------------------------------------------------------------------
 // ro.RomanianNormalizationFilter (applies to keyword tokens too).
 
-func romanianNormalize(term string) string {
+func RomanianNormalize(term string) string {
 	return strings.Map(func(c rune) rune {
 		switch c {
 		case 'Ş':

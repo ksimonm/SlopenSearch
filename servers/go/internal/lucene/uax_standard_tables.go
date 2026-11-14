@@ -1,6 +1,6 @@
 // Code generated from Apache Lucene 10.5.1 StandardTokenizerImpl (lucene-core-10.5.1.jar). DO NOT EDIT.
 
-package main
+package lucene
 
 // uaxCmapTopPacked holds run-length pairs (count, value) of ZZ_CMAP_TOP.
 var uaxCmapTopPacked = []uint16{

@@ -1,4 +1,4 @@
-package main
+package lucene
 
 // Port of Lucene 10.5.1 org.apache.lucene.analysis.en.KStemmer as applied by
 // org.apache.lucene.analysis.en.KStemFilter (Krovetz stemmer). The dictionary
@@ -66,8 +66,8 @@ type ksStemmer struct {
 	matched *ksDictEntry
 }
 
-// kstemLucene returns what KStemFilter emits for one non-keyword token.
-func kstemLucene(term string) string {
+// KStem returns what KStemFilter emits for one non-keyword token.
+func KStem(term string) string {
 	length := 0 // UTF-16 length, as Java sees it
 	ascii := true
 	for i := 0; i < len(term); i++ {

@@ -1,4 +1,4 @@
-package main
+package lucene
 
 import "unicode/utf16"
 
@@ -8,10 +8,10 @@ import "unicode/utf16"
 // works on UTF-16 code units exactly like the Java one, including its fixed-size buffer
 // (whose size is the max token length) and the way that buffer splits long tokens.
 
-// uaxToken is one token produced by uaxStandardTokens; start/end are UTF-16 offsets.
-type uaxToken struct {
-	term, typ          string
-	start, end, posInc int
+// Token is one token produced by StandardTokens; start/end are UTF-16 offsets.
+type Token struct {
+	Term, Type         string
+	Start, End, PosInc int
 }
 
 // uaxStandardTypes mirrors StandardTokenizer.TOKEN_TYPES.
@@ -238,17 +238,17 @@ func (s *uaxScanner) next() int {
 	}
 }
 
-// uaxStandardTokens tokenizes text like Lucene's StandardTokenizer with the given
+// StandardTokens tokenizes text like Lucene's StandardTokenizer with the given
 // maxTokenLength (values < 1 or > 1024*1024 are rejected by Lucene; here they fall back
 // to the default 255 / are clamped).
-func uaxStandardTokens(text string, maxTokenLength int) []uaxToken {
+func StandardTokens(text string, maxTokenLength int) []Token {
 	toks, _, _ := uaxStandardTokensUTF16(utf16.Encode([]rune(text)), maxTokenLength)
 	return toks
 }
 
 // uaxStandardTokensUTF16 also returns what StandardTokenizer.end() reports: the final
 // offset (yychar+yylength) and the final position increment (skipped too-long tokens).
-func uaxStandardTokensUTF16(text []uint16, maxTokenLength int) ([]uaxToken, int, int) {
+func uaxStandardTokensUTF16(text []uint16, maxTokenLength int) ([]Token, int, int) {
 	if maxTokenLength < 1 {
 		maxTokenLength = uaxDefaultMaxTokenLen
 	}
@@ -256,7 +256,7 @@ func uaxStandardTokensUTF16(text []uint16, maxTokenLength int) ([]uaxToken, int,
 		maxTokenLength = uaxMaxTokenLengthLimit
 	}
 	s := &uaxScanner{reader: &uaxStringReader{s: text}, buf: make([]uint16, maxTokenLength)}
-	var out []uaxToken
+	var out []Token
 	skipped := 0
 	for {
 		typ := s.next()
@@ -266,12 +266,12 @@ func uaxStandardTokensUTF16(text []uint16, maxTokenLength int) ([]uaxToken, int,
 		length := s.markedPos - s.startRead
 		if length <= maxTokenLength {
 			term := string(utf16.Decode(s.buf[s.startRead:s.markedPos]))
-			out = append(out, uaxToken{
-				term:   term,
-				typ:    uaxStandardTypes[typ],
-				start:  s.yychar,
-				end:    s.yychar + length,
-				posInc: skipped + 1,
+			out = append(out, Token{
+				Term:   term,
+				Type:   uaxStandardTypes[typ],
+				Start:  s.yychar,
+				End:    s.yychar + length,
+				PosInc: skipped + 1,
 			})
 			skipped = 0
 		} else {

@@ -1,4 +1,4 @@
-package main
+package lucene
 
 // Port of the OpenJDK 25 sun.text break iterators used by Lucene's
 // ThaiTokenizer: RuleBasedBreakIterator (sentence instance for Locale.ROOT),
@@ -24,8 +24,8 @@ const thaiCIDone = 0xFFFF
 // thaiIgnore is RuleBasedBreakIterator.IGNORE.
 const thaiIgnore = -1
 
-// thaiCharIter ports org.apache.lucene.analysis.util.CharArrayIterator.
-type thaiCharIter struct {
+// ThaiCharIter ports org.apache.lucene.analysis.util.CharArrayIterator.
+type ThaiCharIter struct {
 	array  []uint16
 	start  int
 	index  int
@@ -33,7 +33,7 @@ type thaiCharIter struct {
 	limit  int
 }
 
-func (t *thaiCharIter) setText(array []uint16, start, length int) {
+func (t *ThaiCharIter) SetText(array []uint16, start, length int) {
 	t.array = array
 	t.start = start
 	t.index = start
@@ -41,23 +41,23 @@ func (t *thaiCharIter) setText(array []uint16, start, length int) {
 	t.limit = start + length
 }
 
-func (t *thaiCharIter) current() int {
+func (t *ThaiCharIter) current() int {
 	if t.index == t.limit {
 		return thaiCIDone
 	}
 	return int(t.array[t.index])
 }
 
-func (t *thaiCharIter) first() int {
+func (t *ThaiCharIter) first() int {
 	t.index = t.start
 	return t.current()
 }
 
-func (t *thaiCharIter) getBeginIndex() int { return 0 }
-func (t *thaiCharIter) getEndIndex() int   { return t.length }
-func (t *thaiCharIter) getIndex() int      { return t.index - t.start }
+func (t *ThaiCharIter) getBeginIndex() int { return 0 }
+func (t *ThaiCharIter) getEndIndex() int   { return t.length }
+func (t *ThaiCharIter) getIndex() int      { return t.index - t.start }
 
-func (t *thaiCharIter) next() int {
+func (t *ThaiCharIter) next() int {
 	t.index++
 	if t.index >= t.limit {
 		t.index = t.limit
@@ -66,7 +66,7 @@ func (t *thaiCharIter) next() int {
 	return t.current()
 }
 
-func (t *thaiCharIter) previous() int {
+func (t *ThaiCharIter) previous() int {
 	t.index--
 	if t.index < t.start {
 		t.index = t.start
@@ -75,7 +75,7 @@ func (t *thaiCharIter) previous() int {
 	return t.current()
 }
 
-func (t *thaiCharIter) setIndex(position int) int {
+func (t *ThaiCharIter) setIndex(position int) int {
 	if position < t.getBeginIndex() || position > t.getEndIndex() {
 		panic("Illegal Position")
 	}
@@ -336,11 +336,11 @@ func thaiLoadTables() {
 	})
 }
 
-// thaiBreakIter is a RuleBasedBreakIterator, optionally with the
+// ThaiBreakIter is a RuleBasedBreakIterator, optionally with the
 // DictionaryBasedBreakIterator behaviour (dict != nil).
-type thaiBreakIter struct {
+type ThaiBreakIter struct {
 	tab                  *thaiRuleTables
-	text                 *thaiCharIter
+	text                 *ThaiCharIter
 	cachedLastKnownBreak int
 
 	dict                 *thaiDictionary
@@ -350,18 +350,18 @@ type thaiBreakIter struct {
 	positionInCache      int
 }
 
-func thaiNewSentenceIter() *thaiBreakIter {
+func NewThaiSentenceIter() *ThaiBreakIter {
 	thaiLoadTables()
-	return &thaiBreakIter{tab: thaiSentenceTables, cachedLastKnownBreak: -1}
+	return &ThaiBreakIter{tab: thaiSentenceTables, cachedLastKnownBreak: -1}
 }
 
-func thaiNewWordIter() *thaiBreakIter {
+func NewThaiWordIter() *ThaiBreakIter {
 	thaiLoadTables()
-	return &thaiBreakIter{tab: thaiWordTables, cachedLastKnownBreak: -1,
+	return &ThaiBreakIter{tab: thaiWordTables, cachedLastKnownBreak: -1,
 		dict: thaiDict, categoryFlags: thaiWordCatFlags}
 }
 
-func (b *thaiBreakIter) setText(t *thaiCharIter) {
+func (b *ThaiBreakIter) SetText(t *ThaiCharIter) {
 	// CharArrayIterator.setIndex(getEndIndex()) always works, so the
 	// iterator is used directly (no SafeCharIterator).
 	b.text = t
@@ -372,38 +372,38 @@ func (b *thaiBreakIter) setText(t *thaiCharIter) {
 	b.positionInCache = 0
 }
 
-func (b *thaiBreakIter) current() int { return b.text.getIndex() }
+func (b *ThaiBreakIter) Current() int { return b.text.getIndex() }
 
-func thaiIsHigh(c int) bool { return c >= 0xD800 && c <= 0xDBFF }
-func thaiIsLow(c int) bool  { return c >= 0xDC00 && c <= 0xDFFF }
+func ThaiIsHigh(c int) bool { return c >= 0xD800 && c <= 0xDBFF }
+func ThaiIsLow(c int) bool  { return c >= 0xDC00 && c <= 0xDFFF }
 
-func (b *thaiBreakIter) getCurrent() int {
+func (b *ThaiBreakIter) getCurrent() int {
 	t := b.text
 	c1 := t.current()
-	if thaiIsHigh(c1) && t.getIndex() < t.getEndIndex() {
+	if ThaiIsHigh(c1) && t.getIndex() < t.getEndIndex() {
 		c2 := t.next()
 		t.previous()
-		if thaiIsLow(c2) {
+		if ThaiIsLow(c2) {
 			return ((c1 - 0xD800) << 10) + (c2 - 0xDC00) + 0x10000
 		}
 	}
 	return c1
 }
 
-func (b *thaiBreakIter) getCurrentCodePointCount() int {
+func (b *ThaiBreakIter) getCurrentCodePointCount() int {
 	t := b.text
 	c1 := t.current()
-	if thaiIsHigh(c1) && t.getIndex() < t.getEndIndex() {
+	if ThaiIsHigh(c1) && t.getIndex() < t.getEndIndex() {
 		c2 := t.next()
 		t.previous()
-		if thaiIsLow(c2) {
+		if ThaiIsLow(c2) {
 			return 2
 		}
 	}
 	return 1
 }
 
-func (b *thaiBreakIter) getNext() int {
+func (b *ThaiBreakIter) getNext() int {
 	t := b.text
 	index := t.getIndex()
 	endIndex := t.getEndIndex()
@@ -418,7 +418,7 @@ func (b *thaiBreakIter) getNext() int {
 	return b.getCurrent()
 }
 
-func (b *thaiBreakIter) getNextIndex() int {
+func (b *ThaiBreakIter) getNextIndex() int {
 	index := b.text.getIndex() + b.getCurrentCodePointCount()
 	endIndex := b.text.getEndIndex()
 	if index > endIndex {
@@ -427,7 +427,7 @@ func (b *thaiBreakIter) getNextIndex() int {
 	return index
 }
 
-func (b *thaiBreakIter) lookupCategory(c int) int {
+func (b *ThaiBreakIter) lookupCategory(c int) int {
 	var result int
 	if c < 0x10000 {
 		result = b.tab.charCategoryTable.elementAt(c)
@@ -441,7 +441,7 @@ func (b *thaiBreakIter) lookupCategory(c int) int {
 }
 
 // ruleHandleNext is RuleBasedBreakIterator.handleNext.
-func (b *thaiBreakIter) ruleHandleNext() int {
+func (b *ThaiBreakIter) ruleHandleNext() int {
 	t := b.text
 	if t.getIndex() == t.getEndIndex() {
 		return -1
@@ -474,8 +474,8 @@ func (b *thaiBreakIter) ruleHandleNext() int {
 	return result
 }
 
-// next is BreakIterator.next(); returns -1 for DONE.
-func (b *thaiBreakIter) next() int {
+// Next is BreakIterator.Next(); returns -1 for DONE.
+func (b *ThaiBreakIter) Next() int {
 	if b.dict == nil {
 		return b.ruleHandleNext()
 	}
@@ -522,7 +522,7 @@ func thaiPeek(s *[]int) int { return (*s)[len(*s)-1] }
 // divideUpDictionaryRange ports DictionaryBasedBreakIterator's method of the
 // same name. Stacks are pointers so that aliasing (currentBreakPositions =
 // bestBreakPositions) behaves as with the Java objects.
-func (b *thaiBreakIter) divideUpDictionaryRange(startPos, endPos int) {
+func (b *ThaiBreakIter) divideUpDictionaryRange(startPos, endPos int) {
 	t := b.text
 	dict := b.dict
 	t.setIndex(startPos)

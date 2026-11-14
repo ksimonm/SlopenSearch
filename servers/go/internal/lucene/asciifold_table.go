@@ -1,9 +1,9 @@
-package main
+package lucene
 
 // Code generated from Lucene 10.5.1 ASCIIFoldingFilter.foldToASCII; DO NOT EDIT.
 
-// asciiFoldTable maps a non-ASCII character to its ASCII folding.
-var asciiFoldTable = map[rune]string{
+// ASCIIFoldTable maps a non-ASCII character to its ASCII folding.
+var ASCIIFoldTable = map[rune]string{
 	0x00AB: "\"",
 	0x00B2: "2",
 	0x00B3: "3",

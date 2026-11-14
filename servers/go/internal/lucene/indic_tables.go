@@ -1,6 +1,6 @@
 // Code generated from the Unicode 16 tables of the JDK 25 in OpenSearch 3.9.0 (Character.isDigit, Character.getType). DO NOT EDIT.
 
-package main
+package lucene
 
 // indDigitZeros lists, ascending, the zero of every run of ten decimal digits
 // (Java Character.isDigit over all code points; getNumericValue is the offset in the run).

@@ -1,6 +1,6 @@
 // Code generated from Apache Lucene 10.5.1 hi/HindiStemmer.java and bn/BengaliStemmer.java. DO NOT EDIT.
 
-package main
+package lucene
 
 // indHindiSuffixGroups mirrors the suffix groups of Lucene's HindiStemmer.stem, in order.
 var indHindiSuffixGroups = indBuildSuffixGroups([]indSuffixGroupSpec{

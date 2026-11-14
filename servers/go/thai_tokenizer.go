@@ -8,6 +8,8 @@ package main
 import (
 	"sort"
 	"unicode/utf16"
+
+	"slopensearch/internal/lucene"
 )
 
 // thaiToken is one ThaiTokenizer token: start/end are UTF-16 offsets into
@@ -22,18 +24,18 @@ const thaiBufferMax = 1024
 // thaiIsLetterOrDigit is java.lang.Character.isLetterOrDigit(int) (JDK 25).
 func thaiIsLetterOrDigit(cp int) bool {
 	r := int32(cp)
-	i := sort.Search(len(thaiLetterOrDigitRanges), func(i int) bool {
-		return thaiLetterOrDigitRanges[i][1] >= r
+	i := sort.Search(len(lucene.ThaiLetterOrDigitRanges), func(i int) bool {
+		return lucene.ThaiLetterOrDigitRanges[i][1] >= r
 	})
-	return i < len(thaiLetterOrDigitRanges) && thaiLetterOrDigitRanges[i][0] <= r
+	return i < len(lucene.ThaiLetterOrDigitRanges) && lucene.ThaiLetterOrDigitRanges[i][0] <= r
 }
 
 // thaiCodePointAt is Character.codePointAt(char[], index, limit).
 func thaiCodePointAt(a []uint16, index, limit int) int {
 	c1 := int(a[index])
-	if thaiIsHigh(c1) && index+1 < limit {
+	if lucene.ThaiIsHigh(c1) && index+1 < limit {
 		c2 := int(a[index+1])
-		if thaiIsLow(c2) {
+		if lucene.ThaiIsLow(c2) {
 			return ((c1 - 0xD800) << 10) + (c2 - 0xDC00) + 0x10000
 		}
 	}
@@ -49,11 +51,11 @@ type thaiTokenizerState struct {
 	usableLength int
 	offset       int
 
-	sentenceIter    *thaiBreakIter
-	sentenceWrapper thaiCharIter
+	sentenceIter    *lucene.ThaiBreakIter
+	sentenceWrapper lucene.ThaiCharIter
 
-	wordBreaker   *thaiBreakIter
-	wordWrapper   thaiCharIter
+	wordBreaker   *lucene.ThaiBreakIter
+	wordWrapper   lucene.ThaiCharIter
 	sentenceStart int
 	sentenceEnd   int
 }
@@ -95,26 +97,26 @@ func (s *thaiTokenizerState) refill() {
 	if n < 0 {
 		n = 0
 	}
-	s.sentenceWrapper.setText(s.buffer[:], 0, n)
-	s.sentenceIter.setText(&s.sentenceWrapper)
+	s.sentenceWrapper.SetText(s.buffer[:], 0, n)
+	s.sentenceIter.SetText(&s.sentenceWrapper)
 }
 
 func (s *thaiTokenizerState) setNextSentence(sentenceStart, sentenceEnd int) {
 	s.sentenceStart = sentenceStart
 	s.sentenceEnd = sentenceEnd
-	s.wordWrapper.setText(s.buffer[:], sentenceStart, sentenceEnd-sentenceStart)
-	s.wordBreaker.setText(&s.wordWrapper)
+	s.wordWrapper.SetText(s.buffer[:], sentenceStart, sentenceEnd-sentenceStart)
+	s.wordBreaker.SetText(&s.wordWrapper)
 }
 
 func (s *thaiTokenizerState) incrementWord(out *[]thaiToken) bool {
-	start := s.wordBreaker.current()
+	start := s.wordBreaker.Current()
 	if start == -1 {
 		return false
 	}
-	end := s.wordBreaker.next()
+	end := s.wordBreaker.Next()
 	for end != -1 && !thaiIsLetterOrDigit(thaiCodePointAt(s.buffer[:], s.sentenceStart+start, s.sentenceEnd)) {
 		start = end
-		end = s.wordBreaker.next()
+		end = s.wordBreaker.Next()
 	}
 	if end == -1 {
 		return false
@@ -134,11 +136,11 @@ func (s *thaiTokenizerState) incrementSentence(out *[]thaiToken) bool {
 		return false
 	}
 	for {
-		start := s.sentenceIter.current()
+		start := s.sentenceIter.Current()
 		if start == -1 {
 			return false
 		}
-		end := s.sentenceIter.next()
+		end := s.sentenceIter.Next()
 		if end == -1 {
 			return false
 		}
@@ -153,12 +155,12 @@ func (s *thaiTokenizerState) incrementSentence(out *[]thaiToken) bool {
 func thaiTokenize(text string) []thaiToken {
 	s := &thaiTokenizerState{
 		input:        utf16.Encode([]rune(text)),
-		sentenceIter: thaiNewSentenceIter(),
-		wordBreaker:  thaiNewWordIter(),
+		sentenceIter: lucene.NewThaiSentenceIter(),
+		wordBreaker:  lucene.NewThaiWordIter(),
 	}
 	// reset()
-	s.sentenceWrapper.setText(s.buffer[:], 0, 0)
-	s.sentenceIter.setText(&s.sentenceWrapper)
+	s.sentenceWrapper.SetText(s.buffer[:], 0, 0)
+	s.sentenceIter.SetText(&s.sentenceWrapper)
 
 	var out []thaiToken
 	for {

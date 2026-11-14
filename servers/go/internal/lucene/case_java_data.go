@@ -1,6 +1,6 @@
 // Code generated from Apache Lucene 10.5.1 (JDK 25.0.4.1 java.lang.Character) vs Go 15.0.0 unicode tables. DO NOT EDIT.
 
-package main
+package lucene
 
 // mscJavaUnicodeVersion is the Unicode version of Go's tables these diffs were computed against.
 const mscJavaUnicodeVersion = "15.0.0"

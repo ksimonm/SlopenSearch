@@ -1,6 +1,6 @@
 // Code generated from Apache Lucene 10.5.1 br/BrazilianStemmer.java (step1/step2). DO NOT EDIT.
 
-package main
+package lucene
 
 var romBrStep1 = []romBrRule{
 	{0, "uciones", romBrR2, "", romBrReplace, "uciones", "u"},
