@@ -123,7 +123,7 @@ func (s *Server) handleKnnWarmup(w http.ResponseWriter, r *http.Request, spec st
 				Reason: "Warm up request rejected. One or more indices have 'index.knn' set to false."})
 			return
 		}
-		shards += idx.numShards()
+		shards += numShards(idx)
 	}
 	writeJSON(w, 200, orderedJSON{{"_shards", orderedJSON{{"total", shards}, {"successful", shards}, {"failed", 0}}}})
 }

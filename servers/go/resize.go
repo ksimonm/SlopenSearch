@@ -26,7 +26,7 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request, src, op, t
 		writeError(w, errIndexNotFoundNamed(src))
 		return
 	}
-	if !idx.blockOn("write") {
+	if !blockOn(idx, "write") {
 		writeError(w, &apiError{Type: "illegal_state_exception", Status: 500,
 			Reason: fmt.Sprintf("index %s must block write operations to resize index", src)})
 		return
@@ -130,7 +130,7 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request, src, op, t
 		doc := jsonv.DeepCopy(idx.Docs[id]).(map[string]any)
 		newIdx.Docs[id] = doc
 		newIdx.Order = append(newIdx.Order, id)
-		_ = newIdx.computeDocValues(id, doc)
+		_ = computeDocValues(newIdx, id, doc)
 	}
 	s.bumpState()
 	writeJSON(w, 200, map[string]any{"acknowledged": true, "shards_acknowledged": true, "index": target})

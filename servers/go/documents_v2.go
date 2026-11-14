@@ -183,7 +183,7 @@ func shardOf(v string, n int) int {
 }
 
 func routingMatches(idx *Index, id, routing string) bool {
-	if idx.numShards() <= 1 {
+	if numShards(idx) <= 1 {
 		return true
 	}
 	assigned := idx.Routing[id]
@@ -194,7 +194,7 @@ func routingMatches(idx *Index, id, routing string) bool {
 	if probe == "" {
 		probe = id
 	}
-	return shardOf(probe, idx.numShards()) == shardOf(assigned, idx.numShards())
+	return shardOf(probe, numShards(idx)) == shardOf(assigned, numShards(idx))
 }
 
 func requestRouting(r *http.Request) string {
@@ -300,9 +300,9 @@ func waitForActiveShards(r *http.Request, idx *Index) *apiError {
 		return nil
 	}
 	n, err := strconv.Atoi(v)
-	if err == nil && n > idx.numShards() {
+	if err == nil && n > numShards(idx) {
 		return &apiError{Type: "unavailable_shards_exception", Status: 503,
-			Reason: fmt.Sprintf("Timeout waiting for [%d] shards to become active, only [%d] are active", n, idx.numShards())}
+			Reason: fmt.Sprintf("Timeout waiting for [%d] shards to become active, only [%d] are active", n, numShards(idx))}
 	}
 	return nil
 }
@@ -1102,7 +1102,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 		writeError(w, derr)
 		return
 	}
-	if derr := idx.computeDocValues(id, body); derr != nil {
+	if derr := computeDocValues(idx, id, body); derr != nil {
 		writeError(w, derr)
 		return
 	}
@@ -1141,7 +1141,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 	if rv == "true" {
 		resp = append(resp, orderedKV{"forced_refresh", true})
 	}
-	resp = append(resp, orderedKV{"_shards", map[string]any{"total": idx.numShards(), "successful": idx.numShards(), "failed": 0}},
+	resp = append(resp, orderedKV{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
 		orderedKV{"_seq_no", seq}, orderedKV{"_primary_term", int64(1)})
 	if routing != "" {
 		resp = append(resp, orderedKV{"_routing", routing})
@@ -1387,7 +1387,7 @@ func (s *Server) handleDeleteDocV2(w http.ResponseWriter, r *http.Request, name,
 		idx.Versions[id] = ver
 		resp := orderedJSON{
 			{"_index", idx.Name}, {"_id", id}, {"_version", ver}, {"result", "not_found"},
-			{"_shards", map[string]any{"total": idx.numShards(), "successful": idx.numShards(), "failed": 0}},
+			{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
 			{"_seq_no", seq}, {"_primary_term", int64(1)},
 		}
 		writeJSON(w, 404, resp)
@@ -1396,7 +1396,7 @@ func (s *Server) handleDeleteDocV2(w http.ResponseWriter, r *http.Request, name,
 	delete(idx.Docs, id)
 	delete(idx.Pending, id)
 	delete(idx.RawDocs, id)
-	idx.removeDocValues(id)
+	removeDocValues(idx, id)
 	idx.DeleteTotal++
 	idx.Versions[id] = ver
 	resp := orderedJSON{
@@ -1405,7 +1405,7 @@ func (s *Server) handleDeleteDocV2(w http.ResponseWriter, r *http.Request, name,
 	if rv == "true" {
 		resp = append(resp, orderedKV{"forced_refresh", true})
 	}
-	resp = append(resp, orderedKV{"_shards", map[string]any{"total": idx.numShards(), "successful": idx.numShards(), "failed": 0}},
+	resp = append(resp, orderedKV{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
 		orderedKV{"_seq_no", seq}, orderedKV{"_primary_term", int64(1)})
 	writeJSON(w, 200, resp)
 }
@@ -1564,7 +1564,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 			return
 		}
 		ensureFieldTypes(idx)
-		if derr := idx.computeDocValues(id, src); derr != nil {
+		if derr := computeDocValues(idx, id, src); derr != nil {
 			writeError(w, derr)
 			return
 		}
@@ -1590,7 +1590,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		if rv == "true" {
 			resp = append(resp, orderedKV{"forced_refresh", true})
 		}
-		resp = append(resp, orderedKV{"_shards", map[string]any{"total": idx.numShards(), "successful": idx.numShards(), "failed": 0}},
+		resp = append(resp, orderedKV{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
 			orderedKV{"_seq_no", seq}, orderedKV{"_primary_term", int64(1)})
 		if getSpecified(r, body) {
 			resp = append(resp, orderedKV{"get", updateGetObject(idx, id, src, seq, r, body)})
@@ -1616,13 +1616,13 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		seq := nextSeq(idx)
 		delete(idx.Docs, id)
 		delete(idx.Pending, id)
-		idx.removeDocValues(id)
+		removeDocValues(idx, id)
 		idx.DeleteTotal++
 		idx.Versions[id] = ver
 		idx.SeqNos[id] = seq
 		resp := orderedJSON{
 			{"_index", idx.Name}, {"_id", id}, {"_version", ver}, {"result", "deleted"},
-			{"_shards", map[string]any{"total": idx.numShards(), "successful": idx.numShards(), "failed": 0}},
+			{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
 			{"_seq_no", seq}, {"_primary_term", int64(1)},
 		}
 		writeJSON(w, 200, resp)
@@ -1663,7 +1663,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		return
 	}
 	ensureFieldTypes(idx)
-	if derr := idx.computeDocValues(id, newDoc); derr != nil {
+	if derr := computeDocValues(idx, id, newDoc); derr != nil {
 		writeError(w, derr)
 		return
 	}
@@ -1689,7 +1689,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 	if rv == "true" {
 		resp = append(resp, orderedKV{"forced_refresh", true})
 	}
-	resp = append(resp, orderedKV{"_shards", map[string]any{"total": idx.numShards(), "successful": idx.numShards(), "failed": 0}},
+	resp = append(resp, orderedKV{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
 		orderedKV{"_seq_no", seq}, orderedKV{"_primary_term", int64(1)})
 	if getSpecified(r, body) {
 		resp = append(resp, orderedKV{"get", updateGetObject(idx, id, newDoc, seq, r, body)})

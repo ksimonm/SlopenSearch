@@ -204,7 +204,7 @@ type indexHealth struct {
 }
 
 func computeIndexHealth(idx *Index) indexHealth {
-	h := indexHealth{NumShards: idx.numShards(), NumReplicas: idx.numReplicas(), Status: "green"}
+	h := indexHealth{NumShards: numShards(idx), NumReplicas: numReplicas(idx), Status: "green"}
 	if idx.Closed {
 		h.Shards = nil
 		return h
@@ -558,8 +558,8 @@ func (s *Server) buildStateMetadata(indices []*Index) map[string]any {
 
 func indexSettingsForMetadata(idx *Index) map[string]any {
 	inner := map[string]any{
-		"number_of_shards":   settingsString(idx.numShards()),
-		"number_of_replicas": settingsString(idx.numReplicas()),
+		"number_of_shards":   settingsString(numShards(idx)),
+		"number_of_replicas": settingsString(numReplicas(idx)),
 		"provided_name":      idx.Name,
 		"creation_date":      settingsString(idx.CreationDate),
 		"uuid":               idx.UUID,
@@ -596,7 +596,7 @@ func (s *Server) buildRoutingTable(indices []*Index) map[string]any {
 	for _, idx := range indices {
 		shards := map[string]any{}
 		if !idx.Closed {
-			for i := 0; i < idx.numShards(); i++ {
+			for i := 0; i < numShards(idx); i++ {
 				copies := []any{}
 				copies = append(copies, map[string]any{
 					"index":           idx.Name,
@@ -608,7 +608,7 @@ func (s *Server) buildRoutingTable(indices []*Index) map[string]any {
 					"recovery_source": map[string]any{"type": "PEER"},
 					"unassigned_info": nil,
 				})
-				for r := 0; r < idx.numReplicas(); r++ {
+				for r := 0; r < numReplicas(idx); r++ {
 					copies = append(copies, map[string]any{
 						"index":           idx.Name,
 						"shard":           i,
@@ -639,11 +639,11 @@ func (s *Server) buildRoutingNodes(indices []*Index) map[string]any {
 		if idx.Closed {
 			continue
 		}
-		for i := 0; i < idx.numShards(); i++ {
+		for i := 0; i < numShards(idx); i++ {
 			assigned = append(assigned, map[string]any{
 				"index": idx.Name, "shard": i, "primary": true, "state": "STARTED", "node": nodeID,
 			})
-			for r := 0; r < idx.numReplicas(); r++ {
+			for r := 0; r < numReplicas(idx); r++ {
 				unassigned = append(unassigned, map[string]any{
 					"index": idx.Name, "shard": i, "primary": false, "state": "UNASSIGNED", "node": nil,
 				})
@@ -1138,13 +1138,13 @@ func (s *Server) handleAllocationExplain(w http.ResponseWriter, r *http.Request)
 			Reason: "Validation Failed: 1: shard must be specified;2: primary must be specified;", Status: 400})
 		return
 	}
-	if shardNum >= idx.numShards() {
+	if shardNum >= numShards(idx) {
 		writeError(w, &apiError{Type: "shard_not_found_exception",
 			Reason: "no shard with id [" + strconv.Itoa(shardNum) + "]", Status: 404, Extra: strconv.Itoa(shardNum)})
 		return
 	}
 	h := computeIndexHealth(idx)
-	if !primary && h.Unassigned == 0 || primary && idx.numReplicas() == 0 && false {
+	if !primary && h.Unassigned == 0 || primary && numReplicas(idx) == 0 && false {
 	}
 	if primary {
 		writeJSON(w, 200, map[string]any{

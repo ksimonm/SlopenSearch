@@ -1692,14 +1692,14 @@ func applyRequestDerived(idx *Index, defs any) *apiError {
 		norm[name] = cp
 	}
 	idx.Mappings["derived"] = norm
-	idx.recomputeAllDocValues()
+	recomputeAllDocValues(idx)
 	ensureFieldTypes(idx)
 	return nil
 }
 
 // computeDocValues validates and indexes a document, storing normalized field
 // values used by search, sort, aggregations and docvalue_fields.
-func (idx *Index) computeDocValues(id string, doc map[string]any) *apiError {
+func computeDocValues(idx *Index, id string, doc map[string]any) *apiError {
 	if reason := invalidDocFieldName(doc); reason != "" {
 		return mapperErr("mapper_parsing_exception", reason, "illegal_argument_exception", reason)
 	}
@@ -1729,7 +1729,7 @@ func (idx *Index) computeDocValues(id string, doc map[string]any) *apiError {
 		idx.DocValues = map[string]map[string][]any{}
 	}
 	idx.DocValues[id] = c.values
-	idx.dvGen++
+	idx.DVGen++
 	if len(c.ignored) > 0 {
 		if idx.DocIgnored == nil {
 			idx.DocIgnored = map[string][]string{}
@@ -1751,16 +1751,16 @@ func ignoredValues(fields []string) []any {
 	return out
 }
 
-func (idx *Index) removeDocValues(id string) {
+func removeDocValues(idx *Index, id string) {
 	delete(idx.DocValues, id)
 	delete(idx.DocIgnored, id)
-	idx.dvGen++
+	idx.DVGen++
 }
 
 // recomputeAllDocValues rebuilds doc values for every document (used when
 // mappings change).
-func (idx *Index) recomputeAllDocValues() {
-	idx.dvGen++
+func recomputeAllDocValues(idx *Index) {
+	idx.DVGen++
 	idx.DocValues = map[string]map[string][]any{}
 	idx.DocIgnored = map[string][]string{}
 	for _, id := range idx.Order {
@@ -1768,7 +1768,7 @@ func (idx *Index) recomputeAllDocValues() {
 		if !live {
 			continue
 		}
-		_ = idx.computeDocValues(id, doc)
+		_ = computeDocValues(idx, id, doc)
 	}
 }
 

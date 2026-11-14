@@ -5517,10 +5517,10 @@ func termStatsFor(idx *Index, field, analyzer string, docTerms func([]any) []str
 	termStatsMu.Lock()
 	st := termStatsCache[key]
 	termStatsMu.Unlock()
-	if st != nil && st.gen == idx.dvGen && st.mapVer == idx.MappingVersion && st.settings == len(idx.Settings) {
+	if st != nil && st.gen == idx.DVGen && st.mapVer == idx.MappingVersion && st.settings == len(idx.Settings) {
 		return st
 	}
-	st = &fieldTermStats{gen: idx.dvGen, mapVer: idx.MappingVersion, settings: len(idx.Settings),
+	st = &fieldTermStats{gen: idx.DVGen, mapVer: idx.MappingVersion, settings: len(idx.Settings),
 		df: map[string]int{}, docTokens: map[string][]string{}}
 	for id, dv := range idx.DocValues {
 		vals := dv[field]

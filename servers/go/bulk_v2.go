@@ -426,7 +426,7 @@ func (s *Server) runBulkAction(a bulkAction, rv string, requireAliasURL bool, ur
 		delete(idx.Docs, id)
 		delete(idx.Pending, id)
 		delete(idx.RawDocs, id)
-		idx.removeDocValues(id)
+		removeDocValues(idx, id)
 		idx.DeleteTotal++
 		return bulkOKItem("delete", bulkItem("delete", idx.Name, id, ver, seq, 1, "deleted", 200, false)), false
 	case "update":
@@ -488,7 +488,7 @@ func (s *Server) runBulkIndex(idx *Index, a bulkAction, id, routing, rv, urlPipe
 		return bulkErrItem(a.op, idx.Name, id, derr), true
 	}
 	ensureFieldTypes(idx)
-	if derr := idx.computeDocValues(id, src); derr != nil {
+	if derr := computeDocValues(idx, id, src); derr != nil {
 		return bulkErrItem(a.op, idx.Name, id, derr), true
 	}
 	if !exists {
@@ -566,7 +566,7 @@ func (s *Server) runBulkUpdate(idx *Index, a bulkAction, id, routing, rv, urlSou
 			return bulkErrItem(a.op, idx.Name, id, derr), true
 		}
 		ensureFieldTypes(idx)
-		if derr := idx.computeDocValues(id, src); derr != nil {
+		if derr := computeDocValues(idx, id, src); derr != nil {
 			return bulkErrItem("update", idx.Name, id, derr), true
 		}
 		idx.Order = append(idx.Order, id)
@@ -608,7 +608,7 @@ func (s *Server) runBulkUpdate(idx *Index, a bulkAction, id, routing, rv, urlSou
 		delete(idx.Docs, id)
 		delete(idx.Pending, id)
 		delete(idx.RawDocs, id)
-		idx.removeDocValues(id)
+		removeDocValues(idx, id)
 		idx.DeleteTotal++
 		idx.Versions[id] = ver
 		idx.SeqNos[id] = seq
@@ -629,7 +629,7 @@ func (s *Server) runBulkUpdate(idx *Index, a bulkAction, id, routing, rv, urlSou
 		return bulkErrItem("update", idx.Name, id, derr), true
 	}
 	ensureFieldTypes(idx)
-	if derr := idx.computeDocValues(id, newDoc); derr != nil {
+	if derr := computeDocValues(idx, id, newDoc); derr != nil {
 		return bulkErrItem("update", idx.Name, id, derr), true
 	}
 	ver := currentVersion(idx, id) + 1

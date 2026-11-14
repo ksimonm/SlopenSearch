@@ -16,6 +16,7 @@ import (
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
 	"slopensearch/internal/settings"
 	"slopensearch/internal/wildcard"
 )
@@ -35,43 +36,12 @@ var validTypes = map[string]bool{
 	"xy_point": true, "knn_vector": true,
 }
 
-type Index struct {
-	Name           string
-	UUID           string
-	CreationDate   int64
-	Mappings       map[string]any
-	Settings       map[string]any // canonical flat form, keys prefixed "index."
-	Docs           map[string]map[string]any
-	Order          []string
-	FieldTypes     map[string]string
-	Closed         bool
-	Aliases        map[string]map[string]any
-	MappingVersion int64
-	Pending        map[string]map[string]any // indexed but not yet refreshed (search_interval=-1)
-	Routing        map[string]string         // doc id -> routing value
-	SegGen         int64
-	Deletes        int64
-	DataStream     string // non-empty when this index backs a data stream
-	Verified       bool
-	IndexTotal     int64
-	DeleteTotal    int64
-	ForceMerged    bool
-	DocValues      map[string]map[string][]any // doc id -> field path -> indexed values
-	DocIgnored     map[string][]string         // doc id -> ignored (malformed) fields
-	RawDocs        map[string][]byte           // doc id -> original _source bytes
-	Versions       map[string]int64
-	SeqNos         map[string]int64
-	PrimaryTerms   map[string]int64
-	NextSeq        int64
-
-	dvGen uint64 // bumped whenever DocValues changes; validates derived caches
-
-	stale map[string]staleMark // unrefreshed overwrites of searchable docs
-}
+// Index is the in-memory state of an index (internal/model).
+type Index = model.Index
 
 const versionCreated = "137307827"
 
-func (idx *Index) isHidden() bool {
+func isHidden(idx *Index) bool {
 	v, ok := findSetting(idx.Settings, "hidden")
 	if !ok {
 		return false
@@ -79,7 +49,7 @@ func (idx *Index) isHidden() bool {
 	return settingsValueString(v) == "true"
 }
 
-func (idx *Index) blockOn(name string) bool {
+func blockOn(idx *Index, name string) bool {
 	v, ok := findSetting(idx.Settings, "blocks."+name)
 	if !ok {
 		return false
@@ -87,7 +57,7 @@ func (idx *Index) blockOn(name string) bool {
 	return settingsValueString(v) == "true"
 }
 
-func (idx *Index) refreshDisabled() bool {
+func refreshDisabled(idx *Index) bool {
 	v, ok := findSetting(idx.Settings, "refresh_interval")
 	if !ok {
 		return false
@@ -139,14 +109,14 @@ const (
 	nodeVersion = "3.9.0"
 )
 
-func (idx *Index) numShards() int {
+func numShards(idx *Index) int {
 	if v, ok := settingInt(idx.Settings, "number_of_shards"); ok {
 		return v
 	}
 	return 1
 }
 
-func (idx *Index) numReplicas() int {
+func numReplicas(idx *Index) int {
 	if v, ok := settingInt(idx.Settings, "number_of_replicas"); ok {
 		return v
 	}

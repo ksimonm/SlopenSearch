@@ -369,7 +369,7 @@ func sortFieldMapped(idx *Index, field string) bool {
 	return ok
 }
 
-func (idx *Index) objectPaths() map[string]bool {
+func objectPaths(idx *Index) map[string]bool {
 	out := map[string]bool{}
 	var walk func(prefix string, props map[string]any)
 	walk = func(prefix string, props map[string]any) {
@@ -1709,7 +1709,7 @@ func (c *queryCtx) evalExists(raw map[string]any) (bool, float64, *apiError) {
 				return true, boost, nil
 			}
 		}
-		for path := range c.idx.objectPaths() {
+		for path := range objectPaths(c.idx) {
 			if re.MatchString(path) && c.hasField(path) {
 				return true, boost, nil
 			}

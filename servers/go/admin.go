@@ -327,16 +327,16 @@ func settingsToNested(flat map[string]any) map[string]any {
 	return root
 }
 
-func (idx *Index) materializedFlat() map[string]any {
+func materializedFlat(idx *Index) map[string]any {
 	out := map[string]any{}
 	for k, v := range idx.Settings {
 		out[k] = stringifyScalar(v)
 	}
 	if _, ok := out["index.number_of_shards"]; !ok {
-		out["index.number_of_shards"] = strconv.Itoa(idx.numShards())
+		out["index.number_of_shards"] = strconv.Itoa(numShards(idx))
 	}
 	if _, ok := out["index.number_of_replicas"]; !ok {
-		out["index.number_of_replicas"] = strconv.Itoa(idx.numReplicas())
+		out["index.number_of_replicas"] = strconv.Itoa(numReplicas(idx))
 	}
 	out["index.uuid"] = idx.UUID
 	out["index.creation_date"] = strconv.FormatInt(idx.CreationDate, 10)
@@ -383,7 +383,7 @@ func parseSettingsFilter(filter string) []string {
 // when an explicit filter matched nothing.
 func settingsView(idx *Index, flat, includeDefaults bool, filter string) map[string]any {
 	patterns := parseSettingsFilter(filter)
-	flatAll := idx.materializedFlat()
+	flatAll := materializedFlat(idx)
 	matched := map[string]any{}
 	for k, v := range flatAll {
 		if matchAnySettingPattern(patterns, k) {
@@ -467,7 +467,7 @@ func acceptClass(idx *Index, expand map[string]bool) bool {
 	} else if !expand["open"] {
 		return false
 	}
-	if idx.isHidden() && !expand["hidden"] {
+	if isHidden(idx) && !expand["hidden"] {
 		return false
 	}
 	return true
@@ -1081,9 +1081,9 @@ func (s *Server) getIndexMeta(w http.ResponseWriter, r *http.Request, spec strin
 		}
 		var settings map[string]any
 		if flat {
-			settings = idx.materializedFlat()
+			settings = materializedFlat(idx)
 		} else {
-			settings = settingsToNested(idx.materializedFlat())
+			settings = settingsToNested(materializedFlat(idx))
 		}
 		mappings := idx.Mappings
 		if mappings == nil {
@@ -1137,7 +1137,7 @@ func (s *Server) deleteIndices(w http.ResponseWriter, r *http.Request, spec stri
 }
 
 func indexBlockError(idx *Index, block string, code int, status int) *apiError {
-	if !idx.blockOn(block) {
+	if !blockOn(idx, block) {
 		return nil
 	}
 	return &apiError{Type: "cluster_block_exception", Status: status,

@@ -109,7 +109,7 @@ func (s *Server) handleResolveIndex(w http.ResponseWriter, r *http.Request, spec
 			entry["aliases"] = arr
 		}
 		attrs := []any{}
-		if idx.isHidden() {
+		if isHidden(idx) {
 			attrs = append(attrs, "hidden")
 		}
 		if idx.Closed {

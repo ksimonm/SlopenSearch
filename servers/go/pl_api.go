@@ -486,7 +486,7 @@ func plTempIndex(idx *Index, doc map[string]any) *Index {
 		FieldTypes: map[string]string{},
 	}
 	ensureFieldTypes(tmp)
-	_ = tmp.computeDocValues("_execute", doc)
+	_ = computeDocValues(tmp, "_execute", doc)
 	return tmp
 }
 

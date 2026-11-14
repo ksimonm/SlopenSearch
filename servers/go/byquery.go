@@ -173,7 +173,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 			seq := nextSeq(idx)
 			delete(idx.Docs, id)
 			delete(idx.Pending, id)
-			idx.removeDocValues(id)
+			removeDocValues(idx, id)
 			idx.DeleteTotal++
 			idx.Versions[id] = base + 1
 			idx.SeqNos[id] = seq
@@ -211,7 +211,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 			seq := nextSeq(idx)
 			delete(idx.Docs, id)
 			delete(idx.Pending, id)
-			idx.removeDocValues(id)
+			removeDocValues(idx, id)
 			idx.DeleteTotal++
 			idx.Versions[id] = base + 1
 			idx.SeqNos[id] = seq
@@ -249,7 +249,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 			continue
 		}
 		ensureFieldTypes(idx)
-		if derr := idx.computeDocValues(id, newDoc); derr != nil {
+		if derr := computeDocValues(idx, id, newDoc); derr != nil {
 			failures = append(failures, byQueryFailure(idx.Name, id, derr))
 			continue
 		}
@@ -259,7 +259,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 		idx.SeqNos[id] = seq
 		idx.PrimaryTerms[id] = 1
 		idx.IndexTotal++
-		if rv == "true" || rv == "wait_for" || !idx.refreshDisabled() {
+		if rv == "true" || rv == "wait_for" || !refreshDisabled(idx) {
 			delete(idx.Pending, id)
 		} else {
 			markPending(idx, id, newDoc, true)

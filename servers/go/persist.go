@@ -380,7 +380,7 @@ func summarize(idx *Index) idxSummary {
 	return idxSummary{
 		nextSeq: idx.NextSeq, indexTotal: idx.IndexTotal, deleteTotal: idx.DeleteTotal,
 		deletes: idx.Deletes, nDocs: len(idx.Docs), nOrder: len(idx.Order), nSeq: len(idx.SeqNos),
-		dvGen: idx.dvGen, docsPtr: reflect.ValueOf(idx.Docs).Pointer(),
+		dvGen: idx.DVGen, docsPtr: reflect.ValueOf(idx.Docs).Pointer(),
 	}
 }
 
@@ -673,7 +673,7 @@ func (p *persister) load(s *Server) error {
 		}
 		// recovery refreshes the shard: translog operations become searchable
 		idx.Pending = map[string]map[string]any{}
-		idx.recomputeAllDocValues()
+		recomputeAllDocValues(idx)
 	}
 	return nil
 }

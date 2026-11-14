@@ -646,7 +646,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				} else {
 					delete(vidx.Mappings, "derived")
 				}
-				vidx.recomputeAllDocValues()
+				recomputeAllDocValues(vidx)
 				ensureFieldTypes(vidx)
 			}()
 		}
@@ -822,7 +822,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			if sf != nil {
 				shards += len(sf.allowed[idx])
 			} else {
-				shards += idx.numShards()
+				shards += numShards(idx)
 			}
 			for _, id := range idx.Order {
 				if !sf.allows(idx, id) {
@@ -2143,7 +2143,7 @@ func searchSortSpecValueRaw(h multiHit, sp searchSortSpec) (any, bool, bool) {
 				break
 			}
 		}
-		ns := h.idx.numShards()
+		ns := numShards(h.idx)
 		if ns < 1 {
 			ns = 1
 		}

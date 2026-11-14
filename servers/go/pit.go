@@ -51,7 +51,7 @@ func (s *Server) openPit(w http.ResponseWriter, r *http.Request, name string) {
 		}
 		hits = append(hits, multiHit{idx: idx, id: id, doc: doc, score: 1})
 	}
-	shards := idx.numShards()
+	shards := numShards(idx)
 	creation := time.Now().UnixMilli()
 	s.mu.RUnlock()
 

@@ -23,7 +23,7 @@ func (s *Server) maintenanceOp(w http.ResponseWriter, r *http.Request, spec, op 
 			writeError(w, errIndexClosed(idx))
 			return
 		}
-		shards += idx.numShards()
+		shards += numShards(idx)
 		switch op {
 		case "refresh":
 			idx.Pending = nil
@@ -119,8 +119,8 @@ func (s *Server) indexMetrics(idx *Index, requested map[string]bool) map[string]
 			m["count"] = len(idx.Docs)
 			m["deleted"] = idx.DeleteTotal
 		case "store":
-			m["size_in_bytes"] = idx.storeBytes()
-			m["total_data_set_size_in_bytes"] = idx.storeBytes()
+			m["size_in_bytes"] = storeBytes(idx)
+			m["total_data_set_size_in_bytes"] = storeBytes(idx)
 		case "indexing":
 			m["index_total"] = idx.IndexTotal
 			m["delete_total"] = idx.DeleteTotal
@@ -189,7 +189,7 @@ func (s *Server) handleStatsAPI(w http.ResponseWriter, r *http.Request, spec, me
 			writeError(w, errIndexClosed(idx))
 			return
 		}
-		shards += idx.numShards()
+		shards += numShards(idx)
 		prim := s.indexMetrics(idx, requested)
 		total := s.indexMetrics(idx, requested)
 		entry := map[string]any{
@@ -272,9 +272,9 @@ func (s *Server) handleSegmentsAPI(w http.ResponseWriter, r *http.Request, spec 
 			writeError(w, errIndexClosed(idx))
 			return
 		}
-		shards += idx.numShards()
+		shards += numShards(idx)
 		shardMap := map[string]any{}
-		for i := 0; i < idx.numShards(); i++ {
+		for i := 0; i < numShards(idx); i++ {
 			numDocs := 0
 			deleted := 0
 			if i == 0 {
@@ -285,7 +285,7 @@ func (s *Server) handleSegmentsAPI(w http.ResponseWriter, r *http.Request, spec 
 					"generation":    0,
 					"num_docs":      numDocs,
 					"deleted_docs":  deleted,
-					"size_in_bytes": idx.storeBytes() / int64(idx.numShards()+1),
+					"size_in_bytes": storeBytes(idx) / int64(numShards(idx)+1),
 					"committed":     true,
 					"search":        true,
 					"compound":      false,
@@ -326,7 +326,7 @@ func (s *Server) handleRecoveryAPI(w http.ResponseWriter, r *http.Request, spec 
 	out := map[string]any{}
 	for _, idx := range indices {
 		shardList := []any{}
-		for i := 0; i < idx.numShards(); i++ {
+		for i := 0; i < numShards(idx); i++ {
 			shardList = append(shardList, map[string]any{
 				"id": i, "type": "EMPTY_STORE", "stage": "DONE", "primary": true,
 				"start_time_in_millis": idx.CreationDate,
@@ -334,7 +334,7 @@ func (s *Server) handleRecoveryAPI(w http.ResponseWriter, r *http.Request, spec 
 				"total_time_in_millis": 0,
 				"source":               map[string]any{},
 				"target":               map[string]any{"id": nodeID, "host": "127.0.0.1", "transport_address": "127.0.0.1:9300", "ip": "127.0.0.1", "name": nodeName},
-				"index":                map[string]any{"size": map[string]any{"total_in_bytes": idx.storeBytes()}, "files": map[string]any{"total": 1, "reused": 0, "recovered": 0}, "total_time_in_millis": 0},
+				"index":                map[string]any{"size": map[string]any{"total_in_bytes": storeBytes(idx)}, "files": map[string]any{"total": 1, "reused": 0, "recovered": 0}, "total_time_in_millis": 0},
 				"translog":             map[string]any{"recovered": 0, "total": 0, "percent": "100.0%", "total_on_start": 0, "total_time_in_millis": 0},
 				"verify_index":         map[string]any{"check_index_time_in_millis": 0, "total_time_in_millis": 0},
 			})

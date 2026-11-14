@@ -316,7 +316,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 		}
 		destIdx.FieldTypes = map[string]string{}
 		buildFieldTypes(destIdx.Mappings, "", destIdx.FieldTypes)
-		if derr := destIdx.computeDocValues(id, doc); derr != nil {
+		if derr := computeDocValues(destIdx, id, doc); derr != nil {
 			if existing {
 				updated--
 			} else {

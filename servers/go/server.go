@@ -1038,7 +1038,7 @@ func writeBlockError(idx *Index) *apiError {
 	if err := indexBlockError(idx, "read_only", 5, 403); err != nil {
 		return err
 	}
-	if idx.blockOn("read_only_allow_delete") {
+	if blockOn(idx, "read_only_allow_delete") {
 		return &apiError{Type: "cluster_block_exception", Status: 429,
 			Reason: fmt.Sprintf("index [%s] blocked by: [TOO_MANY_REQUESTS/12/disk usage exceeded flood-stage watermark, index has read-only-allow-delete block];", idx.Name)}
 	}
@@ -1111,7 +1111,7 @@ func (s *Server) handleIndexDoc(w http.ResponseWriter, r *http.Request, name, id
 	if id == "" {
 		id = s.nextID()
 	}
-	if derr := idx.computeDocValues(id, body); derr != nil {
+	if derr := computeDocValues(idx, id, body); derr != nil {
 		writeError(w, derr)
 		return
 	}
@@ -1133,7 +1133,7 @@ func (s *Server) handleIndexDoc(w http.ResponseWriter, r *http.Request, name, id
 	}
 	if queryBool(r, "refresh") {
 		delete(idx.Pending, id)
-	} else if idx.refreshDisabled() {
+	} else if refreshDisabled(idx) {
 		if idx.Pending == nil {
 			idx.Pending = map[string]map[string]any{}
 		}
@@ -1235,7 +1235,7 @@ func (s *Server) handleDeleteDoc(w http.ResponseWriter, r *http.Request, name, i
 	delete(idx.Docs, id)
 	delete(idx.Pending, id)
 	delete(idx.Routing, id)
-	idx.removeDocValues(id)
+	removeDocValues(idx, id)
 	idx.DeleteTotal++
 	writeJSON(w, 200, map[string]any{"_index": idx.Name, "_id": id, "result": "deleted"})
 }
@@ -1280,12 +1280,12 @@ func (s *Server) handleUpdateDoc(w http.ResponseWriter, r *http.Request, name, i
 			doc[k] = v
 		}
 	}
-	if derr := idx.computeDocValues(id, doc); derr != nil {
+	if derr := computeDocValues(idx, id, doc); derr != nil {
 		writeError(w, derr)
 		return
 	}
 	idx.Docs[id] = doc
-	if !queryBool(r, "refresh") && idx.refreshDisabled() {
+	if !queryBool(r, "refresh") && refreshDisabled(idx) {
 		if idx.Pending == nil {
 			idx.Pending = map[string]map[string]any{}
 		}
@@ -1434,7 +1434,7 @@ func (s *Server) handleCount(w http.ResponseWriter, r *http.Request, name string
 		if sf != nil {
 			shards += len(sf.allowed[idx])
 		} else {
-			shards += idx.numShards()
+			shards += numShards(idx)
 		}
 		for _, id := range idx.Order {
 			doc, live := idx.Docs[id]
@@ -1544,7 +1544,7 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, name string)
 			delete(idx.Docs, docID)
 			delete(idx.Pending, docID)
 			delete(idx.Routing, docID)
-			idx.removeDocValues(docID)
+			removeDocValues(idx, docID)
 			idx.DeleteTotal++
 			items = append(items, map[string]any{"delete": map[string]any{"_index": idx.Name, "_id": docID, "status": 200}})
 			continue
@@ -1601,7 +1601,7 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, name string)
 			for k, v := range source {
 				doc[k] = v
 			}
-			if derr := idx.computeDocValues(docID, doc); derr != nil {
+			if derr := computeDocValues(idx, docID, doc); derr != nil {
 				hasErrors = true
 				items = append(items, bulkErrAPI("update", idx.Name, docID, derr))
 				continue
@@ -1652,7 +1652,7 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, name string)
 		if docID == "" {
 			docID = s.nextID()
 		}
-		if derr := idx.computeDocValues(docID, source); derr != nil {
+		if derr := computeDocValues(idx, docID, source); derr != nil {
 			hasErrors = true
 			items = append(items, bulkErrAPI(op, idx.Name, docID, derr))
 			continue
@@ -1683,7 +1683,7 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, name string)
 			}
 			idx.Routing[docID] = routing
 		}
-		if !queryBool(r, "refresh") && idx.refreshDisabled() {
+		if !queryBool(r, "refresh") && refreshDisabled(idx) {
 			if idx.Pending == nil {
 				idx.Pending = map[string]map[string]any{}
 			}
