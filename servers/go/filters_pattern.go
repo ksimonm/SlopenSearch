@@ -1,8 +1,10 @@
 package main
 
+import "slopensearch/internal/jregex"
+
 // Regex based token filters, using Java regular expression semantics.
 
-func filterPatternRegex(p map[string]any, pattern string) (*jRegex, *apiError) {
+func filterPatternRegex(p map[string]any, pattern string) (*jregex.Regexp, *apiError) {
 	flags, err := javaRegexFlags(fsString(p, "flags", ""))
 	if err != nil {
 		return nil, err
@@ -23,9 +25,9 @@ func patternReplaceFilter(toks []analyzedToken, p map[string]any) ([]analyzedTok
 	repl := fsString(p, "replacement", "")
 	all := fsBool(p, "all", true)
 	for i := range toks {
-		out, rerr := re.replace(toks[i].term, repl, all)
+		out, rerr := re.Replace(toks[i].term, repl, all)
 		if rerr != nil {
-			return nil, rerr
+			return nil, jregexError(rerr)
 		}
 		toks[i].term = out
 	}
@@ -35,7 +37,7 @@ func patternReplaceFilter(toks []analyzedToken, p map[string]any) ([]analyzedTok
 // patternCaptureFilter ports PatternCaptureGroupTokenFilter: the original
 // (optionally) followed by every non-empty capture group of every match.
 func patternCaptureFilter(toks []analyzedToken, p map[string]any) ([]analyzedToken, *apiError) {
-	var res []*jRegex
+	var res []*jregex.Regexp
 	for _, pat := range fsStrings(p, "patterns") {
 		re, err := filterPatternRegex(p, pat)
 		if err != nil {
@@ -51,7 +53,7 @@ func patternCaptureFilter(toks []analyzedToken, p map[string]any) ([]analyzedTok
 		}
 		in := []rune(t.term)
 		for _, re := range res {
-			for _, m := range re.findAll(in) {
+			for _, m := range re.FindAll(in) {
 				for g := 1; 2*g+1 < len(m); g++ {
 					if m[2*g] < 0 || m[2*g] == m[2*g+1] {
 						continue

@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"slopensearch/internal/jregex"
 )
 
 // Tokenizers. A tokenizer is built once from its settings (which is where
@@ -328,7 +330,7 @@ func buildPatternTokenizer(params map[string]any) (tokenizerFunc, *apiError) {
 	return func(text string) []analyzedToken { return patternTokenize(re, group, text) }, nil
 }
 
-func patternTokenize(re *jRegex, group int, text string) []analyzedToken {
+func patternTokenize(re *jregex.Regexp, group int, text string) []analyzedToken {
 	rs := []rune(text)
 	offs := runeOffsets(rs)
 	out := []analyzedToken{}
@@ -337,7 +339,7 @@ func patternTokenize(re *jRegex, group int, text string) []analyzedToken {
 		out = append(out, analyzedToken{term: string(rs[s:e]), start: offs[s], end: offs[e], pos: pos, typ: "word"})
 		pos++
 	}
-	matches := re.findAll(rs)
+	matches := re.FindAll(rs)
 	if group >= 0 {
 		for _, m := range matches {
 			if 2*group+1 >= len(m) || m[2*group] < 0 {
@@ -363,29 +365,13 @@ func patternTokenize(re *jRegex, group int, text string) []analyzedToken {
 	return out
 }
 
-// longestAt returns the end of the longest match starting exactly at i, or -1.
-func (re *jRegex) longestAt(in []rune, i int) int {
-	m := &jMatcher{re: re, in: in, caps: make([]int, 2*(re.groups+1))}
-	for x := range m.caps {
-		m.caps[x] = -1
-	}
-	best := -1
-	m.match(re.root, i, func(e int) bool {
-		if e > best {
-			best = e
-		}
-		return best == len(in) || m.steps > 200000
-	})
-	return best
-}
-
-func simplePatternTokens(re *jRegex, text string) []analyzedToken {
+func simplePatternTokens(re *jregex.Regexp, text string) []analyzedToken {
 	rs := []rune(text)
 	offs := runeOffsets(rs)
 	out := []analyzedToken{}
 	pos := 0
 	for i := 0; i < len(rs); {
-		e := re.longestAt(rs, i)
+		e := re.LongestAt(rs, i)
 		if e > i {
 			out = append(out, analyzedToken{term: string(rs[i:e]), start: offs[i], end: offs[e], pos: pos, typ: "word"})
 			pos++
@@ -397,14 +383,14 @@ func simplePatternTokens(re *jRegex, text string) []analyzedToken {
 	return out
 }
 
-func simplePatternSplitTokens(re *jRegex, text string) []analyzedToken {
+func simplePatternSplitTokens(re *jregex.Regexp, text string) []analyzedToken {
 	rs := []rune(text)
 	offs := runeOffsets(rs)
 	out := []analyzedToken{}
 	pos := 0
 	start := 0
 	for i := 0; i < len(rs); {
-		e := re.longestAt(rs, i)
+		e := re.LongestAt(rs, i)
 		if e > i {
 			if i > start {
 				out = append(out, analyzedToken{term: string(rs[start:i]), start: offs[start], end: offs[i], pos: pos, typ: "word"})
@@ -572,7 +558,7 @@ func thaiTokens(text string) []analyzedToken {
 // ---------------------------------------------------------------- classic
 
 var classicRules struct {
-	alphanum, apostrophe, acronym, company, email, host, num, acronymDep *jRegex
+	alphanum, apostrophe, acronym, company, email, host, num, acronymDep *jregex.Regexp
 }
 
 func init() {
@@ -583,10 +569,10 @@ func init() {
 	alpha := `(?:` + letter + `)+`
 	p := `[_\-/.,]`
 	hasDigit := `(?:` + letter + `|` + digit + `)*` + digit + `(?:` + letter + `|` + digit + `)*`
-	mk := func(s string) *jRegex {
-		re, err := compileJavaRegex(s, 0)
+	mk := func(s string) *jregex.Regexp {
+		re, err := jregex.Compile(s, 0)
 		if err != nil {
-			panic(err.message())
+			panic(err.Message())
 		}
 		return re
 	}
@@ -619,7 +605,7 @@ func classicTokens(text string, maxLen int) []analyzedToken {
 	out := []analyzedToken{}
 	pos := 0
 	rules := []struct {
-		re  *jRegex
+		re  *jregex.Regexp
 		typ string
 	}{
 		{classicRules.alphanum, "<ALPHANUM>"},
@@ -649,7 +635,7 @@ func classicTokens(text string, maxLen int) []analyzedToken {
 					e = i + 1
 				}
 			} else {
-				e = rule.re.longestAt(cand, i)
+				e = rule.re.LongestAt(cand, i)
 			}
 			if e > best {
 				best, bestTyp = e, rule.typ

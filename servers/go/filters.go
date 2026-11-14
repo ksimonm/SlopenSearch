@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"slopensearch/internal/jregex"
 )
 
 // Token filter framework. Each filter receives the token stream and returns a
@@ -481,7 +483,7 @@ func applyFilterOne(idx *Index, toks []analyzedToken, spec filterSpec) ([]analyz
 		keywords := fsStrings(p, "keywords")
 		ignoreCase := fsBool(p, "ignore_case", false)
 		pattern := fsString(p, "keywords_pattern", "")
-		var re *jRegex
+		var re *jregex.Regexp
 		if pattern != "" {
 			var err *apiError
 			if re, err = compileJavaRegexAPI(pattern, 0); err != nil {
@@ -501,7 +503,7 @@ func applyFilterOne(idx *Index, toks []analyzedToken, spec filterSpec) ([]analyz
 				key = strings.ToLower(key)
 			}
 			// PatternKeywordMarkerFilter requires the whole term to match.
-			if set[key] || (re != nil && re.fullMatch([]rune(toks[i].term))) {
+			if set[key] || (re != nil && re.FullMatch([]rune(toks[i].term))) {
 				toks[i].keyword = true
 			}
 		}

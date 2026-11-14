@@ -3,6 +3,8 @@ package main
 import (
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/jregex"
 )
 
 // Character filter execution with Lucene-style offset correction. Tokens are
@@ -400,18 +402,18 @@ func utf16Len(rs []rune) int {
 }
 
 // patternReplaceChars ports Lucene's PatternReplaceCharFilter.
-func patternReplaceChars(re *jRegex, repl, text string) (string, func(int) int, *apiError) {
+func patternReplaceChars(re *jregex.Regexp, repl, text string) (string, func(int) int, *apiError) {
 	in := []rune(text)
 	var out []rune
 	corr := &luceneCorrection{}
 	cumulative := 0
 	last := 0
-	for _, m := range re.findAll(in) {
+	for _, m := range re.FindAll(in) {
 		out = append(out, in[last:m[0]]...)
 		before := utf16Len(out)
-		r, err := re.expandReplacement(in, m, repl)
+		r, err := re.ExpandReplacement(in, m, repl)
 		if err != nil {
-			return "", nil, err
+			return "", nil, jregexError(err)
 		}
 		out = append(out, r...)
 		groupSize := utf16Len(in[m[0]:m[1]])

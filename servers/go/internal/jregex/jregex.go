@@ -1,4 +1,5 @@
-package main
+// Package jregex is a small backtracking implementation of java.util.regex.
+package jregex
 
 import (
 	"strconv"
@@ -14,20 +15,20 @@ import (
 // rune indices back to UTF-16 offsets.
 
 const (
-	jFlagCaseInsensitive = 1 << iota
-	jFlagMultiline
-	jFlagDotall
-	jFlagUnicodeCase
-	jFlagComments
-	jFlagUnixLines
-	jFlagUnicodeClass
-	jFlagLiteral
-	jFlagCanonEq
+	FlagCaseInsensitive = 1 << iota
+	FlagMultiline
+	FlagDotall
+	FlagUnicodeCase
+	FlagComments
+	FlagUnixLines
+	FlagUnicodeClass
+	FlagLiteral
+	FlagCanonEq
 )
 
-// javaRegexFlags parses the pipe separated flag names accepted by
+// ParseFlags parses the pipe separated flag names accepted by
 // OpenSearch (Regex.flagsFromString).
-func javaRegexFlags(s string) (int, *apiError) {
+func ParseFlags(s string) (int, *Error) {
 	f := 0
 	for _, name := range strings.Split(s, "|") {
 		name = strings.TrimSpace(name)
@@ -36,25 +37,25 @@ func javaRegexFlags(s string) (int, *apiError) {
 		}
 		switch strings.ToUpper(name) {
 		case "CASE_INSENSITIVE":
-			f |= jFlagCaseInsensitive
+			f |= FlagCaseInsensitive
 		case "MULTILINE":
-			f |= jFlagMultiline
+			f |= FlagMultiline
 		case "DOTALL":
-			f |= jFlagDotall
+			f |= FlagDotall
 		case "UNICODE_CASE":
-			f |= jFlagUnicodeCase
+			f |= FlagUnicodeCase
 		case "COMMENTS":
-			f |= jFlagComments
+			f |= FlagComments
 		case "UNIX_LINES":
-			f |= jFlagUnixLines
+			f |= FlagUnixLines
 		case "UNICODE_CHARACTER_CLASS":
-			f |= jFlagUnicodeClass
+			f |= FlagUnicodeClass
 		case "LITERAL":
-			f |= jFlagLiteral
+			f |= FlagLiteral
 		case "CANON_EQ":
-			f |= jFlagCanonEq
+			f |= FlagCanonEq
 		default:
-			return 0, analyzeRequestError("illegal_argument_exception", "Unknown regex flag ["+name+"]")
+			return 0, newError("illegal_argument_exception", "Unknown regex flag ["+name+"]")
 		}
 	}
 	return f, nil
@@ -93,20 +94,21 @@ type jNode struct {
 	asciiWrd bool
 }
 
-type jRegex struct {
+type Regexp struct {
 	root   *jNode
 	groups int
 	names  map[string]int
 	src    string
 }
 
-type jPatternError struct {
+type PatternError struct {
 	desc  string
 	index int
 	pat   string
 }
 
-func (e *jPatternError) message() string {
+// Message renders the error like java.util.regex.PatternSyntaxException.getMessage.
+func (e *PatternError) Message() string {
 	var b strings.Builder
 	b.WriteString(e.desc)
 	if e.index >= 0 {
@@ -123,9 +125,7 @@ func (e *jPatternError) message() string {
 	return b.String()
 }
 
-func (e *jPatternError) apiError() *apiError {
-	return analyzeRequestError("pattern_syntax_exception", e.message())
-}
+func (e *PatternError) Error() string { return e.Message() }
 
 type jParser struct {
 	src    []rune
@@ -136,14 +136,15 @@ type jParser struct {
 	pat    string
 }
 
-func compileJavaRegex(pattern string, flags int) (*jRegex, *jPatternError) {
+// Compile parses a Java pattern with the given Flag* bits.
+func Compile(pattern string, flags int) (*Regexp, *PatternError) {
 	p := &jParser{src: []rune(pattern), flags: flags, names: map[string]int{}, pat: pattern}
-	if flags&jFlagLiteral != 0 {
+	if flags&FlagLiteral != 0 {
 		seq := &jNode{kind: jnSeq}
 		for _, r := range p.src {
 			seq.subs = append(seq.subs, p.lit(r))
 		}
-		return &jRegex{root: seq, src: pattern, names: p.names}, nil
+		return &Regexp{root: seq, src: pattern, names: p.names}, nil
 	}
 	n, err := p.parseAlt()
 	if err != nil {
@@ -151,15 +152,15 @@ func compileJavaRegex(pattern string, flags int) (*jRegex, *jPatternError) {
 	}
 	if p.pos < len(p.src) {
 		if p.src[p.pos] == ')' {
-			return nil, &jPatternError{"Unmatched closing ')'", p.pos - 1, pattern}
+			return nil, &PatternError{"Unmatched closing ')'", p.pos - 1, pattern}
 		}
-		return nil, &jPatternError{"Unexpected internal error", p.pos, pattern}
+		return nil, &PatternError{"Unexpected internal error", p.pos, pattern}
 	}
-	return &jRegex{root: n, groups: p.groups, names: p.names, src: pattern}, nil
+	return &Regexp{root: n, groups: p.groups, names: p.names, src: pattern}, nil
 }
 
-func (p *jParser) errAt(desc string, idx int) *jPatternError {
-	return &jPatternError{desc, idx, p.pat}
+func (p *jParser) errAt(desc string, idx int) *PatternError {
+	return &PatternError{desc, idx, p.pat}
 }
 
 func (p *jParser) more() bool { return p.pos < len(p.src) }
@@ -172,7 +173,7 @@ func (p *jParser) peek() rune {
 }
 
 func (p *jParser) skipComments() {
-	if p.flags&jFlagComments == 0 {
+	if p.flags&FlagComments == 0 {
 		return
 	}
 	for p.more() {
@@ -191,7 +192,7 @@ func (p *jParser) skipComments() {
 	}
 }
 
-func (p *jParser) parseAlt() (*jNode, *jPatternError) {
+func (p *jParser) parseAlt() (*jNode, *PatternError) {
 	var alts []*jNode
 	for {
 		seq, err := p.parseSeq()
@@ -211,7 +212,7 @@ func (p *jParser) parseAlt() (*jNode, *jPatternError) {
 	return &jNode{kind: jnAlt, subs: alts}, nil
 }
 
-func (p *jParser) parseSeq() (*jNode, *jPatternError) {
+func (p *jParser) parseSeq() (*jNode, *PatternError) {
 	seq := &jNode{kind: jnSeq}
 	for {
 		p.skipComments()
@@ -238,7 +239,7 @@ func (p *jParser) parseSeq() (*jNode, *jPatternError) {
 	return seq, nil
 }
 
-func (p *jParser) parseQuant(atom *jNode) (*jNode, *jPatternError) {
+func (p *jParser) parseQuant(atom *jNode) (*jNode, *PatternError) {
 	for {
 		p.skipComments()
 		if !p.more() {
@@ -311,10 +312,10 @@ func (p *jParser) readInt() (int, bool) {
 }
 
 func (p *jParser) lit(r rune) *jNode {
-	return &jNode{kind: jnLit, r: r, fold: p.flags & (jFlagCaseInsensitive | jFlagUnicodeCase)}
+	return &jNode{kind: jnLit, r: r, fold: p.flags & (FlagCaseInsensitive | FlagUnicodeCase)}
 }
 
-func (p *jParser) parseAtom() (*jNode, *jPatternError) {
+func (p *jParser) parseAtom() (*jNode, *PatternError) {
 	r := p.src[p.pos]
 	switch r {
 	case '(':
@@ -328,8 +329,8 @@ func (p *jParser) parseAtom() (*jNode, *jPatternError) {
 		return &jNode{kind: jnSet, set: set}, nil
 	case '.':
 		p.pos++
-		dotall := p.flags&jFlagDotall != 0
-		unix := p.flags&jFlagUnixLines != 0
+		dotall := p.flags&FlagDotall != 0
+		unix := p.flags&FlagUnixLines != 0
 		return &jNode{kind: jnSet, set: func(c rune) bool {
 			if dotall {
 				return true
@@ -341,10 +342,10 @@ func (p *jParser) parseAtom() (*jNode, *jPatternError) {
 		}}, nil
 	case '^':
 		p.pos++
-		return &jNode{kind: jnAssert, assert: '^', multi: p.flags&jFlagMultiline != 0, unixLn: p.flags&jFlagUnixLines != 0}, nil
+		return &jNode{kind: jnAssert, assert: '^', multi: p.flags&FlagMultiline != 0, unixLn: p.flags&FlagUnixLines != 0}, nil
 	case '$':
 		p.pos++
-		return &jNode{kind: jnAssert, assert: '$', multi: p.flags&jFlagMultiline != 0, unixLn: p.flags&jFlagUnixLines != 0}, nil
+		return &jNode{kind: jnAssert, assert: '$', multi: p.flags&FlagMultiline != 0, unixLn: p.flags&FlagUnixLines != 0}, nil
 	case '\\':
 		return p.parseEscape()
 	case '*', '+', '?':
@@ -356,7 +357,7 @@ func (p *jParser) parseAtom() (*jNode, *jPatternError) {
 	return p.lit(r), nil
 }
 
-func (p *jParser) parseGroup() (*jNode, *jPatternError) {
+func (p *jParser) parseGroup() (*jNode, *PatternError) {
 	p.pos++ // (
 	if p.peek() == '?' {
 		p.pos++
@@ -400,19 +401,19 @@ func (p *jParser) parseGroup() (*jNode, *jPatternError) {
 				var bit int
 				switch ch {
 				case 'i':
-					bit = jFlagCaseInsensitive
+					bit = FlagCaseInsensitive
 				case 'm':
-					bit = jFlagMultiline
+					bit = FlagMultiline
 				case 's':
-					bit = jFlagDotall
+					bit = FlagDotall
 				case 'u':
-					bit = jFlagUnicodeCase
+					bit = FlagUnicodeCase
 				case 'x':
-					bit = jFlagComments
+					bit = FlagComments
 				case 'd':
-					bit = jFlagUnixLines
+					bit = FlagUnixLines
 				case 'U':
-					bit = jFlagUnicodeClass
+					bit = FlagUnicodeClass
 				case '-':
 					on = false
 					p.pos++
@@ -444,7 +445,7 @@ func (p *jParser) parseGroup() (*jNode, *jPatternError) {
 	return p.groupBody(&jNode{kind: jnGroup, group: p.groups})
 }
 
-func (p *jParser) groupBody(n *jNode) (*jNode, *jPatternError) {
+func (p *jParser) groupBody(n *jNode) (*jNode, *PatternError) {
 	saved := p.flags
 	body, err := p.parseAlt()
 	if err != nil {
@@ -477,7 +478,7 @@ func javaSpace(c rune) bool {
 }
 
 // parseEscape handles a backslash escape outside a character class.
-func (p *jParser) parseEscape() (*jNode, *jPatternError) {
+func (p *jParser) parseEscape() (*jNode, *PatternError) {
 	start := p.pos
 	p.pos++
 	if !p.more() {
@@ -487,7 +488,7 @@ func (p *jParser) parseEscape() (*jNode, *jPatternError) {
 	switch c {
 	case 'b', 'B', 'A', 'z', 'Z', 'G':
 		p.pos++
-		return &jNode{kind: jnAssert, assert: byte(c), asciiWrd: p.flags&jFlagUnicodeClass == 0, unixLn: p.flags&jFlagUnixLines != 0}, nil
+		return &jNode{kind: jnAssert, assert: byte(c), asciiWrd: p.flags&FlagUnicodeClass == 0, unixLn: p.flags&FlagUnixLines != 0}, nil
 	case 'Q':
 		p.pos++
 		seq := &jNode{kind: jnSeq}
@@ -519,7 +520,7 @@ func (p *jParser) parseEscape() (*jNode, *jPatternError) {
 		if !ok {
 			return nil, p.errAt("named capturing group <"+name+"> does not exist", p.pos-1)
 		}
-		return &jNode{kind: jnBackref, group: g, fold: p.flags & (jFlagCaseInsensitive | jFlagUnicodeCase)}, nil
+		return &jNode{kind: jnBackref, group: g, fold: p.flags & (FlagCaseInsensitive | FlagUnicodeCase)}, nil
 	}
 	if c >= '1' && c <= '9' {
 		p.pos++
@@ -533,7 +534,7 @@ func (p *jParser) parseEscape() (*jNode, *jPatternError) {
 			g = ng
 			p.pos++
 		}
-		return &jNode{kind: jnBackref, group: g, fold: p.flags & (jFlagCaseInsensitive | jFlagUnicodeCase)}, nil
+		return &jNode{kind: jnBackref, group: g, fold: p.flags & (FlagCaseInsensitive | FlagUnicodeCase)}, nil
 	}
 	p.pos = start
 	set, r, err := p.classEscape()
@@ -548,14 +549,14 @@ func (p *jParser) parseEscape() (*jNode, *jPatternError) {
 
 // classEscape parses an escape valid both inside and outside a class. It
 // returns either a set or a single literal rune.
-func (p *jParser) classEscape() (func(rune) bool, rune, *jPatternError) {
+func (p *jParser) classEscape() (func(rune) bool, rune, *PatternError) {
 	p.pos++ // backslash
 	if !p.more() {
 		return nil, 0, p.errAt("Unexpected internal error", len(p.src))
 	}
 	c := p.src[p.pos]
 	p.pos++
-	uni := p.flags&jFlagUnicodeClass != 0
+	uni := p.flags&FlagUnicodeClass != 0
 	switch c {
 	case 'd':
 		if uni {
@@ -813,7 +814,7 @@ func javaUnicodeProperty(name string, uni bool) func(rune) bool {
 }
 
 // parseClass parses a character class after the opening '['.
-func (p *jParser) parseClass() (func(rune) bool, *jPatternError) {
+func (p *jParser) parseClass() (func(rune) bool, *PatternError) {
 	negate := false
 	if p.peek() == '^' {
 		negate = true
@@ -822,7 +823,7 @@ func (p *jParser) parseClass() (func(rune) bool, *jPatternError) {
 	var parts []func(rune) bool
 	var inter []func(rune) bool
 	first := true
-	fold := p.flags & (jFlagCaseInsensitive | jFlagUnicodeCase)
+	fold := p.flags & (FlagCaseInsensitive | FlagUnicodeCase)
 	for {
 		if !p.more() {
 			return nil, p.errAt("Unclosed character class", len(p.src)-1)
@@ -933,10 +934,10 @@ func unionSet(parts []func(rune) bool) func(rune) bool {
 }
 
 func foldVariants(r rune, fold int) []rune {
-	if fold&jFlagCaseInsensitive == 0 {
+	if fold&FlagCaseInsensitive == 0 {
 		return nil
 	}
-	if fold&jFlagUnicodeCase == 0 {
+	if fold&FlagUnicodeCase == 0 {
 		if r >= 'a' && r <= 'z' {
 			return []rune{r - 32}
 		}
@@ -956,7 +957,7 @@ func runeEqFold(a, b rune, fold int) bool {
 	if a == b {
 		return true
 	}
-	if fold&jFlagCaseInsensitive == 0 {
+	if fold&FlagCaseInsensitive == 0 {
 		return false
 	}
 	for _, f := range foldVariants(a, fold) {
@@ -970,7 +971,7 @@ func runeEqFold(a, b rune, fold int) bool {
 // ---------------------------------------------------------------- matching
 
 type jMatcher struct {
-	re    *jRegex
+	re    *Regexp
 	in    []rune
 	caps  []int
 	steps int
@@ -1208,7 +1209,7 @@ func (m *jMatcher) atEndOrFinalTerm(i int, isTerm func(rune) bool) bool {
 
 // findAt returns the capture positions (rune indices) of the first match at
 // or after start, or nil.
-func (re *jRegex) findAt(in []rune, start int) []int {
+func (re *Regexp) FindAt(in []rune, start int) []int {
 	m := &jMatcher{re: re, in: in, caps: make([]int, 2*(re.groups+1))}
 	for s := start; s <= len(in); s++ {
 		for x := range m.caps {
@@ -1224,11 +1225,11 @@ func (re *jRegex) findAt(in []rune, start int) []int {
 }
 
 // findAll returns every non-overlapping match, Java Matcher.find style.
-func (re *jRegex) findAll(in []rune) [][]int {
+func (re *Regexp) FindAll(in []rune) [][]int {
 	var out [][]int
 	pos := 0
 	for pos <= len(in) {
-		m := re.findAt(in, pos)
+		m := re.FindAt(in, pos)
 		if m == nil {
 			break
 		}
@@ -1243,7 +1244,7 @@ func (re *jRegex) findAll(in []rune) [][]int {
 }
 
 // fullMatch reports whether the whole input matches (Matcher.matches).
-func (re *jRegex) fullMatch(in []rune) bool {
+func (re *Regexp) FullMatch(in []rune) bool {
 	m := &jMatcher{re: re, in: in, caps: make([]int, 2*(re.groups+1))}
 	for x := range m.caps {
 		m.caps[x] = -1
@@ -1252,7 +1253,7 @@ func (re *jRegex) fullMatch(in []rune) bool {
 }
 
 // expandReplacement applies a Java replacement string ($n, ${name}, \x).
-func (re *jRegex) expandReplacement(in []rune, caps []int, repl string) ([]rune, *apiError) {
+func (re *Regexp) ExpandReplacement(in []rune, caps []int, repl string) ([]rune, *Error) {
 	var out []rune
 	rr := []rune(repl)
 	for i := 0; i < len(rr); i++ {
@@ -1262,7 +1263,7 @@ func (re *jRegex) expandReplacement(in []rune, caps []int, repl string) ([]rune,
 			if i < len(rr) {
 				out = append(out, rr[i])
 			} else {
-				return nil, analyzeRequestError("illegal_argument_exception", "character to be escaped is missing")
+				return nil, newError("illegal_argument_exception", "character to be escaped is missing")
 			}
 			continue
 		}
@@ -1272,7 +1273,7 @@ func (re *jRegex) expandReplacement(in []rune, caps []int, repl string) ([]rune,
 		}
 		i++
 		if i >= len(rr) {
-			return nil, analyzeRequestError("illegal_argument_exception", "Illegal group reference: group index is missing")
+			return nil, newError("illegal_argument_exception", "Illegal group reference: group index is missing")
 		}
 		g := -1
 		if rr[i] == '{' {
@@ -1283,14 +1284,14 @@ func (re *jRegex) expandReplacement(in []rune, caps []int, repl string) ([]rune,
 			name := string(rr[i+1 : e])
 			n, ok := re.names[name]
 			if !ok {
-				return nil, analyzeRequestError("illegal_argument_exception", "No group with name {"+name+"}")
+				return nil, newError("illegal_argument_exception", "No group with name {"+name+"}")
 			}
 			g = n
 			i = e
 		} else if rr[i] >= '0' && rr[i] <= '9' {
 			g = int(rr[i] - '0')
 			if g > re.groups {
-				return nil, analyzeRequestError("index_out_of_bounds_exception", "No group "+strconv.Itoa(g))
+				return nil, newError("index_out_of_bounds_exception", "No group "+strconv.Itoa(g))
 			}
 			for i+1 < len(rr) && rr[i+1] >= '0' && rr[i+1] <= '9' {
 				ng := g*10 + int(rr[i+1]-'0')
@@ -1301,7 +1302,7 @@ func (re *jRegex) expandReplacement(in []rune, caps []int, repl string) ([]rune,
 				i++
 			}
 		} else {
-			return nil, analyzeRequestError("illegal_argument_exception", "Illegal group reference")
+			return nil, newError("illegal_argument_exception", "Illegal group reference")
 		}
 		if caps[2*g] >= 0 {
 			out = append(out, in[caps[2*g]:caps[2*g+1]]...)
@@ -1311,18 +1312,18 @@ func (re *jRegex) expandReplacement(in []rune, caps []int, repl string) ([]rune,
 }
 
 // replace replaces the first or every match in s.
-func (re *jRegex) replace(s, repl string, all bool) (string, *apiError) {
+func (re *Regexp) Replace(s, repl string, all bool) (string, *Error) {
 	in := []rune(s)
 	var out []rune
 	last := 0
 	pos := 0
 	for pos <= len(in) {
-		m := re.findAt(in, pos)
+		m := re.FindAt(in, pos)
 		if m == nil {
 			break
 		}
 		out = append(out, in[last:m[0]]...)
-		r, err := re.expandReplacement(in, m, repl)
+		r, err := re.ExpandReplacement(in, m, repl)
 		if err != nil {
 			return "", err
 		}
@@ -1343,11 +1344,32 @@ func (re *jRegex) replace(s, repl string, all bool) (string, *apiError) {
 	return string(out), nil
 }
 
-// compileJavaRegexAPI compiles and converts syntax errors to API errors.
-func compileJavaRegexAPI(pattern string, flags int) (*jRegex, *apiError) {
-	re, err := compileJavaRegex(pattern, flags)
-	if err != nil {
-		return nil, err.apiError()
+// Error is an error OpenSearch reports with the given exception type
+// (illegal_argument_exception, index_out_of_bounds_exception, ...).
+type Error struct {
+	Type   string
+	Reason string
+}
+
+func (e *Error) Error() string { return e.Reason }
+
+func newError(etype, reason string) *Error { return &Error{Type: etype, Reason: reason} }
+
+// NumGroups returns the number of capturing groups.
+func (re *Regexp) NumGroups() int { return re.groups }
+
+// LongestAt returns the end of the longest match starting exactly at i, or -1.
+func (re *Regexp) LongestAt(in []rune, i int) int {
+	m := &jMatcher{re: re, in: in, caps: make([]int, 2*(re.groups+1))}
+	for x := range m.caps {
+		m.caps[x] = -1
 	}
-	return re, nil
+	best := -1
+	m.match(re.root, i, func(e int) bool {
+		if e > best {
+			best = e
+		}
+		return best == len(in) || m.steps > 200000
+	})
+	return best
 }
