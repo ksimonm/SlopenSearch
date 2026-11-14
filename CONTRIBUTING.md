@@ -32,8 +32,7 @@ Rules:
   in the commit message why it was added. Hand-written ports are still the right call
   where we must match OpenSearch/Lucene bit for bit and no library does that.
 
-Good areas to pick up: HTTP compression in the Rust server (`test_62`), the literal `NaN`
-vector case (`test_72`), and the multi-node and cross-DC suites (`test_96`, `test_97`).
+Good areas to pick up: the literal `NaN` vector case (`test_72`), and the multi-node and cross-DC suites (`test_96`, `test_97`).
 
 ## Working with an AI coding agent
 

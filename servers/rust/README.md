@@ -89,10 +89,9 @@ relative to the repository root here, adjust it to your build.)
 
 ## Status
 
-99.85% of the suite passes (see the table in the [main README](../../README.md#status)).
-The open work is HTTP compression in `test_62_tasks_http` (no compression library yet) and
-one `test_72_knn` test; `make rust-test ARGS=tests/test_62_tasks_http.py` is the place
-to start. The build still has many warnings; cleaning them up is welcome.
+99.99% of the suite passes (see the table in the [main README](../../README.md#status)).
+The open work is one `test_72_knn` test (a literal `NaN` in a vector). HTTP compression
+(gzip/deflate/snappy) uses the `flate2` and `snap` crates. The build still has many warnings; cleaning them up is welcome.
 
 ## Rules
 

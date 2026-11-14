@@ -40,14 +40,13 @@ Share of the suite passing (2026-11-14, `make go-score` / `make rust-score`):
 | Scripting (Painless, search templates) | 100% | 100% |
 | Suggesters | 100% | 100% |
 | Concurrency and load | 100% | 100% |
-| HTTP layer, async tasks | 100% | 95% |
+| HTTP layer, async tasks | 100% | 100% |
 | Vector search (k-NN) | 99.5% | 99.5% |
 | Persistence (opt-in `test_95`) | 100% | 100% |
-| **Total** | **99.99%** | **99.85%** |
+| **Total** | **99.99%** | **99.99%** |
 
-Go misses one test (a literal `NaN` in a k-NN vector, which needs lenient JSON parsing);
-Rust misses the same one plus HTTP compression (gzip/deflate/snappy, `test_62`), for which
-it has no compression library yet. A few tests in `test_61_concurrency` depend on timing
+Both servers miss one test (a literal `NaN` in a k-NN vector, which needs lenient JSON
+parsing). A few tests in `test_61_concurrency` depend on timing
 and can fail now and then. The multi-node and cross-DC suites (`test_96`, `test_97`) are
 not implemented: both servers are single-node.
 Both servers store their state on disk by default (`SLOP_DATA_DIR`, default `./data`; in Docker a named volume per server) and survive restarts and crashes; `SLOP_IN_MEMORY=true` keeps everything in memory instead (see [servers/go/README.md](servers/go/README.md#persistence) and [servers/rust/README.md](servers/rust/README.md)).
