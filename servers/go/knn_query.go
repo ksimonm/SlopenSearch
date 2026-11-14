@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"strings"
@@ -281,6 +283,44 @@ func knnParseVector(raw []byte, e jsonEntry) *apiError {
 		n++
 		j = end
 	}
+}
+
+func knnIsVectorField(idx *Index, field string) bool {
+	def, _ := mappingFieldDef(idx, field)
+	t, _ := def["type"].(string)
+	return t == "knn_vector"
+}
+
+// knnFieldOutput renders a vector for the fields option (the float array) or
+// for docvalue_fields (the stored little-endian bytes, base64 encoded).
+func knnFieldOutput(idx *Index, id, field string, def map[string]any, fields bool) ([]any, bool, *apiError) {
+	vals := idx.DocValues[id][field]
+	if len(vals) == 0 {
+		return nil, false, nil
+	}
+	dt := knnInfo(def).dataType
+	if fields {
+		out := make([]any, 0, len(vals))
+		for _, v := range vals {
+			f, _ := toFloat(v)
+			if dt == "byte" || dt == "binary" {
+				out = append(out, int64(f))
+			} else {
+				out = append(out, rawFloat(float32(f)))
+			}
+		}
+		return out, true, nil
+	}
+	var b []byte
+	for _, v := range vals {
+		f, _ := toFloat(v)
+		if dt == "byte" || dt == "binary" {
+			b = append(b, byte(int8(f)))
+		} else {
+			b = binary.LittleEndian.AppendUint32(b, math.Float32bits(float32(f)))
+		}
+	}
+	return []any{base64.StdEncoding.EncodeToString(b)}, true, nil
 }
 
 // knnTermCheck rejects term queries on knn_vector fields.

@@ -104,6 +104,9 @@ func docValuesOutput(idx *Index, id, field string, spec fieldSpec, fallbackSourc
 	if !hasDef {
 		return nil, false, nil
 	}
+	if t, _ := def["type"].(string); t == "knn_vector" {
+		return knnFieldOutput(idx, id, field, def, fallbackSource)
+	}
 	ftype := ""
 	hasDV := true
 	if hasDef {
@@ -1540,7 +1543,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 						if !found {
 							continue
 						}
-						if existing, done := out[name]; done {
+						if existing, done := out[name]; done && !knnIsVectorField(h.idx, name) {
 							if list, ok := existing.([]any); ok {
 								out[name] = append(list, vals...)
 								continue
