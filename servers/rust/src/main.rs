@@ -52,6 +52,8 @@ mod search;
 mod shared;
 mod store;
 mod suggest;
+mod suggest_completion;
+mod suggest_phrase;
 mod tasks_async;
 mod templates;
 mod visibility;

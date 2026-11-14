@@ -2084,8 +2084,10 @@ fn handle_count_visible(store: &mut Store, req: &Req, name: &str) -> Response {
         Ok(b) => b,
         Err(e) => return err_response(e),
     };
-    if body.contains_key("size") {
-        return err_response(ApiError::parsing("request does not support [size]"));
+    for k in ["size", "suggest"] {
+        if body.contains_key(k) {
+            return err_response(ApiError::parsing(&format!("request does not support [{}]", k)));
+        }
     }
     if req.param("q").is_some() && body.get("query").is_some() {
         return err_response(ApiError::new(
