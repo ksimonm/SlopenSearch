@@ -83,7 +83,7 @@ Files of `internal/httpapi`:
 | `admin.go`, `maps_api.go` | index create/delete/get, settings, `_mapping` |
 | `alias.go`, `templates.go`, `datastreams.go`, `rollover.go` | aliases, index templates, data streams, rollover |
 | `resize.go`, `reindex.go`, `resolve_index.go`, `maintenance.go` | clone/shrink/split, `_reindex`, `_resolve/index`, refresh/flush/forcemerge |
-| `documents_v2.go`, `bulk_v2.go`, `byquery.go`, `termvectors.go` | document CRUD, `_bulk`, by-query APIs, term vectors |
+| `documents.go`, `bulk.go`, `byquery.go`, `termvectors.go` | document CRUD, `_bulk`, by-query APIs, term vectors |
 | `search.go`, `explain.go`, `validate.go`, `field_caps.go`, `source.go` | `_search` request handling and response assembly, `_explain`, `_validate`, `_field_caps` |
 | `scroll.go`, `pit.go`, `msearch.go`, `search_templates.go`, `rank_eval.go` | scroll, point in time, `_msearch`, search templates, `_rank_eval` |
 | `search_pipelines.go`, `search_shards.go`, `shard_routing.go`, `requestcache.go` | search pipelines, `_search_shards`, shard routing, request cache |
