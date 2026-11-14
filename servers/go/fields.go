@@ -2081,7 +2081,7 @@ func (c *indexCtx) parseCompletion(path string, def map[string]any, v any) (any,
 		for _, ch := range s {
 			cp := int(ch)
 			if cp < 0x20 || cp == 0x7f {
-				return c.fieldValueError(path, "completion", v, "illegal_argument_exception",
+				return completionParseError("illegal_argument_exception",
 					fmt.Sprintf("Illegal input [%s] UTF-16 codepoint [0x%x] at position %d is a reserved character", s, cp, pos))
 			}
 			if ch > 0xffff {
@@ -2105,7 +2105,7 @@ func (c *indexCtx) parseCompletion(path string, def map[string]any, v any) (any,
 		case map[string]any:
 			for k := range t {
 				if k != "input" && k != "weight" && k != "contexts" {
-					return c.fieldValueError(path, "completion", v, "illegal_argument_exception",
+					return completionParseError("illegal_argument_exception",
 						"unknown field name ["+k+"], must be one of [input, weight, contexts]")
 				}
 			}
@@ -2126,11 +2126,11 @@ func (c *indexCtx) parseCompletion(path string, def map[string]any, v any) (any,
 					}
 				}
 				if !ok {
-					return c.fieldValueError(path, "completion", v, "illegal_argument_exception",
+					return completionParseError("illegal_argument_exception",
 						"weight must be an integer, but was ["+previewValue(w)+"]")
 				}
 				if wi < 0 || wi > 2147483647 {
-					return c.fieldValueError(path, "completion", v, "illegal_argument_exception",
+					return completionParseError("illegal_argument_exception",
 						fmt.Sprintf("weight must be in the interval [0..2147483647], but was [%d]", wi))
 				}
 			}
@@ -2170,16 +2170,16 @@ func (c *indexCtx) parseCompletion(path string, def map[string]any, v any) (any,
 									}
 								}
 							default:
-								return c.fieldValueError(path, "completion", iv, "parsing_exception",
+								return completionParseError("parsing_exception",
 									fmt.Sprintf("failed to parse [%s]: expected text or object, but got %s", path, jsonValueKind(iv)))
 							}
 						default:
-							return c.fieldValueError(path, "completion", e, "parsing_exception",
+							return completionParseError("parsing_exception",
 								fmt.Sprintf("failed to parse [%s]: expected text or object, but got %s", path, jsonValueKind(e)))
 						}
 					}
 				default:
-					return c.fieldValueError(path, "completion", inp, "parsing_exception",
+					return completionParseError("parsing_exception",
 						fmt.Sprintf("failed to parse [%s]: expected text or object, but got %s", path, jsonValueKind(inp)))
 				}
 			}
@@ -2195,11 +2195,14 @@ func (c *indexCtx) parseCompletion(path string, def map[string]any, v any) (any,
 			}
 			return nil
 		default:
-			return c.fieldValueError(path, "completion", v, "parsing_exception",
+			return completionParseError("parsing_exception",
 				fmt.Sprintf("failed to parse [%s]: expected text or object, but got %s", path, jsonValueKind(v)))
 		}
 	}
 	if err := parseOne(v); err != nil {
+		return nil, err
+	}
+	if err := c.checkCompletionContexts(path, def, v); err != nil {
 		return nil, err
 	}
 	return out, nil

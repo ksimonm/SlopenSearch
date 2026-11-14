@@ -438,6 +438,11 @@ func validateSearchBody(body map[string]any) *apiError {
 				Reason: "Unknown key for a " + searchValueType(v) + " in [" + k + "]."}
 		}
 	}
+	if sg, ok := body["suggest"]; ok {
+		if err := validateSuggestBody(sg); err != nil {
+			return err
+		}
+	}
 	if q, ok := body["query"]; ok {
 		if q == nil {
 			return &apiError{Type: "parsing_exception", Status: 400,
@@ -1644,6 +1649,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		},
 	}
 
+	if isSuggestOnlySearch(body) {
+		resp["hits"] = map[string]any{"total": map[string]any{"value": 0, "relation": "eq"}, "max_score": nil, "hits": []any{}}
+	}
 	var aggIdx *Index
 	if len(indices) > 0 {
 		aggIdx = indices[0]
@@ -1668,12 +1676,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		}
 		if suggest, ok := body["suggest"].(map[string]any); ok {
 			typed := r.URL.Query().Get("typed_keys") != "" && r.URL.Query().Get("typed_keys") != "false"
-			sres, serr := evalSuggest(suggest, indices, typed)
+			sres, serr := evalSuggest(suggest, indices, typed, body)
 			if serr != nil {
 				writeError(w, serr)
 				return
 			}
-			resp["suggest"] = sres
+			if len(sres) > 0 {
+				resp["suggest"] = sres
+			}
 		}
 	}
 
@@ -1726,6 +1736,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			ordered = append(ordered, orderedKV{k: k, v: v})
 		}
 		writeJSON(w, 200, ordered)
+		return
+	}
+	if _, ok := resp["suggest"]; ok {
+		writeJSON(w, 200, orderSearchResponse(resp))
 		return
 	}
 	writeJSON(w, 200, resp)

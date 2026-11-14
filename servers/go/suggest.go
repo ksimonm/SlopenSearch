@@ -1,9 +1,7 @@
 package main
 
 import (
-	"sort"
 	"strings"
-	"unicode"
 )
 
 func collectFieldTerms(idx *Index, field string) (map[string]int, []string) {
@@ -26,7 +24,7 @@ func collectFieldTerms(idx *Index, field string) (map[string]int, []string) {
 	return freq, order
 }
 
-func evalSuggest(suggest map[string]any, indices []*Index, typed bool) (map[string]any, *apiError) {
+func evalSuggest(suggest map[string]any, indices []*Index, typed bool, searchBody map[string]any) (map[string]any, *apiError) {
 	out := map[string]any{}
 	var idx *Index
 	if len(indices) > 0 {
@@ -66,7 +64,11 @@ func evalSuggest(suggest map[string]any, indices []*Index, typed bool) (map[stri
 			if typed {
 				key = "completion#" + name
 			}
-			out[key] = []any{completionSuggester(spec, t, idx)}
+			entries, err := completionSuggest(spec, t, indices, globalText, searchBody)
+			if err != nil {
+				return nil, err
+			}
+			out[key] = entries
 		}
 	}
 	return out, nil
@@ -119,141 +121,4 @@ func phraseSuggester(spec, body map[string]any, idx *Index) map[string]any {
 		options = append(options, map[string]any{"text": phrase, "score": 0.9})
 	}
 	return map[string]any{"text": input, "offset": 0, "length": len(input), "options": options}
-}
-
-func completionInputs(v any) [][2]any {
-	var out [][2]any
-	add := func(input string, weight float64) {
-		out = append(out, [2]any{input, weight})
-	}
-	switch t := v.(type) {
-	case string:
-		add(t, 0)
-	case map[string]any:
-		w, _ := toFloat(t["weight"])
-		addAll := func(in any) {
-			switch iv := in.(type) {
-			case string:
-				add(iv, w)
-			case []any:
-				for _, e := range iv {
-					if s, ok := toString(e); ok {
-						add(s, w)
-					}
-				}
-			}
-		}
-		if in, ok := t["input"]; ok {
-			addAll(in)
-		}
-	case []any:
-		for _, e := range t {
-			if s, ok := toString(e); ok {
-				add(s, 0)
-				continue
-			}
-			if m, ok := e.(map[string]any); ok {
-				w, _ := toFloat(m["weight"])
-				if in, ok := m["input"]; ok {
-					switch iv := in.(type) {
-					case string:
-						add(iv, w)
-					case []any:
-						for _, x := range iv {
-							if s, ok := toString(x); ok {
-								add(s, w)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	return out
-}
-
-func completionSuggester(spec, body map[string]any, idx *Index) map[string]any {
-	field, _ := toString(body["field"])
-	prefix := suggestText(spec)
-	def, _ := mappingFieldDef(idx, field)
-	preserve := true
-	if b, ok := def["preserve_separators"].(bool); ok {
-		preserve = b
-	}
-	maxLen := 50
-	if n, ok := toFloat(def["max_input_length"]); ok && int(n) > 0 {
-		maxLen = int(n)
-	}
-	fuzzy := 0.0
-	if f, ok := body["fuzzy"].(map[string]any); ok {
-		if n, ok := toFloat(f["fuzziness"]); ok {
-			fuzzy = n
-		}
-	} else if f, ok := spec["fuzzy"].(map[string]any); ok {
-		if n, ok := toFloat(f["fuzziness"]); ok {
-			fuzzy = n
-		}
-	}
-	size := 10
-	if n, ok := toFloat(body["size"]); ok {
-		size = int(n)
-		if size < 0 {
-			size = 0
-		}
-	}
-	norm := func(s string) string {
-		lower := strings.ToLower(s)
-		if preserve {
-			return lower
-		}
-		var b strings.Builder
-		for _, r := range lower {
-			if unicode.IsLetter(r) || unicode.IsDigit(r) {
-				b.WriteRune(r)
-			}
-		}
-		return b.String()
-	}
-	want := norm(prefix)
-
-	type entry struct {
-		text   string
-		weight float64
-		id     string
-	}
-	var entries []entry
-	for _, id := range idx.Order {
-		v, ok := fieldValue(idx.Docs[id], field)
-		if !ok {
-			continue
-		}
-		for _, pair := range completionInputs(v) {
-			text, _ := pair[0].(string)
-			weight, _ := pair[1].(float64)
-			if len([]rune(text)) > maxLen {
-				text = string([]rune(text)[:maxLen])
-			}
-			if !strings.HasPrefix(norm(text), want) {
-				continue
-			}
-			score := 1.0
-			if weight > 0 {
-				score = weight
-			}
-			if fuzzy > 0 {
-				score *= 1.0 + fuzzy*2.0
-			}
-			entries = append(entries, entry{text: text, weight: score, id: id})
-		}
-	}
-	sort.SliceStable(entries, func(i, j int) bool { return entries[i].weight > entries[j].weight })
-
-	options := []any{}
-	for i, e := range entries {
-		if i >= size {
-			break
-		}
-		options = append(options, map[string]any{"text": e.text, "_score": e.weight, "_id": e.id})
-	}
-	return map[string]any{"text": prefix, "offset": 0, "length": len(prefix), "options": options}
 }

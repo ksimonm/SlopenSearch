@@ -148,6 +148,11 @@ func validateProps(props map[string]any) *mappingValidationError {
 		if t != "" && !validTypes[t] {
 			return mve(fmt.Sprintf("No handler for type [%s] declared on field [%s]", t, name), "")
 		}
+		if t == "completion" {
+			if err := validateCompletionMapping(def); err != nil {
+				return err
+			}
+		}
 		if t == "knn_vector" && def["dimension"] == nil {
 			return mve(fmt.Sprintf("Dimension value missing for vector: %s", name), "illegal_argument_exception")
 		}
@@ -542,6 +547,8 @@ func normalizeKnnVectors(props map[string]any) {
 			if _, has := def["doc_values"]; !has {
 				def["doc_values"] = true
 			}
+		case "completion":
+			normalizeCompletionMapping(def)
 		case "join":
 			if _, has := def["eager_global_ordinals"]; !has {
 				def["eager_global_ordinals"] = true

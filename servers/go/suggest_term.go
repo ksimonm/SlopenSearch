@@ -252,14 +252,20 @@ func termCandidates(term string, terms []string, df map[string]int, maxDoc int, 
 			continue
 		}
 		cr := []rune(c)
-		if prefixLen > 0 {
-			if len(cr) < prefixLen || len(tr) < prefixLen || string(cr[:prefixLen]) != string(tr[:prefixLen]) {
-				continue
-			}
-		}
 		ed := osaDistance(tr, cr)
 		if ed > maxEdits {
 			continue
+		}
+		// DirectSpellChecker searches edit distance 1 with the given prefix
+		// length, then larger distances with a prefix of at least editDistance-1.
+		pl := prefixLen
+		if ed > 1 {
+			pl = max(pl, ed-1)
+		}
+		if pl > 0 {
+			if len(cr) < pl || len(tr) < pl || string(cr[:pl]) != string(tr[:pl]) {
+				continue
+			}
 		}
 		f := df[c]
 		if f <= docfreq {

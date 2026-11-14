@@ -1498,6 +1498,11 @@ func (s *Server) handleCount(w http.ResponseWriter, r *http.Request, name string
 			Reason: "request does not support [size]"})
 		return
 	}
+	if _, has := body["suggest"]; has {
+		writeError(w, &apiError{Type: "parsing_exception", Status: 400,
+			Reason: "request does not support [suggest]"})
+		return
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	o := s.parseResolveParams(r, resolveOpts2{closedError: true})
