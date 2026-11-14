@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+
+	"slopensearch/internal/wildcard"
 )
 
 // handleResolveIndex implements GET /_resolve/index/{spec}.
@@ -37,11 +39,11 @@ func (s *Server) handleResolveIndex(w http.ResponseWriter, r *http.Request, spec
 		if token == "" {
 			continue
 		}
-		wildcard := token == "_all" || token == "*" || strings.ContainsAny(token, "*?")
-		if wildcard {
+		isPattern := token == "_all" || token == "*" || strings.ContainsAny(token, "*?")
+		if isPattern {
 			for _, name := range sortedIndexNames(s) {
 				idx := s.indices[name]
-				if !globMatch(token, name) && token != "_all" && token != "*" {
+				if !wildcard.Match(token, name) && token != "_all" && token != "*" {
 					continue
 				}
 				if !acceptClass(idx, expand) {
@@ -59,13 +61,13 @@ func (s *Server) handleResolveIndex(w http.ResponseWriter, r *http.Request, spec
 					continue
 				}
 				for alias := range idx.Aliases {
-					if globMatch(token, alias) || token == "_all" || token == "*" {
+					if wildcard.Match(token, alias) || token == "_all" || token == "*" {
 						addAlias(alias, name)
 					}
 				}
 			}
 			for _, dsName := range sortedDataStreamNames(s) {
-				if globMatch(token, dsName) || token == "_all" || token == "*" {
+				if wildcard.Match(token, dsName) || token == "_all" || token == "*" {
 					seenDS[dsName] = true
 				}
 			}

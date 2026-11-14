@@ -22,6 +22,16 @@ type Verbatim []byte
 
 func (v Verbatim) MarshalJSON() ([]byte, error) { return v, nil }
 
+// Index returns the position of the first member named key, or -1.
+func (o Object) Index(key string) int {
+	for i, kv := range o {
+		if kv.K == key {
+			return i
+		}
+	}
+	return -1
+}
+
 func (o Object) MarshalJSON() ([]byte, error) {
 	var b bytes.Buffer
 	b.WriteByte('{')

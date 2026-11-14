@@ -2,7 +2,9 @@
 package jsonv
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -50,4 +52,79 @@ func ToFloat(v any) (float64, bool) {
 		return 0, false
 	}
 	return 0, false
+}
+
+// FormatNumber renders a number like OpenSearch renders whole doubles (no
+// fraction) and other doubles (shortest form).
+func FormatNumber(f float64) string {
+	if f == float64(int64(f)) && f < 1e15 && f > -1e15 {
+		return strconv.FormatInt(int64(f), 10)
+	}
+	return strconv.FormatFloat(f, 'g', -1, 64)
+}
+
+var jsonStringEscaper = strings.NewReplacer(
+	"\\", "\\\\", "\"", "\\\"", "\n", "\\n", "\r", "\\r", "\t", "\\t",
+	"\b", "\\b", "\f", "\\f",
+)
+
+// EncodeString quotes s as a JSON string (Jackson escaping).
+func EncodeString(s string) string {
+	var sb strings.Builder
+	sb.WriteByte('"')
+	for _, r := range s {
+		if r < 0x20 && r != '\n' && r != '\r' && r != '\t' && r != '\b' && r != '\f' {
+			sb.WriteString(fmt.Sprintf("\\u%04x", r))
+		} else {
+			sb.WriteString(jsonStringEscaper.Replace(string(r)))
+		}
+	}
+	sb.WriteByte('"')
+	return sb.String()
+}
+
+// SortStrings sorts a in place (insertion sort, stable).
+func SortStrings(a []string) {
+	for i := 1; i < len(a); i++ {
+		for j := i; j > 0 && a[j] < a[j-1]; j-- {
+			a[j], a[j-1] = a[j-1], a[j]
+		}
+	}
+}
+
+// DeepCopy copies maps and slices of a decoded JSON value.
+func DeepCopy(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		m := make(map[string]any, len(t))
+		for k, val := range t {
+			m[k] = DeepCopy(val)
+		}
+		return m
+	case []any:
+		a := make([]any, len(t))
+		for i, e := range t {
+			a[i] = DeepCopy(e)
+		}
+		return a
+	default:
+		return v
+	}
+}
+
+// SortedKeys returns the keys of m in sorted order.
+func SortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	SortStrings(keys)
+	return keys
+}
+
+// Unmarshal decodes JSON with numbers as json.Number.
+func Unmarshal(b []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	return dec.Decode(v)
 }

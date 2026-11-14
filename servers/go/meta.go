@@ -7,6 +7,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/wildcard"
 )
 
 const (
@@ -83,7 +86,7 @@ func (s *Server) resolveIndices(spec string, opts resolveOpts) ([]*Index, *apiEr
 		if strings.ContainsAny(token, "*?") {
 			matched := false
 			for _, idx := range s.indices {
-				if globMatch(token, idx.Name) {
+				if wildcard.Match(token, idx.Name) {
 					if idx.Closed && !opts.wildcardClosed {
 						continue
 					}
@@ -97,7 +100,7 @@ func (s *Server) resolveIndices(spec string, opts resolveOpts) ([]*Index, *apiEr
 						continue
 					}
 					for alias := range idx.Aliases {
-						if globMatch(token, alias) {
+						if wildcard.Match(token, alias) {
 							add(idx)
 							break
 						}
@@ -129,7 +132,7 @@ func (s *Server) resolveIndices(spec string, opts resolveOpts) ([]*Index, *apiEr
 		}
 	}
 	out := make([]*Index, 0, len(order))
-	sortStrings(order)
+	jsonv.SortStrings(order)
 	for _, name := range order {
 		out = append(out, seen[name])
 	}
@@ -508,7 +511,7 @@ func settingsString(v any) string {
 	case json.Number:
 		return t.String()
 	case float64:
-		return formatNumber(t)
+		return jsonv.FormatNumber(t)
 	case bool:
 		if t {
 			return "true"
@@ -1016,7 +1019,7 @@ func readBodyJSON(w http.ResponseWriter, r *http.Request) (map[string]any, *apiE
 		return nil, apiErr
 	}
 	var out map[string]any
-	if err := unmarshalJSON(body, &out); err != nil {
+	if err := jsonv.Unmarshal(body, &out); err != nil {
 		return nil, &apiError{Type: "json_parse_exception", Reason: err.Error(), Status: 400}
 	}
 	return out, nil
@@ -1075,7 +1078,7 @@ func (s *Server) handleAllocationExplain(w http.ResponseWriter, r *http.Request)
 	if r.ContentLength > 0 {
 		raw, apiErr := readAllBody(r)
 		if apiErr == nil {
-			if err := unmarshalJSON(raw, &body); err != nil {
+			if err := jsonv.Unmarshal(raw, &body); err != nil {
 				writeError(w, &apiError{Type: "x_content_parse_exception", Reason: err.Error(), Status: 400})
 				return
 			}
@@ -1196,7 +1199,7 @@ func sortedIndexNames(s *Server) []string {
 	for name := range s.indices {
 		names = append(names, name)
 	}
-	sortStrings(names)
+	jsonv.SortStrings(names)
 	return names
 }
 
@@ -1235,7 +1238,7 @@ func (s *Server) handleAliases(w http.ResponseWriter, r *http.Request, name stri
 	}
 	for _, idx := range s.indices {
 		for alias, def := range idx.Aliases {
-			if globMatch(spec, alias) {
+			if wildcard.Match(spec, alias) {
 				entry := map[string]any{}
 				for k, v := range def {
 					entry[k] = v
@@ -1356,7 +1359,7 @@ func (s *Server) handleIndexAlias(w http.ResponseWriter, r *http.Request, indexS
 		out := map[string]any{}
 		for _, idx := range indices {
 			for alias, def := range idx.Aliases {
-				if aliasName == "" || globMatch(aliasName, alias) {
+				if aliasName == "" || wildcard.Match(aliasName, alias) {
 					entry := map[string]any{}
 					for k, v := range def {
 						entry[k] = v
@@ -1389,7 +1392,7 @@ func (s *Server) handleIndexAlias(w http.ResponseWriter, r *http.Request, indexS
 	case http.MethodDelete:
 		for _, idx := range indices {
 			for alias := range idx.Aliases {
-				if aliasName == "" || globMatch(aliasName, alias) {
+				if aliasName == "" || wildcard.Match(aliasName, alias) {
 					delete(idx.Aliases, alias)
 				}
 			}

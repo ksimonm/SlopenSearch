@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"slopensearch/internal/jsonv"
 	"slopensearch/internal/painless"
 )
 
@@ -1070,7 +1071,7 @@ func ingestCtx(env *ingestEnv) *painless.Map {
 			ctx.Put(k, painless.FromJSON(v, painless.Linked))
 		}
 	}
-	for _, k := range sortedKeys(env.source) {
+	for _, k := range jsonv.SortedKeys(env.source) {
 		ctx.Put(k, painless.FromJSON(env.source[k], painless.Linked))
 	}
 	return ctx

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"slopensearch/internal/jsonv"
 	"slopensearch/internal/mustache"
 	"slopensearch/internal/painless"
 )
@@ -87,7 +88,7 @@ func (s *Server) renderTemplateBody(body map[string]any) (map[string]any, *apiEr
 		return nil, err
 	}
 	var out map[string]any
-	if uerr := unmarshalJSON([]byte(text), &out); uerr != nil || out == nil {
+	if uerr := jsonv.Unmarshal([]byte(text), &out); uerr != nil || out == nil {
 		reason := "Unexpected character: expected a value"
 		if uerr != nil {
 			reason = uerr.Error()
@@ -140,7 +141,7 @@ func (s *Server) handleSearchTemplate(w http.ResponseWriter, r *http.Request, na
 		writeError(w, apiErr)
 		return
 	}
-	for _, k := range sortedKeys(body) {
+	for _, k := range jsonv.SortedKeys(body) {
 		if !searchTemplateKeys[k] {
 			col := strings.Index(string(raw), `"`+k+`"`) + 1
 			writeError(w, &apiError{Type: "x_content_parse_exception", Status: 400,

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"sort"
+
+	"slopensearch/internal/jsonv"
 )
 
 func matrixStatsAgg(spec map[string]any, docs []map[string]any, idx *Index, pathPrefix string) (any, *apiError) {
@@ -335,7 +337,7 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *Index) (any, *a
 			if serr != nil {
 				return nil, serr
 			}
-			for _, name := range sortedKeys(got) {
+			for _, name := range jsonv.SortedKeys(got) {
 				fields = append(fields, orderedKV{name, got[name]})
 			}
 		}

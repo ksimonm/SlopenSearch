@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/wildcard"
 )
 
 func (s *Server) runIngestProcessor(typ string, cfg map[string]any, env *ingestEnv) (bool, *apiError) {
@@ -159,7 +161,7 @@ func (s *Server) procRemove(cfg map[string]any, env *ingestEnv) *apiError {
 		for _, k := range collectLeafPaths(env.source, "") {
 			skip := false
 			for _, p := range excludes {
-				if globMatch(p, k) {
+				if wildcard.Match(p, k) {
 					skip = true
 					break
 				}
@@ -175,10 +177,10 @@ func (s *Server) procRemove(cfg map[string]any, env *ingestEnv) *apiError {
 func (s *Server) removeGlob(env *ingestEnv, pattern string, exclude []string) {
 	keys := collectLeafPaths(env.source, "")
 	for _, k := range keys {
-		if globMatch(pattern, k) {
+		if wildcard.Match(pattern, k) {
 			skip := false
 			for _, ex := range exclude {
-				if globMatch(ex, k) {
+				if wildcard.Match(ex, k) {
 					skip = true
 				}
 			}
@@ -224,7 +226,7 @@ func (s *Server) procRemoveByPattern(cfg map[string]any, env *ingestEnv) *apiErr
 	for _, k := range keys {
 		matched := false
 		for _, p := range patterns {
-			if globMatch(p, k) {
+			if wildcard.Match(p, k) {
 				matched = true
 				break
 			}
@@ -237,7 +239,7 @@ func (s *Server) procRemoveByPattern(cfg map[string]any, env *ingestEnv) *apiErr
 		}
 		excluded := false
 		for _, p := range excludes {
-			if globMatch(p, k) {
+			if wildcard.Match(p, k) {
 				excluded = true
 				break
 			}

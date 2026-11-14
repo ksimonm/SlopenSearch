@@ -17,6 +17,7 @@ import (
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/settings"
+	"slopensearch/internal/wildcard"
 )
 
 var validTypes = map[string]bool{
@@ -101,7 +102,7 @@ func settingsValueString(v any) string {
 	case json.Number:
 		return t.String()
 	case float64:
-		return formatNumber(t)
+		return jsonv.FormatNumber(t)
 	case bool:
 		return strconv.FormatBool(t)
 	case nil:
@@ -914,7 +915,7 @@ func matchDynamicTemplate(idx *Index, path, name, dynType string) (map[string]an
 				re, err := regexp.Compile(p)
 				return err == nil && re.MatchString(s)
 			}
-			return globMatch(p, s)
+			return wildcard.Match(p, s)
 		}
 		if p, ok := spec["match"].(string); ok && !matchOne(p, name) {
 			continue
@@ -922,10 +923,10 @@ func matchDynamicTemplate(idx *Index, path, name, dynType string) (map[string]an
 		if p, ok := spec["unmatch"].(string); ok && matchOne(p, name) {
 			continue
 		}
-		if p, ok := spec["path_match"].(string); ok && !globMatch(p, path) {
+		if p, ok := spec["path_match"].(string); ok && !wildcard.Match(p, path) {
 			continue
 		}
-		if p, ok := spec["path_unmatch"].(string); ok && globMatch(p, path) {
+		if p, ok := spec["path_unmatch"].(string); ok && wildcard.Match(p, path) {
 			continue
 		}
 		if mt, ok := spec["match_mapping_type"].(string); ok && mt != dynType {
@@ -984,7 +985,7 @@ func dynamicDefFor(idx *Index, path, name string, raw any) (map[string]any, bool
 	tmpl, matched := matchDynamicTemplate(idx, path, name, dynType)
 	var def map[string]any
 	if tmpl != nil {
-		def, _ = deepCopyJSON(tmpl).(map[string]any)
+		def, _ = jsonv.DeepCopy(tmpl).(map[string]any)
 		if def == nil {
 			def = map[string]any{}
 		}

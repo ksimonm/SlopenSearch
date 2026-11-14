@@ -12,6 +12,7 @@ import (
 	_ "time/tzdata"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/jsonv"
 	"slopensearch/internal/painless"
 )
 
@@ -464,7 +465,7 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *Ind
 			return nil, &apiError{Type: "x_content_parse_exception", Status: 400,
 				Reason: "Failed to parse aggregation [a]",
 				CausedBy: &apiError{Type: "illegal_argument_exception",
-					Reason: fmt.Sprintf("[precisionThreshold] must be greater than or equal to 0. Found [%s] in [a]", formatNumber(v))}}
+					Reason: fmt.Sprintf("[precisionThreshold] must be greater than or equal to 0. Found [%s] in [a]", jsonv.FormatNumber(v))}}
 		}
 		return cardinalityAgg(t, docs, idx, pathPrefix)
 	}

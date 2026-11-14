@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/jsonv"
 	"slopensearch/internal/painless"
 )
 
@@ -1654,7 +1655,7 @@ func (c *queryCtx) evalGeoBoundingBox(body any) (bool, float64, *apiError) {
 	}
 	if top < bottom {
 		return false, 0, &apiError{Type: "illegal_argument_exception", Status: 400,
-			Reason: "top is below bottom corner: " + formatNumber(top) + " vs. " + formatNumber(bottom)}
+			Reason: "top is below bottom corner: " + jsonv.FormatNumber(top) + " vs. " + jsonv.FormatNumber(bottom)}
 	}
 	boost := 1.0
 	if b, ok := toFloat(bm["boost"]); ok {

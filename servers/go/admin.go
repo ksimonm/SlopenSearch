@@ -11,6 +11,8 @@ import (
 	"unicode"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/wildcard"
 )
 
 // ---------------------------------------------------------------- name rules
@@ -318,7 +320,7 @@ func settingsSetNested(root map[string]any, path []string, v any) {
 
 func settingsToNested(flat map[string]any) map[string]any {
 	root := map[string]any{}
-	keys := sortedKeys(flat)
+	keys := jsonv.SortedKeys(flat)
 	for _, k := range keys {
 		settingsSetNested(root, strings.Split(k, "."), flat[k])
 	}
@@ -355,7 +357,7 @@ func matchAnySettingPattern(patterns []string, key string) bool {
 		if p == "" {
 			continue
 		}
-		if globMatch(p, key) || strings.HasPrefix(key, strings.TrimSuffix(p, "*")) && strings.HasSuffix(p, "*") {
+		if wildcard.Match(p, key) || strings.HasPrefix(key, strings.TrimSuffix(p, "*")) && strings.HasSuffix(p, "*") {
 			return true
 		}
 	}
@@ -524,7 +526,7 @@ func (s *Server) resolveSpec2(spec string, o resolveOpts2) ([]*Index, *apiError)
 		} else if strings.ContainsAny(token, "*?") {
 			for _, name := range sortedIndexNames(s) {
 				idx := s.indices[name]
-				if globMatch(token, name) && acceptClass(idx, expand) {
+				if wildcard.Match(token, name) && acceptClass(idx, expand) {
 					matched = append(matched, idx)
 				}
 			}
@@ -535,7 +537,7 @@ func (s *Server) resolveSpec2(spec string, o resolveOpts2) ([]*Index, *apiError)
 						continue
 					}
 					for alias := range idx.Aliases {
-						if globMatch(token, alias) {
+						if wildcard.Match(token, alias) {
 							matched = append(matched, idx)
 							break
 						}
@@ -636,7 +638,7 @@ func (s *Server) createIndex(w http.ResponseWriter, r *http.Request, name string
 	bodyBytes, _ := io.ReadAll(r.Body)
 	var body map[string]any
 	if len(strings.TrimSpace(string(bodyBytes))) > 0 {
-		if err := unmarshalJSON(bodyBytes, &body); err != nil {
+		if err := jsonv.Unmarshal(bodyBytes, &body); err != nil {
 			writeError(w, &apiError{Type: "not_x_content_exception", Status: 400,
 				Reason: "Compressor detection can only be called on some xcontent bytes or compressed xcontent bytes"})
 			return

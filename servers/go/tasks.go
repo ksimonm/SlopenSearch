@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"slopensearch/internal/jsonv"
 )
 
 // storedTask is a task started with wait_for_completion=false. It runs in
@@ -256,7 +258,7 @@ func (s *Server) startAsync(w http.ResponseWriter, r *http.Request, segs []strin
 	}
 	raw, _ := io.ReadAll(r.Body)
 	var body map[string]any
-	_ = unmarshalJSON(raw, &body)
+	_ = jsonv.Unmarshal(raw, &body)
 	batchSize := int64(1000)
 	if v := q.Get("scroll_size"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
@@ -431,14 +433,7 @@ func taskStatus(out map[string]any, batchSize int64, rps float64, asResponse, fa
 	return res
 }
 
-func findKey(o orderedJSON, k string) int {
-	for i, kv := range o {
-		if kv.K == k {
-			return i
-		}
-	}
-	return -1
-}
+func findKey(o orderedJSON, k string) int { return o.Index(k) }
 
 // render answers GET _tasks/{id}; the caller holds taskReg.
 func (t *storedTask) render() orderedJSON {

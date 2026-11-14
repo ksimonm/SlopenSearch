@@ -8,6 +8,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/jsonv"
 )
 
 // ---------------------------------------------------------------------------
@@ -63,7 +65,7 @@ func knnTokenText(v any) string {
 	case string:
 		return t
 	case float64:
-		return formatNumber(t)
+		return jsonv.FormatNumber(t)
 	}
 	return fmt.Sprintf("%v", v)
 }

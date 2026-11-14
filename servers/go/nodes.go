@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/wildcard"
 )
 
 var nodeInfoMetrics = map[string]bool{
@@ -305,7 +307,7 @@ func nodesSelectorMatches(selector string) bool {
 		if strings.HasPrefix(token, "_") {
 			continue
 		}
-		if strings.ContainsAny(token, "*?") && (globMatch(token, nodeID) || globMatch(token, nodeName)) {
+		if strings.ContainsAny(token, "*?") && (wildcard.Match(token, nodeID) || wildcard.Match(token, nodeName)) {
 			return true
 		}
 	}
@@ -614,7 +616,7 @@ func taskActionMatches(task map[string]any, actions string) bool {
 	}
 	action, _ := task["action"].(string)
 	for _, pat := range strings.Split(actions, ",") {
-		if globMatch(pat, action) {
+		if wildcard.Match(pat, action) {
 			return true
 		}
 	}

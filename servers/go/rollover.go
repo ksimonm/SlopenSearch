@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/jsonv"
 )
 
 var rolloverSuffixRE = regexp.MustCompile(`^(.*)-(\d+)$`)
@@ -191,7 +193,7 @@ func (s *Server) handleRollover(w http.ResponseWriter, r *http.Request, target, 
 		for k, v := range oldIdx.Settings {
 			settings[k] = v
 		}
-		mappings := deepCopyJSON(oldIdx.Mappings).(map[string]any)
+		mappings := jsonv.DeepCopy(oldIdx.Mappings).(map[string]any)
 		body := map[string]any{"settings": settings, "mappings": mappings}
 		if _, apiErr2 := s.createIndexInternal(newName, body, false); apiErr2 != nil {
 			writeError(w, apiErr2)

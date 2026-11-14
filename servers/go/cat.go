@@ -8,6 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/wildcard"
 )
 
 const catRootListing = `=^.^=
@@ -251,7 +254,7 @@ func resolveCatColumns(h string, cols []catCol) []catRequestedCol {
 		}
 		if strings.ContainsAny(token, "*?") {
 			for _, c := range cols {
-				if globMatch(token, c.key) {
+				if wildcard.Match(token, c.key) {
 					out = append(out, catRequestedCol{key: c.key, display: c.key, numeric: c.numeric})
 				}
 			}
@@ -496,7 +499,7 @@ func writeCatJSONObject(buf *bytes.Buffer, cols []catRequestedCol, row catRow, i
 				buf.WriteString("  ")
 			}
 		}
-		buf.WriteString(encodeString(c.display))
+		buf.WriteString(jsonv.EncodeString(c.display))
 		if pretty {
 			buf.WriteString(" : ")
 		} else {
@@ -506,7 +509,7 @@ func writeCatJSONObject(buf *bytes.Buffer, cols []catRequestedCol, row catRow, i
 		if v == nil {
 			buf.WriteString("null")
 		} else {
-			buf.WriteString(encodeString(fmt.Sprintf("%v", v)))
+			buf.WriteString(jsonv.EncodeString(fmt.Sprintf("%v", v)))
 		}
 	}
 	if pretty && len(cols) > 0 {
@@ -532,7 +535,7 @@ func renderCatYAML(w http.ResponseWriter, cols []catRequestedCol, rows []catRow)
 			if v == nil {
 				buf.WriteString("null")
 			} else {
-				buf.WriteString(encodeString(fmt.Sprintf("%v", v)))
+				buf.WriteString(jsonv.EncodeString(fmt.Sprintf("%v", v)))
 			}
 			buf.WriteString("\n")
 		}
@@ -831,7 +834,7 @@ func (s *Server) catAliases(r *http.Request, spec string) ([]catCol, []catRow) {
 	}
 	for _, idx := range s.indices {
 		for alias, def := range idx.Aliases {
-			if !globMatch(spec, alias) {
+			if !wildcard.Match(spec, alias) {
 				continue
 			}
 			row := catRow{values: map[string]any{}}
@@ -1061,7 +1064,7 @@ func catThreadPool(r *http.Request, spec string) ([]catCol, []catRow) {
 		if spec != "" {
 			matched := false
 			for _, pat := range strings.Split(spec, ",") {
-				if globMatch(pat, name) {
+				if wildcard.Match(pat, name) {
 					matched = true
 				}
 			}
@@ -1319,7 +1322,7 @@ func (s *Server) catTemplates(r *http.Request, spec string) ([]catCol, []catRow)
 			return true
 		}
 		for _, pat := range strings.Split(spec, ",") {
-			if globMatch(pat, name) {
+			if wildcard.Match(pat, name) {
 				return true
 			}
 		}

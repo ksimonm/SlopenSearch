@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/jsonv"
 )
 
 // ---------------------------------------------------------------------------
@@ -514,7 +515,7 @@ func numberKey(v any) string {
 	case json.Number:
 		return t.String()
 	case float64:
-		return formatNumber(t)
+		return jsonv.FormatNumber(t)
 	case bool:
 		return strconv.FormatBool(t)
 	case nil:

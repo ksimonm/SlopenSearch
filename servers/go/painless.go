@@ -4,6 +4,7 @@ import (
 	"math"
 	"strconv"
 
+	"slopensearch/internal/jsonv"
 	"slopensearch/internal/painless"
 )
 
@@ -15,7 +16,7 @@ func valueToScriptString(v any) (string, bool) {
 	case string:
 		return t, true
 	case float64:
-		return formatNumber(t), true
+		return jsonv.FormatNumber(t), true
 	case int64:
 		return strconv.FormatInt(t, 10), true
 	case bool:

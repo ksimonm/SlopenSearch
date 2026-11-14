@@ -14,7 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"slopensearch/internal/jsonv"
 	"slopensearch/internal/ojson"
+	"slopensearch/internal/respfmt"
 )
 
 type captureWriter struct {
@@ -124,7 +126,7 @@ func errorMetadata(fields map[string]any) orderedJSON {
 			out = append(out, orderedKV{k, v})
 		}
 	}
-	for _, k := range sortedKeys(fields) {
+	for _, k := range jsonv.SortedKeys(fields) {
 		switch k {
 		case "index", "resource.id", "resource.type", "index_uuid", "shard":
 			continue
@@ -147,12 +149,6 @@ func causedByObject(e *apiError) map[string]any {
 
 func writeSimpleError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]any{"error": msg, "status": status})
-}
-
-func unmarshalJSON(b []byte, v any) error {
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.UseNumber()
-	return dec.Decode(v)
 }
 
 func readJSON(r *http.Request) (map[string]any, *apiError) {
@@ -181,7 +177,7 @@ func readJSONRaw(r *http.Request) (map[string]any, []byte, *apiError) {
 			Reason: "Expected [START_OBJECT] but found [START_ARRAY]"}
 	}
 	var out map[string]any
-	if err := unmarshalJSON(body, &out); err != nil {
+	if err := jsonv.Unmarshal(body, &out); err != nil {
 		return nil, body, &apiError{Type: "json_parse_exception", Status: 400,
 			Reason: "Failed to parse request body: " + err.Error()}
 	}
@@ -311,7 +307,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		cw.h.Set("Content-Type", "application/json; charset=UTF-8")
 	}
 	if strings.HasPrefix(cw.h.Get("Content-Type"), "application/json") {
-		body = postProcessJSON(cw, r, status, body)
+		body = respfmt.Process(cw.h, cw.ordered, r, status, body, nodeVersion)
 	}
 	cw.h.Set("X-OpenSearch-Version", "OpenSearch/3.9.0 (opensearch)")
 	writeFinal(w, r, status, body)
@@ -844,11 +840,11 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	}
 	if q.Get("format") == "yaml" {
 		if fp := q.Get("filter_path"); fp != "" {
-			body = filterPathValue(body, fp).(map[string]any)
+			body = respfmt.FilterPath(body, fp).(map[string]any)
 		}
 		w.Header().Set("Content-Type", "application/yaml")
 		w.WriteHeader(200)
-		w.Write(toYAML(body))
+		w.Write(respfmt.YAML(body))
 		return
 	}
 	pretty := q.Get("pretty") == "" || (q.Get("pretty") != "false")
@@ -876,7 +872,7 @@ func renderOrderedJSON(buf *bytes.Buffer, pairs []any, pretty bool) {
 			if i > 0 {
 				buf.WriteByte(',')
 			}
-			buf.WriteString(encodeString(pairs[i].(string)))
+			buf.WriteString(jsonv.EncodeString(pairs[i].(string)))
 			buf.WriteByte(':')
 			writeCompact(buf, pairs[i+1])
 		}
@@ -889,9 +885,9 @@ func renderOrderedJSON(buf *bytes.Buffer, pairs []any, pretty bool) {
 			buf.WriteString(",\n")
 		}
 		buf.WriteString("  ")
-		buf.WriteString(encodeString(pairs[i].(string)))
+		buf.WriteString(jsonv.EncodeString(pairs[i].(string)))
 		buf.WriteString(" : ")
-		writePretty(buf, pairs[i+1], 1)
+		respfmt.WritePretty(buf, pairs[i+1], 1)
 	}
 	buf.WriteString("\n}\n")
 }
@@ -900,12 +896,12 @@ func writeCompact(buf *bytes.Buffer, v any) {
 	switch t := v.(type) {
 	case map[string]any:
 		buf.WriteByte('{')
-		keys := sortedKeys(t)
+		keys := jsonv.SortedKeys(t)
 		for i, k := range keys {
 			if i > 0 {
 				buf.WriteByte(',')
 			}
-			buf.WriteString(encodeString(k))
+			buf.WriteString(jsonv.EncodeString(k))
 			buf.WriteByte(':')
 			writeCompact(buf, t[k])
 		}
@@ -919,97 +915,6 @@ func writeCompact(buf *bytes.Buffer, v any) {
 			writeCompact(buf, e)
 		}
 		buf.WriteByte(']')
-	default:
-		buf.WriteString(string(jsonMustMarshal(v)))
-	}
-}
-
-func toYAML(v any) []byte {
-	var buf bytes.Buffer
-	buf.WriteString("---\n")
-	writeYAML(&buf, v, 0)
-	return buf.Bytes()
-}
-
-func writeYAML(buf *bytes.Buffer, v any, indent int) {
-	switch t := v.(type) {
-	case map[string]any:
-		for _, k := range sortedKeys(t) {
-			for i := 0; i < indent; i++ {
-				buf.WriteString("  ")
-			}
-			buf.WriteString(k)
-			buf.WriteByte(':')
-			switch child := t[k].(type) {
-			case map[string]any:
-				if len(child) == 0 {
-					buf.WriteString(" {}\n")
-				} else {
-					buf.WriteByte('\n')
-					writeYAML(buf, child, indent+1)
-				}
-			case []any:
-				if len(child) == 0 {
-					buf.WriteString(" []\n")
-				} else {
-					buf.WriteByte('\n')
-					writeYAML(buf, child, indent)
-				}
-			default:
-				buf.WriteByte(' ')
-				writeYAMLScalar(buf, child)
-				buf.WriteByte('\n')
-			}
-		}
-	case []any:
-		for _, e := range t {
-			for i := 0; i < indent; i++ {
-				buf.WriteString("  ")
-			}
-			buf.WriteString("- ")
-			if m, ok := e.(map[string]any); ok {
-				keys := sortedKeys(m)
-				for i, k := range keys {
-					if i > 0 {
-						for j := 0; j < indent+1; j++ {
-							buf.WriteString("  ")
-						}
-					}
-					buf.WriteString(k)
-					buf.WriteString(": ")
-					writeYAMLScalar(buf, m[k])
-					buf.WriteByte('\n')
-				}
-			} else {
-				writeYAMLScalar(buf, e)
-				buf.WriteByte('\n')
-			}
-		}
-	default:
-		writeYAMLScalar(buf, v)
-		buf.WriteByte('\n')
-	}
-}
-
-func writeYAMLScalar(buf *bytes.Buffer, v any) {
-	switch t := v.(type) {
-	case map[string]any, []any:
-		b := string(jsonMustMarshal(t))
-		buf.WriteString(b)
-	case string:
-		buf.WriteString(encodeString(t))
-	case json.Number:
-		buf.WriteString(t.String())
-	case float64:
-		buf.WriteString(formatNumber(t))
-	case bool:
-		if t {
-			buf.WriteString("true")
-		} else {
-			buf.WriteString("false")
-		}
-	case nil:
-		buf.WriteString("null")
 	default:
 		buf.WriteString(string(jsonMustMarshal(v)))
 	}
@@ -1605,7 +1510,7 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, name string)
 		var meta map[string]any
 		for k, v := range action {
 			op = k
-			unmarshalJSON(v, &meta)
+			jsonv.Unmarshal(v, &meta)
 		}
 		idxName := name
 		if meta != nil {
@@ -1651,7 +1556,7 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, name string)
 		}
 		var source map[string]any
 		if docLine != "" {
-			if err := unmarshalJSON([]byte(docLine), &source); err != nil {
+			if err := jsonv.Unmarshal([]byte(docLine), &source); err != nil {
 				hasErrors = true
 				items = append(items, bulkErr(op, idxName, docID, 400, "illegal_argument_exception", "malformed document"))
 				continue
@@ -1660,7 +1565,7 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, name string)
 		if op == "update" {
 			var wrapper map[string]any
 			source = nil
-			unmarshalJSON([]byte(docLine), &wrapper)
+			jsonv.Unmarshal([]byte(docLine), &wrapper)
 			if d, ok := wrapper["doc"].(map[string]any); ok {
 				source = d
 			}

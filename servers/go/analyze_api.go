@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/jsonv"
 )
 
 // The _analyze API (TransportAnalyzeAction).
@@ -392,7 +393,7 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request, name stri
 		raw = []byte(src)
 	}
 	var body map[string]any
-	if uerr := unmarshalJSON(raw, &body); uerr != nil {
+	if uerr := jsonv.Unmarshal(raw, &body); uerr != nil {
 		writeError(w, &apiError{Type: "json_parse_exception", Status: 400, Reason: "Failed to parse request body: " + uerr.Error()})
 		return
 	}

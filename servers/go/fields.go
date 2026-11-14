@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/jsonv"
 )
 
 // ---------------------------------------------------------------------------
@@ -93,7 +94,7 @@ func previewValue(v any) string {
 	case bool:
 		return strconv.FormatBool(t)
 	case float64:
-		return formatNumber(t)
+		return jsonv.FormatNumber(t)
 	case json.Number:
 		return t.String()
 	case map[string]any:
@@ -211,8 +212,8 @@ func (c *indexCtx) parseIntValue(name, typ string, def map[string]any, v any) (a
 func (c *indexCtx) parseIntFloat(name, typ string, def map[string]any, f float64, coerce bool) (any, *apiError) {
 	if !coerce {
 		if f != math.Trunc(f) {
-			return nil, c.fieldValueError(name, typ, formatNumber(f), "illegal_argument_exception",
-				fmt.Sprintf("%s cannot be converted to Integer without data loss", formatNumber(f)))
+			return nil, c.fieldValueError(name, typ, jsonv.FormatNumber(f), "illegal_argument_exception",
+				fmt.Sprintf("%s cannot be converted to Integer without data loss", jsonv.FormatNumber(f)))
 		}
 	}
 	iv := int64(f)
@@ -383,13 +384,13 @@ func (c *indexCtx) parseFloatValue(name, typ string, def map[string]any, v any) 
 	case "float":
 		if f > math.MaxFloat32 || f < -math.MaxFloat32 {
 			return nil, c.fieldValueError(name, typ, v, "input_coercion_exception",
-				fmt.Sprintf("Value [%s] is out of range for a float", formatNumber(f)))
+				fmt.Sprintf("Value [%s] is out of range for a float", jsonv.FormatNumber(f)))
 		}
 		return float64(float32(f)), nil
 	case "half_float":
 		if f > 65504 || f < -65504 {
 			return nil, c.fieldValueError(name, typ, v, "input_coercion_exception",
-				fmt.Sprintf("Value [%s] is out of range for a half_float", formatNumber(f)))
+				fmt.Sprintf("Value [%s] is out of range for a half_float", jsonv.FormatNumber(f)))
 		}
 		return float64(float32FromHalf(float32Half(f))), nil
 	case "scaled_float":
@@ -1292,7 +1293,7 @@ func valueScalarString(v any) (string, bool) {
 	case string:
 		return t, true
 	case float64:
-		return formatNumber(t), true
+		return jsonv.FormatNumber(t), true
 	case json.Number:
 		return t.String(), true
 	case bool:
@@ -2416,7 +2417,7 @@ func (c *indexCtx) parseRangeValue(path, typ string, def map[string]any, v any) 
 func boundsValue(v any) string {
 	switch t := v.(type) {
 	case float64:
-		return formatNumber(t)
+		return jsonv.FormatNumber(t)
 	case int64:
 		return strconv.FormatInt(t, 10)
 	case uint64:

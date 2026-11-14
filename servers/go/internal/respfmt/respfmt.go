@@ -1,4 +1,4 @@
-package main
+package respfmt
 
 import (
 	"bytes"
@@ -8,11 +8,18 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/ojson"
 )
 
-// postProcessJSON applies filter_path, human, error_trace, pretty and the
+// Process applies filter_path, human, error_trace, pretty and the
 // yaml format to a JSON response body.
-func postProcessJSON(cw *captureWriter, r *http.Request, status int, body []byte) []byte {
+//
+// h is the response header (Content-Type is adjusted), ordered reports a body
+// the handler already rendered in its final form, version is the node version
+// for the human readable settings.
+func Process(h http.Header, ordered bool, r *http.Request, status int, body []byte, version string) []byte {
 	q := r.URL.Query()
 	fp := q.Get("filter_path")
 	_, hasPretty := q["pretty"]
@@ -24,11 +31,11 @@ func postProcessJSON(cw *captureWriter, r *http.Request, status int, body []byte
 	filter := fp != "" && status < 400
 	switch {
 	case strings.Contains(acc, "application/smile"):
-		cw.h.Set("Content-Type", "application/smile")
+		h.Set("Content-Type", "application/smile")
 	case strings.Contains(acc, "application/cbor"):
-		cw.h.Set("Content-Type", "application/cbor")
+		h.Set("Content-Type", "application/cbor")
 	}
-	if cw.ordered && !filter && !trace && !yaml {
+	if ordered && !filter && !trace && !yaml {
 		return body // already rendered in its final form
 	}
 	if !filter && !trace && !yaml && !pretty && !human {
@@ -39,20 +46,20 @@ func postProcessJSON(cw *captureWriter, r *http.Request, status int, body []byte
 		return bytes.TrimRight(body, "\n")
 	}
 	if human && status < 400 {
-		tree = humanize(tree, r)
+		tree = humanize(tree, r, version)
 	}
 	if filter {
-		tree = reorderLike(tree, filterPathValue(toPlain(tree), fp))
+		tree = reorderLike(tree, FilterPath(toPlain(tree), fp))
 	}
 	if trace {
 		tree = addStackTraces(tree)
 	}
 	if yaml {
-		cw.h.Set("Content-Type", "application/yaml")
+		h.Set("Content-Type", "application/yaml")
 		return toYAMLOrdered(tree)
 	}
 	if pretty {
-		return prettyJSON(tree)
+		return Pretty(tree)
 	}
 	var buf bytes.Buffer
 	writeCompactOrdered(&buf, tree)
@@ -64,7 +71,7 @@ func postProcessJSON(cw *captureWriter, r *http.Request, status int, body []byte
 // handler wrote survives every transformation.
 
 // parseOrdered decodes JSON keeping object key order (objects become
-// orderedJSON, numbers json.Number). With rawSource, a "_source" object is
+// ojson.Object, numbers json.Number). With rawSource, a "_source" object is
 // kept as its verbatim bytes, the way OpenSearch copies stored sources
 // into pretty output.
 func parseResp(b []byte, rawSource bool) (any, error) {
@@ -91,7 +98,7 @@ func parseRespValue(dec *json.Decoder, src []byte, rawSource bool) (any, error) 
 	}
 	switch d {
 	case '{':
-		o := orderedJSON{}
+		o := ojson.Object{}
 		for dec.More() {
 			kt, err := dec.Token()
 			if err != nil {
@@ -107,21 +114,21 @@ func parseRespValue(dec *json.Decoder, src []byte, rawSource bool) (any, error) 
 				if len(raw) > 0 && raw[0] == '{' {
 					// keep the bytes exactly as written (after the colon)
 					seg := bytes.TrimLeft(src[start:dec.InputOffset()], " \t\r\n:")
-					o = append(o, orderedKV{k, verbatimJSON(append([]byte(nil), seg...))})
+					o = append(o, ojson.KV{k, ojson.Verbatim(append([]byte(nil), seg...))})
 					continue
 				}
 				v, err := parseResp(raw, false)
 				if err != nil {
 					return nil, err
 				}
-				o = append(o, orderedKV{k, v})
+				o = append(o, ojson.KV{k, v})
 				continue
 			}
 			v, err := parseRespValue(dec, src, rawSource)
 			if err != nil {
 				return nil, err
 			}
-			o = append(o, orderedKV{k, v})
+			o = append(o, ojson.KV{k, v})
 		}
 		_, err := dec.Token()
 		return o, err
@@ -142,7 +149,7 @@ func parseRespValue(dec *json.Decoder, src []byte, rawSource bool) (any, error) 
 // toPlain converts an ordered tree to plain maps (for filter_path).
 func toPlain(v any) any {
 	switch t := v.(type) {
-	case orderedJSON:
+	case ojson.Object:
 		m := make(map[string]any, len(t))
 		for _, kv := range t {
 			m[kv.K] = toPlain(kv.V)
@@ -154,9 +161,9 @@ func toPlain(v any) any {
 			a[i] = toPlain(e)
 		}
 		return a
-	case verbatimJSON:
+	case ojson.Verbatim:
 		var x any
-		_ = unmarshalJSON(t, &x)
+		_ = jsonv.Unmarshal(t, &x)
 		return x
 	}
 	return v
@@ -166,24 +173,24 @@ func toPlain(v any) any {
 func reorderLike(orig, filtered any) any {
 	switch f := filtered.(type) {
 	case map[string]any:
-		out := orderedJSON{}
-		if o, ok := orig.(orderedJSON); ok {
+		out := ojson.Object{}
+		if o, ok := orig.(ojson.Object); ok {
 			seen := map[string]bool{}
 			for _, kv := range o {
 				if v, has := f[kv.K]; has && !seen[kv.K] {
 					seen[kv.K] = true
-					out = append(out, orderedKV{kv.K, reorderLike(kv.V, v)})
+					out = append(out, ojson.KV{kv.K, reorderLike(kv.V, v)})
 				}
 			}
-			for _, k := range sortedKeys(f) {
+			for _, k := range jsonv.SortedKeys(f) {
 				if !seen[k] {
-					out = append(out, orderedKV{k, reorderLike(nil, f[k])})
+					out = append(out, ojson.KV{k, reorderLike(nil, f[k])})
 				}
 			}
 			return out
 		}
-		for _, k := range sortedKeys(f) {
-			out = append(out, orderedKV{k, reorderLike(nil, f[k])})
+		for _, k := range jsonv.SortedKeys(f) {
+			out = append(out, ojson.KV{k, reorderLike(nil, f[k])})
 		}
 		return out
 	case []any:
@@ -204,13 +211,13 @@ func reorderLike(orig, filtered any) any {
 // writeCompactOrdered renders an ordered tree as compact JSON.
 func writeCompactOrdered(buf *bytes.Buffer, v any) {
 	switch t := v.(type) {
-	case orderedJSON:
+	case ojson.Object:
 		buf.WriteByte('{')
 		for i, kv := range t {
 			if i > 0 {
 				buf.WriteByte(',')
 			}
-			buf.WriteString(encodeString(kv.K))
+			buf.WriteString(jsonv.EncodeString(kv.K))
 			buf.WriteByte(':')
 			writeCompactOrdered(buf, kv.V)
 		}
@@ -224,10 +231,10 @@ func writeCompactOrdered(buf *bytes.Buffer, v any) {
 			writeCompactOrdered(buf, e)
 		}
 		buf.WriteByte(']')
-	case verbatimJSON:
+	case ojson.Verbatim:
 		buf.Write(t)
 	case string:
-		buf.WriteString(encodeString(t))
+		buf.WriteString(jsonv.EncodeString(t))
 	case json.Number:
 		buf.WriteString(t.String())
 	case bool:
@@ -239,11 +246,11 @@ func writeCompactOrdered(buf *bytes.Buffer, v any) {
 	case nil:
 		buf.WriteString("null")
 	default:
-		buf.Write(jsonMustMarshal(t))
+		buf.Write(ojson.Marshal(t))
 	}
 }
 
-func writePrettyOrdered(buf *bytes.Buffer, o orderedJSON, indent int) {
+func writePrettyOrdered(buf *bytes.Buffer, o ojson.Object, indent int) {
 	if len(o) == 0 {
 		buf.WriteString("{ }")
 		return
@@ -251,13 +258,13 @@ func writePrettyOrdered(buf *bytes.Buffer, o orderedJSON, indent int) {
 	buf.WriteString("{\n")
 	for i, kv := range o {
 		writeIndent(buf, indent+1)
-		buf.WriteString(encodeString(kv.K))
-		if raw, ok := kv.V.(verbatimJSON); ok {
+		buf.WriteString(jsonv.EncodeString(kv.K))
+		if raw, ok := kv.V.(ojson.Verbatim); ok {
 			buf.WriteByte(':')
 			buf.Write(raw)
 		} else {
 			buf.WriteString(" : ")
-			writePretty(buf, kv.V, indent+1)
+			WritePretty(buf, kv.V, indent+1)
 		}
 		if i < len(o)-1 {
 			buf.WriteByte(',')
@@ -289,9 +296,9 @@ var javaLangExceptions = map[string]bool{
 }
 
 // stackTraceFor renders a Java-like stack trace for an error object.
-func stackTraceFor(e orderedJSON) string {
+func stackTraceFor(e ojson.Object) string {
 	get := func(k string) string {
-		if i := findKey(e, k); i >= 0 {
+		if i := e.Index(k); i >= 0 {
 			if s, ok := e[i].V.(string); ok {
 				return s
 			}
@@ -313,35 +320,35 @@ func stackTraceFor(e orderedJSON) string {
 // addStackTraces appends stack_trace to an error body's error object and
 // its root causes, as error_trace=true does.
 func addStackTraces(tree any) any {
-	top, ok := tree.(orderedJSON)
+	top, ok := tree.(ojson.Object)
 	if !ok {
 		return tree
 	}
-	i := findKey(top, "error")
+	i := top.Index("error")
 	if i < 0 {
 		return tree
 	}
-	errObj, ok := top[i].V.(orderedJSON)
+	errObj, ok := top[i].V.(ojson.Object)
 	if !ok {
 		return tree
 	}
-	if rc := findKey(errObj, "root_cause"); rc >= 0 {
+	if rc := errObj.Index("root_cause"); rc >= 0 {
 		if list, ok := errObj[rc].V.([]any); ok {
 			for j, c := range list {
-				if co, ok := c.(orderedJSON); ok {
-					list[j] = append(co, orderedKV{"stack_trace", stackTraceFor(co)})
+				if co, ok := c.(ojson.Object); ok {
+					list[j] = append(co, ojson.KV{"stack_trace", stackTraceFor(co)})
 				}
 			}
 		}
 	}
-	errObj = append(errObj, orderedKV{"stack_trace", stackTraceFor(errObj)})
+	errObj = append(errObj, ojson.KV{"stack_trace", stackTraceFor(errObj)})
 	top[i].V = errObj
 	return top
 }
 
 // humanize adds the human readable twins OpenSearch writes with
 // human=true for index stats (sizes) and index settings (dates, versions).
-func humanize(tree any, r *http.Request) any {
+func humanize(tree any, r *http.Request, version string) any {
 	path := strings.Trim(r.URL.Path, "/")
 	segs := strings.Split(path, "/")
 	hasSeg := func(s string) bool {
@@ -356,25 +363,25 @@ func humanize(tree any, r *http.Request) any {
 	case hasSeg("_stats") && !strings.HasPrefix(path, "_nodes") && !strings.HasPrefix(path, "_cluster"):
 		return humanizeStats(tree)
 	case hasSeg("_settings") && !strings.HasPrefix(path, "_cluster") && !strings.HasPrefix(path, "_nodes"):
-		return humanizeSettings(tree, false)
+		return humanizeSettings(tree, false, version)
 	}
 	return tree
 }
 
 func humanizeStats(v any) any {
 	switch t := v.(type) {
-	case orderedJSON:
-		out := make(orderedJSON, 0, len(t))
+	case ojson.Object:
+		out := make(ojson.Object, 0, len(t))
 		for _, kv := range t {
 			if strings.HasSuffix(kv.K, "_in_bytes") {
 				base := strings.TrimSuffix(kv.K, "_in_bytes")
-				if findKey(t, base) < 0 {
-					if n, ok := toFloat(kv.V); ok {
-						out = append(out, orderedKV{base, humanBytes(int64(n))})
+				if t.Index(base) < 0 {
+					if n, ok := jsonv.ToFloat(kv.V); ok {
+						out = append(out, ojson.KV{base, humanBytes(int64(n))})
 					}
 				}
 			}
-			out = append(out, orderedKV{kv.K, humanizeStats(kv.V)})
+			out = append(out, ojson.KV{kv.K, humanizeStats(kv.V)})
 		}
 		return out
 	case []any:
@@ -402,12 +409,12 @@ func humanBytes(n int64) string {
 	return fmt.Sprintf("%db", n)
 }
 
-func humanizeSettings(v any, inIndex bool) any {
-	t, ok := v.(orderedJSON)
+func humanizeSettings(v any, inIndex bool, version string) any {
+	t, ok := v.(ojson.Object)
 	if !ok {
 		return v
 	}
-	out := make(orderedJSON, 0, len(t))
+	out := make(ojson.Object, 0, len(t))
 	for _, kv := range t {
 		val := kv.V
 		switch {
@@ -415,25 +422,25 @@ func humanizeSettings(v any, inIndex bool) any {
 			if s, ok := val.(string); ok {
 				var ms int64
 				if _, err := fmt.Sscan(s, &ms); err == nil {
-					out = append(out, orderedKV{"creation_date_string",
+					out = append(out, ojson.KV{"creation_date_string",
 						time.UnixMilli(ms).UTC().Format("2006-01-02T15:04:05.000Z")})
 				}
 			}
 		case inIndex && kv.K == "version":
-			if vo, ok := val.(orderedJSON); ok {
-				nv := make(orderedJSON, 0, len(vo)+2)
+			if vo, ok := val.(ojson.Object); ok {
+				nv := make(ojson.Object, 0, len(vo)+2)
 				for _, x := range vo {
 					if x.K == "created" || x.K == "upgraded" {
-						nv = append(nv, orderedKV{x.K + "_string", nodeVersion})
+						nv = append(nv, ojson.KV{x.K + "_string", version})
 					}
 					nv = append(nv, x)
 				}
 				val = nv
 			}
 		default:
-			val = humanizeSettings(val, kv.K == "index")
+			val = humanizeSettings(val, kv.K == "index", version)
 		}
-		out = append(out, orderedKV{kv.K, val})
+		out = append(out, ojson.KV{kv.K, val})
 	}
 	return out
 }
@@ -458,22 +465,22 @@ func toYAMLOrdered(v any) []byte {
 
 func yamlKey(k string) string {
 	if yamlNeedsQuotes(k) {
-		return encodeString(k)
+		return jsonv.EncodeString(k)
 	}
 	return k
 }
 
-func asOrdered(v any) (orderedJSON, bool) {
+func asOrdered(v any) (ojson.Object, bool) {
 	switch t := v.(type) {
-	case orderedJSON:
+	case ojson.Object:
 		return t, true
 	case map[string]any:
-		o := orderedJSON{}
-		for _, k := range sortedKeys(t) {
-			o = append(o, orderedKV{k, t[k]})
+		o := ojson.Object{}
+		for _, k := range jsonv.SortedKeys(t) {
+			o = append(o, ojson.KV{k, t[k]})
 		}
 		return o, true
-	case verbatimJSON:
+	case ojson.Verbatim:
 		x, err := parseResp(t, false)
 		if err == nil {
 			return asOrdered(x)

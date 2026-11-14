@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/wildcard"
 )
 
 // ---------------------------------------------------------------- helpers
@@ -77,7 +79,7 @@ func patternsOverlap(a, b string) bool {
 
 func templateMatches(tpl map[string]any, name string) bool {
 	for _, pat := range normalizePatterns(tpl["index_patterns"]) {
-		if ps, ok := pat.(string); ok && globMatch(ps, name) {
+		if ps, ok := pat.(string); ok && wildcard.Match(ps, name) {
 			return true
 		}
 	}
@@ -210,7 +212,7 @@ func (s *Server) handleComposableTemplate(w http.ResponseWriter, r *http.Request
 	case http.MethodGet, http.MethodHead:
 		out := []any{}
 		for _, n := range sortedNames(s.composableTemplates) {
-			if n == name || globMatch(name, n) {
+			if n == name || wildcard.Match(name, n) {
 				out = append(out, map[string]any{"name": n, "index_template": indexTemplateGetView(s.composableTemplates[n])})
 			}
 		}
@@ -395,7 +397,7 @@ func (s *Server) handleComponentTemplate(w http.ResponseWriter, r *http.Request,
 	case http.MethodGet, http.MethodHead:
 		out := []any{}
 		for _, n := range sortedNames(s.componentTemplates) {
-			if n == name || globMatch(name, n) {
+			if n == name || wildcard.Match(name, n) {
 				out = append(out, view(n, s.componentTemplates[n]))
 			}
 		}
@@ -492,7 +494,7 @@ func (s *Server) handleLegacyTemplate(w http.ResponseWriter, r *http.Request, re
 	case http.MethodGet, http.MethodHead:
 		out := map[string]any{}
 		for n, tpl := range s.legacyTemplates {
-			if n == name || globMatch(name, n) {
+			if n == name || wildcard.Match(name, n) {
 				out[n] = legacyGetView(tpl)
 			}
 		}

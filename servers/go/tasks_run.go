@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/jsonv"
 )
 
 // Background execution of tasks started with wait_for_completion=false.
@@ -464,7 +466,7 @@ func (s *Server) runThrottled(t *storedTask, r *http.Request, segs []string, q u
 			rec := &captureWriter{h: http.Header{}}
 			s.route(rec, subRequest(r, subPath, nq, raw))
 			var out map[string]any
-			_ = unmarshalJSON(rec.buf.Bytes(), &out)
+			_ = jsonv.Unmarshal(rec.buf.Bytes(), &out)
 			status := rec.status
 			if status == 0 {
 				status = 200

@@ -1,38 +1,44 @@
-package main
+// Package respfmt renders response bodies the way OpenSearch does: pretty
+// JSON, filter_path, human, error_trace and YAML output.
+package respfmt
 
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/ojson"
+	"slopensearch/internal/wildcard"
 )
 
 // ---------------------------------------------------------------- pretty JSON
 
-func prettyJSON(v any) []byte {
+// Pretty renders v as indented JSON (pretty=true).
+func Pretty(v any) []byte {
 	var buf bytes.Buffer
-	writePretty(&buf, v, 0)
+	WritePretty(&buf, v, 0)
 	buf.WriteByte('\n')
 	return buf.Bytes()
 }
 
-func writePretty(buf *bytes.Buffer, v any, indent int) {
+func WritePretty(buf *bytes.Buffer, v any, indent int) {
 	switch t := v.(type) {
 	case map[string]any:
 		writePrettyObject(buf, t, indent)
-	case orderedJSON:
+	case ojson.Object:
 		writePrettyOrdered(buf, t, indent)
-	case verbatimJSON:
+	case ojson.Verbatim:
 		buf.Write(t)
 	case []any:
 		writePrettyArray(buf, t, indent)
 	case string:
-		buf.WriteString(encodeString(t))
+		buf.WriteString(jsonv.EncodeString(t))
 	case json.Number:
 		buf.WriteString(t.String())
 	case float64:
-		buf.WriteString(formatNumber(t))
+		buf.WriteString(jsonv.FormatNumber(t))
 	case bool:
 		if t {
 			buf.WriteString("true")
@@ -56,13 +62,13 @@ func writePrettyObject(buf *bytes.Buffer, m map[string]any, indent int) {
 	for k := range m {
 		keys = append(keys, k)
 	}
-	sortStrings(keys)
+	jsonv.SortStrings(keys)
 	buf.WriteString("{\n")
 	for i, k := range keys {
 		writeIndent(buf, indent+1)
-		buf.WriteString(encodeString(k))
+		buf.WriteString(jsonv.EncodeString(k))
 		buf.WriteString(" : ")
-		writePretty(buf, m[k], indent+1)
+		WritePretty(buf, m[k], indent+1)
 		if i < len(keys)-1 {
 			buf.WriteByte(',')
 		}
@@ -80,7 +86,7 @@ func writePrettyArray(buf *bytes.Buffer, a []any, indent int) {
 	buf.WriteString("[\n")
 	for i, e := range a {
 		writeIndent(buf, indent+1)
-		writePretty(buf, e, indent+1)
+		WritePretty(buf, e, indent+1)
 		if i < len(a)-1 {
 			buf.WriteByte(',')
 		}
@@ -93,40 +99,6 @@ func writePrettyArray(buf *bytes.Buffer, a []any, indent int) {
 func writeIndent(buf *bytes.Buffer, n int) {
 	for i := 0; i < n; i++ {
 		buf.WriteString("  ")
-	}
-}
-
-func formatNumber(f float64) string {
-	if f == float64(int64(f)) && f < 1e15 && f > -1e15 {
-		return strconv.FormatInt(int64(f), 10)
-	}
-	return strconv.FormatFloat(f, 'g', -1, 64)
-}
-
-var jsonStringEscaper = strings.NewReplacer(
-	"\\", "\\\\", "\"", "\\\"", "\n", "\\n", "\r", "\\r", "\t", "\\t",
-	"\b", "\\b", "\f", "\\f",
-)
-
-func encodeString(s string) string {
-	var sb strings.Builder
-	sb.WriteByte('"')
-	for _, r := range s {
-		if r < 0x20 && r != '\n' && r != '\r' && r != '\t' && r != '\b' && r != '\f' {
-			sb.WriteString(fmt.Sprintf("\\u%04x", r))
-		} else {
-			sb.WriteString(jsonStringEscaper.Replace(string(r)))
-		}
-	}
-	sb.WriteByte('"')
-	return sb.String()
-}
-
-func sortStrings(a []string) {
-	for i := 1; i < len(a); i++ {
-		for j := i; j > 0 && a[j] < a[j-1]; j-- {
-			a[j], a[j-1] = a[j-1], a[j]
-		}
 	}
 }
 
@@ -155,29 +127,7 @@ func parseFilterPath(fp string) []pathPattern {
 	return pats
 }
 
-func globMatch(pat, s string) bool {
-	if pat == "*" || pat == s {
-		return true
-	}
-	if !strings.Contains(pat, "*") {
-		return false
-	}
-	parts := strings.Split(pat, "*")
-	if !strings.HasPrefix(s, parts[0]) {
-		return false
-	}
-	s = s[len(parts[0]):]
-	for i := 1; i < len(parts)-1; i++ {
-		idx := strings.Index(s, parts[i])
-		if idx < 0 {
-			return false
-		}
-		s = s[idx+len(parts[i]):]
-	}
-	return strings.HasSuffix(s, parts[len(parts)-1])
-}
-
-func filterPathValue(v any, fp string) any {
+func FilterPath(v any, fp string) any {
 	pats := parseFilterPath(fp)
 	var includes, excludes [][]string
 	for _, p := range pats {
@@ -189,7 +139,7 @@ func filterPathValue(v any, fp string) any {
 	}
 	var out any
 	if len(includes) == 0 {
-		out = deepCopyJSON(v)
+		out = jsonv.DeepCopy(v)
 	} else {
 		res, matched := filterNode(v, includes)
 		if !matched {
@@ -231,7 +181,7 @@ func expandDoubleStar(segs []string) [][]string {
 func filterNode(v any, pats [][]string) (any, bool) {
 	for _, p := range pats {
 		if len(p) == 0 {
-			return deepCopyJSON(v), true
+			return jsonv.DeepCopy(v), true
 		}
 	}
 	switch t := v.(type) {
@@ -240,7 +190,7 @@ func filterNode(v any, pats [][]string) (any, bool) {
 		for k, val := range t {
 			var sub [][]string
 			for _, p := range pats {
-				if len(p) > 0 && globMatch(p[0], k) {
+				if len(p) > 0 && wildcard.Match(p[0], k) {
 					sub = append(sub, p[1:])
 				}
 			}
@@ -269,28 +219,9 @@ func filterNode(v any, pats [][]string) (any, bool) {
 	}
 }
 
-func deepCopyJSON(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		m := make(map[string]any, len(t))
-		for k, val := range t {
-			m[k] = deepCopyJSON(val)
-		}
-		return m
-	case []any:
-		a := make([]any, len(t))
-		for i, e := range t {
-			a[i] = deepCopyJSON(e)
-		}
-		return a
-	default:
-		return v
-	}
-}
-
 func collectPath(v any, segs []string, path []string, out any) {
 	if len(segs) == 0 {
-		insertPath(out, path, deepCopyJSON(v))
+		insertPath(out, path, jsonv.DeepCopy(v))
 		return
 	}
 	seg := segs[0]
@@ -311,7 +242,7 @@ func collectPath(v any, segs []string, path []string, out any) {
 	switch t := v.(type) {
 	case map[string]any:
 		for k, val := range t {
-			if globMatch(seg, k) {
+			if wildcard.Match(seg, k) {
 				collectPath(val, segs[1:], append(path, k), out)
 			}
 		}
@@ -412,18 +343,8 @@ func matchPathPattern(segs, path []string) bool {
 	if len(path) == 0 {
 		return false
 	}
-	if !globMatch(segs[0], path[0]) {
+	if !wildcard.Match(segs[0], path[0]) {
 		return false
 	}
 	return matchPathPattern(segs[1:], path[1:])
-}
-
-// enforce sorted output for deterministic responses
-func sortedKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sortStrings(keys)
-	return keys
 }

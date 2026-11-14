@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"slopensearch/internal/jsonv"
 )
 
 // Shard request cache (IndicesRequestCache). OpenSearch caches the result
@@ -90,7 +92,7 @@ func (s *Server) requestCacheKey(r *http.Request, raw []byte) string {
 	}
 	var body map[string]any
 	if len(bytes.TrimSpace(raw)) > 0 {
-		if err := unmarshalJSON(raw, &body); err != nil {
+		if err := jsonv.Unmarshal(raw, &body); err != nil {
 			return ""
 		}
 	}

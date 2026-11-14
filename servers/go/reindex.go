@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"slopensearch/internal/jsonv"
 	"slopensearch/internal/painless"
 )
 
@@ -196,7 +197,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 	destIdx := s.indices[destName]
 	destNameErr := validateIndexName(destName)
 	for _, it := range items {
-		doc := deepCopyJSON(it.doc).(map[string]any)
+		doc := jsonv.DeepCopy(it.doc).(map[string]any)
 		id := it.id
 		targetName := destName
 		if hasScript {

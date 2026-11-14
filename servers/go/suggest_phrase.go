@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/jsonv"
 	"slopensearch/internal/mustache"
 	"slopensearch/internal/painless"
 )
@@ -1528,7 +1529,7 @@ func phCollateMatches(idx *Index, req *phraseRequest, suggestion string) (bool, 
 		return false, mustacheScriptError(tpl, merr)
 	}
 	var q map[string]any
-	if err := unmarshalJSON([]byte(src), &q); err != nil {
+	if err := jsonv.Unmarshal([]byte(src), &q); err != nil {
 		return false, &apiError{Type: "parsing_exception", Status: 400, Reason: "Failed to parse collate query"}
 	}
 	for _, id := range idx.Order {

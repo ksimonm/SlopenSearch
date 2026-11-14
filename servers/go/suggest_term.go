@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/jsonv"
 	"slopensearch/internal/painless"
 )
 
@@ -134,7 +135,7 @@ func termSuggester(spec, body map[string]any, indices []*Index, globalText any) 
 	}
 	input, _ := toString(rawText)
 	if f, ok := rawText.(float64); ok {
-		input = formatNumber(f)
+		input = jsonv.FormatNumber(f)
 	}
 
 	analyzer, _ := toString(body["analyzer"])

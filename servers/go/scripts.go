@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"slopensearch/internal/jsonv"
 	"slopensearch/internal/painless"
 )
 
@@ -106,7 +107,7 @@ func evalScriptFields(hit multiHit, specs map[string]any) (map[string]any, *apiE
 		}
 	}
 	source := painless.FromJSON(deepCopySource(src), painless.Linked).(*painless.Map)
-	for _, name := range sortedKeys(specs) {
+	for _, name := range jsonv.SortedKeys(specs) {
 		spec, _ := specs[name].(map[string]any)
 		ignore, _ := spec["ignore_failure"].(bool)
 		cs, se, ae := prepareScript(spec["script"], "field")

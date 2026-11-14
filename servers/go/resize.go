@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+
+	"slopensearch/internal/jsonv"
 )
 
 // handleResize implements POST /{src}/_clone|_shrink|_split/{target}.
@@ -114,7 +116,7 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request, src, op, t
 
 	newBody := map[string]any{
 		"settings": newSettings,
-		"mappings": deepCopyJSON(idx.Mappings),
+		"mappings": jsonv.DeepCopy(idx.Mappings),
 	}
 	if a, ok := body["aliases"]; ok && a != nil {
 		newBody["aliases"] = a
@@ -125,7 +127,7 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request, src, op, t
 		return
 	}
 	for _, id := range idx.Order {
-		doc := deepCopyJSON(idx.Docs[id]).(map[string]any)
+		doc := jsonv.DeepCopy(idx.Docs[id]).(map[string]any)
 		newIdx.Docs[id] = doc
 		newIdx.Order = append(newIdx.Order, id)
 		_ = newIdx.computeDocValues(id, doc)

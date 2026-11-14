@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"slopensearch/internal/analysis"
+	"slopensearch/internal/jsonv"
 )
 
 // ---------------------------------------------------------------------------
@@ -126,7 +127,7 @@ func expandDottedObject(src map[string]any) (map[string]any, *apiError) {
 		keys = append(keys, k)
 	}
 	// Stable order keeps conflict reporting deterministic.
-	sortStrings(keys)
+	jsonv.SortStrings(keys)
 	out := map[string]any{}
 	for _, key := range keys {
 		if err := insertDottedObject(out, key, src[key]); err != nil {
