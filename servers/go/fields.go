@@ -1700,7 +1700,10 @@ func (idx *Index) computeDocValues(id string, doc map[string]any) *apiError {
 	if derr := checkObjectDepth(doc, 0, mappingIntSetting(idx, "mapping.depth.limit", 20)); derr != nil {
 		return derr
 	}
-	if derr := checkDocFieldNameLengths(doc, mappingIntSetting(idx, "mapping.field_name_length.limit", 1000)); derr != nil {
+	if derr := checkArrayDepth(doc, 0, mappingIntSetting(idx, "mapping.depth.limit", 20)); derr != nil {
+		return derr
+	}
+	if derr := checkDocFieldNameLengths(doc, mappingIntSetting(idx, "mapping.field_name_length.limit", 0)); derr != nil {
 		return derr
 	}
 	if props, ok := idx.Mappings["properties"].(map[string]any); ok {
