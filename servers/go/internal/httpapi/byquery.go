@@ -156,7 +156,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 			continue
 		}
 		total++
-		if searchSeesStale(idx, id) {
+		if idx.SearchSeesStale(id) {
 			// the search hit carries the refreshed version: if_seq_no fails
 			versionConflicts++
 			if conflicts != "proceed" {
@@ -174,8 +174,8 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 			slices[si].total++
 		}
 		if isDelete {
-			base := currentVersion(idx, id)
-			seq := nextSeq(idx)
+			base := idx.CurrentVersion(id)
+			seq := idx.AllocSeqNo()
 			delete(idx.Docs, id)
 			delete(idx.Pending, id)
 			mapping.RemoveDocValues(idx, id)
@@ -212,8 +212,8 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 			newDoc = res.source
 		}
 		if op == "delete" {
-			base := currentVersion(idx, id)
-			seq := nextSeq(idx)
+			base := idx.CurrentVersion(id)
+			seq := idx.AllocSeqNo()
 			delete(idx.Docs, id)
 			delete(idx.Pending, id)
 			mapping.RemoveDocValues(idx, id)
@@ -258,16 +258,16 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 			failures = append(failures, byQueryFailure(idx.Name, id, derr))
 			continue
 		}
-		seq := nextSeq(idx)
+		seq := idx.AllocSeqNo()
 		idx.Docs[id] = newDoc
-		idx.Versions[id] = currentVersion(idx, id) + 1
+		idx.Versions[id] = idx.CurrentVersion(id) + 1
 		idx.SeqNos[id] = seq
 		idx.PrimaryTerms[id] = 1
 		idx.IndexTotal++
 		if rv == "true" || rv == "wait_for" || !idx.RefreshDisabled() {
 			delete(idx.Pending, id)
 		} else {
-			markPending(idx, id, newDoc, true)
+			idx.MarkPending(id, newDoc, true)
 		}
 		updated++
 		if si >= 0 {

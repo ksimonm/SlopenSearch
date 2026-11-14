@@ -275,7 +275,7 @@ func metaInt(meta map[string]any, key string) (int64, bool) {
 }
 
 func bulkVersion(idx *model.Index, id string, meta map[string]any, exists bool) (int64, *apierr.Error) {
-	old := currentVersion(idx, id)
+	old := idx.CurrentVersion(id)
 	v, has := metaInt(meta, "version")
 	vt := metaString(meta, "version_type")
 	if !has {
@@ -401,7 +401,7 @@ func (s *Server) runBulkAction(a bulkAction, rv string, requireAliasURL bool, ur
 	if routing == "" {
 		routing = aliasRoutingFor(idx, a.indexName)
 	}
-	if mappingRoutingRequired(idx) && routing == "" {
+	if idx.RoutingRequired() && routing == "" {
 		return bulkErrItem(a.op, idx.Name, a.id, routingMissing(idx, a.id)), true
 	}
 	id := a.id
@@ -411,7 +411,7 @@ func (s *Server) runBulkAction(a bulkAction, rv string, requireAliasURL bool, ur
 	switch a.op {
 	case "delete":
 		exists := false
-		if _, ok := idx.Docs[id]; ok && routingMatches(idx, id, routing) {
+		if _, ok := idx.Docs[id]; ok && idx.RoutingMatches(id, routing) {
 			exists = true
 		}
 		if err := bulkIfSeq(idx, id, a.meta); err != nil {
@@ -421,7 +421,7 @@ func (s *Server) runBulkAction(a bulkAction, rv string, requireAliasURL bool, ur
 		if err != nil {
 			return bulkErrItem("delete", idx.Name, id, err), true
 		}
-		seq := nextSeq(idx)
+		seq := idx.AllocSeqNo()
 		idx.SeqNos[id] = seq
 		idx.PrimaryTerms[id] = 1
 		idx.Versions[id] = ver
@@ -445,7 +445,7 @@ func (s *Server) runBulkIndex(idx *model.Index, a bulkAction, id, routing, rv, u
 	_, exists := idx.Docs[id]
 	if a.op == "create" && exists {
 		return bulkErrItem("create", idx.Name, id, versionConflict(idx, id,
-			fmt.Sprintf("[%s]: version conflict, document already exists (current version [%d])", id, currentVersion(idx, id)))), true
+			fmt.Sprintf("[%s]: version conflict, document already exists (current version [%d])", id, idx.CurrentVersion(id)))), true
 	}
 	if err := bulkIfSeq(idx, id, a.meta); err != nil {
 		return bulkErrItem(a.op, idx.Name, id, err), true
@@ -502,7 +502,7 @@ func (s *Server) runBulkIndex(idx *model.Index, a bulkAction, id, routing, rv, u
 	idx.Docs[id] = src
 	delete(idx.RawDocs, id)
 	idx.Versions[id] = ver
-	seq := nextSeq(idx)
+	seq := idx.AllocSeqNo()
 	idx.SeqNos[id] = seq
 	idx.PrimaryTerms[id] = 1
 	idx.IndexTotal++
@@ -514,7 +514,7 @@ func (s *Server) runBulkIndex(idx *model.Index, a bulkAction, id, routing, rv, u
 	if rv == "true" || rv == "wait_for" {
 		delete(idx.Pending, id)
 	} else {
-		markPending(idx, id, src, exists)
+		idx.MarkPending(id, src, exists)
 	}
 	result := "created"
 	status := 201
@@ -537,7 +537,7 @@ func (s *Server) runBulkUpdate(idx *model.Index, a bulkAction, id, routing, rv, 
 		detectNoop = b
 	}
 	old, exists := idx.Docs[id]
-	if exists && !routingMatches(idx, id, routing) {
+	if exists && !idx.RoutingMatches(id, routing) {
 		exists = false
 	}
 	if !exists {
@@ -578,7 +578,7 @@ func (s *Server) runBulkUpdate(idx *model.Index, a bulkAction, id, routing, rv, 
 		idx.Docs[id] = src
 		delete(idx.RawDocs, id)
 		idx.Versions[id] = 1
-		seq := nextSeq(idx)
+		seq := idx.AllocSeqNo()
 		idx.SeqNos[id] = seq
 		idx.PrimaryTerms[id] = 1
 		idx.IndexTotal++
@@ -599,7 +599,7 @@ func (s *Server) runBulkUpdate(idx *model.Index, a bulkAction, id, routing, rv, 
 	newDoc := deepCopyMap(old)
 	op := "index"
 	if hasScript {
-		res, serr := runUpdateScript(script, newDoc, idx.Name, id, currentVersion(idx, id))
+		res, serr := runUpdateScript(script, newDoc, idx.Name, id, idx.CurrentVersion(id))
 		if serr != nil {
 			return bulkErrItem("update", idx.Name, id, serr), true
 		}
@@ -608,8 +608,8 @@ func (s *Server) runBulkUpdate(idx *model.Index, a bulkAction, id, routing, rv, 
 		deepMergeDoc(newDoc, docPatch)
 	}
 	if op == "delete" {
-		ver := currentVersion(idx, id) + 1
-		seq := nextSeq(idx)
+		ver := idx.CurrentVersion(id) + 1
+		seq := idx.AllocSeqNo()
 		delete(idx.Docs, id)
 		delete(idx.Pending, id)
 		delete(idx.RawDocs, id)
@@ -620,7 +620,7 @@ func (s *Server) runBulkUpdate(idx *model.Index, a bulkAction, id, routing, rv, 
 		return bulkOKItem("update", bulkItem("update", idx.Name, id, ver, seq, 1, "deleted", 200, false)), false
 	}
 	if op == "none" || op == "noop" || (detectNoop && reflectDeepEqual(old, newDoc)) {
-		it := bulkItem("update", idx.Name, id, currentVersion(idx, id), idx.SeqNos[id], 1, "noop", 200, false)
+		it := bulkItem("update", idx.Name, id, idx.CurrentVersion(id), idx.SeqNos[id], 1, "noop", 200, false)
 		if get, ok := bulkGetObject(idx, id, old, idx.SeqNos[id], a.meta, body, urlSource); ok {
 			it = append(it, ojson.KV{"get", get})
 		}
@@ -637,8 +637,8 @@ func (s *Server) runBulkUpdate(idx *model.Index, a bulkAction, id, routing, rv, 
 	if derr := mapping.ComputeDocValues(idx, id, newDoc); derr != nil {
 		return bulkErrItem("update", idx.Name, id, derr), true
 	}
-	ver := currentVersion(idx, id) + 1
-	seq := nextSeq(idx)
+	ver := idx.CurrentVersion(id) + 1
+	seq := idx.AllocSeqNo()
 	idx.Docs[id] = newDoc
 	delete(idx.RawDocs, id)
 	idx.Versions[id] = ver
@@ -648,7 +648,7 @@ func (s *Server) runBulkUpdate(idx *model.Index, a bulkAction, id, routing, rv, 
 	if rv == "true" || rv == "wait_for" {
 		delete(idx.Pending, id)
 	} else {
-		markPending(idx, id, newDoc, true)
+		idx.MarkPending(id, newDoc, true)
 	}
 	it := bulkItem("update", idx.Name, id, ver, seq, 1, "updated", 200, rv == "true")
 	if get, ok := bulkGetObject(idx, id, newDoc, seq, a.meta, body, urlSource); ok {
@@ -680,7 +680,7 @@ func bulkGetObject(idx *model.Index, id string, src map[string]any, seq int64, m
 		includes = search.SplitSourceList(urlSource)
 	}
 	out := ojson.Object{{"_seq_no", seq}, {"_primary_term", int64(1)}, {"found", true}}
-	if mappingSourceEnabled(idx) {
+	if idx.SourceEnabled() {
 		out = append(out, ojson.KV{"_source", search.FilterSourceDoc(src, includes, excludes)})
 	}
 	return out, true

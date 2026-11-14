@@ -283,7 +283,7 @@ func (s *Server) termVectorResponse(r *http.Request, idx *model.Index, id string
 		out["_version"] = int64(0)
 	} else {
 		out["_id"] = id
-		out["_version"] = currentVersion(idx, id)
+		out["_version"] = idx.CurrentVersion(id)
 	}
 	tvs := map[string]any{}
 	for _, f := range tvFields(r, body, idx, doc) {
@@ -347,7 +347,7 @@ func (s *Server) termVectorResponseWithBody(r *http.Request, idx *model.Index, i
 		out["_version"] = int64(0)
 	} else {
 		out["_id"] = id
-		out["_version"] = currentVersion(idx, id)
+		out["_version"] = idx.CurrentVersion(id)
 	}
 	tvs := map[string]any{}
 	for _, f := range tvFields(r, body, idx, doc) {

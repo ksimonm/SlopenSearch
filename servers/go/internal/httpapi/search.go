@@ -1206,7 +1206,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			entry["_routing"] = rv
 		}
 		if versionFlag {
-			entry["_version"] = currentVersion(h.Idx, h.Id)
+			entry["_version"] = h.Idx.CurrentVersion(h.Id)
 		}
 		if seqNoTermFlag {
 			entry["_seq_no"] = h.Idx.SeqNos[h.Id]
@@ -1250,7 +1250,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			delete(entry, "_id")
 		}
 		hitCtx := search.NewQueryCtxForDoc(h.Idx, h.Id, h.Doc)
-		if hlCfg != nil && mappingSourceEnabled(h.Idx) {
+		if hlCfg != nil && h.Idx.SourceEnabled() {
 			if hlErr := hlCfg.Validate(h.Idx); hlErr != nil {
 				writeError(w, hlErr)
 				return

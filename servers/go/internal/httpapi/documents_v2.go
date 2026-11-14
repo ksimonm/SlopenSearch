@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
 	"io"
 	"net/http"
 	"reflect"
@@ -106,71 +105,9 @@ func readDocBody(r *http.Request) (map[string]any, []byte, *apierr.Error) {
 	return out, raw, nil
 }
 
-func nextSeq(idx *model.Index) int64 {
-	idx.EnsureDocState()
-	n := idx.NextSeq
-	idx.NextSeq++
-	return n
-}
-
-func currentVersion(idx *model.Index, id string) int64 {
-	idx.EnsureDocState()
-	if v, ok := idx.Versions[id]; ok {
-		return v
-	}
-	if _, ok := idx.Docs[id]; ok {
-		return 1
-	}
-	return 0
-}
-
-func mappingRoutingRequired(idx *model.Index) bool {
-	m, _ := idx.Mappings["_routing"].(map[string]any)
-	if m == nil {
-		return false
-	}
-	b, _ := m["required"].(bool)
-	return b
-}
-
-func mappingSourceEnabled(idx *model.Index) bool {
-	m, _ := idx.Mappings["_source"].(map[string]any)
-	if m == nil {
-		return true
-	}
-	if b, ok := m["enabled"].(bool); ok {
-		return b
-	}
-	return true
-}
-
 func routingMissing(idx *model.Index, id string) *apierr.Error {
 	return &apierr.Error{Type: "routing_missing_exception", Status: 400,
 		Reason: "routing is required for [" + idx.Name + "]/[" + id + "]"}
-}
-
-func shardOf(v string, n int) int {
-	if n <= 1 {
-		return 0
-	}
-	h := fnv.New32a()
-	h.Write([]byte(v))
-	return int(h.Sum32() % uint32(n))
-}
-
-func routingMatches(idx *model.Index, id, routing string) bool {
-	if idx.NumShards() <= 1 {
-		return true
-	}
-	assigned := idx.Routing[id]
-	if assigned == "" {
-		assigned = id
-	}
-	probe := routing
-	if probe == "" {
-		probe = id
-	}
-	return shardOf(probe, idx.NumShards()) == shardOf(assigned, idx.NumShards())
 }
 
 func requestRouting(r *http.Request) string {
@@ -200,7 +137,7 @@ func versionConflict(idx *model.Index, id, reason string) *apierr.Error {
 }
 
 func plannedVersion(idx *model.Index, id string, r *http.Request) (int64, *apierr.Error) {
-	old := currentVersion(idx, id)
+	old := idx.CurrentVersion(id)
 	_, exists := idx.Docs[id]
 	v, vt, has, err := parseVersionParams(r)
 	if err != nil {
@@ -887,7 +824,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 	if id == "" {
 		id = randomID20(s)
 	}
-	if mappingRoutingRequired(idx) && routing == "" {
+	if idx.RoutingRequired() && routing == "" {
 		if autoID {
 			writeError(w, &apierr.Error{Type: "null_pointer_exception", Status: 500, Reason: "id must not be null"})
 			return
@@ -1014,7 +951,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 	}
 	idx.RawDocs[id] = append([]byte(nil), rawBody...)
 	idx.Versions[id] = ver
-	seq := nextSeq(idx)
+	seq := idx.AllocSeqNo()
 	idx.SeqNos[id] = seq
 	idx.PrimaryTerms[id] = 1
 	idx.IndexTotal++
@@ -1026,7 +963,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 	if rv == "true" || rv == "wait_for" {
 		delete(idx.Pending, id)
 	} else {
-		markPending(idx, id, body, existing)
+		idx.MarkPending(id, body, existing)
 	}
 	status := 201
 	result := "created"
@@ -1100,12 +1037,12 @@ func (s *Server) handleGetDocV2(w http.ResponseWriter, r *http.Request, name, id
 		return
 	}
 	routing := requestRouting(r)
-	if mappingRoutingRequired(idx) && routing == "" {
+	if idx.RoutingRequired() && routing == "" {
 		writeError(w, routingMissing(idx, id))
 		return
 	}
 	doc, ok := idx.Docs[id]
-	if !ok || !routingMatches(idx, id, routing) {
+	if !ok || !idx.RoutingMatches(id, routing) {
 		writeJSON(w, 404, map[string]any{"_index": idx.Name, "_id": id, "found": false})
 		return
 	}
@@ -1115,7 +1052,7 @@ func (s *Server) handleGetDocV2(w http.ResponseWriter, r *http.Request, name, id
 			return
 		}
 	}
-	ver := currentVersion(idx, id)
+	ver := idx.CurrentVersion(id)
 	if vraw := r.URL.Query().Get("version"); vraw != "" {
 		if want, err := strconv.ParseInt(vraw, 10, 64); err == nil && want != ver {
 			writeError(w, versionConflict(idx, id, fmt.Sprintf("[%s]: version conflict, current version [%d] is different than the one provided [%d]", id, ver, want)))
@@ -1127,7 +1064,7 @@ func (s *Server) handleGetDocV2(w http.ResponseWriter, r *http.Request, name, id
 	if term == 0 {
 		term = 1
 	}
-	sourceEnabled := mappingSourceEnabled(idx)
+	sourceEnabled := idx.SourceEnabled()
 	includes, excludes, omit, _ := sourceFilterFromQuery(r.URL.Query())
 	if !sourceEnabled {
 		omit = true
@@ -1202,17 +1139,17 @@ func (s *Server) handleGetSourceV2(w http.ResponseWriter, r *http.Request, name,
 		return
 	}
 	routing := requestRouting(r)
-	if mappingRoutingRequired(idx) && routing == "" {
+	if idx.RoutingRequired() && routing == "" {
 		writeError(w, routingMissing(idx, id))
 		return
 	}
 	doc, ok := idx.Docs[id]
-	if !ok || !routingMatches(idx, id, routing) {
+	if !ok || !idx.RoutingMatches(id, routing) {
 		writeError(w, &apierr.Error{Type: "resource_not_found_exception", Status: 404,
 			Reason: "Document not found [" + idx.Name + "]/[" + id + "]"})
 		return
 	}
-	if !mappingSourceEnabled(idx) {
+	if !idx.SourceEnabled() {
 		writeError(w, &apierr.Error{Type: "resource_not_found_exception", Status: 404,
 			Reason: "Source not found [" + idx.Name + "]/[" + id + "]"})
 		return
@@ -1261,7 +1198,7 @@ func (s *Server) handleDeleteDocV2(w http.ResponseWriter, r *http.Request, name,
 		return
 	}
 	routing := requestRouting(r)
-	if mappingRoutingRequired(idx) && routing == "" {
+	if idx.RoutingRequired() && routing == "" {
 		writeError(w, routingMissing(idx, id))
 		return
 	}
@@ -1276,10 +1213,10 @@ func (s *Server) handleDeleteDocV2(w http.ResponseWriter, r *http.Request, name,
 		return
 	}
 	_, exists := idx.Docs[id]
-	if exists && !routingMatches(idx, id, routing) {
+	if exists && !idx.RoutingMatches(id, routing) {
 		exists = false
 	}
-	seq := nextSeq(idx)
+	seq := idx.AllocSeqNo()
 	idx.SeqNos[id] = seq
 	idx.PrimaryTerms[id] = 1
 	if !exists {
@@ -1352,7 +1289,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		return
 	}
 	routing := requestRouting(r)
-	if mappingRoutingRequired(idx) && routing == "" {
+	if idx.RoutingRequired() && routing == "" {
 		writeError(w, routingMissing(idx, id))
 		return
 	}
@@ -1395,10 +1332,10 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		return
 	}
 	old, exists := idx.Docs[id]
-	if exists && !routingMatches(idx, id, routing) {
+	if exists && !idx.RoutingMatches(id, routing) {
 		exists = false
 	}
-	if exists && !mappingSourceEnabled(idx) {
+	if exists && !idx.SourceEnabled() {
 		writeError(w, &apierr.Error{Type: "document_source_missing_exception", Status: 400,
 			Reason: "[" + id + "]: document source missing", Fields: map[string]any{"index": idx.Name, "shard": "0"}})
 		return
@@ -1471,7 +1408,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		idx.Docs[id] = src
 		delete(idx.RawDocs, id)
 		idx.Versions[id] = 1
-		seq := nextSeq(idx)
+		seq := idx.AllocSeqNo()
 		idx.SeqNos[id] = seq
 		idx.PrimaryTerms[id] = 1
 		idx.IndexTotal++
@@ -1512,7 +1449,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 	}
 	if op == "delete" {
 		ver := idx.Versions[id] + 1
-		seq := nextSeq(idx)
+		seq := idx.AllocSeqNo()
 		delete(idx.Docs, id)
 		delete(idx.Pending, id)
 		mapping.RemoveDocValues(idx, id)
@@ -1567,7 +1504,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		return
 	}
 	ver := idx.Versions[id] + 1
-	seq := nextSeq(idx)
+	seq := idx.AllocSeqNo()
 	idx.Docs[id] = newDoc
 	delete(idx.RawDocs, id)
 	idx.Versions[id] = ver
@@ -1580,7 +1517,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 	if rv == "true" || rv == "wait_for" {
 		delete(idx.Pending, id)
 	} else {
-		markPending(idx, id, newDoc, true)
+		idx.MarkPending(id, newDoc, true)
 	}
 	resp := ojson.Object{
 		{"_index", idx.Name}, {"_id", id}, {"_version", ver}, {"result", "updated"},
@@ -1622,7 +1559,7 @@ func updateGetObject(idx *model.Index, id string, src map[string]any, seq int64,
 		}
 	}
 	out := ojson.Object{{"_seq_no", seq}, {"_primary_term", int64(1)}, {"found", true}}
-	if mappingSourceEnabled(idx) {
+	if idx.SourceEnabled() {
 		out = append(out, ojson.KV{"_source", search.FilterSourceDoc(src, includes, excludes)})
 	}
 	return out
@@ -1860,13 +1797,13 @@ func (s *Server) handleMget(w http.ResponseWriter, r *http.Request, pathIndex st
 			continue
 		}
 		routing, _ := e["routing"].(string)
-		if mappingRoutingRequired(idx) && routing == "" {
+		if idx.RoutingRequired() && routing == "" {
 			doc["error"] = errorObject(routingMissing(idx, id))
 			docs = append(docs, doc)
 			continue
 		}
 		src, found := idx.Docs[id]
-		if !found || !routingMatches(idx, id, routing) {
+		if !found || !idx.RoutingMatches(id, routing) {
 			doc["found"] = false
 			docs = append(docs, doc)
 			continue
@@ -1878,7 +1815,7 @@ func (s *Server) handleMget(w http.ResponseWriter, r *http.Request, pathIndex st
 				continue
 			}
 		}
-		doc["_version"] = currentVersion(idx, id)
+		doc["_version"] = idx.CurrentVersion(id)
 		doc["_seq_no"] = idx.SeqNos[id]
 		term := idx.PrimaryTerms[id]
 		if term == 0 {
@@ -1891,7 +1828,7 @@ func (s *Server) handleMget(w http.ResponseWriter, r *http.Request, pathIndex st
 			i2, e2, o2 := sourceSpecFromValue(v)
 			inc, exc, omit = i2, e2, o2
 		}
-		if !mappingSourceEnabled(idx) {
+		if !idx.SourceEnabled() {
 			omit = true
 		}
 		storedRaw := urlStored
@@ -1942,15 +1879,4 @@ func errorObject(e *apierr.Error) map[string]any {
 		out["caused_by"] = errorObject(e.CausedBy)
 	}
 	return out
-}
-
-// markPending records an unrefreshed write. A document that searches could
-// already see stays visible: a refresh only changes which version they read,
-// it never makes an existing document disappear.
-func markPending(idx *model.Index, id string, doc map[string]any, existed bool) {
-	if _, pending := idx.Pending[id]; existed && !pending {
-		noteStaleOverwrite(idx, id)
-		return
-	}
-	idx.Pending[id] = doc
 }
