@@ -765,7 +765,12 @@ fn run(shared: Shared, id: u64, job: Job, q_param: Option<String>, max_docs: Opt
         let req = sub_req(&job.base, job.base.path.clone(), &job.body, false);
         let (status, v) = {
             let mut st = lock_store(&shared);
-            read_response(crate::dispatch(&mut st, &req))
+            {
+                let r = read_response(crate::dispatch(&mut st, &req));
+                // background batches change state outside a request: journal them too
+                crate::persist::after_request(&st, &req.method, &req.path);
+                r
+            }
         };
         if status >= 400 {
             finish(id, None, error_body(&v), true);
@@ -856,7 +861,12 @@ fn run(shared: Shared, id: u64, job: Job, q_param: Option<String>, max_docs: Opt
             let req = sub_req(&job.base, path, &body, true);
             let (status, v) = {
                 let mut st = lock_store(&shared);
-                read_response(crate::dispatch(&mut st, &req))
+                {
+                let r = read_response(crate::dispatch(&mut st, &req));
+                // background batches change state outside a request: journal them too
+                crate::persist::after_request(&st, &req.method, &req.path);
+                r
+            }
             };
             if v.get("error").is_some() || (status >= 400 && v.get("failures").is_none()) {
                 {
@@ -1011,7 +1021,12 @@ fn run_sliced(shared: &Shared, id: u64, job: &Job) {
     let req = sub_req(&job.base, job.base.path.clone(), &job.body, false);
     let (status, v) = {
         let mut st = lock_store(shared);
-        read_response(crate::dispatch(&mut st, &req))
+        {
+                let r = read_response(crate::dispatch(&mut st, &req));
+                // background batches change state outside a request: journal them too
+                crate::persist::after_request(&st, &req.method, &req.path);
+                r
+            }
     };
     if v.get("error").is_some() || (status >= 400 && v.get("failures").is_none()) {
         return finish_error_value(id, error_body(&v));
