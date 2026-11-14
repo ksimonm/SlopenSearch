@@ -126,7 +126,7 @@ func settingsValueInt(v any) (int, bool) {
 const (
 	clusterName = "opensearch"
 	clusterUUID = "slopensearch-cluster-uuid"
-	nodeID      = "slopensearch-node-id"
+	nodeID      = "c2xvcGVuc2VhcmNobm9kZQ"
 	nodeName    = "slopensearch-node"
 	nodeVersion = "3.9.0"
 )
