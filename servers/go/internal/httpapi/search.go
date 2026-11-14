@@ -299,13 +299,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	o := s.parseResolveParams(r, resolveOpts2{closedError: true})
+	o := s.parseResolveParams(r, specOpts{closedError: true})
 	var indices []*model.Index
 	if pitCtx != nil {
 		indices = []*model.Index{pitCtx.idx}
 	} else {
 		var apiErr2 *apierr.Error
-		indices, apiErr2 = s.resolveSpec2(name, o)
+		indices, apiErr2 = s.resolveSpec(name, o)
 		if apiErr2 != nil {
 			writeError(w, apiErr2)
 			return
@@ -536,7 +536,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			obj, _ := ent.(map[string]any)
 			for pat, val := range obj {
 				f, _ := jsonv.ToFloat(val)
-				boosted, berr := s.resolveSpec2(pat, o)
+				boosted, berr := s.resolveSpec(pat, o)
 				if berr != nil {
 					writeError(w, berr)
 					return

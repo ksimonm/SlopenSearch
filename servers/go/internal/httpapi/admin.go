@@ -416,7 +416,9 @@ func settingsView(idx *model.Index, flat, includeDefaults bool, filter string) m
 
 // ------------------------------------------------------------ spec resolution
 
-type resolveOpts2 struct {
+// specOpts are the expand_wildcards / allow_no_indices / ignore_unavailable
+// options of resolveSpec.
+type specOpts struct {
 	expand            map[string]bool
 	allowNoIndices    *bool
 	ignoreUnavailable bool
@@ -468,9 +470,9 @@ func errIndexClosed(idx *model.Index) *apierr.Error {
 		Fields: map[string]any{"index": idx.Name, "index_uuid": idx.UUID}}
 }
 
-// resolveSpec2 resolves an index expression (comma list, wildcards, exclusions,
+// resolveSpec resolves an index expression (comma list, wildcards, exclusions,
 // aliases) according to OpenSearch semantics.
-func (s *Server) resolveSpec2(spec string, o resolveOpts2) ([]*model.Index, *apierr.Error) {
+func (s *Server) resolveSpec(spec string, o specOpts) ([]*model.Index, *apierr.Error) {
 	if spec == "" {
 		spec = "*"
 	}
@@ -601,7 +603,7 @@ func (s *Server) resolveSpec2(spec string, o resolveOpts2) ([]*model.Index, *api
 	return out, nil
 }
 
-func (s *Server) parseResolveParams(r *http.Request, o resolveOpts2) resolveOpts2 {
+func (s *Server) parseResolveParams(r *http.Request, o specOpts) specOpts {
 	q := r.URL.Query()
 	if v, ok := q["expand_wildcards"]; ok && len(v) > 0 {
 		if set, err := parseExpandWildcards(v[0], nil); err == nil {
@@ -1043,8 +1045,8 @@ func validateMappingFull(mappings map[string]any) *apierr.Error {
 func (s *Server) getIndexMeta(w http.ResponseWriter, r *http.Request, spec string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	o := s.parseResolveParams(r, resolveOpts2{})
-	indices, apiErr2 := s.resolveSpec2(spec, o)
+	o := s.parseResolveParams(r, specOpts{})
+	indices, apiErr2 := s.resolveSpec(spec, o)
 	if apiErr2 != nil {
 		writeError(w, apiErr2)
 		return
@@ -1095,8 +1097,8 @@ func (s *Server) getIndexMeta(w http.ResponseWriter, r *http.Request, spec strin
 func (s *Server) deleteIndices(w http.ResponseWriter, r *http.Request, spec string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	o := s.parseResolveParams(r, resolveOpts2{rejectAlias: true})
-	indices, apiErr2 := s.resolveSpec2(spec, o)
+	o := s.parseResolveParams(r, specOpts{rejectAlias: true})
+	indices, apiErr2 := s.resolveSpec(spec, o)
 	if apiErr2 != nil {
 		writeError(w, apiErr2)
 		return
@@ -1139,8 +1141,8 @@ func indexBlockError(idx *model.Index, block string, code int, status int) *apie
 func (s *Server) getSettingsAPI(w http.ResponseWriter, r *http.Request, spec, filter string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	o := s.parseResolveParams(r, resolveOpts2{})
-	indices, apiErr2 := s.resolveSpec2(spec, o)
+	o := s.parseResolveParams(r, specOpts{})
+	indices, apiErr2 := s.resolveSpec(spec, o)
 	if apiErr2 != nil {
 		writeError(w, apiErr2)
 		return
@@ -1180,12 +1182,12 @@ func (s *Server) putSettingsAPI(w http.ResponseWriter, r *http.Request, spec str
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	o := s.parseResolveParams(r, resolveOpts2{})
+	o := s.parseResolveParams(r, specOpts{})
 	if o.allowNoIndices == nil {
 		f := false
 		o.allowNoIndices = &f
 	}
-	indices, apiErr3 := s.resolveSpec2(spec, o)
+	indices, apiErr3 := s.resolveSpec(spec, o)
 	if apiErr3 != nil {
 		writeError(w, apiErr3)
 		return
@@ -1305,8 +1307,8 @@ func (s *Server) putBlockAPI(w http.ResponseWriter, r *http.Request, indexSpec, 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	o := s.parseResolveParams(r, resolveOpts2{})
-	indices, apiErr2 := s.resolveSpec2(indexSpec, o)
+	o := s.parseResolveParams(r, specOpts{})
+	indices, apiErr2 := s.resolveSpec(indexSpec, o)
 	if apiErr2 != nil {
 		writeError(w, apiErr2)
 		return

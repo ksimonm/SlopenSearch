@@ -13,8 +13,8 @@ import (
 func (s *Server) getMappingAPI(w http.ResponseWriter, r *http.Request, spec, fields string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	o := s.parseResolveParams(r, resolveOpts2{})
-	indices, apiErr2 := s.resolveSpec2(spec, o)
+	o := s.parseResolveParams(r, specOpts{})
+	indices, apiErr2 := s.resolveSpec(spec, o)
 	if apiErr2 != nil {
 		writeError(w, apiErr2)
 		return
@@ -47,8 +47,8 @@ func (s *Server) putMappingAPI(w http.ResponseWriter, r *http.Request, spec stri
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	o := s.parseResolveParams(r, resolveOpts2{})
-	indices, apiErr3 := s.resolveSpec2(spec, o)
+	o := s.parseResolveParams(r, specOpts{})
+	indices, apiErr3 := s.resolveSpec(spec, o)
 	if apiErr3 != nil {
 		writeError(w, apiErr3)
 		return

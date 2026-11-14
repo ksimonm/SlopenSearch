@@ -29,7 +29,7 @@ type bulkAction struct {
 	updateErr  *apierr.Error
 }
 
-func (s *Server) handleBulkV2(w http.ResponseWriter, r *http.Request, pathIndex string) {
+func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, pathIndex string) {
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeError(w, apierr.BadRequest("failed to read bulk body"))
@@ -244,7 +244,7 @@ func (s *Server) bulkResolve(name string, requireAlias bool) (*model.Index, *api
 		}
 		return idx, nil
 	}
-	return s.resolveWriteTargetV2(name)
+	return s.resolveOrCreateWriteTarget(name)
 }
 
 func metaString(meta map[string]any, key string) string {

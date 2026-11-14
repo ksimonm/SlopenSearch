@@ -116,7 +116,7 @@ func (s *Server) handleKnnStats(w http.ResponseWriter, r *http.Request, segs []s
 func (s *Server) handleKnnWarmup(w http.ResponseWriter, r *http.Request, spec string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	indices, err := s.resolveSpec2(spec, s.parseResolveParams(r, resolveOpts2{}))
+	indices, err := s.resolveSpec(spec, s.parseResolveParams(r, specOpts{}))
 	if err != nil {
 		writeError(w, err)
 		return
