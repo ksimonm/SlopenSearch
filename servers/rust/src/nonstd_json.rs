@@ -16,19 +16,100 @@ struct Frame {
     array: bool,
     /// object: the current key; array: the key the array is the value of.
     key: String,
+    /// object: byte offset of the current key.
+    key_start: usize,
     /// array: raw text of the finished elements.
     elems: Vec<(usize, usize)>,
 }
 
-struct Found {
-    tok: &'static str,
-    end: usize,
+/// One of Jackson's non-standard number tokens in a body that is valid JSON
+/// up to it. Offsets are counted from the start of that body.
+pub struct NonStdToken {
+    pub tok: &'static str,
+    /// Byte offset just past the token (what Jackson reports).
+    pub end: usize,
     frames: Vec<Frame>,
 }
+
+type Found = NonStdToken;
 
 enum Stop {
     Found(Found),
     Invalid,
+}
+
+/// The non-standard number token Jackson fails on when `raw` is valid JSON
+/// up to it; None when it parses or fails for any other reason.
+pub fn find(raw: &[u8]) -> Option<NonStdToken> {
+    let mut sc = Scanner { b: raw, i: 0, frames: Vec::new() };
+    match sc.value() {
+        Err(Stop::Found(f)) => Some(f),
+        _ => None,
+    }
+}
+
+impl NonStdToken {
+    /// Jackson's json_parse_exception for the token, as OpenSearch reports it
+    /// when nothing wraps it.
+    pub fn cause(&self) -> ApiError {
+        let reason = format!(
+            "Non-standard token '{}': enable `JsonReadFeature.ALLOW_NON_NUMERIC_NUMBERS` to allow\n at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); byte offset: #{}]",
+            self.tok, self.end
+        );
+        ApiError::new("json_parse_exception", &reason, 400)
+            .caused_by(ApiError::new("stream_read_exception", &reason, 400))
+    }
+
+    /// The error of an ingest pipeline reading the document into a map
+    /// (indexing through a pipeline, ingest simulate).
+    pub fn ingest_error(&self) -> ApiError {
+        ApiError::new("parse_exception", "Failed to parse content to map", 400).caused_by(self.cause())
+    }
+
+    /// The error of the OpenSearch ObjectParser named `parser` (e.g.
+    /// "UpdateRequest") failing in the value of a top-level field: it names
+    /// that field and the location of the parser's current token (the field
+    /// name when the token is an object value, the token itself in an array).
+    /// A token that is the direct value of a top-level field fails before the
+    /// field is dispatched and is reported unwrapped.
+    pub fn object_parser_error(&self, parser: &str, raw: &[u8]) -> ApiError {
+        let fr = &self.frames;
+        if fr.len() < 2 || fr[0].array {
+            return self.cause();
+        }
+        let last = &fr[fr.len() - 1];
+        let pos = if last.array { self.end - self.tok.len() } else { last.key_start };
+        let before = &raw[..pos.min(raw.len())];
+        let line = 1 + before.iter().filter(|&&c| c == b'\n').count();
+        let col = pos - before.iter().rposition(|&c| c == b'\n').map_or(0, |nl| nl + 1) + 1;
+        ApiError::new(
+            "x_content_parse_exception",
+            &format!("[{}:{}] [{}] failed to parse field [{}]", line, col, parser, fr[0].key),
+            400,
+        )
+        .caused_by(self.cause())
+    }
+}
+
+/// Whether indexing into `index` goes through an ingest pipeline: the
+/// requested one (unless "_none"), else the index default pipeline, or the
+/// index final pipeline.
+pub fn runs_pipeline(store: &crate::store::Store, index: &str, requested: &str) -> bool {
+    let real = |p: &str| !p.is_empty() && p != "_none";
+    matches!(crate::ingest::effective_ingest_pipeline(store, index, requested), Ok(Some(p)) if real(&p))
+        || crate::ingest::final_ingest_pipeline(store, index).map_or(false, |p| real(&p))
+}
+
+/// The error for a document source that is valid JSON up to a non-standard
+/// token; None when it fails for any other reason. Through an ingest pipeline
+/// the source fails while it is read into a map; otherwise while the
+/// document parser reads it.
+pub fn doc_source_error(store: &crate::store::Store, index: &str, pipeline: &str, doc_id: &str, raw: &[u8]) -> Option<ApiError> {
+    let t = find(raw)?;
+    if runs_pipeline(store, index, pipeline) {
+        return Some(t.ingest_error());
+    }
+    non_standard_token_error(store.indices.get(index), doc_id, raw)
 }
 
 struct Scanner<'a> {
@@ -72,7 +153,7 @@ impl<'a> Scanner<'a> {
             Some(b'{') => {
                 self.i += 1;
                 let key = self.frames.last().map(|f| f.key.clone()).unwrap_or_default();
-                self.frames.push(Frame { array: false, key, elems: Vec::new() });
+                self.frames.push(Frame { array: false, key, key_start: 0, elems: Vec::new() });
                 self.ws();
                 if self.b.get(self.i) == Some(&b'}') {
                     self.i += 1;
@@ -82,7 +163,9 @@ impl<'a> Scanner<'a> {
                         let ks = self.i;
                         self.string()?;
                         let k: String = serde_json::from_slice(&self.b[ks..self.i]).map_err(|_| Stop::Invalid)?;
-                        self.frames.last_mut().unwrap().key = k;
+                        let f = self.frames.last_mut().unwrap();
+                        f.key = k;
+                        f.key_start = ks;
                         self.eat(b':')?;
                         self.value()?;
                         self.ws();
@@ -101,7 +184,7 @@ impl<'a> Scanner<'a> {
             Some(b'[') => {
                 self.i += 1;
                 let key = self.frames.last().map(|f| f.key.clone()).unwrap_or_default();
-                self.frames.push(Frame { array: true, key, elems: Vec::new() });
+                self.frames.push(Frame { array: true, key, key_start: 0, elems: Vec::new() });
                 self.ws();
                 if self.b.get(self.i) == Some(&b']') {
                     self.i += 1;
@@ -168,17 +251,8 @@ fn is_java_ident_part(c: u8) -> bool {
 /// one of Jackson's non-standard number tokens; None when the body fails for
 /// any other reason.
 pub fn non_standard_token_error(idx: Option<&Index>, doc_id: &str, raw: &[u8]) -> Option<ApiError> {
-    let mut sc = Scanner { b: raw, i: 0, frames: Vec::new() };
-    let found = match sc.value() {
-        Err(Stop::Found(f)) => f,
-        _ => return None,
-    };
-    let reason = format!(
-        "Non-standard token '{}': enable `JsonReadFeature.ALLOW_NON_NUMERIC_NUMBERS` to allow\n at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); byte offset: #{}]",
-        found.tok, found.end
-    );
-    let cause = ApiError::new("json_parse_exception", &reason, 400)
-        .caused_by(ApiError::new("stream_read_exception", &reason, 400));
+    let found = find(raw)?;
+    let cause = found.cause();
     let top = idx
         .and_then(|idx| knn_error(idx, doc_id, &found, raw))
         .unwrap_or_else(|| ApiError::new("mapper_parsing_exception", "failed to parse", 400));

@@ -438,8 +438,8 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
     let mut body = match parse_index_body(req) {
         Ok(b) => b,
         Err(e) => {
-            let idx = store.indices.get(&target);
-            return err_response(crate::nonstd_json::non_standard_token_error(idx, id, &req.body).unwrap_or(e));
+            let pipeline = req.param("pipeline").unwrap_or("");
+            return err_response(crate::nonstd_json::doc_source_error(store, &target, pipeline, id, &req.body).unwrap_or(e));
         }
     };
     let depth_limit = crate::store::setting_int(
@@ -1517,7 +1517,10 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
     };
     let body = match req.json_body() {
         Ok(b) => b,
-        Err(e) => return err_response(e),
+        Err(e) => {
+            let t = crate::nonstd_json::find(&req.body);
+            return err_response(t.map_or(e, |t| t.object_parser_error("UpdateRequest", &req.body)));
+        }
     };
     for k in body.keys() {
         match k.as_str() {
@@ -2368,7 +2371,10 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
                         400,
                     ))
                 }
-                Err(_) => continue,
+                Err(_) => match crate::nonstd_json::find(lines[vi - 1].as_bytes()) {
+                    Some(t) => return err_response(t.cause()),
+                    None => continue,
+                },
             };
             let Some((vop, vmeta)) = act.iter().next() else { continue };
             if !matches!(vop.as_str(), "create" | "delete" | "index" | "update") {
@@ -2420,6 +2426,10 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
             let sline = lines[vi].trim();
             vi += 1;
             if vop == "update" {
+                // the update body is parsed with the request and fails it
+                if let Some(t) = crate::nonstd_json::find(lines[vi - 1].as_bytes()) {
+                    return err_response(t.object_parser_error("UpdateRequest", lines[vi - 1].as_bytes()));
+                }
                 if let Ok(Value::Object(wrapper)) = serde_json::from_str::<Value>(sline) {
                     for k in wrapper.keys() {
                         match k.as_str() {
@@ -2667,9 +2677,13 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
             i += 1;
         }
         let mut source: Option<Map<String, Value>> = None;
+        // A source failing on a Jackson non-standard token fails its item once
+        // the target index and pipeline are known.
+        let mut nonstd_source: Option<&str> = None;
         if !doc_line.is_empty() {
             match serde_json::from_str::<Value>(&doc_line) {
                 Ok(Value::Object(m)) => source = Some(m),
+                Err(_) if crate::nonstd_json::find(lines[i - 1].as_bytes()).is_some() => nonstd_source = Some(lines[i - 1]),
                 _ => {
                     has_errors = true;
                     items.push(bulk_err(
@@ -2932,6 +2946,13 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
         } else {
             request_pipeline.as_str()
         };
+        if let Some(raw) = nonstd_source {
+            if let Some(e) = crate::nonstd_json::doc_source_error(store, &target, explicit, &doc_id, raw.as_bytes()) {
+                has_errors = true;
+                items.push(bulk_err_api(&op, &target, &doc_id, &e));
+                continue;
+            }
+        }
         let mut source = source.unwrap_or_default();
         let effective =
             match crate::ingest::effective_ingest_pipeline(store, &target, explicit) {

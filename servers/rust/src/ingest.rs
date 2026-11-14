@@ -632,14 +632,14 @@ pub fn handle_ingest(store: &mut Store, req: &Req, segs: &[String]) -> Response 
         "POST" if segs.len() == 2 && segs[1] == "_simulate" => {
             let body = match req.json_body() {
                 Ok(b) => b,
-                Err(e) => return err_response(e),
+                Err(e) => return err_response(crate::nonstd_json::find(&req.body).map_or(e, |t| t.ingest_error())),
             };
             simulate(store, req, body, None)
         }
         "POST" if segs.len() == 3 && segs[2] == "_simulate" => {
             let body = match req.json_body() {
                 Ok(b) => b,
-                Err(e) => return err_response(e),
+                Err(e) => return err_response(crate::nonstd_json::find(&req.body).map_or(e, |t| t.ingest_error())),
             };
             let name = segs[1].clone();
             if !store.pipelines.contains_key(&name) {
