@@ -33,8 +33,7 @@ func (o orderedJSON) MarshalJSON() ([]byte, error) {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		kb, _ := json.Marshal(kv.k)
-		b.Write(kb)
+		b.Write(jsonMustMarshal(kv.k))
 		b.WriteByte(':')
 		switch t := kv.v.(type) {
 		case verbatimJSON:
@@ -42,11 +41,13 @@ func (o orderedJSON) MarshalJSON() ([]byte, error) {
 		case json.RawMessage:
 			b.Write(t)
 		default:
-			vb, err := json.Marshal(kv.v)
-			if err != nil {
+			var vb bytes.Buffer
+			enc := json.NewEncoder(&vb)
+			enc.SetEscapeHTML(false)
+			if err := enc.Encode(kv.v); err != nil {
 				return nil, err
 			}
-			b.Write(vb)
+			b.Write(bytes.TrimRight(vb.Bytes(), "\n"))
 		}
 	}
 	b.WriteByte('}')
@@ -149,6 +150,9 @@ func readDocBody(r *http.Request) (map[string]any, []byte, *apiError) {
 		return nil, raw, &apiError{Type: "mapper_parsing_exception", Status: 400,
 			Reason:   "Failed to parse request body",
 			CausedBy: &apiError{Type: "illegal_argument_exception", Reason: "trailing data"}}
+	}
+	if e := invalidUTF8Error(raw); e != nil {
+		return nil, raw, e
 	}
 	return out, raw, nil
 }
@@ -498,7 +502,34 @@ func checkObjectDepth(v any, depth, limit int) *apiError {
 		}
 	case []any:
 		for _, e := range t {
-			if err := checkObjectDepth(e, depth+1, limit); err != nil {
+			if err := checkObjectDepth(e, depth, limit); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkArrayDepth enforces index.mapping.depth.limit on arrays nested in
+// arrays (DocumentParser's field array depth).
+func checkArrayDepth(v any, depth, limit int) *apiError {
+	switch t := v.(type) {
+	case map[string]any:
+		for _, e := range t {
+			if err := checkArrayDepth(e, depth, limit); err != nil {
+				return err
+			}
+		}
+	case []any:
+		if depth+1 > limit {
+			reason := "The depth of the nested array field has exceeded the allowed limit of [" + strconv.Itoa(limit) + "]. This limit can be set by changing the [index.mapping.depth.limit] index level setting."
+			return &apiError{Type: "mapper_parsing_exception", Status: 400,
+				Reason:    "failed to parse",
+				RootCause: &apiError{Type: "parse_exception", Reason: reason},
+				CausedBy:  &apiError{Type: "parse_exception", Reason: reason}}
+		}
+		for _, e := range t {
+			if err := checkArrayDepth(e, depth+1, limit); err != nil {
 				return err
 			}
 		}
@@ -2053,6 +2084,7 @@ func errorObject(e *apiError) map[string]any {
 // it never makes an existing document disappear.
 func markPending(idx *Index, id string, doc map[string]any, existed bool) {
 	if _, pending := idx.Pending[id]; existed && !pending {
+		noteStaleOverwrite(idx, id)
 		return
 	}
 	idx.Pending[id] = doc

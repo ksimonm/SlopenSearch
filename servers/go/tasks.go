@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,9 +14,8 @@ import (
 	"time"
 )
 
-// storedTask is the result of a task started with wait_for_completion=false.
-// Tasks run to completion before the start request answers, so every stored
-// task is already completed when it can first be looked up.
+// storedTask is a task started with wait_for_completion=false. It runs in
+// the background; once completed its result stays retrievable.
 type storedTask struct {
 	id          int64
 	action      string
@@ -28,6 +27,21 @@ type storedTask struct {
 	status      orderedJSON // nil for tasks without a status (forcemerge)
 	response    any
 	errBody     any
+
+	// live state, guarded by taskReg
+	done           chan struct{} // closed on completion
+	wake           chan struct{} // rethrottle/cancel nudges for the worker
+	completed      bool
+	bulk           bool // BulkByScrollTask with a live status
+	cancelled      bool
+	cancelAt       time.Time
+	canceled       string // "canceled" reason of a by-scroll result
+	ctr            bbsCounters
+	rps            float64 // +Inf when unthrottled
+	delayEnd       time.Time
+	delayRPS       float64
+	throttledNanos int64
+	failures       []any
 }
 
 var taskReg = struct {
@@ -125,8 +139,14 @@ func (s *Server) handleTaskRoutes(w http.ResponseWriter, r *http.Request) bool {
 			writeError(w, e)
 			return true
 		}
-		if _, _, e := parseTaskID(segs[1]); e != nil {
+		rps, _ := parseRPS(v[len(v)-1])
+		node, n, e := parseTaskID(segs[1])
+		if e != nil {
 			writeError(w, e)
+			return true
+		}
+		if t := liveTask(n); t != nil && node == nodeID && t.bulk {
+			writeJSON(w, 200, rethrottleTask(t, segs[1], rps))
 			return true
 		}
 		writeJSON(w, 200, taskNodeFailure("task ["+segs[1]+"] is missing"))
@@ -135,8 +155,13 @@ func (s *Server) handleTaskRoutes(w http.ResponseWriter, r *http.Request) bool {
 	if len(segs) >= 2 && segs[0] == "_tasks" && segs[1] != "_cancel" {
 		id := segs[1]
 		if len(segs) == 3 && segs[2] == "_cancel" && r.Method == http.MethodPost {
-			if _, _, e := parseTaskID(id); e != nil {
+			node, n, e := parseTaskID(id)
+			if e != nil {
 				writeError(w, e)
+				return true
+			}
+			if t := liveTask(n); t != nil && node == nodeID && t.cancellable {
+				writeJSON(w, 200, cancelTask(t, id))
 				return true
 			}
 			writeJSON(w, 200, taskNodeFailure("task ["+id+"] is not found"))
@@ -165,7 +190,20 @@ func (s *Server) handleTaskRoutes(w http.ResponseWriter, r *http.Request) bool {
 			writeError(w, &apiError{Type: "resource_not_found_exception", Status: 404, Reason: notStored})
 			return true
 		}
-		writeJSON(w, 200, t.render())
+		if wv, has := q["wait_for_completion"]; has && (wv[len(wv)-1] == "true" || wv[len(wv)-1] == "") {
+			timeout, ok := parseTimeout(q.Get("timeout"))
+			if !ok {
+				timeout = 30 * time.Second
+			}
+			if !waitTask(t, timeout) {
+				writeError(w, taskTimeoutError(t))
+				return true
+			}
+		}
+		taskReg.Lock()
+		out := t.render()
+		taskReg.Unlock()
+		writeJSON(w, 200, out)
 		return true
 	}
 	action, ok := asyncAction(segs)
@@ -218,7 +256,7 @@ func (s *Server) startAsync(w http.ResponseWriter, r *http.Request, segs []strin
 	}
 	raw, _ := io.ReadAll(r.Body)
 	var body map[string]any
-	_ = json.Unmarshal(raw, &body)
+	_ = unmarshalJSON(raw, &body)
 	batchSize := int64(1000)
 	if v := q.Get("scroll_size"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
@@ -250,50 +288,64 @@ func (s *Server) startAsync(w http.ResponseWriter, r *http.Request, segs []strin
 		}
 		desc = "Force-merge indices [" + name + "], maxSegments[-1], onlyExpungeDeletes[false], flush[true], primaryOnly[false]"
 	}
-	// run the operation synchronously with wait_for_completion removed
-	nq := url.Values{}
-	for k, v := range q {
-		if k != "wait_for_completion" {
-			nq[k] = v
-		}
-	}
-	r2 := r.Clone(r.Context())
-	r2.URL.RawQuery = nq.Encode()
-	r2.Body = io.NopCloser(bytes.NewReader(raw))
-	r2.ContentLength = int64(len(raw))
-	rec := &captureWriter{h: http.Header{}}
-	start := time.Now()
-	s.route(rec, r2)
-	elapsed := time.Since(start)
-	t := &storedTask{action: action, description: desc, start: start, runNanos: elapsed.Nanoseconds(),
-		cancellable: !isForcemerge, headers: map[string]any{}}
+	t := &storedTask{action: action, description: desc, start: time.Now(),
+		cancellable: !isForcemerge, headers: map[string]any{}, bulk: !isForcemerge,
+		done: make(chan struct{}), wake: make(chan struct{}, 1), rps: rpsInternal(rps)}
 	if oid := r.Header.Get("X-Opaque-Id"); oid != "" {
 		t.headers["X-Opaque-Id"] = oid
-	}
-	var out map[string]any
-	_ = json.Unmarshal(rec.buf.Bytes(), &out)
-	status := rec.status
-	if status == 0 {
-		status = 200
-	}
-	if !isForcemerge {
-		t.status = taskStatus(out, batchSize, rps, false, status >= 400)
-	}
-	if status >= 400 {
-		t.errBody = out["error"]
-		if t.errBody == nil {
-			t.errBody = out
-		}
-	} else if isForcemerge {
-		t.response = out
-	} else {
-		t.response = taskStatus(out, batchSize, rps, true, false)
 	}
 	taskReg.Lock()
 	taskReg.next++
 	t.id = taskReg.next
 	taskReg.tasks[t.id] = t
 	taskReg.Unlock()
+	ctx := context.WithoutCancel(r.Context())
+	r = r.WithContext(ctx)
+	if !isForcemerge && rps > 0 {
+		if refs, ok := s.bbsMatches(action, segs, q, body); ok {
+			go s.runThrottled(t, r, segs, q, body, refs, int(batchSize))
+			writeJSON(w, 200, orderedJSON{{"task", nodeID + ":" + strconv.FormatInt(t.id, 10)}})
+			return true
+		}
+	}
+	// run the whole operation in one piece, with wait_for_completion removed
+	nq := url.Values{}
+	for k, v := range q {
+		if !formatParams[k] {
+			nq[k] = v
+		}
+	}
+	r2 := subRequest(r, r.URL.Path, nq, raw)
+	r2.Header.Set("Content-Type", r.Header.Get("Content-Type"))
+	if r2.Header.Get("Content-Type") == "" {
+		r2.Header.Del("Content-Type")
+	}
+	go func() {
+		rec := &captureWriter{h: http.Header{}}
+		s.route(rec, r2)
+		var out map[string]any
+		_ = json.Unmarshal(rec.buf.Bytes(), &out)
+		status := rec.status
+		if status == 0 {
+			status = 200
+		}
+		taskReg.Lock()
+		defer taskReg.Unlock()
+		if !isForcemerge {
+			t.status = taskStatus(out, batchSize, rps, false, status >= 400)
+		}
+		if status >= 400 {
+			t.errBody = out["error"]
+			if t.errBody == nil {
+				t.errBody = out
+			}
+		} else if isForcemerge {
+			t.response = out
+		} else {
+			t.response = taskStatus(out, batchSize, rps, true, false)
+		}
+		t.finishLocked(time.Now())
+	}()
 	writeJSON(w, 200, orderedJSON{{"task", nodeID + ":" + strconv.FormatInt(t.id, 10)}})
 	return true
 }
@@ -388,7 +440,11 @@ func findKey(o orderedJSON, k string) int {
 	return -1
 }
 
+// render answers GET _tasks/{id}; the caller holds taskReg.
 func (t *storedTask) render() orderedJSON {
+	if !t.completed {
+		return orderedJSON{{"completed", false}, {"task", t.taskEntry(time.Now(), true)}}
+	}
 	task := orderedJSON{{"node", nodeID}, {"id", t.id}, {"type", "transport"}, {"action", t.action}}
 	if t.status != nil {
 		task = append(task, orderedKV{"status", t.status})
@@ -396,8 +452,11 @@ func (t *storedTask) render() orderedJSON {
 	task = append(task, orderedKV{"description", t.description},
 		orderedKV{"start_time_in_millis", t.start.UnixMilli()},
 		orderedKV{"running_time_in_nanos", t.runNanos},
-		orderedKV{"cancellable", t.cancellable}, orderedKV{"cancelled", false},
+		orderedKV{"cancellable", t.cancellable}, orderedKV{"cancelled", t.cancelled},
 		orderedKV{"headers", t.headers})
+	if t.cancelled {
+		task = append(task, orderedKV{"cancellation_time_millis", t.cancelAt.UnixMilli()})
+	}
 	out := orderedJSON{{"completed", true}, {"task", task}}
 	if t.errBody != nil {
 		out = append(out, orderedKV{"error", t.errBody})

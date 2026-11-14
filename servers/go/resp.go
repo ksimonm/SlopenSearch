@@ -21,6 +21,10 @@ func writePretty(buf *bytes.Buffer, v any, indent int) {
 	switch t := v.(type) {
 	case map[string]any:
 		writePrettyObject(buf, t, indent)
+	case orderedJSON:
+		writePrettyOrdered(buf, t, indent)
+	case verbatimJSON:
+		buf.Write(t)
 	case []any:
 		writePrettyArray(buf, t, indent)
 	case string:
@@ -108,7 +112,7 @@ func encodeString(s string) string {
 	var sb strings.Builder
 	sb.WriteByte('"')
 	for _, r := range s {
-		if r < 0x20 {
+		if r < 0x20 && r != '\n' && r != '\r' && r != '\t' && r != '\b' && r != '\f' {
 			sb.WriteString(fmt.Sprintf("\\u%04x", r))
 		} else {
 			sb.WriteString(jsonStringEscaper.Replace(string(r)))

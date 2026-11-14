@@ -59,6 +59,8 @@ type Index struct {
 	NextSeq        int64
 
 	dvGen uint64 // bumped whenever DocValues changes; validates derived caches
+
+	stale map[string]staleMark // unrefreshed overwrites of searchable docs
 }
 
 const versionCreated = "137307827"
@@ -126,7 +128,7 @@ func settingsValueInt(v any) (int, bool) {
 const (
 	clusterName = "opensearch"
 	clusterUUID = "slopensearch-cluster-uuid"
-	nodeID      = "slopensearch-node-id"
+	nodeID      = "c2xvcGVuc2VhcmNobm9kZQ"
 	nodeName    = "slopensearch-node"
 	nodeVersion = "3.9.0"
 )

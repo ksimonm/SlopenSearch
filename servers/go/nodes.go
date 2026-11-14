@@ -697,7 +697,8 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request, rest []stri
 			matched = append(matched, t)
 		}
 	}
-	if len(matched) == 0 {
+	running := runningTasks(actions, detailed)
+	if len(matched) == 0 && len(running) == 0 {
 		writeJSON(w, 200, map[string]any{"nodes": map[string]any{}})
 		return
 	}
@@ -706,6 +707,9 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request, rest []stri
 		list := []any{}
 		for _, t := range matched {
 			list = append(list, taskJSON(t, detailed))
+		}
+		for _, kv := range running {
+			list = append(list, kv.v)
 		}
 		writeJSON(w, 200, map[string]any{"tasks": list})
 	case "parents":
@@ -718,6 +722,9 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request, rest []stri
 				parents[t["node"].(string)+":"+t["id"].(string)] = taskJSON(t, detailed)
 			}
 		}
+		for _, kv := range running {
+			parents[kv.k] = kv.v
+		}
 		for pid, kids := range children {
 			if parent, ok := parents[pid].(map[string]any); ok {
 				parent["children"] = kids
@@ -728,6 +735,9 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request, rest []stri
 		tasksOut := map[string]any{}
 		for _, t := range matched {
 			tasksOut[t["node"].(string)+":"+t["id"].(string)] = taskJSON(t, detailed)
+		}
+		for _, kv := range running {
+			tasksOut[kv.k] = kv.v
 		}
 		writeJSON(w, 200, map[string]any{
 			"nodes": map[string]any{nodeID: map[string]any{"name": nodeName, "tasks": tasksOut}},

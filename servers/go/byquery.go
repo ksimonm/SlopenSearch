@@ -125,6 +125,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 	slices := make([]sliceStat, sliceCount)
 	report := byQueryReport()
 	total, deleted, updated, noops := int64(0), int64(0), int64(0), int64(0)
+	versionConflicts := int64(0)
 	var failures []any
 	start := time.Now()
 	for _, id := range append([]string(nil), idx.Order...) {
@@ -148,6 +149,18 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 			continue
 		}
 		total++
+		if searchSeesStale(idx, id) {
+			// the search hit carries the refreshed version: if_seq_no fails
+			versionConflicts++
+			if conflicts != "proceed" {
+				failures = append(failures, map[string]any{"index": idx.Name, "id": id, "status": 409,
+					"cause": map[string]any{"type": "version_conflict_engine_exception",
+						"reason": fmt.Sprintf("[%s]: version conflict, required seqNo [%d], primary term [1]. current document has seqNo [%d] and primary term [1]",
+							id, idx.SeqNos[id]-1, idx.SeqNos[id]),
+						"index_uuid": idx.UUID, "shard": "0", "index": idx.Name}})
+			}
+			continue
+		}
 		si := -1
 		if sliceCount > 0 {
 			si = int((total - 1) % int64(sliceCount))
@@ -244,10 +257,10 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 		idx.SeqNos[id] = seq
 		idx.PrimaryTerms[id] = 1
 		idx.IndexTotal++
-		if rv == "true" || rv == "wait_for" {
+		if rv == "true" || rv == "wait_for" || !idx.refreshDisabled() {
 			delete(idx.Pending, id)
 		} else {
-			idx.Pending[id] = newDoc
+			markPending(idx, id, newDoc, true)
 		}
 		updated++
 		if si >= 0 {
@@ -262,6 +275,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 		report[4].v = int64(0)
 	}
 	report[2].v = total
+	report[5].v = versionConflicts
 	report[6].v = noops
 	if failures == nil {
 		failures = []any{}
@@ -291,6 +305,9 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 	status := 200
 	if len(failures) > 0 {
 		status = 400
+		if versionConflicts > 0 && conflicts != "proceed" {
+			status = 409
+		}
 	}
 	writeJSON(w, status, report)
 }
