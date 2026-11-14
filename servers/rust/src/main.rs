@@ -15,6 +15,7 @@ mod fields;
 mod hashes;
 mod hdr;
 mod highlight;
+mod hl_analyzed;
 mod ingest;
 mod ingest_script;
 mod lang;
