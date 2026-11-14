@@ -22,3 +22,7 @@ data/
 
 # Compatibility score reports (scripts/score.py)
 .score/
+
+# Benchmark results (bench/run.py); bench/results/sample is committed
+bench/results/*
+!bench/results/sample/

@@ -1,0 +1,2 @@
+# bench/ needs only the standard library plus numpy (data generation, k-NN ground truth)
+numpy==2.5.4
