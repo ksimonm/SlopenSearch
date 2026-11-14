@@ -76,7 +76,7 @@ func (s *Server) renderTemplateText(body map[string]any) (string, *apierr.Error)
 	}
 	out, merr := mustache.Render(text, templateParams(body))
 	if merr != nil {
-		return "", mustacheScriptError(text, merr)
+		return "", search.MustacheScriptError(text, merr)
 	}
 	return out, nil
 }

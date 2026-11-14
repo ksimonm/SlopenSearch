@@ -181,7 +181,7 @@ func typeDisplayName(t string) string {
 	return t
 }
 
-// parseIntValue converts a raw JSON number/string into an int64 value subject
+// ParseIntValue converts a raw JSON number/string into an int64 value subject
 // to OpenSearch coercion rules.
 func (c *ParseContext) ParseIntValue(name, typ string, def map[string]any, v any) (any, *apierr.Error) {
 	coerce := c.IndexCoerce
@@ -332,7 +332,7 @@ func (c *ParseContext) parseIntString(name, typ string, def map[string]any, s st
 	return c.checkIntRange(name, typ, iv, float64(iv), !trim)
 }
 
-// parseFloatValue implements float/double/half_float/scaled_float coercion.
+// ParseFloatValue implements float/double/half_float/scaled_float coercion.
 func (c *ParseContext) ParseFloatValue(name, typ string, def map[string]any, v any) (any, *apierr.Error) {
 	coerceFalse := !c.IndexCoerce
 	if b, ok := def["coerce"].(bool); ok {
@@ -464,7 +464,7 @@ func float32FromHalf(h uint16) float32 {
 	}
 }
 
-// parseBooleanValue implements boolean coercion.
+// ParseBooleanValue implements boolean coercion.
 func (c *ParseContext) ParseBooleanValue(name string, def map[string]any, v any) (any, *apierr.Error) {
 	switch raw := v.(type) {
 	case bool:
@@ -491,7 +491,7 @@ func (c *ParseContext) ParseBooleanValue(name string, def map[string]any, v any)
 	}
 }
 
-// parseDateValue stores epoch millis (date) or epoch nanos (date_nanos).
+// ParseDateValue stores epoch millis (date) or epoch nanos (date_nanos).
 func (c *ParseContext) ParseDateValue(name, typ string, def map[string]any, v any) (any, *apierr.Error) {
 	s, isStr := v.(string)
 	if isStr && s == "" {
@@ -525,7 +525,7 @@ func (c *ParseContext) ParseDateValue(name, typ string, def map[string]any, v an
 	return nil, e
 }
 
-// parseIPValue canonicalizes an IPv4/IPv6 string or CIDR.
+// ParseIPValue canonicalizes an IPv4/IPv6 string or CIDR.
 func (c *ParseContext) ParseIPValue(name string, v any) (any, *apierr.Error) {
 	s, ok := jsonv.ToString(v)
 	if !ok {
@@ -1187,7 +1187,7 @@ func (c *ParseContext) fillConstants(props map[string]any, src map[string]any) {
 	}
 }
 
-// buildDocValues computes indexed values for a document.
+// BuildDocValues computes indexed values for a document.
 func (c *ParseContext) BuildDocValues() *apierr.Error {
 	props, _ := c.Idx.Mappings["properties"].(map[string]any)
 	if props == nil {
@@ -1353,7 +1353,7 @@ func addDerivedValues(idx *model.Index, c *ParseContext) {
 	}
 }
 
-// normalizeDerivedMappings gives derived scripts their default lang.
+// NormalizeDerivedMappings gives derived scripts their default lang.
 func NormalizeDerivedMappings(mappings map[string]any) {
 	derived, ok := mappings["derived"].(map[string]any)
 	if !ok {
@@ -1375,7 +1375,7 @@ func NormalizeDerivedMappings(mappings map[string]any) {
 	}
 }
 
-// applyRequestDerived installs request-level derived field definitions.
+// ApplyRequestDerived installs request-level derived field definitions.
 func ApplyRequestDerived(idx *model.Index, defs any) *apierr.Error {
 	src, ok := defs.(map[string]any)
 	if !ok {
@@ -1402,7 +1402,7 @@ func ApplyRequestDerived(idx *model.Index, defs any) *apierr.Error {
 	return nil
 }
 
-// computeDocValues validates and indexes a document, storing normalized field
+// ComputeDocValues validates and indexes a document, storing normalized field
 // values used by search, sort, aggregations and docvalue_fields.
 func ComputeDocValues(idx *model.Index, id string, doc map[string]any) *apierr.Error {
 	if reason := invalidDocFieldName(doc); reason != "" {
@@ -1462,7 +1462,7 @@ func RemoveDocValues(idx *model.Index, id string) {
 	idx.DVGen++
 }
 
-// recomputeAllDocValues rebuilds doc values for every document (used when
+// RecomputeAllDocValues rebuilds doc values for every document (used when
 // mappings change).
 func RecomputeAllDocValues(idx *model.Index) {
 	idx.DVGen++

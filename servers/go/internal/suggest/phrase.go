@@ -1,4 +1,4 @@
-package main
+package suggest
 
 import (
 	"math"
@@ -1531,7 +1531,7 @@ func phCollateMatches(idx *model.Index, req *phraseRequest, suggestion string) (
 	vars["suggestion"] = suggestion
 	src, merr := mustache.Render(tpl, vars)
 	if merr != nil {
-		return false, mustacheScriptError(tpl, merr)
+		return false, search.MustacheScriptError(tpl, merr)
 	}
 	var q map[string]any
 	if err := jsonv.Unmarshal([]byte(src), &q); err != nil {

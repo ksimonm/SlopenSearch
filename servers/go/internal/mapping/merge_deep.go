@@ -1,6 +1,6 @@
 package mapping
 
-// mergeMappingsDeep merges src into dst; values in src win.
+// MergeDeep merges src into dst; values in src win.
 func MergeDeep(dst, src map[string]any) {
 	for k, v := range src {
 		if k == "properties" {

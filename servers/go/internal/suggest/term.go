@@ -1,4 +1,4 @@
-package main
+package suggest
 
 import (
 	"math"
@@ -163,7 +163,7 @@ func termSuggester(spec, body map[string]any, indices []*model.Index, globalText
 	df := map[string]int{}
 	maxDoc := 0
 	for _, ix := range indices {
-		fa := fieldAnalyzer(ix, field, "")
+		fa := mapping.FieldAnalyzer(ix, field, "")
 		for _, id := range ix.Order {
 			doc, live := ix.Docs[id]
 			if !live {
@@ -192,7 +192,7 @@ func termSuggester(spec, body map[string]any, indices []*model.Index, globalText
 	sort.Strings(terms)
 
 	if analyzer == "" {
-		analyzer = fieldAnalyzer(idx, field, "")
+		analyzer = mapping.FieldAnalyzer(idx, field, "")
 	}
 	toks := analysis.Tokens(mapping.AnalysisIndex(idx), analyzer, input)
 	entries := []any{}

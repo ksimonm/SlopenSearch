@@ -2194,7 +2194,7 @@ func (c *QueryCtx) analyzerName(field string, opts any) string {
 	return c.searchAnalyzerName(field, opts)
 }
 
-// analyzeDocField analyzes a document value of field with its index analyzer.
+// AnalyzeDocField analyzes a document value of field with its index analyzer.
 func (c *QueryCtx) AnalyzeDocField(field, text string) []string {
 	return analysis.Terms(mapping.AnalysisIndex(c.Idx), c.indexAnalyzerName(field), text)
 }

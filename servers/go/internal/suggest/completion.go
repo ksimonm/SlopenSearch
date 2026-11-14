@@ -1,4 +1,4 @@
-package main
+package suggest
 
 import (
 	"regexp"
@@ -33,13 +33,13 @@ const (
 
 var suggesterTypes = map[string]bool{"term": true, "phrase": true, "completion": true}
 
-// validateSuggestBody checks the shape of the "suggest" section of a search
+// ValidateBody checks the shape of the "suggest" section of a search
 // request (parse-time errors, answered before any shard is searched).
-func validateSuggestBody(v any) *apierr.Error {
+func ValidateBody(v any) *apierr.Error {
 	m, ok := v.(map[string]any)
 	if !ok {
 		return &apierr.Error{Type: "parsing_exception", Status: 400,
-			Reason: "Unknown key for a " + searchValueType(v) + " in [suggest]."}
+			Reason: "Unknown key for a " + search.TokenType(v) + " in [suggest]."}
 	}
 	for _, name := range mapping.SortedAnyKeys(m) {
 		if name == "text" {
@@ -107,9 +107,9 @@ func validateCompletionOptions(body map[string]any) *apierr.Error {
 	return nil
 }
 
-// isSuggestOnlySearch reports whether a search body only asks for suggestions;
+// IsSuggestOnly reports whether a search body only asks for suggestions;
 // such a request skips the query phase and answers zero hits.
-func isSuggestOnlySearch(body map[string]any) bool {
+func IsSuggestOnly(body map[string]any) bool {
 	if _, ok := body["suggest"].(map[string]any); !ok {
 		return false
 	}
@@ -121,9 +121,9 @@ func isSuggestOnlySearch(body map[string]any) bool {
 	return true
 }
 
-// orderSearchResponse renders the top-level search response keys in the
+// OrderSearchResponse renders the top-level search response keys in the
 // order OpenSearch writes them.
-func orderSearchResponse(resp map[string]any) ojson.Object {
+func OrderSearchResponse(resp map[string]any) ojson.Object {
 	first := []string{"_scroll_id", "took", "timed_out", "terminated_early", "_shards", "hits",
 		"aggregations", "suggest", "profile"}
 	out := ojson.Object{}

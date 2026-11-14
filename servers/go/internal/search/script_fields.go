@@ -6,7 +6,7 @@ import (
 	"slopensearch/internal/painless"
 )
 
-// evalScriptFields evaluates the script_fields section of a search body.
+// EvalScriptFields evaluates the script_fields section of a search body.
 // All script fields of a hit share one params._source map, so a script that
 // mutates it is seen by the next one.
 func EvalScriptFields(hit MultiHit, specs map[string]any) (map[string]any, *apierr.Error) {

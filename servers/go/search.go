@@ -19,6 +19,7 @@ import (
 	"slopensearch/internal/painless"
 	"slopensearch/internal/search"
 	"slopensearch/internal/settings"
+	"slopensearch/internal/suggest"
 )
 
 type fieldSpec struct {
@@ -198,33 +199,15 @@ var searchBodyKeys = map[string]bool{
 	"rest_total_hits_as_int": true, "source": true, "seq_no_primary_term ": true,
 }
 
-func searchValueType(v any) string {
-	switch v.(type) {
-	case nil:
-		return "VALUE_NULL"
-	case bool:
-		return "VALUE_BOOLEAN"
-	case json.Number, float64, int, int64:
-		return "VALUE_NUMBER"
-	case string:
-		return "VALUE_STRING"
-	case []any:
-		return "START_ARRAY"
-	case map[string]any:
-		return "START_OBJECT"
-	}
-	return "VALUE_NULL"
-}
-
 func validateSearchBody(body map[string]any) *apierr.Error {
 	for k, v := range body {
 		if !searchBodyKeys[k] {
 			return &apierr.Error{Type: "parsing_exception", Status: 400,
-				Reason: "Unknown key for a " + searchValueType(v) + " in [" + k + "]."}
+				Reason: "Unknown key for a " + search.TokenType(v) + " in [" + k + "]."}
 		}
 	}
 	if sg, ok := body["suggest"]; ok {
-		if err := validateSuggestBody(sg); err != nil {
+		if err := suggest.ValidateBody(sg); err != nil {
 			return err
 		}
 	}
@@ -1444,7 +1427,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		},
 	}
 
-	if isSuggestOnlySearch(body) {
+	if suggest.IsSuggestOnly(body) {
 		resp["hits"] = map[string]any{"total": map[string]any{"value": 0, "relation": "eq"}, "max_score": nil, "hits": []any{}}
 	}
 	var aggIdx *model.Index
@@ -1469,9 +1452,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				break
 			}
 		}
-		if suggest, ok := body["suggest"].(map[string]any); ok {
+		if suggestSpec, ok := body["suggest"].(map[string]any); ok {
 			typed := r.URL.Query().Get("typed_keys") != "" && r.URL.Query().Get("typed_keys") != "false"
-			sres, serr := evalSuggest(suggest, indices, typed, body)
+			sres, serr := suggest.Evaluate(suggestSpec, indices, typed, body)
 			if serr != nil {
 				writeError(w, serr)
 				return
@@ -1534,7 +1517,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		return
 	}
 	if _, ok := resp["suggest"]; ok {
-		writeJSON(w, 200, orderSearchResponse(resp))
+		writeJSON(w, 200, suggest.OrderSearchResponse(resp))
 		return
 	}
 	writeJSON(w, 200, resp)

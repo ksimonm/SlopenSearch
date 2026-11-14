@@ -80,7 +80,7 @@ func insertDottedProperty(root map[string]any, key string, val map[string]any) *
 	return nil
 }
 
-// expandDottedProperties rewrites every properties map so dotted names become
+// ExpandDottedProperties rewrites every properties map so dotted names become
 // nested object mappings.
 func ExpandDottedProperties(props map[string]any) *apierr.Error {
 	keys := SortedAnyKeys(props)
@@ -114,7 +114,7 @@ func ExpandDottedProperties(props map[string]any) *apierr.Error {
 	return nil
 }
 
-// expandDottedMapping expands the properties of a full mapping document.
+// ExpandDottedMapping expands the properties of a full mapping document.
 func ExpandDottedMapping(mappings map[string]any) *apierr.Error {
 	if props, ok := mappings["properties"].(map[string]any); ok {
 		return ExpandDottedProperties(props)
@@ -122,7 +122,7 @@ func ExpandDottedMapping(mappings map[string]any) *apierr.Error {
 	return nil
 }
 
-// expandDottedObject rewrites a source document into the nested shape used for
+// ExpandDottedObject rewrites a source document into the nested shape used for
 // dynamic mapping detection. The caller keeps the original _source.
 func ExpandDottedObject(src map[string]any) (map[string]any, *apierr.Error) {
 	keys := make([]string, 0, len(src))
@@ -254,7 +254,7 @@ func normalizerFound(settings map[string]any, name string) bool {
 	return settingsHasAnalyzer(settings, "normalizer", name)
 }
 
-// validateMappingAnalyzers checks analyzers and normalizers referenced from a
+// ValidateAnalyzers checks analyzers and normalizers referenced from a
 // mapping against the index settings.
 func ValidateAnalyzers(props map[string]any, settings map[string]any) *apierr.Error {
 	for _, name := range SortedAnyKeys(props) {
@@ -423,7 +423,7 @@ func nestedObjectsLimitError(limit int) *apierr.Error {
 	return &apierr.Error{Type: "mapper_parsing_exception", Status: 400, Reason: reason}
 }
 
-// indexDocCount returns the number of documents including nested documents,
+// IndexDocCount returns the number of documents including nested documents,
 // which is what _cat/indices reports as docs.count.
 func IndexDocCount(idx *model.Index) int {
 	count := len(idx.Docs)

@@ -14,7 +14,7 @@ import (
 	"slopensearch/internal/painless"
 )
 
-// plScriptErr is a script_exception: a compile or runtime error with the
+// ScriptError is a script_exception: a compile or runtime error with the
 // script position.
 type ScriptError struct {
 	Compile   bool
@@ -74,7 +74,7 @@ func (e *ScriptError) causeObject() ojson.Object {
 	return c
 }
 
-// errorBody renders the full {"error": ..., "status": 400} response.
+// ErrorBody renders the full {"error": ..., "status": 400} response.
 func (e *ScriptError) ErrorBody() ojson.Object {
 	errObj := ojson.Object{{"root_cause", []any{e.Object(false)}}}
 	errObj = append(errObj, e.Object(true)...)
@@ -131,12 +131,12 @@ func plRuntimeFailure(s *Script, name string, re *painless.RuntimeError) *Script
 	return e
 }
 
-// plScript is a compiled Painless script.
+// Script is a compiled Painless script.
 type Script struct {
 	s *painless.Script
 }
 
-// plCompileScript compiles and converts errors to script exceptions.
+// CompileScript compiles and converts errors to script exceptions.
 func CompileScript(src, ctxName, name string) (*Script, *ScriptError) {
 	s, err := painless.Compile(src, ctxName)
 	if err != nil {
@@ -148,7 +148,7 @@ func CompileScript(src, ctxName, name string) (*Script, *ScriptError) {
 	return &Script{s}, nil
 }
 
-// exec runs a compiled script and applies the context's return conversion.
+// Exec runs a compiled script and applies the context's return conversion.
 func (s *Script) Exec(b painless.Bindings, name string) (any, *ScriptError) {
 	v, rerr := s.s.Run(b)
 	if rerr != nil {
@@ -162,7 +162,7 @@ func (s *Script) Exec(b painless.Bindings, name string) (any, *ScriptError) {
 
 var plTextFielddataReason = "Text fields are not optimised for operations that require per-document field data like aggregations and sorting, so these operations are disabled by default. Please use a keyword field instead. Alternatively, set fielddata=true on [%s] in order to load field data by uninverting the inverted index. Note that this can use significant memory."
 
-// plDocLookup builds the doc variable for one document.
+// DocLookup builds the doc variable for one document.
 func DocLookup(qc *QueryCtx) *painless.DocMap {
 	cache := map[string]*painless.DocValues{}
 	has := func(field string) bool {

@@ -14,7 +14,7 @@ import (
 	"slopensearch/internal/painless"
 )
 
-// knnShardFail renders a "failed to create query" shard failure whose
+// KnnShardFail renders a "failed to create query" shard failure whose
 // cause is an illegal_argument_exception.
 func KnnShardFail(idx *model.Index, reason string) *apierr.Error {
 	return knnShardFailWith(idx, "failed to create query: "+reason, ojson.Object{

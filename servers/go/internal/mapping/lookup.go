@@ -26,7 +26,7 @@ func ResolveAliasField(idx *model.Index, field string) string {
 	return field
 }
 
-// mappingFieldDef looks up a field definition by dotted path.
+// FieldDef looks up a field definition by dotted path.
 func FieldDef(idx *model.Index, field string) (map[string]any, bool) {
 	if derived, ok := idx.Mappings["derived"].(map[string]any); ok {
 		if d, ok := derived[field].(map[string]any); ok {

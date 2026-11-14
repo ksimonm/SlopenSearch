@@ -319,7 +319,7 @@ func countMappingType(props map[string]any, wanted string) int {
 	return n
 }
 
-// validatePropsMeta performs the checks OpenSearch runs before mapper parsing.
+// ValidatePropsMeta performs the checks OpenSearch runs before mapper parsing.
 func ValidatePropsMeta(props map[string]any) *apierr.Error {
 	var walk func(props map[string]any) *apierr.Error
 	walk = func(props map[string]any) *apierr.Error {
@@ -533,7 +533,7 @@ func ValidateSource(mappings map[string]any) *apierr.Error {
 	return nil
 }
 
-// normalizeKnnVectors fills the implicit mapper parameters (doc_values and
+// NormalizeKnnVectors fills the implicit mapper parameters (doc_values and
 // similar) so they are rendered back in the mapping.
 func NormalizeKnnVectors(props map[string]any) {
 	for _, raw := range props {

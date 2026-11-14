@@ -405,7 +405,7 @@ func matchDynamicTemplate(idx *model.Index, path, name, dynType string) (map[str
 	return nil, false
 }
 
-// dynamicDefFor resolves the mapping for an undeclared field, applying dynamic
+// DynamicDefFor resolves the mapping for an undeclared field, applying dynamic
 // templates and dynamic type detection.
 func DynamicDefFor(idx *model.Index, path, name string, raw any) (map[string]any, bool, *apierr.Error) {
 	if arr, ok := raw.([]any); ok {
@@ -517,7 +517,7 @@ func EnsureFieldTypes(idx *model.Index) {
 	idx.FieldTypes = fresh
 }
 
-// analysisIndex is the analysis view of idx (nil for nil).
+// AnalysisIndex is the analysis view of idx (nil for nil).
 func AnalysisIndex(idx *model.Index) *analysis.Index {
 	if idx == nil {
 		return nil

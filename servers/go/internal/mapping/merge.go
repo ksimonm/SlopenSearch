@@ -102,7 +102,7 @@ func mergeFieldDefaults(def map[string]any) {
 	}
 }
 
-// mergeMappingChecked merges new mapping properties into existing ones,
+// MergeChecked merges new mapping properties into existing ones,
 // returning OpenSearch-compatible conflict errors.
 func MergeChecked(existing, incoming map[string]any) *apierr.Error {
 	for name, rawNew := range incoming {

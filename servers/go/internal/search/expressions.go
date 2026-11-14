@@ -29,7 +29,7 @@ func expressionScriptErr(e *expressions.Error, src string) *ScriptError {
 	return se
 }
 
-// exPrepare compiles and checks an expression for a context.
+// PrepareExpression compiles and checks an expression for a context.
 func PrepareExpression(src, ctxName string) (*expressions.Script, *ScriptError, *apierr.Error) {
 	s, err := expressions.Compile(src)
 	if err != nil {

@@ -33,7 +33,7 @@ func KnnFieldDef(idx *model.Index, path string) (map[string]any, bool) {
 	return nil, false
 }
 
-// knnDistanceScore returns the raw distance-like value and the OpenSearch score.
+// KnnDistanceScore returns the raw distance-like value and the OpenSearch score.
 func KnnDistanceScore(space string, q, d []float64) (float64, float64) {
 	switch space {
 	case "cosinesimil":

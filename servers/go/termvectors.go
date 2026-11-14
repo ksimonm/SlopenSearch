@@ -69,26 +69,9 @@ func tvTokens(text, analyzer string) []tvToken {
 	return out
 }
 
-func fieldAnalyzer(idx *model.Index, field string, override string) string {
-	if override != "" {
-		return override
-	}
-	def, ok := mapping.FieldDef(idx, field)
-	if !ok {
-		return "standard"
-	}
-	if t, _ := def["type"].(string); t == "keyword" {
-		return "keyword"
-	}
-	if a, _ := def["analyzer"].(string); a != "" {
-		return a
-	}
-	return "standard"
-}
-
 func tvFieldStats(idx *model.Index, field string) map[string]any {
 	docCount, sumDocFreq, sumTTF := 0, 0, 0
-	analyzer := fieldAnalyzer(idx, field, "")
+	analyzer := mapping.FieldAnalyzer(idx, field, "")
 	for _, id := range idx.Order {
 		doc, live := idx.Docs[id]
 		if !live {
@@ -114,7 +97,7 @@ func tvFieldStats(idx *model.Index, field string) map[string]any {
 
 func tvIndexTermStats(idx *model.Index, field string) map[string]map[string]int {
 	out := map[string]map[string]int{}
-	analyzer := fieldAnalyzer(idx, field, "")
+	analyzer := mapping.FieldAnalyzer(idx, field, "")
 	for _, id := range idx.Order {
 		doc, live := idx.Docs[id]
 		if !live {
@@ -146,7 +129,7 @@ func termVectorFor(idx *model.Index, field string, doc map[string]any, analyzer 
 	if !ok {
 		return nil
 	}
-	analyzer = fieldAnalyzer(idx, field, analyzer)
+	analyzer = mapping.FieldAnalyzer(idx, field, analyzer)
 	stats := map[string]map[string]int(nil)
 	if termStats {
 		stats = tvIndexTermStats(idx, field)

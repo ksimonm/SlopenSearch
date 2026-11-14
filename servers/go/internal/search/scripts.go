@@ -9,7 +9,7 @@ import (
 	"slopensearch/internal/painless"
 )
 
-// scriptSpec is a parsed "script" object.
+// ScriptSpec is a parsed "script" object.
 type ScriptSpec struct {
 	Src    string
 	Lang   string
@@ -17,7 +17,7 @@ type ScriptSpec struct {
 	Params map[string]any
 }
 
-// errName is the "script" value reported in script exceptions.
+// ErrName is the "script" value reported in script exceptions.
 func (s *ScriptSpec) ErrName() string {
 	if s.Id != "" {
 		return s.Id
@@ -25,7 +25,7 @@ func (s *ScriptSpec) ErrName() string {
 	return s.Src
 }
 
-// parseScriptSpec reads a script given as a string or an object and
+// ParseScriptSpec reads a script given as a string or an object and
 // resolves stored scripts.
 func ParseScriptSpec(raw any) (*ScriptSpec, *apierr.Error) {
 	switch t := raw.(type) {
@@ -90,7 +90,7 @@ var expressionContexts = map[string]bool{
 	"filter": true, "number_sort": true, "score": true, "terms_set": true,
 }
 
-// checkScriptLang rejects languages that cannot run in a context.
+// CheckScriptLang rejects languages that cannot run in a context.
 func CheckScriptLang(spec *ScriptSpec, ctxName string) *apierr.Error {
 	switch spec.Lang {
 	case "painless":
@@ -106,12 +106,12 @@ func CheckScriptLang(spec *ScriptSpec, ctxName string) *apierr.Error {
 	return apierr.BadRequest("script_lang not supported [" + spec.Lang + "]")
 }
 
-// compilePainless compiles a painless spec for a context.
+// CompilePainless compiles a painless spec for a context.
 func CompilePainless(spec *ScriptSpec, ctxName string) (*Script, *ScriptError) {
 	return CompileScript(spec.Src, ctxName, spec.ErrName())
 }
 
-// scriptParams converts request params into a painless params map.
+// ScriptParams converts request params into a painless params map.
 func ScriptParams(p map[string]any) *painless.Map {
 	if p == nil {
 		return painless.NewMap(painless.Hash)
@@ -119,7 +119,7 @@ func ScriptParams(p map[string]any) *painless.Map {
 	return painless.FromJSON(p, painless.Hash).(*painless.Map)
 }
 
-// shardFailure is a pre-rendered search_phase_execution_exception.
+// ShardFailure is a pre-rendered search_phase_execution_exception.
 type ShardFailure struct {
 	Raw    ojson.Object // complete response body, when set
 	Status int
@@ -160,7 +160,7 @@ func (f *ShardFailure) body() ojson.Object {
 	return ojson.Object{{"error", errObj}, {"status", f.Status}}
 }
 
-// scriptShardError wraps a script exception raised while executing a query
+// ScriptShardError wraps a script exception raised while executing a query
 // phase script.
 func ScriptShardError(idx *model.Index, se *ScriptError) *apierr.Error {
 	f := &ShardFailure{Status: 400, Index: idx.Name, Root: se.Object(false), Shard: se.Object(true), Top: se.Object(true)}
@@ -179,7 +179,7 @@ func scriptQueryCompileError(idx *model.Index, se *ScriptError) *apierr.Error {
 	return &apierr.Error{Type: "script_exception", Status: 400, Reason: "script error", Shard: f}
 }
 
-// plainShardError reports a non-script exception raised on the shard.
+// PlainShardError reports a non-script exception raised on the shard.
 func PlainShardError(idx *model.Index, e *apierr.Error) *apierr.Error {
 	if e.Shard != nil {
 		return e
@@ -197,7 +197,7 @@ func PlainShardError(idx *model.Index, e *apierr.Error) *apierr.Error {
 	return &apierr.Error{Type: e.Type, Status: status, Reason: e.Reason, Shard: f}
 }
 
-// scriptErrForShard turns any script setup or execution error into a shard
+// ScriptErrForShard turns any script setup or execution error into a shard
 // failure.
 func ScriptErrForShard(idx *model.Index, se *ScriptError, ae *apierr.Error, query bool) *apierr.Error {
 	if se != nil {
@@ -215,7 +215,7 @@ func ScriptErrForShard(idx *model.Index, se *ScriptError, ae *apierr.Error, quer
 	return PlainShardError(idx, ae)
 }
 
-// compiledScript is a script prepared for one context, in either language.
+// CompiledScript is a script prepared for one context, in either language.
 type CompiledScript struct {
 	spec   *ScriptSpec
 	ctx    string
@@ -224,7 +224,7 @@ type CompiledScript struct {
 	linked map[*model.Index]*expressions.Linked
 }
 
-// prepareScript parses, resolves and compiles a script for a context.
+// PrepareScript parses, resolves and compiles a script for a context.
 func PrepareScript(raw any, ctxName string) (*CompiledScript, *ScriptError, *apierr.Error) {
 	spec, ae := ParseScriptSpec(raw)
 	if ae != nil {
@@ -259,7 +259,7 @@ func prepareSpec(spec *ScriptSpec, ctxName string) (*CompiledScript, *ScriptErro
 	return cs, nil, nil
 }
 
-// runOpts carries the per-execution bindings of a script.
+// RunOpts carries the per-execution bindings of a script.
 type RunOpts struct {
 	Score    float64
 	Value    any
@@ -295,7 +295,7 @@ func (cs *CompiledScript) link(idx *model.Index, extra map[string]any) (*express
 	return l, nil
 }
 
-// run executes the script for one document (qc may be nil for scripts
+// Run executes the script for one document (qc may be nil for scripts
 // without document access).
 func (cs *CompiledScript) Run(qc *QueryCtx, o RunOpts) (any, *ScriptError) {
 	if cs.Ex != nil {

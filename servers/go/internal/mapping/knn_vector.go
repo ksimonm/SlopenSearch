@@ -15,7 +15,7 @@ import (
 	"slopensearch/internal/settings"
 )
 
-// indexKnnEnabled reports whether the index has index.knn = true.
+// IndexKnnEnabled reports whether the index has index.knn = true.
 func IndexKnnEnabled(idx *model.Index) bool {
 	if idx == nil {
 		return false
@@ -195,7 +195,7 @@ func (c *ParseContext) indexKnnVector(path string, def map[string]any, raw any) 
 	return nil
 }
 
-// knnDeriveSource rewrites knn_vector values of a document the way an
+// KnnDeriveSource rewrites knn_vector values of a document the way an
 // index.knn index returns them from its derived _source: as stored floats
 // (or integers for byte/binary vectors). It reports whether anything changed.
 func KnnDeriveSource(idx *model.Index, doc map[string]any) bool {
