@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/analysis"
 )
 
 // ---------------------------------------------------------------------------
@@ -946,8 +948,8 @@ func (c *queryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 		analyzer, _ := def["analyzer"].(string)
 		for _, v := range vals {
 			s, _ := valueScalarString(v)
-			for _, tok := range analyzeTokensWithIndex(c.idx, analyzer, s) {
-				t := tok.term
+			for _, tok := range analysis.Tokens(analysisIndex(c.idx), analyzer, s) {
+				t := tok.Term
 				if caseInsensitive {
 					t = strings.ToLower(t)
 				}
@@ -2244,7 +2246,7 @@ func (c *queryCtx) analyzerName(field string, opts any) string {
 
 // analyzeDocField analyzes a document value of field with its index analyzer.
 func (c *queryCtx) analyzeDocField(field, text string) []string {
-	return analyzeWithIndex(c.idx, c.indexAnalyzerName(field), text)
+	return analysis.Terms(analysisIndex(c.idx), c.indexAnalyzerName(field), text)
 }
 
 // indexAnalyzerName is the analyzer documents are indexed with.
@@ -2257,7 +2259,7 @@ func (c *queryCtx) indexAnalyzerName(field string) string {
 			return a
 		}
 	}
-	if (analysisScope{idx: c.idx}).indexHasAnalyzer("default") {
+	if (analysis.Scope{Index: analysisIndex(c.idx)}).IndexHasAnalyzer("default") {
 		return "default"
 	}
 	return ""
@@ -2282,11 +2284,11 @@ func (c *queryCtx) searchAnalyzerName(field string, opts any) string {
 			return a
 		}
 	}
-	sc := analysisScope{idx: c.idx}
-	if sc.indexHasAnalyzer("default_search") {
+	sc := analysis.Scope{Index: analysisIndex(c.idx)}
+	if sc.IndexHasAnalyzer("default_search") {
 		return "default_search"
 	}
-	if sc.indexHasAnalyzer("default") {
+	if sc.IndexHasAnalyzer("default") {
 		return "default"
 	}
 	return ""
@@ -2343,7 +2345,7 @@ func setPhraseAnalyzer(q any, analyzer string) {
 
 func (c *queryCtx) analyzeField(field string, opts any, text string) []string {
 	a := c.analyzerName(field, opts)
-	return analyzeWithIndex(c.idx, a, text)
+	return analysis.Terms(analysisIndex(c.idx), a, text)
 }
 
 func matchShardError(reason string) *apiError {
@@ -2514,7 +2516,7 @@ func msmRequired(spec any, n int, defaultAll bool) (int, *apiError) {
 }
 
 func matchAnalyzerExists(idx *Index, name string) bool {
-	if builtinAnalyzer(name) {
+	if analysis.BuiltinAnalyzer(name) {
 		return true
 	}
 	if idx != nil {
@@ -2544,25 +2546,25 @@ func (c *queryCtx) phraseMatchesTerms(field string, terms []string) bool {
 	if g, ok := toFloat(def["position_increment_gap"]); ok {
 		gap = int(g)
 	}
-	doc := []analyzedToken{}
+	doc := []analysis.Token{}
 	lastPos := -1
 	for _, v := range c.mustValues(field) {
 		s, _ := valueScalarString(v)
-		toks := analyzeTokensWithIndex(c.idx, c.indexAnalyzerName(field), s)
+		toks := analysis.Tokens(analysisIndex(c.idx), c.indexAnalyzerName(field), s)
 		base := 0
 		if lastPos >= 0 {
 			base = lastPos + gap + 1
 		}
 		for _, t := range toks {
-			doc = append(doc, analyzedToken{term: t.term, pos: t.pos + base})
-			if t.pos+base > lastPos {
-				lastPos = t.pos + base
+			doc = append(doc, analysis.Token{Term: t.Term, Pos: t.Pos + base})
+			if t.Pos+base > lastPos {
+				lastPos = t.Pos + base
 			}
 		}
 	}
-	qtokens := make([]analyzedToken, len(terms))
+	qtokens := make([]analysis.Token, len(terms))
 	for i, t := range terms {
-		qtokens[i] = analyzedToken{term: t, pos: i}
+		qtokens[i] = analysis.Token{Term: t, Pos: i}
 	}
 	return phraseCost(doc, qtokens, 0)
 }
@@ -2733,7 +2735,7 @@ func (c *queryCtx) evalMatch(field string, raw any, boost float64) (bool, float6
 		return false, 0, nil
 	}
 	analyzer := c.analyzerName(field, opts)
-	if alts, matched := synonymAlternatives(c.idx, analyzer, text); matched {
+	if alts, matched := analysis.SynonymAlternatives(analysisIndex(c.idx), analyzer, text); matched {
 		auto := true
 		if m != nil {
 			if v, ok := m["auto_generate_synonyms_phrase_query"].(bool); ok {
@@ -2880,13 +2882,13 @@ func absInt(n int) int {
 	return n
 }
 
-func phraseCost(doc []analyzedToken, q []analyzedToken, slop int) bool {
+func phraseCost(doc []analysis.Token, q []analysis.Token, slop int) bool {
 	if len(q) == 0 {
 		return false
 	}
 	if len(q) == 1 {
 		for _, d := range doc {
-			if d.term == q[0].term {
+			if d.Term == q[0].Term {
 				return true
 			}
 		}
@@ -2896,24 +2898,24 @@ func phraseCost(doc []analyzedToken, q []analyzedToken, slop int) bool {
 	rec = func(qi, prevPos, cost int) bool {
 		expected := 1
 		if qi > 0 {
-			expected = q[qi].pos - q[qi-1].pos
+			expected = q[qi].Pos - q[qi-1].Pos
 			if expected < 1 {
 				expected = 1
 			}
 		}
 		for _, d := range doc {
-			if d.term != q[qi].term {
+			if d.Term != q[qi].Term {
 				continue
 			}
 			nc := cost
 			if qi > 0 {
-				diff := d.pos - prevPos
+				diff := d.Pos - prevPos
 				nc += absInt(diff - expected)
 				if nc > slop {
 					continue
 				}
 			}
-			if qi == len(q)-1 || rec(qi+1, d.pos, nc) {
+			if qi == len(q)-1 || rec(qi+1, d.Pos, nc) {
 				return true
 			}
 		}
@@ -2961,7 +2963,7 @@ func (c *queryCtx) evalMatchPhrase(field string, raw any, boost, slop float64) (
 		}
 		return false, 0, nil
 	}
-	if alts, matched := synonymAlternatives(c.idx, c.quoteAnalyzerName(field, opts), text); matched {
+	if alts, matched := analysis.SynonymAlternatives(analysisIndex(c.idx), c.quoteAnalyzerName(field, opts), text); matched {
 		for _, alt := range alts {
 			if c.phraseMatchesTerms(field, alt) {
 				return true, boost, nil
@@ -2969,7 +2971,7 @@ func (c *queryCtx) evalMatchPhrase(field string, raw any, boost, slop float64) (
 		}
 		return false, 0, nil
 	}
-	qtokens := analyzeTokensWithIndex(c.idx, c.quoteAnalyzerName(field, opts), text)
+	qtokens := analysis.Tokens(analysisIndex(c.idx), c.quoteAnalyzerName(field, opts), text)
 	if len(qtokens) == 0 {
 		if m, ok := opts.(map[string]any); ok {
 			if z, ok := m["zero_terms_query"].(string); ok && strings.EqualFold(z, "all") {
@@ -2992,19 +2994,19 @@ func (c *queryCtx) evalMatchPhrase(field string, raw any, boost, slop float64) (
 	if g, ok := toFloat(def["position_increment_gap"]); ok {
 		gap = int(g)
 	}
-	doc := []analyzedToken{}
+	doc := []analysis.Token{}
 	lastPos := -1
 	for _, v := range vals {
 		s, _ := valueScalarString(v)
-		toks := analyzeTokensWithIndex(c.idx, c.indexAnalyzerName(field), s)
+		toks := analysis.Tokens(analysisIndex(c.idx), c.indexAnalyzerName(field), s)
 		base := 0
 		if lastPos >= 0 {
 			base = lastPos + gap + 1
 		}
 		for _, t := range toks {
-			doc = append(doc, analyzedToken{term: t.term, pos: t.pos + base})
-			if t.pos+base > lastPos {
-				lastPos = t.pos + base
+			doc = append(doc, analysis.Token{Term: t.Term, Pos: t.Pos + base})
+			if t.Pos+base > lastPos {
+				lastPos = t.Pos + base
 			}
 		}
 	}
@@ -3488,7 +3490,7 @@ func (c *queryCtx) eval(raw map[string]any) (bool, float64, *apiError) {
 				}
 				return false, 0, nil
 			}
-			qtokens := analyzeTokensWithIndex(c.idx, c.quoteAnalyzerName(field, opts), text)
+			qtokens := analysis.Tokens(analysisIndex(c.idx), c.quoteAnalyzerName(field, opts), text)
 			if len(qtokens) == 0 {
 				return false, 0, nil
 			}
@@ -3497,23 +3499,23 @@ func (c *queryCtx) eval(raw map[string]any) (bool, float64, *apiError) {
 			if g, ok := toFloat(def["position_increment_gap"]); ok {
 				gap = int(g)
 			}
-			doc := []analyzedToken{}
+			doc := []analysis.Token{}
 			lastPos := -1
 			prefixes := map[string]bool{}
 			for _, v := range vals {
 				s, _ := valueScalarString(v)
-				toks := analyzeTokensWithIndex(c.idx, c.indexAnalyzerName(field), s)
+				toks := analysis.Tokens(analysisIndex(c.idx), c.indexAnalyzerName(field), s)
 				base := 0
 				if lastPos >= 0 {
 					base = lastPos + gap + 1
 				}
 				for _, t := range toks {
-					doc = append(doc, analyzedToken{term: t.term, pos: t.pos + base})
-					if t.pos+base > lastPos {
-						lastPos = t.pos + base
+					doc = append(doc, analysis.Token{Term: t.Term, Pos: t.Pos + base})
+					if t.Pos+base > lastPos {
+						lastPos = t.Pos + base
 					}
-					if strings.HasPrefix(t.term, qtokens[len(qtokens)-1].term) {
-						prefixes[t.term] = true
+					if strings.HasPrefix(t.Term, qtokens[len(qtokens)-1].Term) {
+						prefixes[t.Term] = true
 					}
 				}
 			}
@@ -3528,9 +3530,9 @@ func (c *queryCtx) eval(raw map[string]any) (bool, float64, *apiError) {
 				for _, dv := range c.idx.DocValues {
 					for _, v := range dv[resolved] {
 						s, _ := valueScalarString(v)
-						for _, t := range analyzeTokensWithIndex(c.idx, c.indexAnalyzerName(field), s) {
-							if strings.HasPrefix(t.term, qtokens[len(qtokens)-1].term) {
-								prefixes[t.term] = true
+						for _, t := range analysis.Tokens(analysisIndex(c.idx), c.indexAnalyzerName(field), s) {
+							if strings.HasPrefix(t.Term, qtokens[len(qtokens)-1].Term) {
+								prefixes[t.Term] = true
 							}
 						}
 					}
@@ -3553,27 +3555,27 @@ func (c *queryCtx) eval(raw map[string]any) (bool, float64, *apiError) {
 			rec = func(qi, prevPos, cost int) bool {
 				expected := 1
 				if qi > 0 {
-					expected = qtokens[qi].pos - qtokens[qi-1].pos
+					expected = qtokens[qi].Pos - qtokens[qi-1].Pos
 					if expected < 1 {
 						expected = 1
 					}
 				}
 				for _, d := range doc {
 					if qi == last {
-						if !allowed[d.term] {
+						if !allowed[d.Term] {
 							continue
 						}
-					} else if d.term != qtokens[qi].term {
+					} else if d.Term != qtokens[qi].Term {
 						continue
 					}
 					nc := cost
 					if qi > 0 {
-						nc += absInt((d.pos - prevPos) - expected)
+						nc += absInt((d.Pos - prevPos) - expected)
 						if nc > slop {
 							continue
 						}
 					}
-					if qi == last || rec(qi+1, d.pos, nc) {
+					if qi == last || rec(qi+1, d.Pos, nc) {
 						return true
 					}
 				}

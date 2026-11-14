@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"slopensearch/internal/analysis"
 	"slopensearch/internal/painless"
 )
 
@@ -346,8 +347,8 @@ func (h multiHit) sortValue(field string, desc bool, mode string) (any, bool) {
 				toks := []string{}
 				for _, v := range list {
 					s, _ := valueScalarString(v)
-					for _, t := range analyzeTokensWithIndex(h.idx, analyzer, s) {
-						toks = append(toks, t.term)
+					for _, t := range analysis.Tokens(analysisIndex(h.idx), analyzer, s) {
+						toks = append(toks, t.Term)
 					}
 				}
 				if len(toks) == 0 {

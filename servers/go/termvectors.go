@@ -7,6 +7,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"slopensearch/internal/analysis"
 )
 
 type tvToken struct {
@@ -18,10 +20,10 @@ type tvToken struct {
 // tvTokensIdx analyzes with the index's own analyzers when the field uses
 // one, falling back to the built-in term vector tokenizer.
 func tvTokensIdx(idx *Index, text, analyzer string) []tvToken {
-	if toks, ok := indexAnalyzerTokens(idx, analyzer, text); ok {
+	if toks, ok := analysis.IndexAnalyzerTokens(analysisIndex(idx), analyzer, text); ok {
 		out := make([]tvToken, 0, len(toks))
 		for _, t := range toks {
-			out = append(out, tvToken{term: t.term, position: t.pos, start: t.start, end: t.end})
+			out = append(out, tvToken{term: t.Term, position: t.Pos, start: t.Start, end: t.End})
 		}
 		return out
 	}

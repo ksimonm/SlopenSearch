@@ -1,4 +1,4 @@
-package main
+package analysis
 
 import (
 	"crypto/sha256"
@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jregex"
 )
 
@@ -16,13 +17,13 @@ import (
 // for the recorded OpenSearch responses.
 
 type filterSpec struct {
-	typ    string
-	params map[string]any
+	Type   string
+	Params map[string]any
 	// finalOffset is the end offset of the analyzed text (Lucene's final
 	// offset), used by filters looking at trailing tokens.
 	finalOffset int
 	// ruleAnalyzer analyzes synonym rules with the preceding chain.
-	ruleAnalyzer func(string) []analyzedToken
+	ruleAnalyzer func(string) []Token
 }
 
 func subSettings(settings map[string]any, prefix string) map[string]any {
@@ -81,26 +82,26 @@ func globalFilterSpec(name string) (filterSpec, bool) {
 		return filterSpec{}, false
 	}
 	if name == "english" {
-		return filterSpec{typ: "stemmer", params: map[string]any{"language": "english"}}, true
+		return filterSpec{Type: "stemmer", Params: map[string]any{"language": "english"}}, true
 	}
-	return filterSpec{typ: name}, true
+	return filterSpec{Type: name}, true
 }
 
-func resolveFilterSpec(idx *Index, c analyzeComponent) (filterSpec, bool) {
-	if c.inline != nil {
+func resolveFilterSpec(idx *Index, c Component) (filterSpec, bool) {
+	if c.Inline != nil {
 		typ := c.name
-		if t, ok := c.inline["type"].(string); ok && t != "" {
+		if t, ok := c.Inline["type"].(string); ok && t != "" {
 			typ = t
 		}
 		if !knownFilterTypes[typ] {
 			return filterSpec{}, false
 		}
-		return filterSpec{typ: typ, params: c.inline}, true
+		return filterSpec{Type: typ, Params: c.Inline}, true
 	}
 	if idx != nil {
 		if raw, ok := findSetting(idx.Settings, "analysis.filter."+c.name+".type"); ok {
 			typ, _ := raw.(string)
-			return filterSpec{typ: typ, params: subSettings(idx.Settings, "analysis.filter."+c.name)}, true
+			return filterSpec{Type: typ, Params: subSettings(idx.Settings, "analysis.filter."+c.name)}, true
 		}
 	}
 	return globalFilterSpec(c.name)
@@ -115,7 +116,7 @@ func fsString(p map[string]any, key, def string) string {
 	return def
 }
 
-func fsBool(p map[string]any, key string, def bool) bool {
+func ParamBool(p map[string]any, key string, def bool) bool {
 	if p != nil {
 		switch v := p[key].(type) {
 		case bool:
@@ -133,7 +134,7 @@ func fsBool(p map[string]any, key string, def bool) bool {
 	return def
 }
 
-func fsInt(p map[string]any, key string, def int) int {
+func ParamInt(p map[string]any, key string, def int) int {
 	if p != nil {
 		if n, ok := toFloat(p[key]); ok {
 			return int(n)
@@ -146,18 +147,18 @@ func fsStrings(p map[string]any, key string) []string {
 	if p == nil {
 		return nil
 	}
-	return filterNames(p[key])
+	return FilterNames(p[key])
 }
 
-func filterError(reason string) *apiError {
-	return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: reason,
-		RootCause: &apiError{Type: "illegal_argument_exception", Status: 400, Reason: reason}}
+func filterError(reason string) *apierr.Error {
+	return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: reason,
+		RootCause: &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: reason}}
 }
 
-func applyGlobalFilters(toks []analyzedToken, names []string) ([]analyzedToken, bool) {
-	comps := make([]analyzeComponent, 0, len(names))
+func applyGlobalFilters(toks []Token, names []string) ([]Token, bool) {
+	comps := make([]Component, 0, len(names))
 	for _, n := range names {
-		comps = append(comps, analyzeComponent{name: n})
+		comps = append(comps, Component{name: n})
 	}
 	out, err := applyFilterComponents(nil, toks, comps)
 	if err != nil {
@@ -166,14 +167,14 @@ func applyGlobalFilters(toks []analyzedToken, names []string) ([]analyzedToken, 
 	return out, true
 }
 
-func applyFilterComponents(idx *Index, toks []analyzedToken, comps []analyzeComponent) ([]analyzedToken, *apiError) {
+func applyFilterComponents(idx *Index, toks []Token, comps []Component) ([]Token, *apierr.Error) {
 	cur := toks
 	for _, c := range comps {
 		spec, ok := resolveFilterSpec(idx, c)
 		if !ok {
 			return nil, filterError("failed to find global filter under [" + c.name + "]")
 		}
-		var err *apiError
+		var err *apierr.Error
 		cur, err = applyFilterOne(idx, cur, spec)
 		if err != nil {
 			return nil, err
@@ -182,18 +183,18 @@ func applyFilterComponents(idx *Index, toks []analyzedToken, comps []analyzeComp
 	return cur, nil
 }
 
-func applyNamedFilterChain(idx *Index, toks []analyzedToken, chain string) ([]analyzedToken, *apiError) {
+func applyNamedFilterChain(idx *Index, toks []Token, chain string) ([]Token, *apierr.Error) {
 	cur := toks
 	for _, name := range strings.Split(chain, ",") {
 		name = strings.TrimSpace(name)
 		if name == "" {
 			continue
 		}
-		spec, ok := resolveFilterSpec(idx, analyzeComponent{name: name})
+		spec, ok := resolveFilterSpec(idx, Component{name: name})
 		if !ok {
 			return nil, filterError("failed to find global filter under [" + name + "]")
 		}
-		var err *apiError
+		var err *apierr.Error
 		cur, err = applyFilterOne(idx, cur, spec)
 		if err != nil {
 			return nil, err
@@ -210,17 +211,17 @@ func translateRunes(s string, f func(rune) rune) string {
 	return string(rs)
 }
 
-func truncateUTF16(s string, n int) string {
+func TruncateUTF16(s string, n int) string {
 	if n <= 0 {
 		return ""
 	}
 	w := 0
 	rs := []rune(s)
 	for i, r := range rs {
-		if w+runeWidth(r) > n {
+		if w+RuneWidth(r) > n {
 			return string(rs[:i])
 		}
-		w += runeWidth(r)
+		w += RuneWidth(r)
 	}
 	return s
 }
@@ -317,24 +318,24 @@ func possessiveStrip(s string) string {
 	return s
 }
 
-func applyFilterOne(idx *Index, toks []analyzedToken, spec filterSpec) ([]analyzedToken, *apiError) {
+func applyFilterOne(idx *Index, toks []Token, spec filterSpec) ([]Token, *apierr.Error) {
 	if out, err, handled := langFilterOne(toks, spec); handled {
 		return out, err
 	}
-	p := spec.params
-	switch spec.typ {
+	p := spec.Params
+	switch spec.Type {
 	case "asciifolding":
-		preserve := fsBool(p, "preserve_original", false)
-		out := make([]analyzedToken, 0, len(toks))
+		preserve := ParamBool(p, "preserve_original", false)
+		out := make([]Token, 0, len(toks))
 		for _, t := range toks {
-			folded := asciiFoldReplacer.Replace(t.term)
-			if preserve && folded != t.term {
+			folded := ASCIIFoldReplacer.Replace(t.Term)
+			if preserve && folded != t.Term {
 				ft := t
-				ft.term = folded
+				ft.Term = folded
 				out = append(out, ft)
 				out = append(out, t)
 			} else {
-				t.term = folded
+				t.Term = folded
 				out = append(out, t)
 			}
 		}
@@ -344,17 +345,17 @@ func applyFilterOne(idx *Index, toks []analyzedToken, spec filterSpec) ([]analyz
 			return nil, filterError("IOException while reading stopwords_path: file not readable")
 		}
 		words := stopWordSet(p)
-		ignoreCase := fsBool(p, "ignore_case", false)
-		removeTrailing := fsBool(p, "remove_trailing", true)
-		out := make([]analyzedToken, 0, len(toks))
+		ignoreCase := ParamBool(p, "ignore_case", false)
+		removeTrailing := ParamBool(p, "remove_trailing", true)
+		out := make([]Token, 0, len(toks))
 		for i, t := range toks {
-			key := t.term
+			key := t.Term
 			if ignoreCase {
 				key = strings.ToLower(key)
 			}
 			if words[key] {
 				// SuggestStopFilter keeps a final stopword the text ends with.
-				if !removeTrailing && i == len(toks)-1 && t.end == spec.finalOffset {
+				if !removeTrailing && i == len(toks)-1 && t.End == spec.finalOffset {
 					out = append(out, t)
 				}
 				continue
@@ -363,68 +364,68 @@ func applyFilterOne(idx *Index, toks []analyzedToken, spec filterSpec) ([]analyz
 		}
 		toks = out
 	case "length":
-		min := fsInt(p, "min", 0)
-		max := fsInt(p, "max", 1<<30)
+		min := ParamInt(p, "min", 0)
+		max := ParamInt(p, "max", 1<<30)
 		out := toks[:0]
 		for _, t := range toks {
-			n := utf16Offset(t.term)
+			n := UTF16Offset(t.Term)
 			if n >= min && n <= max {
 				out = append(out, t)
 			}
 		}
 		toks = out
 	case "truncate":
-		n := fsInt(p, "length", 10)
+		n := ParamInt(p, "length", 10)
 		for i := range toks {
-			toks[i].term = truncateUTF16(toks[i].term, n)
+			toks[i].Term = TruncateUTF16(toks[i].Term, n)
 		}
 	case "trim":
 		for i := range toks {
-			toks[i].term = strings.TrimSpace(toks[i].term)
+			toks[i].Term = strings.TrimSpace(toks[i].Term)
 		}
 	case "reverse":
 		for i := range toks {
-			rs := []rune(toks[i].term)
+			rs := []rune(toks[i].Term)
 			for a, b := 0, len(rs)-1; a < b; a, b = a+1, b-1 {
 				rs[a], rs[b] = rs[b], rs[a]
 			}
-			toks[i].term = string(rs)
+			toks[i].Term = string(rs)
 		}
 	case "unique":
 		// UniqueTokenFilter drops duplicates together with their position
 		// increments.
-		samePos := fsBool(p, "only_on_same_position", false)
+		samePos := ParamBool(p, "only_on_same_position", false)
 		seen := map[string]bool{}
-		out := []analyzedToken{}
+		out := []Token{}
 		prevIn, pos := -1, -1
 		for _, t := range toks {
-			inc := t.pos - prevIn
-			prevIn = t.pos
+			inc := t.Pos - prevIn
+			prevIn = t.Pos
 			if samePos && inc > 0 {
 				seen = map[string]bool{}
 			}
-			dup := seen[t.term] && (!samePos || inc == 0)
-			seen[t.term] = true
+			dup := seen[t.Term] && (!samePos || inc == 0)
+			seen[t.Term] = true
 			if dup {
 				continue
 			}
 			pos += inc
-			t.pos = pos
+			t.Pos = pos
 			out = append(out, t)
 		}
 		toks = out
 	case "limit":
-		n := fsInt(p, "max_token_count", 1)
+		n := ParamInt(p, "max_token_count", 1)
 		if len(toks) > n {
 			toks = toks[:n]
 		}
 	case "classic":
 		for i := range toks {
-			switch toks[i].typ {
+			switch toks[i].Type {
 			case "<ACRONYM>":
-				toks[i].term = strings.ReplaceAll(toks[i].term, ".", "")
+				toks[i].Term = strings.ReplaceAll(toks[i].Term, ".", "")
 			case "<APOSTROPHE>":
-				toks[i].term = possessiveStrip(toks[i].term)
+				toks[i].Term = possessiveStrip(toks[i].Term)
 			}
 		}
 	case "pattern_replace":
@@ -434,7 +435,7 @@ func applyFilterOne(idx *Index, toks []analyzedToken, spec filterSpec) ([]analyz
 	case "fingerprint":
 		return fingerprintFilter(toks, p), nil
 	case "condition", "predicate_token_filter":
-		return predicateFilter(idx, toks, p, spec.typ == "condition")
+		return predicateFilter(idx, toks, p, spec.Type == "condition")
 	case "multiplexer":
 		return multiplexerFilter(idx, toks, p)
 	case "dictionary_decompounder":
@@ -447,22 +448,22 @@ func applyFilterOne(idx *Index, toks []analyzedToken, spec filterSpec) ([]analyz
 	case "delimited_payload", "delimited_payload_filter":
 		delim := fsString(p, "delimiter", "|")
 		for i := range toks {
-			if at := strings.LastIndex(toks[i].term, delim); at >= 0 {
-				toks[i].term = toks[i].term[:at]
+			if at := strings.LastIndex(toks[i].Term, delim); at >= 0 {
+				toks[i].Term = toks[i].Term[:at]
 			}
 		}
 	case "flatten_graph":
 	case "min_hash":
 		return minHashFilter(toks), nil
 	case "hunspell":
-		return nil, &apiError{Type: "illegal_state_exception", Status: 500,
+		return nil, &apierr.Error{Type: "illegal_state_exception", Status: 500,
 			Reason:    "Failed to load hunspell dictionary for locale: " + fsString(p, "locale", ""),
-			RootCause: &apiError{Type: "illegal_state_exception", Status: 500, Reason: "Failed to load hunspell dictionary for locale: " + fsString(p, "locale", "")}}
+			RootCause: &apierr.Error{Type: "illegal_state_exception", Status: 500, Reason: "Failed to load hunspell dictionary for locale: " + fsString(p, "locale", "")}}
 	case "keyword_repeat":
-		out := make([]analyzedToken, 0, len(toks)*2)
+		out := make([]Token, 0, len(toks)*2)
 		for _, t := range toks {
 			kw := t
-			kw.keyword = true
+			kw.Keyword = true
 			out = append(out, kw)
 			out = append(out, t)
 		}
@@ -471,7 +472,7 @@ func applyFilterOne(idx *Index, toks []analyzedToken, spec filterSpec) ([]analyz
 		seen := map[string]bool{}
 		out := toks[:0]
 		for _, t := range toks {
-			key := t.term + "\x00" + strconv.Itoa(t.pos)
+			key := t.Term + "\x00" + strconv.Itoa(t.Pos)
 			if seen[key] {
 				continue
 			}
@@ -481,11 +482,11 @@ func applyFilterOne(idx *Index, toks []analyzedToken, spec filterSpec) ([]analyz
 		toks = out
 	case "keyword_marker":
 		keywords := fsStrings(p, "keywords")
-		ignoreCase := fsBool(p, "ignore_case", false)
+		ignoreCase := ParamBool(p, "ignore_case", false)
 		pattern := fsString(p, "keywords_pattern", "")
 		var re *jregex.Regexp
 		if pattern != "" {
-			var err *apiError
+			var err *apierr.Error
 			if re, err = compileJavaRegexAPI(pattern, 0); err != nil {
 				return nil, err
 			}
@@ -498,13 +499,13 @@ func applyFilterOne(idx *Index, toks []analyzedToken, spec filterSpec) ([]analyz
 			set[k] = true
 		}
 		for i := range toks {
-			key := toks[i].term
+			key := toks[i].Term
 			if ignoreCase {
 				key = strings.ToLower(key)
 			}
 			// PatternKeywordMarkerFilter requires the whole term to match.
-			if set[key] || (re != nil && re.FullMatch([]rune(toks[i].term))) {
-				toks[i].keyword = true
+			if set[key] || (re != nil && re.FullMatch([]rune(toks[i].Term))) {
+				toks[i].Keyword = true
 			}
 		}
 	case "stemmer_override":
@@ -520,88 +521,88 @@ func applyFilterOne(idx *Index, toks []analyzedToken, spec filterSpec) ([]analyz
 			}
 		}
 		for i := range toks {
-			if v, ok := rules[toks[i].term]; ok {
-				toks[i].term = v
-				toks[i].keyword = true
+			if v, ok := rules[toks[i].Term]; ok {
+				toks[i].Term = v
+				toks[i].Keyword = true
 			}
 		}
 	case "ngram", "edge_ngram":
-		var err *apiError
-		toks, err = ngramFilter(toks, p, spec.typ == "edge_ngram")
+		var err *apierr.Error
+		toks, err = ngramFilter(toks, p, spec.Type == "edge_ngram")
 		if err != nil {
 			return nil, err
 		}
 	case "shingle":
-		var err *apiError
+		var err *apierr.Error
 		toks, err = shingleFilter(toks, p)
 		if err != nil {
 			return nil, err
 		}
 	case "word_delimiter", "word_delimiter_graph":
-		toks = wordDelimiterFilter(toks, p, spec.typ == "word_delimiter_graph")
+		toks = wordDelimiterFilter(toks, p, spec.Type == "word_delimiter_graph")
 	case "common_grams":
 		toks = commonGramsFilter(toks, p)
 	case "synonym", "synonym_graph":
-		var err *apiError
-		toks, err = synonymFilter(toks, spec, spec.typ == "synonym_graph")
+		var err *apierr.Error
+		toks, err = synonymFilter(toks, spec, spec.Type == "synonym_graph")
 		if err != nil {
 			return nil, err
 		}
 	default:
-		return nil, filterError("failed to find global filter under [" + spec.typ + "]")
+		return nil, filterError("failed to find global filter under [" + spec.Type + "]")
 	}
 	return toks, nil
 }
 
-func fingerprintFilter(toks []analyzedToken, p map[string]any) []analyzedToken {
+func fingerprintFilter(toks []Token, p map[string]any) []Token {
 	if len(toks) == 0 {
 		return toks
 	}
 	sep := fsString(p, "separator", " ")
-	maxSize := fsInt(p, "max_output_size", 255)
+	maxSize := ParamInt(p, "max_output_size", 255)
 	seen := map[string]bool{}
 	terms := []string{}
 	for _, t := range toks {
-		if !seen[t.term] {
-			seen[t.term] = true
-			terms = append(terms, t.term)
+		if !seen[t.Term] {
+			seen[t.Term] = true
+			terms = append(terms, t.Term)
 		}
 	}
 	sort.Strings(terms)
 	joined := strings.Join(terms, sep)
-	if utf16Offset(joined) > maxSize {
-		return []analyzedToken{}
+	if UTF16Offset(joined) > maxSize {
+		return []Token{}
 	}
 	end := 0
 	for _, t := range toks {
-		if t.end > end {
-			end = t.end
+		if t.End > end {
+			end = t.End
 		}
 	}
-	return []analyzedToken{{term: joined, start: 0, end: end, pos: 0, typ: "fingerprint"}}
+	return []Token{{Term: joined, Start: 0, End: end, Pos: 0, Type: "fingerprint"}}
 }
 
-func predicateFilter(idx *Index, toks []analyzedToken, p map[string]any, condition bool) ([]analyzedToken, *apiError) {
+func predicateFilter(idx *Index, toks []Token, p map[string]any, condition bool) ([]Token, *apierr.Error) {
 	source := ""
 	if script, ok := p["script"].(map[string]any); ok {
 		source, _ = script["source"].(string)
 	}
 	// Supported predicates: term length comparisons and position parity.
-	matches := func(t analyzedToken) bool {
+	matches := func(t Token) bool {
 		switch {
 		case strings.Contains(source, "getTerm().length() < "):
 			n := scriptNumber(source, "getTerm().length() < ")
-			return utf16Offset(t.term) < n
+			return UTF16Offset(t.Term) < n
 		case strings.Contains(source, "getTerm().length() > "):
 			n := scriptNumber(source, "getTerm().length() > ")
-			return utf16Offset(t.term) > n
+			return UTF16Offset(t.Term) > n
 		case strings.Contains(source, "getTerm().length() == "):
 			n := scriptNumber(source, "getTerm().length() == ")
-			return utf16Offset(t.term) == n
+			return UTF16Offset(t.Term) == n
 		case strings.Contains(source, "getPosition() % 2 == 0"):
-			return t.pos%2 == 0
+			return t.Pos%2 == 0
 		case strings.Contains(source, "getPosition() % 2 == 1"):
-			return t.pos%2 == 1
+			return t.Pos%2 == 1
 		}
 		return true
 	}
@@ -615,13 +616,13 @@ func predicateFilter(idx *Index, toks []analyzedToken, p map[string]any, conditi
 		return out, nil
 	}
 	sub := fsStrings(p, "filter")
-	out := make([]analyzedToken, 0, len(toks))
+	out := make([]Token, 0, len(toks))
 	for _, t := range toks {
 		if !matches(t) {
 			out = append(out, t)
 			continue
 		}
-		part, err := applyNamedFilterChain(idx, []analyzedToken{t}, strings.Join(sub, ","))
+		part, err := applyNamedFilterChain(idx, []Token{t}, strings.Join(sub, ","))
 		if err != nil {
 			return nil, err
 		}
@@ -644,14 +645,14 @@ func scriptNumber(source, marker string) int {
 	return n
 }
 
-func multiplexerFilter(idx *Index, toks []analyzedToken, p map[string]any) ([]analyzedToken, *apiError) {
+func multiplexerFilter(idx *Index, toks []Token, p map[string]any) ([]Token, *apierr.Error) {
 	chains := fsStrings(p, "filters")
-	preserve := fsBool(p, "preserve_original", true)
-	out := []analyzedToken{}
+	preserve := ParamBool(p, "preserve_original", true)
+	out := []Token{}
 	seen := map[string]bool{}
-	add := func(ts []analyzedToken) {
+	add := func(ts []Token) {
 		for _, t := range ts {
-			key := t.term + "\x00" + strconv.Itoa(t.pos) + "\x00" + strconv.Itoa(t.start) + "\x00" + strconv.Itoa(t.end) + "\x00" + t.typ
+			key := t.Term + "\x00" + strconv.Itoa(t.Pos) + "\x00" + strconv.Itoa(t.Start) + "\x00" + strconv.Itoa(t.End) + "\x00" + t.Type
 			if seen[key] {
 				continue
 			}
@@ -663,7 +664,7 @@ func multiplexerFilter(idx *Index, toks []analyzedToken, p map[string]any) ([]an
 		add(toks)
 	}
 	for _, chain := range chains {
-		part, err := applyNamedFilterChain(idx, append([]analyzedToken{}, toks...), chain)
+		part, err := applyNamedFilterChain(idx, append([]Token{}, toks...), chain)
 		if err != nil {
 			return nil, err
 		}
@@ -672,14 +673,14 @@ func multiplexerFilter(idx *Index, toks []analyzedToken, p map[string]any) ([]an
 	return out, nil
 }
 
-func decompounderFilter(toks []analyzedToken, p map[string]any) []analyzedToken {
+func decompounderFilter(toks []Token, p map[string]any) []Token {
 	words := fsStrings(p, "word_list")
-	minSize := fsInt(p, "min_word_size", 5)
-	maxSize := fsInt(p, "max_subword_size", 15)
-	out := make([]analyzedToken, 0, len(toks))
+	minSize := ParamInt(p, "min_word_size", 5)
+	maxSize := ParamInt(p, "max_subword_size", 15)
+	out := make([]Token, 0, len(toks))
 	for _, t := range toks {
 		out = append(out, t)
-		rs := []rune(t.term)
+		rs := []rune(t.Term)
 		for i := 0; i < len(rs); i++ {
 			for n := maxSize; n >= minSize; n-- {
 				if i+n > len(rs) {
@@ -689,7 +690,7 @@ func decompounderFilter(toks []analyzedToken, p map[string]any) []analyzedToken 
 				for _, w := range words {
 					if w == sub {
 						nt := t
-						nt.term = sub
+						nt.Term = sub
 						out = append(out, nt)
 						break
 					}
@@ -700,30 +701,30 @@ func decompounderFilter(toks []analyzedToken, p map[string]any) []analyzedToken 
 	return out
 }
 
-func minHashFilter(toks []analyzedToken) []analyzedToken {
+func minHashFilter(toks []Token) []Token {
 	if len(toks) == 0 {
 		return toks
 	}
 	terms := make([]string, 0, len(toks))
 	for _, t := range toks {
-		terms = append(terms, t.term)
+		terms = append(terms, t.Term)
 	}
 	sort.Strings(terms)
 	sum := sha256.Sum256([]byte(strings.Join(terms, " ")))
-	return []analyzedToken{{
-		term: hex.EncodeToString(sum[:8]), start: toks[0].start, end: toks[len(toks)-1].end,
-		pos: 0, typ: "MIN_HASH",
+	return []Token{{
+		Term: hex.EncodeToString(sum[:8]), Start: toks[0].Start, End: toks[len(toks)-1].End,
+		Pos: 0, Type: "MIN_HASH",
 	}}
 }
 
-func ngramFilter(toks []analyzedToken, p map[string]any, edge bool) ([]analyzedToken, *apiError) {
-	minGram := fsInt(p, "min_gram", 1)
+func ngramFilter(toks []Token, p map[string]any, edge bool) ([]Token, *apierr.Error) {
+	minGram := ParamInt(p, "min_gram", 1)
 	defMax := 2
 	if edge {
 		defMax = 1
 	}
-	maxGram := fsInt(p, "max_gram", defMax)
-	limit := fsInt(p, "_max_ngram_diff", 1)
+	maxGram := ParamInt(p, "max_gram", defMax)
+	limit := ParamInt(p, "_max_ngram_diff", 1)
 	if !edge && maxGram-minGram > limit {
 		reason := "The difference between max_gram and min_gram in NGram Tokenizer must be less than or equal to: [" + strconv.Itoa(limit) + "] but was [" +
 			strconv.Itoa(maxGram-minGram) + "]. This limit can be set by changing the [index.max_ngram_diff] index level setting."
@@ -735,19 +736,19 @@ func ngramFilter(toks []analyzedToken, p map[string]any, edge bool) ([]analyzedT
 	if minGram > maxGram {
 		return nil, filterError("minGram must not be greater than maxGram")
 	}
-	preserve := fsBool(p, "preserve_original", false)
+	preserve := ParamBool(p, "preserve_original", false)
 	back := fsString(p, "side", "front") == "back"
-	out := make([]analyzedToken, 0, len(toks))
+	out := make([]Token, 0, len(toks))
 	for _, t := range toks {
-		rs := []rune(t.term)
+		rs := []rune(t.Term)
 		base := t
 		if edge {
 			for n := minGram; n <= maxGram && n <= len(rs); n++ {
 				nt := base
 				if back {
-					nt.term = string(rs[len(rs)-n:])
+					nt.Term = string(rs[len(rs)-n:])
 				} else {
-					nt.term = string(rs[:n])
+					nt.Term = string(rs[:n])
 				}
 				out = append(out, nt)
 			}
@@ -755,7 +756,7 @@ func ngramFilter(toks []analyzedToken, p map[string]any, edge bool) ([]analyzedT
 			for k := 0; k < len(rs); k++ {
 				for n := minGram; n <= maxGram && k+n <= len(rs); n++ {
 					nt := base
-					nt.term = string(rs[k : k+n])
+					nt.Term = string(rs[k : k+n])
 					out = append(out, nt)
 				}
 			}
@@ -768,21 +769,21 @@ func ngramFilter(toks []analyzedToken, p map[string]any, edge bool) ([]analyzedT
 	return out, nil
 }
 
-func shingleFilter(toks []analyzedToken, p map[string]any) ([]analyzedToken, *apiError) {
-	minS := fsInt(p, "min_shingle_size", 2)
-	maxS := fsInt(p, "max_shingle_size", 2)
+func shingleFilter(toks []Token, p map[string]any) ([]Token, *apierr.Error) {
+	minS := ParamInt(p, "min_shingle_size", 2)
+	maxS := ParamInt(p, "max_shingle_size", 2)
 	if minS > maxS {
 		return nil, filterError("Min shingle size must be <= max shingle size")
 	}
-	outputUnigrams := fsBool(p, "output_unigrams", true)
-	outputUnigramsIfNoShingles := fsBool(p, "output_unigrams_if_no_shingles", false)
+	outputUnigrams := ParamBool(p, "output_unigrams", true)
+	outputUnigramsIfNoShingles := ParamBool(p, "output_unigrams_if_no_shingles", false)
 	sep := fsString(p, "token_separator", " ")
 	filler := fsString(p, "filler_token", "_")
 	diff := maxS - minS
 	if outputUnigrams {
 		diff++
 	}
-	if limit := fsInt(p, "_max_shingle_diff", 3); diff > limit {
+	if limit := ParamInt(p, "_max_shingle_diff", 3); diff > limit {
 		reason := "In Shingle TokenFilter the difference between max_shingle_size and min_shingle_size (and +1 if " +
 			"outputting unigrams) must be less than or equal to: [" + strconv.Itoa(limit) + "] but was [" + strconv.Itoa(diff) + "]. " +
 			"This limit can be set by changing the [index.max_shingle_diff] index level setting."
@@ -794,35 +795,35 @@ func shingleFilter(toks []analyzedToken, p map[string]any) ([]analyzedToken, *ap
 	// One slot per input position; holes become filler tokens, at most
 	// max_shingle_size-1 per hole, with the next token's start offset.
 	type slot struct {
-		tok    analyzedToken
+		tok    Token
 		isFill bool
 	}
 	var slots []slot
 	lastPos := -1
 	realCount := 0
 	for _, t := range toks {
-		if t.pos <= lastPos {
+		if t.Pos <= lastPos {
 			continue
 		}
-		fill := t.pos - lastPos - 1
+		fill := t.Pos - lastPos - 1
 		if fill > maxS-1 {
 			fill = maxS - 1
 		}
 		for k := 0; k < fill; k++ {
-			slots = append(slots, slot{tok: analyzedToken{term: filler, typ: "word", start: t.start, end: t.start}, isFill: true})
+			slots = append(slots, slot{tok: Token{Term: filler, Type: "word", Start: t.Start, End: t.Start}, isFill: true})
 		}
 		slots = append(slots, slot{tok: t})
 		realCount++
-		lastPos = t.pos
+		lastPos = t.Pos
 	}
 	if realCount < minS && outputUnigramsIfNoShingles && !outputUnigrams {
 		return toks, nil
 	}
 	minPos, maxPos := 0, len(slots)-1
 	for i := range slots {
-		slots[i].tok.pos = i
+		slots[i].tok.Pos = i
 	}
-	out := []analyzedToken{}
+	out := []Token{}
 	for pos := minPos; pos <= maxPos; pos++ {
 		s := slots[pos]
 		if !s.isFill && outputUnigrams {
@@ -837,7 +838,7 @@ func shingleFilter(toks []analyzedToken, p map[string]any) ([]analyzedToken, *ap
 			allFill := true
 			for k := 0; k < size; k++ {
 				sl := slots[pos+k]
-				terms = append(terms, sl.tok.term)
+				terms = append(terms, sl.tok.Term)
 				if sl.isFill {
 					fillerUsed = true
 				} else {
@@ -856,26 +857,26 @@ func shingleFilter(toks []analyzedToken, p map[string]any) ([]analyzedToken, *ap
 			if fillerUsed && pl < 2 {
 				pl = 2
 			}
-			out = append(out, analyzedToken{
-				term: strings.Join(terms, sep), start: first.start, end: last.end,
-				pos: pos, typ: "shingle", posLen: pl,
+			out = append(out, Token{
+				Term: strings.Join(terms, sep), Start: first.Start, End: last.End,
+				Pos: pos, Type: "shingle", PosLen: pl,
 			})
 		}
 	}
 	return out, nil
 }
 
-func wordDelimiterFilter(toks []analyzedToken, p map[string]any, graph bool) []analyzedToken {
-	splitCase := fsBool(p, "split_on_case_change", true)
-	splitNums := fsBool(p, "split_on_numerics", true)
-	genWord := fsBool(p, "generate_word_parts", true)
-	genNum := fsBool(p, "generate_number_parts", true)
-	stemPossessive := fsBool(p, "stem_english_possessive", true)
-	catenateWords := fsBool(p, "catenate_words", false)
-	catenateNumbers := fsBool(p, "catenate_numbers", false)
-	catenateAll := fsBool(p, "catenate_all", false)
-	preserve := fsBool(p, "preserve_original", false)
-	adjust := fsBool(p, "adjust_offsets", true)
+func wordDelimiterFilter(toks []Token, p map[string]any, graph bool) []Token {
+	splitCase := ParamBool(p, "split_on_case_change", true)
+	splitNums := ParamBool(p, "split_on_numerics", true)
+	genWord := ParamBool(p, "generate_word_parts", true)
+	genNum := ParamBool(p, "generate_number_parts", true)
+	stemPossessive := ParamBool(p, "stem_english_possessive", true)
+	catenateWords := ParamBool(p, "catenate_words", false)
+	catenateNumbers := ParamBool(p, "catenate_numbers", false)
+	catenateAll := ParamBool(p, "catenate_all", false)
+	preserve := ParamBool(p, "preserve_original", false)
+	adjust := ParamBool(p, "adjust_offsets", true)
 	protected := map[string]bool{}
 	for _, w := range fsStrings(p, "protected_words") {
 		protected[w] = true
@@ -895,7 +896,7 @@ func wordDelimiterFilter(toks []analyzedToken, p map[string]any, graph bool) []a
 		}
 	}
 	outputPos := 0
-	out := []analyzedToken{}
+	out := []Token{}
 	type part struct {
 		term       string
 		start, end int
@@ -903,10 +904,10 @@ func wordDelimiterFilter(toks []analyzedToken, p map[string]any, graph bool) []a
 		alpha      bool
 	}
 	for _, t := range toks {
-		term := t.term
+		term := t.Term
 		if protected[term] {
 			nt := t
-			nt.pos = outputPos
+			nt.Pos = outputPos
 			outputPos++
 			out = append(out, nt)
 			continue
@@ -935,7 +936,7 @@ func wordDelimiterFilter(toks []analyzedToken, p map[string]any, graph bool) []a
 		off := 0
 		for _, r := range rs {
 			offsets = append(offsets, off)
-			off += runeWidth(r)
+			off += RuneWidth(r)
 		}
 		offsets = append(offsets, off)
 		flush := func(end int) {
@@ -957,7 +958,7 @@ func wordDelimiterFilter(toks []analyzedToken, p map[string]any, graph bool) []a
 					alpha = false
 				}
 			}
-			parts = append(parts, part{term: pt, start: t.start + offsets[s], end: t.start + offsets[e], isNum: isNum, alpha: alpha})
+			parts = append(parts, part{term: pt, start: t.Start + offsets[s], end: t.Start + offsets[e], isNum: isNum, alpha: alpha})
 			cur = cur[:0]
 		}
 		prevClass := 0
@@ -1002,8 +1003,8 @@ func wordDelimiterFilter(toks []analyzedToken, p map[string]any, graph bool) []a
 				continue
 			}
 			if !adjust {
-				pt.start = t.start
-				pt.end = t.end
+				pt.start = t.Start
+				pt.end = t.End
 			}
 			emitted = append(emitted, pt)
 		}
@@ -1019,7 +1020,7 @@ func wordDelimiterFilter(toks []analyzedToken, p map[string]any, graph bool) []a
 			return b.String()
 		}
 		if catenateAll {
-			catenated = append(catenated, part{term: catTerm(emitted), start: t.start, end: t.end})
+			catenated = append(catenated, part{term: catTerm(emitted), start: t.Start, end: t.End})
 		} else {
 			words := []part{}
 			nums := []part{}
@@ -1031,33 +1032,33 @@ func wordDelimiterFilter(toks []analyzedToken, p map[string]any, graph bool) []a
 				}
 			}
 			if catenateWords && len(words) > 1 {
-				catenated = append(catenated, part{term: catTerm(words), start: t.start, end: t.end, alpha: true})
+				catenated = append(catenated, part{term: catTerm(words), start: t.Start, end: t.End, alpha: true})
 			}
 			if catenateNumbers && len(nums) > 1 {
-				catenated = append(catenated, part{term: catTerm(nums), start: t.start, end: t.end, isNum: true})
+				catenated = append(catenated, part{term: catTerm(nums), start: t.Start, end: t.End, isNum: true})
 			}
 		}
 		pl := len(emitted)
 		if graph && catenateAll && preserve {
 			nt := t
-			nt.pos = outputPos
-			nt.posLen = pl
+			nt.Pos = outputPos
+			nt.PosLen = pl
 			out = append(out, nt)
 		}
 		if graph && len(catenated) > 0 {
 			for _, ct := range catenated {
-				out = append(out, analyzedToken{term: ct.term, start: ct.start, end: ct.end, pos: outputPos, typ: t.typ, posLen: pl})
+				out = append(out, Token{Term: ct.term, Start: ct.start, End: ct.end, Pos: outputPos, Type: t.Type, PosLen: pl})
 			}
 		}
 		if !graph && len(catenated) > 0 {
 			// Classical word_delimiter emits the catenated form after the first part.
 			first := true
 			for _, pt := range emitted {
-				out = append(out, analyzedToken{term: pt.term, start: pt.start, end: pt.end, pos: outputPos, typ: t.typ})
+				out = append(out, Token{Term: pt.term, Start: pt.start, End: pt.end, Pos: outputPos, Type: t.Type})
 				outputPos++
 				if first {
 					for _, ct := range catenated {
-						out = append(out, analyzedToken{term: ct.term, start: ct.start, end: ct.end, pos: outputPos - 1, typ: t.typ})
+						out = append(out, Token{Term: ct.term, Start: ct.start, End: ct.end, Pos: outputPos - 1, Type: t.Type})
 					}
 					first = false
 				}
@@ -1065,40 +1066,40 @@ func wordDelimiterFilter(toks []analyzedToken, p map[string]any, graph bool) []a
 			continue
 		}
 		for _, pt := range emitted {
-			out = append(out, analyzedToken{term: pt.term, start: pt.start, end: pt.end, pos: outputPos, typ: t.typ})
+			out = append(out, Token{Term: pt.term, Start: pt.start, End: pt.end, Pos: outputPos, Type: t.Type})
 			outputPos++
 		}
 	}
 	return out
 }
 
-func commonGramsFilter(toks []analyzedToken, p map[string]any) []analyzedToken {
+func commonGramsFilter(toks []Token, p map[string]any) []Token {
 	common := map[string]bool{}
 	for _, w := range fsStrings(p, "common_words") {
-		if fsBool(p, "ignore_case", false) {
+		if ParamBool(p, "ignore_case", false) {
 			w = strings.ToLower(w)
 		}
 		common[w] = true
 	}
-	query := fsBool(p, "query_mode", false)
+	query := ParamBool(p, "query_mode", false)
 	sep := "_"
-	isCommon := func(t analyzedToken) bool {
-		key := t.term
-		if fsBool(p, "ignore_case", false) {
+	isCommon := func(t Token) bool {
+		key := t.Term
+		if ParamBool(p, "ignore_case", false) {
 			key = strings.ToLower(key)
 		}
 		return common[key]
 	}
 	// CommonGramsFilter: a bigram joins every pair where either side is common.
-	out := []analyzedToken{}
+	out := []Token{}
 	for i, t := range toks {
 		out = append(out, t)
 		if i+1 < len(toks) {
 			next := toks[i+1]
 			if isCommon(t) || isCommon(next) {
-				out = append(out, analyzedToken{
-					term: t.term + sep + next.term, start: t.start, end: next.end,
-					pos: t.pos, typ: "gram", posLen: 2,
+				out = append(out, Token{
+					Term: t.Term + sep + next.Term, Start: t.Start, End: next.End,
+					Pos: t.Pos, Type: "gram", PosLen: 2,
 				})
 			}
 		}
@@ -1108,16 +1109,16 @@ func commonGramsFilter(toks []analyzedToken, p map[string]any) []analyzedToken {
 	}
 	// CommonGramsQueryFilter: keep a unigram only when no gram follows it,
 	// and drop the last token when it follows a gram.
-	res := []analyzedToken{}
-	var prev *analyzedToken
+	res := []Token{}
+	var prev *Token
 	prevType := ""
 	for i := range out {
 		cur := out[i]
-		if prev != nil && cur.typ != "gram" {
+		if prev != nil && cur.Type != "gram" {
 			t := *prev
-			t.posLen = 0
+			t.PosLen = 0
 			res = append(res, t)
-			prevType = t.typ
+			prevType = t.Type
 			prev = &out[i]
 			continue
 		}
@@ -1125,7 +1126,7 @@ func commonGramsFilter(toks []analyzedToken, p map[string]any) []analyzedToken {
 	}
 	if prev != nil && prevType != "gram" {
 		t := *prev
-		t.posLen = 0
+		t.PosLen = 0
 		res = append(res, t)
 	}
 	return res

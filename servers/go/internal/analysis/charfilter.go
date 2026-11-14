@@ -1,9 +1,10 @@
-package main
+package analysis
 
 import (
 	"strconv"
 	"strings"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jregex"
 )
 
@@ -20,8 +21,8 @@ func runesToCF(text string) []cfRune {
 	out := []cfRune{}
 	off := 0
 	for _, r := range text {
-		out = append(out, cfRune{r: r, start: off, end: off + runeWidth(r)})
-		off += runeWidth(r)
+		out = append(out, cfRune{r: r, start: off, end: off + RuneWidth(r)})
+		off += RuneWidth(r)
 	}
 	return out
 }
@@ -94,7 +95,7 @@ func parseHex(s string) (int, error) {
 		case r >= 'A' && r <= 'F':
 			n += int(r-'A') + 10
 		default:
-			return 0, errBad("bad hex")
+			return 0, apierr.BadRequest("bad hex")
 		}
 	}
 	return n, nil
@@ -104,7 +105,7 @@ func parseDec(s string) (int, error) {
 	n := 0
 	for _, r := range s {
 		if r < '0' || r > '9' {
-			return 0, errBad("bad dec")
+			return 0, apierr.BadRequest("bad dec")
 		}
 		n = n*10 + int(r-'0')
 	}
@@ -221,11 +222,11 @@ func htmlStrip(rs []cfRune, escaped map[string]bool) []cfRune {
 }
 
 func runeBoundary(rs []cfRune, text string, originalLen int) []int {
-	total := utf16Offset(text)
+	total := UTF16Offset(text)
 	boundary := make([]int, total+1)
 	off := 0
 	for _, c := range rs {
-		w := runeWidth(c.r)
+		w := RuneWidth(c.r)
 		for k := 0; k < w; k++ {
 			boundary[off+k] = c.start
 		}
@@ -298,7 +299,7 @@ type mappingRule struct {
 	from, to []rune
 }
 
-func parseMappingRules(lines []string) ([]mappingRule, *apiError) {
+func parseMappingRules(lines []string) ([]mappingRule, *apierr.Error) {
 	var rules []mappingRule
 	for _, line := range lines {
 		at := strings.LastIndex(line, "=>")
@@ -393,16 +394,16 @@ func (c *luceneCorrection) correct(off int) int {
 	return off + c.diffs[k]
 }
 
-func utf16Len(rs []rune) int {
+func UTF16Len(rs []rune) int {
 	n := 0
 	for _, r := range rs {
-		n += runeWidth(r)
+		n += RuneWidth(r)
 	}
 	return n
 }
 
 // patternReplaceChars ports Lucene's PatternReplaceCharFilter.
-func patternReplaceChars(re *jregex.Regexp, repl, text string) (string, func(int) int, *apiError) {
+func patternReplaceChars(re *jregex.Regexp, repl, text string) (string, func(int) int, *apierr.Error) {
 	in := []rune(text)
 	var out []rune
 	corr := &luceneCorrection{}
@@ -410,14 +411,14 @@ func patternReplaceChars(re *jregex.Regexp, repl, text string) (string, func(int
 	last := 0
 	for _, m := range re.FindAll(in) {
 		out = append(out, in[last:m[0]]...)
-		before := utf16Len(out)
+		before := UTF16Len(out)
 		r, err := re.ExpandReplacement(in, m, repl)
 		if err != nil {
 			return "", nil, jregexError(err)
 		}
 		out = append(out, r...)
-		groupSize := utf16Len(in[m[0]:m[1]])
-		replSize := utf16Len(r)
+		groupSize := UTF16Len(in[m[0]:m[1]])
+		replSize := UTF16Len(r)
 		if groupSize != replSize {
 			if replSize < groupSize {
 				cumulative += groupSize - replSize
@@ -437,7 +438,7 @@ func patternReplaceChars(re *jregex.Regexp, repl, text string) (string, func(int
 
 // applyCharFilter runs one char filter, returning the filtered text and the
 // function mapping its offsets back to the input.
-func applyCharFilter(cf chainCharFilter, text string) (string, func(int) int, *apiError) {
+func applyCharFilter(cf chainCharFilter, text string) (string, func(int) int, *apierr.Error) {
 	identity := func(o int) int { return o }
 	switch cf.typ {
 	case "html_strip":
@@ -447,7 +448,7 @@ func applyCharFilter(cf chainCharFilter, text string) (string, func(int) int, *a
 		}
 		rs := htmlStrip(runesToCF(text), escaped)
 		out := cfToString(rs)
-		return out, boundaryCorrection(rs, out, utf16Offset(text)), nil
+		return out, boundaryCorrection(rs, out, UTF16Offset(text)), nil
 	case "mapping":
 		if fsString(cf.params, "mappings_path", "") != "" {
 			return "", nil, filterError("IOException while reading mappings_path: file not readable")
@@ -461,11 +462,11 @@ func applyCharFilter(cf chainCharFilter, text string) (string, func(int) int, *a
 		}
 		rs := mappingApply(runesToCF(text), rules)
 		out := cfToString(rs)
-		return out, boundaryCorrection(rs, out, utf16Offset(text)), nil
+		return out, boundaryCorrection(rs, out, UTF16Offset(text)), nil
 	case "pattern_replace":
 		pat := fsString(cf.params, "pattern", "")
 		if pat == "" {
-			return "", nil, filterError("pattern is missing for [" + cf.name + "] char filter of type 'pattern_replace'")
+			return "", nil, filterError("pattern is missing for [" + cf.Name + "] char filter of type 'pattern_replace'")
 		}
 		flags, ferr := javaRegexFlags(fsString(cf.params, "flags", ""))
 		if ferr != nil {

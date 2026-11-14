@@ -1,8 +1,9 @@
-package main
+package analysis
 
 import (
 	"strings"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/lucene"
 	"slopensearch/internal/snowball"
 )
@@ -197,9 +198,9 @@ func englishPluralStem(term string) string {
 
 // stemmerError is the error StemmerTokenFilterFactory raises for an
 // unknown language (SnowballFilter's class lookup failure).
-func stemmerError(cls string) *apiError {
-	return &apiError{Type: "illegal_argument_exception", Status: 400,
+func stemmerError(cls string) *apierr.Error {
+	return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 		Reason:    "Invalid stemmer class specified: " + cls,
-		RootCause: &apiError{Type: "illegal_argument_exception", Status: 400, Reason: "Invalid stemmer class specified: " + cls},
-		CausedBy:  &apiError{Type: "class_not_found_exception", Reason: "org.tartarus.snowball.ext." + cls + "Stemmer"}}
+		RootCause: &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "Invalid stemmer class specified: " + cls},
+		CausedBy:  &apierr.Error{Type: "class_not_found_exception", Reason: "org.tartarus.snowball.ext." + cls + "Stemmer"}}
 }

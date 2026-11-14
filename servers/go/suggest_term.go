@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"slopensearch/internal/analysis"
 	"slopensearch/internal/painless"
 )
 
@@ -147,8 +148,8 @@ func termSuggester(spec, body map[string]any, indices []*Index, globalText any) 
 		return nil, suggestShardError(idx, "no mapping found for field ["+field+"]")
 	}
 	if analyzer != "" {
-		if _, ok := globalAnalyzerTokens(analyzer, ""); !ok && prebuiltChain(analyzer) == nil &&
-			(idx == nil || !(analysisScope{idx: idx}).indexHasAnalyzer(analyzer)) {
+		if _, ok := analysis.GlobalAnalyzerTokens(analyzer, ""); !ok && analysis.PrebuiltChain(analyzer) == nil &&
+			(idx == nil || !(analysis.Scope{Index: analysisIndex(idx)}).IndexHasAnalyzer(analyzer)) {
 			return nil, suggestShardError(idx, "analyzer ["+analyzer+"] doesn't exists")
 		}
 	}
@@ -169,7 +170,7 @@ func termSuggester(spec, body map[string]any, indices []*Index, globalText any) 
 			}
 			seen := map[string]bool{}
 			for _, s := range docStrings(v) {
-				for _, tok := range analyzeWithIndex(ix, fa, s) {
+				for _, tok := range analysis.Terms(analysisIndex(ix), fa, s) {
 					if !seen[tok] {
 						seen[tok] = true
 						df[tok]++
@@ -187,10 +188,10 @@ func termSuggester(spec, body map[string]any, indices []*Index, globalText any) 
 	if analyzer == "" {
 		analyzer = fieldAnalyzer(idx, field, "")
 	}
-	toks := analyzeTokensWithIndex(idx, analyzer, input)
+	toks := analysis.Tokens(analysisIndex(idx), analyzer, input)
 	entries := []any{}
 	for _, tok := range toks {
-		options := termCandidates(tok.term, terms, df, maxDoc, mode, distance, maxEdits, accuracy,
+		options := termCandidates(tok.Term, terms, df, maxDoc, mode, distance, maxEdits, accuracy,
 			maxTermFreq, prefixLen, minWordLen, minDocFreq, shardSize)
 		sort.SliceStable(options, func(i, j int) bool {
 			a, b := options[i], options[j]
@@ -218,7 +219,7 @@ func termSuggester(spec, body map[string]any, indices []*Index, globalText any) 
 		for _, c := range options {
 			opts = append(opts, orderedJSON{{"text", c.text}, {"score", painless.JSONFloat32(float32(c.score))}, {"freq", c.freq}})
 		}
-		entries = append(entries, orderedJSON{{"text", tok.term}, {"offset", tok.start}, {"length", tok.end - tok.start}, {"options", opts}})
+		entries = append(entries, orderedJSON{{"text", tok.Term}, {"offset", tok.Start}, {"length", tok.End - tok.Start}, {"options", opts}})
 	}
 	return entries, nil
 }

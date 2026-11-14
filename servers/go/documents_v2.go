@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"slopensearch/internal/jsonv"
 	"slopensearch/internal/painless"
 )
 
@@ -581,15 +582,8 @@ func checkMixedArray(idx *Index, v any, path string) *apiError {
 	return nil
 }
 
-type rawFloat float64
-
-func (f rawFloat) MarshalJSON() ([]byte, error) {
-	s := strconv.FormatFloat(float64(f), 'f', -1, 64)
-	if !strings.Contains(s, ".") {
-		s += ".0"
-	}
-	return []byte(s), nil
-}
+// rawFloat is a double rendered like Java (internal/jsonv).
+type rawFloat = jsonv.Float
 
 func normalizeNumbers(v any) any {
 	switch t := v.(type) {

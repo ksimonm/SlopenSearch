@@ -1,4 +1,4 @@
-package main
+package analysis
 
 // Code generated from the stopword resources of Apache Lucene 10.5.1
 // (lucene-analysis-common). DO NOT EDIT.

@@ -1,6 +1,10 @@
 package main
 
-import "strings"
+import (
+	"strings"
+
+	"slopensearch/internal/analysis"
+)
 
 // Highlighting of text fields through their analyzers: the document value is
 // analyzed with the field's index analyzer and every token whose term is a
@@ -85,18 +89,18 @@ func hlAnalyzedSpans(idx *Index, field, text string, query map[string]any) []hlS
 			terms[qt.text] = true
 			continue
 		}
-		for _, t := range analyzeTokensWithIndex(idx, qc.searchAnalyzerName(field, qt.opts), qt.text) {
-			terms[t.term] = true
+		for _, t := range analysis.Tokens(analysisIndex(idx), qc.searchAnalyzerName(field, qt.opts), qt.text) {
+			terms[t.Term] = true
 		}
 	}
 	if len(terms) == 0 {
 		return nil
 	}
-	toks := analyzeTokensWithIndex(idx, qc.indexAnalyzerName(field), text)
+	toks := analysis.Tokens(analysisIndex(idx), qc.indexAnalyzerName(field), text)
 	// UTF-16 offset -> byte offset.
 	byteAt := make([]int, 0, len(text)+1)
 	for i, r := range text {
-		for k := 0; k < runeWidth(r); k++ {
+		for k := 0; k < analysis.RuneWidth(r); k++ {
 			byteAt = append(byteAt, i)
 		}
 	}
@@ -113,10 +117,10 @@ func hlAnalyzedSpans(idx *Index, field, text string, query map[string]any) []hlS
 	spans := []hlSpan{}
 	last := -1
 	for _, t := range toks {
-		if !terms[t.term] {
+		if !terms[t.Term] {
 			continue
 		}
-		s, e := conv(t.start), conv(t.end)
+		s, e := conv(t.Start), conv(t.End)
 		if s < last || e <= s {
 			continue
 		}

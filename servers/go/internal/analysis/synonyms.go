@@ -1,8 +1,10 @@
-package main
+package analysis
 
 import (
 	"sort"
 	"strings"
+
+	"slopensearch/internal/apierr"
 )
 
 // Synonym token filters: rule parsing like Lucene's SolrSynonymParser and
@@ -40,40 +42,40 @@ func (m *synonymMap) add(input, output []string, includeOrig bool) {
 	}
 }
 
-func synonymsError() *apiError {
+func synonymsError() *apierr.Error {
 	return filterError("Failed to build synonyms")
 }
 
 // analyzeSynonymPhrase runs a rule phrase through the rule analyzer.
-func analyzeSynonymPhrase(analyze func(string) []analyzedToken, phrase string) ([]string, bool) {
-	var toks []analyzedToken
+func analyzeSynonymPhrase(analyze func(string) []Token, phrase string) ([]string, bool) {
+	var toks []Token
 	if analyze != nil {
 		toks = analyze(phrase)
 	} else {
 		for i, w := range strings.Fields(phrase) {
-			toks = append(toks, analyzedToken{term: w, pos: i})
+			toks = append(toks, Token{Term: w, Pos: i})
 		}
 	}
 	out := make([]string, 0, len(toks))
 	last := -1
 	for _, t := range toks {
-		if t.pos != last+1 {
+		if t.Pos != last+1 {
 			// Rules may not analyze to holes or stacked tokens.
 			return nil, false
 		}
-		last = t.pos
-		out = append(out, t.term)
+		last = t.Pos
+		out = append(out, t.Term)
 	}
 	return out, len(out) > 0
 }
 
-func parseSynonymRules(p map[string]any, analyze func(string) []analyzedToken) (*synonymMap, *apiError) {
+func parseSynonymRules(p map[string]any, analyze func(string) []Token) (*synonymMap, *apierr.Error) {
 	if fsString(p, "synonyms_path", "") != "" {
 		return nil, filterError("IOException while reading synonyms_path_path: file not readable")
 	}
 	lines := fsStrings(p, "synonyms")
-	expand := fsBool(p, "expand", true)
-	lenient := fsBool(p, "lenient", false)
+	expand := ParamBool(p, "expand", true)
+	lenient := ParamBool(p, "lenient", false)
 	m := &synonymMap{entries: map[string]*synonymEntry{}}
 	addGroup := func(inputs [][]string) {
 		if expand {
@@ -248,14 +250,14 @@ func parseWordnetLine(line string) (string, string, bool) {
 }
 
 // longestSynonymMatch returns the matched entry and input length at token i.
-func (m *synonymMap) longestMatch(toks []analyzedToken, i int) (*synonymEntry, int) {
+func (m *synonymMap) longestMatch(toks []Token, i int) (*synonymEntry, int) {
 	for l := m.maxLen; l >= 1; l-- {
 		if i+l > len(toks) {
 			continue
 		}
 		words := make([]string, l)
 		for k := 0; k < l; k++ {
-			words[k] = toks[i+k].term
+			words[k] = toks[i+k].Term
 		}
 		if e, ok := m.entries[synKey(words)]; ok {
 			return e, l
@@ -264,8 +266,8 @@ func (m *synonymMap) longestMatch(toks []analyzedToken, i int) (*synonymEntry, i
 	return nil, 0
 }
 
-func synonymFilter(toks []analyzedToken, spec filterSpec, graph bool) ([]analyzedToken, *apiError) {
-	m, err := parseSynonymRules(spec.params, spec.ruleAnalyzer)
+func synonymFilter(toks []Token, spec filterSpec, graph bool) ([]Token, *apierr.Error) {
+	m, err := parseSynonymRules(spec.Params, spec.ruleAnalyzer)
 	if err != nil {
 		return nil, err
 	}
@@ -280,21 +282,21 @@ func synonymFilter(toks []analyzedToken, spec filterSpec, graph bool) ([]analyze
 
 // synonymLegacyApply mirrors SynonymFilter: outputs are laid onto the
 // following input slots.
-func synonymLegacyApply(m *synonymMap, toks []analyzedToken) []analyzedToken {
+func synonymLegacyApply(m *synonymMap, toks []Token) []Token {
 	type slot struct {
-		orig    *analyzedToken
+		orig    *Token
 		inc     int
-		outputs []analyzedToken
+		outputs []Token
 	}
 	slots := make([]slot, len(toks))
 	for i := range toks {
-		inc := toks[i].pos + 1
+		inc := toks[i].Pos + 1
 		if i > 0 {
-			inc = toks[i].pos - toks[i-1].pos
+			inc = toks[i].Pos - toks[i-1].Pos
 		}
 		slots[i].inc = inc
 	}
-	addOut := func(idx int, t analyzedToken) {
+	addOut := func(idx int, t Token) {
 		for idx >= len(slots) {
 			slots = append(slots, slot{inc: 1})
 		}
@@ -314,7 +316,7 @@ func synonymLegacyApply(m *synonymMap, toks []analyzedToken) []analyzedToken {
 				slots[i+k].orig = &t
 			}
 		}
-		matchEnd := toks[i+l-1].end
+		matchEnd := toks[i+l-1].End
 		for _, out := range e.outputs {
 			for j, w := range out {
 				at := i + j
@@ -322,11 +324,11 @@ func synonymLegacyApply(m *synonymMap, toks []analyzedToken) []analyzedToken {
 				if at < len(toks) {
 					src = toks[at]
 				}
-				t := analyzedToken{term: w, start: src.start, end: src.end, typ: "SYNONYM"}
+				t := Token{Term: w, Start: src.Start, End: src.End, Type: "SYNONYM"}
 				if len(out) == 1 {
-					t.end = matchEnd
+					t.End = matchEnd
 					if e.keepOrig {
-						t.posLen = l
+						t.PosLen = l
 					}
 				}
 				addOut(at, t)
@@ -334,7 +336,7 @@ func synonymLegacyApply(m *synonymMap, toks []analyzedToken) []analyzedToken {
 		}
 		i += l
 	}
-	out := []analyzedToken{}
+	out := []Token{}
 	pos := -1
 	for _, s := range slots {
 		if s.orig == nil && len(s.outputs) == 0 {
@@ -343,13 +345,13 @@ func synonymLegacyApply(m *synonymMap, toks []analyzedToken) []analyzedToken {
 		if s.orig != nil {
 			pos += s.inc
 			t := *s.orig
-			t.pos = pos
+			t.Pos = pos
 			out = append(out, t)
 		} else {
 			pos++
 		}
 		for _, t := range s.outputs {
-			t.pos = pos
+			t.Pos = pos
 			out = append(out, t)
 		}
 	}
@@ -358,19 +360,19 @@ func synonymLegacyApply(m *synonymMap, toks []analyzedToken) []analyzedToken {
 
 // synonymGraphApply mirrors SynonymGraphFilter: every rule output becomes its
 // own path between the match's start and end nodes.
-func synonymGraphApply(m *synonymMap, toks []analyzedToken) []analyzedToken {
-	out := []analyzedToken{}
+func synonymGraphApply(m *synonymMap, toks []Token) []Token {
+	out := []Token{}
 	node := -1
 	for i := 0; i < len(toks); {
-		inc := toks[i].pos + 1
+		inc := toks[i].Pos + 1
 		if i > 0 {
-			inc = toks[i].pos - toks[i-1].pos
+			inc = toks[i].Pos - toks[i-1].Pos
 		}
 		e, l := m.longestMatch(toks, i)
 		if e == nil {
 			t := toks[i]
 			node += inc
-			t.pos = node
+			t.Pos = node
 			out = append(out, t)
 			i++
 			continue
@@ -384,9 +386,9 @@ func synonymGraphApply(m *synonymMap, toks []analyzedToken) []analyzedToken {
 			total += len(o) - 1
 		}
 		end := start + total + 1
-		matchStart, matchEnd := toks[i].start, toks[i+l-1].end
+		matchStart, matchEnd := toks[i].Start, toks[i+l-1].End
 		type bt struct {
-			tok        analyzedToken
+			tok        Token
 			start, end int
 		}
 		var buf []bt
@@ -397,7 +399,7 @@ func synonymGraphApply(m *synonymMap, toks []analyzedToken) []analyzedToken {
 				pathEnd = start + newNodes + 1
 				newNodes += len(o) - 1
 			}
-			buf = append(buf, bt{analyzedToken{term: o[0], start: matchStart, end: matchEnd, typ: "SYNONYM"}, start, pathEnd})
+			buf = append(buf, bt{Token{Term: o[0], Start: matchStart, End: matchEnd, Type: "SYNONYM"}, start, pathEnd})
 			for k := 1; k < len(o); k++ {
 				ps := pathEnd
 				if k == len(o)-1 {
@@ -405,7 +407,7 @@ func synonymGraphApply(m *synonymMap, toks []analyzedToken) []analyzedToken {
 				} else {
 					pathEnd++
 				}
-				buf = append(buf, bt{analyzedToken{term: o[k], start: matchStart, end: matchEnd, typ: "SYNONYM"}, ps, pathEnd})
+				buf = append(buf, bt{Token{Term: o[k], Start: matchStart, End: matchEnd, Type: "SYNONYM"}, ps, pathEnd})
 			}
 		}
 		if e.keepOrig {
@@ -423,8 +425,8 @@ func synonymGraphApply(m *synonymMap, toks []analyzedToken) []analyzedToken {
 		sort.SliceStable(buf, func(a, b int) bool { return buf[a].start < buf[b].start })
 		for _, b := range buf {
 			t := b.tok
-			t.pos = b.start
-			t.posLen = b.end - b.start
+			t.Pos = b.start
+			t.PosLen = b.end - b.start
 			out = append(out, t)
 		}
 		node = end - 1

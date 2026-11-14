@@ -1,4 +1,4 @@
-package main
+package analysis
 
 // Port of Lucene 10.5.1 org.apache.lucene.analysis.th.ThaiTokenizer and its
 // base class org.apache.lucene.analysis.util.SegmentingTokenizerBase

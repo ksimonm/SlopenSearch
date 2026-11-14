@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"slopensearch/internal/analysis"
 	"slopensearch/internal/painless"
 )
 
@@ -233,10 +234,10 @@ func plDocValuesFor(qc *queryCtx, field string, off int) (*painless.DocValues, *
 		seen := map[string]bool{}
 		for _, v := range vals {
 			s, _ := valueScalarString(v)
-			for _, t := range analyzeTokensWithIndex(qc.idx, analyzer, s) {
-				if !seen[t.term] {
-					seen[t.term] = true
-					terms = append(terms, t.term)
+			for _, t := range analysis.Tokens(analysisIndex(qc.idx), analyzer, s) {
+				if !seen[t.Term] {
+					seen[t.Term] = true
+					terms = append(terms, t.Term)
 				}
 			}
 		}

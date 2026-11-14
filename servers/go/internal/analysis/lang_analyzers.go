@@ -1,4 +1,4 @@
-package main
+package analysis
 
 import (
 	"strings"
@@ -41,37 +41,37 @@ func (s langWordSet) contains(term string) bool {
 
 // Token stream stages.
 
-func langMap(toks []analyzedToken, f func(string) string) []analyzedToken {
+func langMap(toks []Token, f func(string) string) []Token {
 	for i := range toks {
-		toks[i].term = f(toks[i].term)
+		toks[i].Term = f(toks[i].Term)
 	}
 	return toks
 }
 
 // langStem applies a stemmer to tokens not marked as keywords.
-func langStem(toks []analyzedToken, f func(string) string) []analyzedToken {
+func langStem(toks []Token, f func(string) string) []Token {
 	for i := range toks {
-		if !toks[i].keyword {
-			toks[i].term = f(toks[i].term)
+		if !toks[i].Keyword {
+			toks[i].Term = f(toks[i].Term)
 		}
 	}
 	return toks
 }
 
-func langStop(toks []analyzedToken, set langWordSet) []analyzedToken {
+func langStop(toks []Token, set langWordSet) []Token {
 	out := toks[:0]
 	for _, t := range toks {
-		if !set.contains(t.term) {
+		if !set.contains(t.Term) {
 			out = append(out, t)
 		}
 	}
 	return out
 }
 
-func langKeywords(toks []analyzedToken, set langWordSet) []analyzedToken {
+func langKeywords(toks []Token, set langWordSet) []Token {
 	for i := range toks {
-		if set.contains(toks[i].term) {
-			toks[i].keyword = true
+		if set.contains(toks[i].Term) {
+			toks[i].Keyword = true
 		}
 	}
 	return toks
@@ -136,7 +136,7 @@ func langDefaultStop(name string) []string {
 
 // langStopSetting resolves the "stopwords" setting (Analysis.parseStopWords).
 func langStopSetting(name string, params map[string]any) langWordSet {
-	ignoreCase := fsBool(params, "stopwords_case", false)
+	ignoreCase := ParamBool(params, "stopwords_case", false)
 	raw, ok := params["stopwords"]
 	if !ok || raw == nil {
 		return newLangWordSet(langDefaultStop(name), false)
@@ -180,15 +180,15 @@ func snowballStem(name string) func(string) string {
 
 // languageAnalyzerTokens runs a language analyzer over text. params holds the
 // analyzer settings (nil for the pre-built analyzers).
-func languageAnalyzerTokens(name, text string, params map[string]any) ([]analyzedToken, bool) {
+func languageAnalyzerTokens(name, text string, params map[string]any) ([]Token, bool) {
 	if !languageAnalyzerNames[name] {
 		return nil, false
 	}
 	stop := langStopSetting(name, params)
 	excl := langStemExclusion(params)
-	std := func() []analyzedToken { return tokenizePositionsCase(text, false, false, 255) }
+	std := func() []Token { return tokenizePositionsCase(text, false, false, 255) }
 	// The common shape: standard, lowercase, stop, keyword marker, stemmer.
-	simple := func(stem func(string) string) []analyzedToken {
+	simple := func(stem func(string) string) []Token {
 		t := langMap(std(), lucene.Lower)
 		t = langStop(t, stop)
 		t = langKeywords(t, excl)
@@ -246,12 +246,12 @@ func languageAnalyzerTokens(name, text string, params map[string]any) ([]analyze
 		t = langStop(t, stop)
 		t = langKeywords(t, excl)
 		for i := range t {
-			if t[i].keyword {
+			if t[i].Keyword {
 				continue
 			}
-			if v, ok := dutchStemOverride[t[i].term]; ok {
-				t[i].term = v
-				t[i].keyword = true
+			if v, ok := dutchStemOverride[t[i].Term]; ok {
+				t[i].Term = v
+				t[i].Keyword = true
 			}
 		}
 		return langStem(t, snowballStem("Dutch")), true
@@ -336,7 +336,7 @@ func languageAnalyzerTokens(name, text string, params map[string]any) ([]analyze
 
 // languageAnalyzerPositions is the number of positions a language analyzer
 // consumes for text, trailing stopword holes included.
-func languageAnalyzerPositions(name, text string, toks []analyzedToken) int {
+func languageAnalyzerPositions(name, text string, toks []Token) int {
 	n := lastPosition(toks) + 1
 	switch name {
 	case "cjk":
@@ -357,9 +357,9 @@ func languageAnalyzerPositions(name, text string, toks []analyzedToken) int {
 
 // standardTokenizerTokens runs Lucene's StandardTokenizer (uax_standard.go),
 // optionally lowercasing like the standard analyzer's LowerCaseFilter.
-func standardTokenizerTokens(text string, lower bool, maxLen int) []analyzedToken {
+func standardTokenizerTokens(text string, lower bool, maxLen int) []Token {
 	ut := lucene.StandardTokens(text, maxLen)
-	out := make([]analyzedToken, len(ut))
+	out := make([]Token, len(ut))
 	pos := -1
 	for i, t := range ut {
 		pos += t.PosInc
@@ -367,17 +367,17 @@ func standardTokenizerTokens(text string, lower bool, maxLen int) []analyzedToke
 		if lower {
 			term = lucene.Lower(term)
 		}
-		out[i] = analyzedToken{term: term, start: t.Start, end: t.End, pos: pos, typ: t.Type}
+		out[i] = Token{Term: term, Start: t.Start, End: t.End, Pos: pos, Type: t.Type}
 	}
 	return out
 }
 
 // thaiAnalyzedTokens runs the Thai tokenizer.
-func thaiAnalyzedTokens(text string) []analyzedToken {
+func thaiAnalyzedTokens(text string) []Token {
 	tt := thaiTokenize(text)
-	out := make([]analyzedToken, len(tt))
+	out := make([]Token, len(tt))
 	for i, t := range tt {
-		out[i] = analyzedToken{term: t.term, start: t.start, end: t.end, pos: i, typ: "word"}
+		out[i] = Token{Term: t.term, Start: t.start, End: t.end, Pos: i, Type: "word"}
 	}
 	return out
 }

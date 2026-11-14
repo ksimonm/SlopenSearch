@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/analysis"
 )
 
 // The _analyze API (TransportAnalyzeAction).
@@ -107,8 +109,8 @@ type analyzeRequest struct {
 	tokName     string
 	tokInline   map[string]any
 	hasTok      bool
-	filters     []analyzeComponent
-	charFilters []analyzeComponent
+	filters     []analysis.Component
+	charFilters []analysis.Component
 	explain     bool
 	attributes  []string
 }
@@ -137,7 +139,7 @@ func parseAnalyzeRequest(body map[string]any, raw []byte) (*analyzeRequest, *api
 		}
 	}
 	req := &analyzeRequest{}
-	req.texts, _ = analyzeStringValues(body["text"])
+	req.texts, _ = analysis.StringValues(body["text"])
 	req.analyzer, _ = body["analyzer"].(string)
 	req.normalizer, _ = body["normalizer"].(string)
 	req.field, _ = body["field"].(string)
@@ -154,17 +156,17 @@ func parseAnalyzeRequest(body map[string]any, raw []byte) (*analyzeRequest, *api
 	if filterRaw == nil {
 		filterRaw = body["token_filter"]
 	}
-	if req.filters, err = parseAnalyzeComponents(filterRaw); err != nil {
+	if req.filters, err = analysis.ParseComponents(filterRaw); err != nil {
 		return nil, err
 	}
-	if req.charFilters, err = parseAnalyzeComponents(body["char_filter"]); err != nil {
+	if req.charFilters, err = analysis.ParseComponents(body["char_filter"]); err != nil {
 		return nil, err
 	}
 	if req.charFilters != nil {
 		for _, c := range req.charFilters {
-			if c.inline != nil {
-				if _, ok := c.inline["type"].(string); !ok {
-					return nil, analyzeRequestError("illegal_argument_exception", "Missing [type] setting for anonymous char_filter: "+anonymousJSON(c.inline))
+			if c.Inline != nil {
+				if _, ok := c.Inline["type"].(string); !ok {
+					return nil, analysis.RequestError("illegal_argument_exception", "Missing [type] setting for anonymous char_filter: "+analysis.AnonymousJSON(c.Inline))
 				}
 			}
 		}
@@ -184,9 +186,9 @@ func parseAnalyzeRequest(body map[string]any, raw []byte) (*analyzeRequest, *api
 		}
 	default:
 		return nil, xcontentParseError(pos("explain", true)+" [analyze_request] failed to parse field [explain]",
-			&apiError{Type: "illegal_argument_exception", Reason: "Failed to parse value [" + anonymousJSON(map[string]any{"v": v}) + "] as only [true] or [false] are allowed."})
+			&apiError{Type: "illegal_argument_exception", Reason: "Failed to parse value [" + analysis.AnonymousJSON(map[string]any{"v": v}) + "] as only [true] or [false] are allowed."})
 	}
-	req.attributes = filterNames(body["attributes"])
+	req.attributes = analysis.FilterNames(body["attributes"])
 	return req, nil
 }
 
@@ -219,70 +221,70 @@ func (req *analyzeRequest) validate(hasIndex bool) *apiError {
 		b.WriteString(m)
 		b.WriteString(";")
 	}
-	return analyzeRequestError("action_request_validation_exception", b.String())
+	return analysis.RequestError("action_request_validation_exception", b.String())
 }
 
 // resolveAnalyzeChain picks the analyzer for a request, in the order of
 // TransportAnalyzeAction.
-func resolveAnalyzeChain(sc analysisScope, req *analyzeRequest) (*analysisChain, *apiError) {
+func resolveAnalyzeChain(idx *Index, sc analysis.Scope, req *analyzeRequest) (*analysis.Chain, *apiError) {
 	if req.hasTok {
-		return sc.buildRequestChain(req.tokName, req.tokInline, req.charFilters, req.filters)
+		return sc.BuildRequestChain(req.tokName, req.tokInline, req.charFilters, req.filters)
 	}
 	if len(req.filters) > 0 || len(req.charFilters) > 0 {
-		c, err := sc.buildRequestChain("keyword", nil, req.charFilters, req.filters)
+		c, err := sc.BuildRequestChain("keyword", nil, req.charFilters, req.filters)
 		if err != nil {
 			return nil, err
 		}
-		for _, f := range c.filters {
-			if !normalizerFilterAllowed[f.spec.typ] {
-				return nil, analyzeRequestError("illegal_argument_exception", "Custom normalizer may not use filter ["+f.name+"]")
+		for _, f := range c.Filters {
+			if !analysis.NormalizerFilterAllowed[f.Spec.Type] {
+				return nil, analysis.RequestError("illegal_argument_exception", "Custom normalizer may not use filter ["+f.Name+"]")
 			}
 		}
 		return c, nil
 	}
 	if req.analyzer != "" {
-		return sc.analyzerChain(req.analyzer)
+		return sc.AnalyzerChain(req.analyzer)
 	}
 	if req.normalizer != "" {
-		if sc.global() {
-			return nil, analyzeRequestError("illegal_argument_exception", "analysis based on a normalizer requires an index")
+		if sc.Global() {
+			return nil, analysis.RequestError("illegal_argument_exception", "analysis based on a normalizer requires an index")
 		}
-		return sc.normalizerChain(req.normalizer)
+		return sc.NormalizerChain(req.normalizer)
 	}
 	if req.field != "" {
-		if sc.global() {
-			return nil, analyzeRequestError("illegal_argument_exception", "analysis based on a specific field requires an index")
+		if sc.Global() {
+			return nil, analysis.RequestError("illegal_argument_exception", "analysis based on a specific field requires an index")
 		}
-		if def, ok := mappingFieldDef(sc.idx, req.field); ok && def != nil {
+		if def, ok := mappingFieldDef(idx, req.field); ok && def != nil {
 			typ, _ := def["type"].(string)
 			switch typ {
 			case "text", "match_only_text", "search_as_you_type", "":
-				var c *analysisChain
+				var c *analysis.Chain
 				var err *apiError
 				if a, ok := def["analyzer"].(string); ok && a != "" {
-					c, err = sc.analyzerChain(a)
+					c, err = sc.AnalyzerChain(a)
 				} else {
-					c = sc.defaultIndexChain()
+					c = sc.DefaultIndexChain()
 				}
 				if err != nil {
 					return nil, err
 				}
 				if n, ok := toFloat(def["position_increment_gap"]); ok {
-					c.gap = int(n)
+					c.Gap = int(n)
 				}
 				return c, nil
 			case "keyword":
 				if n, ok := def["normalizer"].(string); ok && n != "" {
-					return sc.normalizerChain(n)
+					return sc.NormalizerChain(n)
 				}
-				return sc.analyzerChain("keyword")
+				return sc.AnalyzerChain("keyword")
 			default:
-				return nil, analyzeRequestError("illegal_argument_exception",
+				return nil, analysis.RequestError("illegal_argument_exception",
 					"Can't process field ["+req.field+"], Analysis requests are only supported on tokenized fields")
 			}
 		}
 	}
-	return sc.defaultIndexChain(), nil
+	return sc.DefaultIndexChain(), nil
 }
 
 // tokenListCreator accumulates tokens of several texts the way
@@ -290,19 +292,19 @@ func resolveAnalyzeChain(sc analysisScope, req *analyzeRequest) (*analysisChain,
 type tokenListCreator struct {
 	lastPosition int
 	lastOffset   int
-	tokens       []analyzedToken
+	tokens       []analysis.Token
 }
 
 func newTokenListCreator() *tokenListCreator {
 	return &tokenListCreator{lastPosition: -1}
 }
 
-func (t *tokenListCreator) add(toks []analyzedToken, posCount, finalOffset, gap int) {
+func (t *tokenListCreator) add(toks []analysis.Token, posCount, finalOffset, gap int) {
 	base := t.lastPosition + 1
 	for _, tok := range toks {
-		tok.pos += base
-		tok.start += t.lastOffset
-		tok.end += t.lastOffset
+		tok.Pos += base
+		tok.Start += t.lastOffset
+		tok.End += t.lastOffset
 		t.tokens = append(t.tokens, tok)
 	}
 	t.lastPosition = base + posCount - 1
@@ -316,13 +318,13 @@ type tokenAttrs struct {
 	include map[string]bool
 }
 
-func tokenJSON(t analyzedToken, attrs *tokenAttrs) orderedJSON {
-	typ := t.typ
+func tokenJSON(t analysis.Token, attrs *tokenAttrs) orderedJSON {
+	typ := t.Type
 	if typ == "" {
 		typ = "<ALPHANUM>"
 	}
-	o := orderedJSON{{"token", t.term}, {"start_offset", t.start}, {"end_offset", t.end}, {"type", typ}, {"position", t.pos}}
-	posLen := t.posLen
+	o := orderedJSON{{"token", t.Term}, {"start_offset", t.Start}, {"end_offset", t.End}, {"type", typ}, {"position", t.Pos}}
+	posLen := t.PosLen
 	if posLen < 1 {
 		posLen = 1
 	}
@@ -336,10 +338,10 @@ func tokenJSON(t analyzedToken, attrs *tokenAttrs) orderedJSON {
 		return len(attrs.include) == 0 || attrs.include[strings.ToLower(k)]
 	}
 	if want("bytes") {
-		o = append(o, orderedKV{"bytes", tokenBytes(t.term)})
+		o = append(o, orderedKV{"bytes", analysis.TokenBytes(t.Term)})
 	}
 	if attrs.keyword && want("keyword") {
-		o = append(o, orderedKV{"keyword", t.keyword})
+		o = append(o, orderedKV{"keyword", t.Keyword})
 	}
 	if want("positionLength") {
 		o = append(o, orderedKV{"positionLength", posLen})
@@ -350,7 +352,7 @@ func tokenJSON(t analyzedToken, attrs *tokenAttrs) orderedJSON {
 	return o
 }
 
-func tokensJSON(toks []analyzedToken, attrs *tokenAttrs) []any {
+func tokensJSON(toks []analysis.Token, attrs *tokenAttrs) []any {
 	out := make([]any, 0, len(toks))
 	for _, t := range toks {
 		out = append(out, tokenJSON(t, attrs))
@@ -403,8 +405,8 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request, name stri
 		writeError(w, verr)
 		return
 	}
-	sc := analysisScope{idx: idx}
-	chain, apiErr := resolveAnalyzeChain(sc, req)
+	sc := analysis.Scope{Index: analysisIndex(idx)}
+	chain, apiErr := resolveAnalyzeChain(idx, sc, req)
 	if apiErr != nil {
 		writeError(w, apiErr)
 		return
@@ -421,12 +423,12 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request, name stri
 	}
 	tl := newTokenListCreator()
 	for _, text := range req.texts {
-		res, rerr := chain.run(idx, text, false)
+		res, rerr := chain.Run(analysisIndex(idx), text, false)
 		if rerr != nil {
 			writeError(w, rerr)
 			return
 		}
-		tl.add(res.toks, res.posCount, res.finalOffset, chain.gap)
+		tl.add(res.Tokens, res.PosCount, res.FinalOffset, chain.Gap)
 		if len(tl.tokens) > limit {
 			writeError(w, tokenLimitError(limit))
 			return
@@ -435,80 +437,80 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request, name stri
 	writeJSON(w, 200, orderedJSON{{"tokens", tokensJSON(tl.tokens, nil)}})
 }
 
-func (s *Server) writeAnalyzeExplain(w http.ResponseWriter, idx *Index, chain *analysisChain, req *analyzeRequest, limit int) {
+func (s *Server) writeAnalyzeExplain(w http.ResponseWriter, idx *Index, chain *analysis.Chain, req *analyzeRequest, limit int) {
 	include := map[string]bool{}
 	for _, a := range req.attributes {
 		include[strings.ToLower(a)] = true
 	}
-	if !chain.custom {
+	if !chain.Custom {
 		tl := newTokenListCreator()
 		for _, text := range req.texts {
-			res, err := chain.run(idx, text, false)
+			res, err := chain.Run(analysisIndex(idx), text, false)
 			if err != nil {
 				writeError(w, err)
 				return
 			}
-			tl.add(res.toks, res.posCount, res.finalOffset, chain.gap)
+			tl.add(res.Tokens, res.PosCount, res.FinalOffset, chain.Gap)
 			if len(tl.tokens) > limit {
 				writeError(w, tokenLimitError(limit))
 				return
 			}
 		}
-		kw := chain.keywordAttr
-		for _, f := range chain.filters {
-			if filterHasKeywordAttr(f.spec.typ) {
+		kw := chain.KeywordAttr
+		for _, f := range chain.Filters {
+			if analysis.FilterHasKeywordAttr(f.Spec.Type) {
 				kw = true
 			}
 		}
-		name := chain.name
+		name := chain.Name
 		writeJSON(w, 200, orderedJSON{{"detail", orderedJSON{
 			{"custom_analyzer", false},
 			{"analyzer", orderedJSON{{"name", name}, {"tokens", tokensJSON(tl.tokens, &tokenAttrs{keyword: kw, include: include})}}},
 		}}})
 		return
 	}
-	charTexts := make([][]string, len(chain.chars))
-	stages := make([]*tokenListCreator, len(chain.filters)+1)
+	charTexts := make([][]string, len(chain.Chars))
+	stages := make([]*tokenListCreator, len(chain.Filters)+1)
 	for i := range stages {
 		stages[i] = newTokenListCreator()
 	}
 	for _, text := range req.texts {
-		res, err := chain.run(idx, text, true)
+		res, err := chain.Run(analysisIndex(idx), text, true)
 		if err != nil {
 			writeError(w, err)
 			return
 		}
-		for i := range chain.chars {
-			charTexts[i] = append(charTexts[i], res.charTexts[i])
+		for i := range chain.Chars {
+			charTexts[i] = append(charTexts[i], res.CharTexts[i])
 		}
 		for i := range stages {
-			stages[i].add(res.stages[i], res.stageCounts[i], res.finalOffset, 0)
+			stages[i].add(res.Stages[i], res.StageCounts[i], res.FinalOffset, 0)
 			if len(stages[i].tokens) > limit {
 				writeError(w, tokenLimitError(limit))
 				return
 			}
 		}
 	}
-	cfs := make([]any, 0, len(chain.chars))
-	for i, cf := range chain.chars {
+	cfs := make([]any, 0, len(chain.Chars))
+	for i, cf := range chain.Chars {
 		texts := make([]any, 0, len(charTexts[i]))
 		for _, t := range charTexts[i] {
 			texts = append(texts, t)
 		}
-		cfs = append(cfs, orderedJSON{{"name", cf.name}, {"filtered_text", texts}})
+		cfs = append(cfs, orderedJSON{{"name", cf.Name}, {"filtered_text", texts}})
 	}
-	tfs := make([]any, 0, len(chain.filters))
+	tfs := make([]any, 0, len(chain.Filters))
 	kw := false
-	for i, f := range chain.filters {
-		if filterHasKeywordAttr(f.spec.typ) {
+	for i, f := range chain.Filters {
+		if analysis.FilterHasKeywordAttr(f.Spec.Type) {
 			kw = true
 		}
-		tfs = append(tfs, orderedJSON{{"name", f.name}, {"tokens", tokensJSON(stages[i+1].tokens, &tokenAttrs{keyword: kw, include: include})}})
+		tfs = append(tfs, orderedJSON{{"name", f.Name}, {"tokens", tokensJSON(stages[i+1].tokens, &tokenAttrs{keyword: kw, include: include})}})
 	}
 	writeJSON(w, 200, orderedJSON{{"detail", orderedJSON{
 		{"custom_analyzer", true},
 		{"charfilters", cfs},
-		{"tokenizer", orderedJSON{{"name", chain.tokName}, {"tokens", tokensJSON(stages[0].tokens, &tokenAttrs{include: include})}}},
+		{"tokenizer", orderedJSON{{"name", chain.TokenizerName}, {"tokens", tokensJSON(stages[0].tokens, &tokenAttrs{include: include})}}},
 		{"tokenfilters", tfs},
 	}}})
 }

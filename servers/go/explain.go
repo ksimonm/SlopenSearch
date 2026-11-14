@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+
+	"slopensearch/internal/analysis"
 )
 
 func (c *queryCtx) bm25Explain(field, term string, score float64) map[string]any {
@@ -30,8 +32,8 @@ func (c *queryCtx) bm25Explain(field, term string, score float64) map[string]any
 		out := []string{}
 		for _, v := range vals {
 			s, _ := valueScalarString(v)
-			for _, t := range analyzeTokensWithIndex(c.idx, analyzer, s) {
-				out = append(out, t.term)
+			for _, t := range analysis.Tokens(analysisIndex(c.idx), analyzer, s) {
+				out = append(out, t.Term)
 			}
 		}
 		return out

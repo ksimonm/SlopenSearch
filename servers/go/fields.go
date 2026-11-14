@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/analysis"
 )
 
 // ---------------------------------------------------------------------------
@@ -1790,14 +1792,14 @@ func asciiLower(s string) string {
 func applyNormalizerWithIndex(idx *Index, name, s string) string {
 	if idx != nil {
 		if rawFilters, ok := findSetting(idx.Settings, "analysis.normalizer."+name+".filter"); ok {
-			for _, f := range filterNames(rawFilters) {
+			for _, f := range analysis.FilterNames(rawFilters) {
 				switch f {
 				case "lowercase":
 					s = strings.ToLower(s)
 				case "uppercase":
 					s = strings.ToUpper(s)
 				case "asciifolding":
-					s = asciiFoldReplacer.Replace(s)
+					s = analysis.ASCIIFoldReplacer.Replace(s)
 				}
 			}
 			return s
@@ -1824,7 +1826,7 @@ func (c *indexCtx) parseTokenCount(path string, def map[string]any, v any) (any,
 		return nil, c.fieldValueError(path, "token_count", v, "illegal_argument_exception", "malformed")
 	}
 	analyzer, _ := def["analyzer"].(string)
-	tokens := analyzeTokensWithIndex(c.idx, analyzer, s)
+	tokens := analysis.Tokens(analysisIndex(c.idx), analyzer, s)
 	epi := true
 	if b, ok := def["enable_position_increments"].(bool); ok {
 		epi = b
@@ -1833,7 +1835,7 @@ func (c *indexCtx) parseTokenCount(path string, def map[string]any, v any) (any,
 		if len(tokens) == 0 {
 			return int64(0), nil
 		}
-		return int64(tokens[len(tokens)-1].pos + 1), nil
+		return int64(tokens[len(tokens)-1].Pos + 1), nil
 	}
 	return int64(len(tokens)), nil
 }

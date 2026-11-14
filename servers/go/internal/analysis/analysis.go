@@ -1,4 +1,4 @@
-package main
+package analysis
 
 import (
 	"encoding/json"
@@ -43,29 +43,29 @@ func simpleAnalyze(text string) []string {
 	return out
 }
 
-type analyzedToken struct {
-	term    string
-	pos     int
-	start   int
-	end     int
-	typ     string
-	posLen  int
-	keyword bool
+type Token struct {
+	Term    string
+	Pos     int
+	Start   int
+	End     int
+	Type    string
+	PosLen  int
+	Keyword bool
 }
 
-// runeWidth is the number of UTF-16 code units the rune occupies. Lucene
+// RuneWidth is the number of UTF-16 code units the rune occupies. Lucene
 // reports token offsets in UTF-16 code units, not bytes or code points.
-func runeWidth(r rune) int {
+func RuneWidth(r rune) int {
 	if r > 0xFFFF {
 		return 2
 	}
 	return 1
 }
 
-func utf16Offset(text string) int {
+func UTF16Offset(text string) int {
 	n := 0
 	for _, r := range text {
-		n += runeWidth(r)
+		n += RuneWidth(r)
 	}
 	return n
 }
@@ -153,14 +153,14 @@ func simpleCaseFold(s string) string {
 }
 
 // splitLongToken splits a token at maxLen UTF-16 code units.
-func splitLongToken(term string, start, end, pos int, typ string, maxLen int) []analyzedToken {
+func splitLongToken(term string, start, end, pos int, typ string, maxLen int) []Token {
 	if maxLen <= 0 {
 		maxLen = 255
 	}
 	if end-start <= maxLen {
-		return []analyzedToken{{term: term, start: start, end: end, pos: pos, typ: typ}}
+		return []Token{{Term: term, Start: start, End: end, Pos: pos, Type: typ}}
 	}
-	out := []analyzedToken{}
+	out := []Token{}
 	rs := []rune(term)
 	ri := 0
 	cur := start
@@ -172,7 +172,7 @@ func splitLongToken(term string, start, end, pos int, typ string, maxLen int) []
 		var chunk []rune
 		width := 0
 		for ri < len(rs) {
-			w := runeWidth(rs[ri])
+			w := RuneWidth(rs[ri])
 			if width+w > chunkEnd-cur {
 				break
 			}
@@ -180,26 +180,26 @@ func splitLongToken(term string, start, end, pos int, typ string, maxLen int) []
 			width += w
 			ri++
 		}
-		out = append(out, analyzedToken{term: string(chunk), start: cur, end: chunkEnd, pos: pos, typ: typ})
+		out = append(out, Token{Term: string(chunk), Start: cur, End: chunkEnd, Pos: pos, Type: typ})
 		pos++
 		cur = chunkEnd
 	}
 	return out
 }
 
-func tokenizePositions(text string, simple bool) []analyzedToken {
+func tokenizePositions(text string, simple bool) []Token {
 	return tokenizePositionsCase(text, simple, true, 255)
 }
 
-func tokenizePositionsCase(text string, simple, lower bool, maxLen int) []analyzedToken {
+func tokenizePositionsCase(text string, simple, lower bool, maxLen int) []Token {
 	if !simple {
 		return standardTokenizerTokens(text, lower, maxLen)
 	}
-	out := []analyzedToken{}
+	out := []Token{}
 	rs := []rune(text)
 	offs := make([]int, len(rs)+1)
 	for i, r := range rs {
-		offs[i+1] = offs[i] + runeWidth(r)
+		offs[i+1] = offs[i] + RuneWidth(r)
 	}
 	var buf []rune
 	pos := 0
@@ -392,7 +392,7 @@ func synonymGroups(idx *Index, analyzer string) []synonymGroup {
 	return groups
 }
 
-func synonymAlternatives(idx *Index, analyzer, text string) ([][]string, bool) {
+func SynonymAlternatives(idx *Index, analyzer, text string) ([][]string, bool) {
 	groups := synonymGroups(idx, analyzer)
 	if len(groups) == 0 {
 		return nil, false
@@ -400,7 +400,7 @@ func synonymAlternatives(idx *Index, analyzer, text string) ([][]string, bool) {
 	base := tokenizePositions(text, false)
 	terms := make([]string, 0, len(base))
 	for _, t := range base {
-		terms = append(terms, t.term)
+		terms = append(terms, t.Term)
 	}
 	alts := [][]string{terms}
 	matched := false
@@ -442,7 +442,7 @@ func synonymAlternatives(idx *Index, analyzer, text string) ([][]string, bool) {
 // asciiFolder folds characters like Lucene's ASCIIFoldingFilter.
 type asciiFolder struct{}
 
-var asciiFoldReplacer asciiFolder
+var ASCIIFoldReplacer asciiFolder
 
 func (asciiFolder) Replace(s string) string {
 	var b strings.Builder
@@ -463,7 +463,7 @@ func (asciiFolder) Replace(s string) string {
 	return b.String()
 }
 
-func filterNames(raw any) []string {
+func FilterNames(raw any) []string {
 	out := []string{}
 	switch t := raw.(type) {
 	case []any:
@@ -482,17 +482,17 @@ func filterNames(raw any) []string {
 	return out
 }
 
-func keywordAnalyzedTokens(text string) []analyzedToken {
-	return []analyzedToken{{term: text, start: 0, end: utf16Offset(text), pos: 0, typ: "word"}}
+func keywordAnalyzedTokens(text string) []Token {
+	return []Token{{Term: text, Start: 0, End: UTF16Offset(text), Pos: 0, Type: "word"}}
 }
 
-func whitespaceAnalyzedTokens(text string) []analyzedToken {
+func whitespaceAnalyzedTokens(text string) []Token {
 	rs := []rune(text)
 	offs := make([]int, len(rs)+1)
 	for i, r := range rs {
-		offs[i+1] = offs[i] + runeWidth(r)
+		offs[i+1] = offs[i] + RuneWidth(r)
 	}
-	out := []analyzedToken{}
+	out := []Token{}
 	pos := 0
 	i := 0
 	for i < len(rs) {
@@ -504,7 +504,7 @@ func whitespaceAnalyzedTokens(text string) []analyzedToken {
 		for j < len(rs) && !unicode.IsSpace(rs[j]) {
 			j++
 		}
-		out = append(out, analyzedToken{term: string(rs[i:j]), start: offs[i], end: offs[j], pos: pos, typ: "word"})
+		out = append(out, Token{Term: string(rs[i:j]), Start: offs[i], End: offs[j], Pos: pos, Type: "word"})
 		pos++
 		i = j
 	}
@@ -524,24 +524,24 @@ func paramStrings(params map[string]any, key string) []string {
 	if params == nil {
 		return nil
 	}
-	return filterNames(params[key])
+	return FilterNames(params[key])
 }
 
-func uaxTokens(text string, maxLen int) []analyzedToken {
+func uaxTokens(text string, maxLen int) []Token {
 	// Recognize emails and URLs first, then tokenize the remaining runs.
 	re := regexp.MustCompile(`(?:https?://|www\.)[^\s]+|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}`)
 	matches := re.FindAllStringIndex(text, -1)
-	out := []analyzedToken{}
+	out := []Token{}
 	pos := 0
 	last := 0
 	addStandard := func(part string, base int) {
 		offs := 0
 		for _, t := range tokenizePositionsCase(part, false, false, maxLen) {
-			t.start += base
-			t.end += base
-			t.pos += pos
+			t.Start += base
+			t.End += base
+			t.Pos += pos
 			out = append(out, t)
-			offs = t.pos - pos + 1
+			offs = t.Pos - pos + 1
 		}
 		_ = offs
 		pos += len(tokenizePositionsCase(part, false, false, maxLen))
@@ -553,13 +553,13 @@ func uaxTokens(text string, maxLen int) []analyzedToken {
 		if strings.Contains(tok, "@") && !strings.HasPrefix(tok, "http") {
 			typ = "<EMAIL>"
 		}
-		if maxLen > 0 && utf16Offset(tok) > maxLen && typ == "<EMAIL>" {
+		if maxLen > 0 && UTF16Offset(tok) > maxLen && typ == "<EMAIL>" {
 			at := strings.Index(tok, "@")
 			addStandard(tok[:at], m[0])
-			out = append(out, analyzedToken{term: tok[at+1:], start: utf16Offset(text[:m[0]+at+1]), end: utf16Offset(text[:m[1]]), pos: pos, typ: "<URL>"})
+			out = append(out, Token{Term: tok[at+1:], Start: UTF16Offset(text[:m[0]+at+1]), End: UTF16Offset(text[:m[1]]), Pos: pos, Type: "<URL>"})
 			pos++
 		} else {
-			out = append(out, analyzedToken{term: tok, start: utf16Offset(text[:m[0]]), end: utf16Offset(text[:m[1]]), pos: pos, typ: typ})
+			out = append(out, Token{Term: tok, Start: UTF16Offset(text[:m[0]]), End: UTF16Offset(text[:m[1]]), Pos: pos, Type: typ})
 			pos++
 		}
 		last = m[1]
@@ -568,7 +568,7 @@ func uaxTokens(text string, maxLen int) []analyzedToken {
 	return out
 }
 
-func globalAnalyzerTokens(name, text string) ([]analyzedToken, bool) {
+func GlobalAnalyzerTokens(name, text string) ([]Token, bool) {
 	switch name {
 	case "", "standard":
 		return tokenizePositions(text, false), true
@@ -579,9 +579,9 @@ func globalAnalyzerTokens(name, text string) ([]analyzedToken, bool) {
 	case "keyword":
 		return keywordAnalyzedTokens(text), true
 	case "stop":
-		out := []analyzedToken{}
+		out := []Token{}
 		for _, t := range tokenizePositions(text, true) {
-			if !englishStopWords[t.term] {
+			if !englishStopWords[t.Term] {
 				out = append(out, t)
 			}
 		}
@@ -591,57 +591,57 @@ func globalAnalyzerTokens(name, text string) ([]analyzedToken, bool) {
 	case "fingerprint":
 		return fingerprintAnalyzedToken(text), true
 	case "lowercase":
-		return []analyzedToken{{term: strings.ToLower(text), start: 0, end: utf16Offset(text), pos: 0, typ: "word"}}, true
+		return []Token{{Term: strings.ToLower(text), Start: 0, End: UTF16Offset(text), Pos: 0, Type: "word"}}, true
 	}
 	return languageAnalyzerTokens(name, text, nil)
 }
 
-// analyzeTokensWithIndex analyzes text with a named analyzer, resolving the
+// Tokens analyzes text with a named analyzer, resolving the
 // analyzers configured on the index before the prebuilt ones.
-func analyzeTokensWithIndex(idx *Index, analyzer, text string) []analyzedToken {
-	if analyzer == "" && idx != nil && (analysisScope{idx: idx}).indexHasAnalyzer("default") {
+func Tokens(idx *Index, analyzer, text string) []Token {
+	if analyzer == "" && idx != nil && (Scope{Index: idx}).IndexHasAnalyzer("default") {
 		analyzer = "default"
 	}
-	if toks, ok := indexAnalyzerTokens(idx, analyzer, text); ok {
+	if toks, ok := IndexAnalyzerTokens(idx, analyzer, text); ok {
 		return toks
 	}
-	if c := prebuiltChain(analyzer); c != nil && c.builtin == "" {
-		if r, err := c.run(idx, text, false); err == nil {
-			return r.toks
+	if c := PrebuiltChain(analyzer); c != nil && c.builtin == "" {
+		if r, err := c.Run(idx, text, false); err == nil {
+			return r.Tokens
 		}
 	}
-	if toks, ok := globalAnalyzerTokens(analyzer, text); ok {
+	if toks, ok := GlobalAnalyzerTokens(analyzer, text); ok {
 		return toks
 	}
 	return tokenizePositions(text, false)
 }
 
-func analyzeWithIndex(idx *Index, analyzer, text string) []string {
-	toks := analyzeTokensWithIndex(idx, analyzer, text)
+func Terms(idx *Index, analyzer, text string) []string {
+	toks := Tokens(idx, analyzer, text)
 	out := make([]string, 0, len(toks))
 	for _, t := range toks {
-		out = append(out, t.term)
+		out = append(out, t.Term)
 	}
 	return out
 }
 
 // patternAnalyzedTokens runs the prebuilt pattern analyzer.
-func patternAnalyzedTokens(text string, lower bool) []analyzedToken {
+func patternAnalyzedTokens(text string, lower bool) []Token {
 	c, _ := typedAnalyzerChain("pattern", "pattern", map[string]any{"lowercase": lower})
-	r, _ := c.run(nil, text, false)
-	return r.toks
+	r, _ := c.Run(nil, text, false)
+	return r.Tokens
 }
 
 // fingerprintAnalyzedToken runs the prebuilt fingerprint analyzer.
-func fingerprintAnalyzedToken(text string) []analyzedToken {
+func fingerprintAnalyzedToken(text string) []Token {
 	c, _ := typedAnalyzerChain("fingerprint", "fingerprint", nil)
-	r, _ := c.run(nil, text, false)
-	return r.toks
+	r, _ := c.Run(nil, text, false)
+	return r.Tokens
 }
 
-func analyzeRequestError(etype, reason string) *apiError { return apierr.Request(etype, reason) }
+func RequestError(etype, reason string) *apierr.Error { return apierr.Request(etype, reason) }
 
-func analyzeStringValues(raw any) ([]string, bool) {
+func StringValues(raw any) ([]string, bool) {
 	switch t := raw.(type) {
 	case string:
 		return []string{t}, true
@@ -659,16 +659,16 @@ func analyzeStringValues(raw any) ([]string, bool) {
 	return nil, false
 }
 
-type analyzeComponent struct {
+type Component struct {
 	name   string
-	inline map[string]any
+	Inline map[string]any
 }
 
-func parseAnalyzeComponents(raw any) ([]analyzeComponent, *apiError) {
+func ParseComponents(raw any) ([]Component, *apierr.Error) {
 	if raw == nil {
 		return nil, nil
 	}
-	out := []analyzeComponent{}
+	out := []Component{}
 	list, ok := raw.([]any)
 	if !ok {
 		list = []any{raw}
@@ -676,15 +676,15 @@ func parseAnalyzeComponents(raw any) ([]analyzeComponent, *apiError) {
 	for _, e := range list {
 		switch t := e.(type) {
 		case string:
-			out = append(out, analyzeComponent{name: t})
+			out = append(out, Component{name: t})
 		case map[string]any:
 			typ, _ := t["type"].(string)
 			if typ == "" {
 				enc, _ := json.Marshal(t)
-				return nil, analyzeRequestError("illegal_argument_exception",
+				return nil, RequestError("illegal_argument_exception",
 					"Missing [type] setting for anonymous filter: "+string(enc))
 			}
-			out = append(out, analyzeComponent{name: typ, inline: t})
+			out = append(out, Component{name: typ, Inline: t})
 		}
 	}
 	return out, nil

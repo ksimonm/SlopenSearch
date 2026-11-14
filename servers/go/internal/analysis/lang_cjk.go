@@ -1,4 +1,4 @@
-package main
+package analysis
 
 // A port of Lucene 10.5.1 CJKBigramFilter. The filter works on a stream with
 // position increments; tokens here carry absolute positions, so the stream is
@@ -13,16 +13,16 @@ const (
 )
 
 type cjkStreamTok struct {
-	tok    analyzedToken
+	tok    Token
 	posInc int
 }
 
-func cjkBigramLucene(toks []analyzedToken, flags int, outputUnigrams bool) []analyzedToken {
+func cjkBigramLucene(toks []Token, flags int, outputUnigrams bool) []Token {
 	in := make([]cjkStreamTok, len(toks))
 	prev := -1
 	for i, t := range toks {
-		in[i] = cjkStreamTok{tok: t, posInc: t.pos - prev}
-		prev = t.pos
+		in[i] = cjkStreamTok{tok: t, posInc: t.Pos - prev}
+		prev = t.Pos
 	}
 	doType := map[string]bool{}
 	if flags&cjkBigramHan != 0 {
@@ -68,18 +68,18 @@ func cjkBigramLucene(toks []analyzedToken, flags int, outputUnigrams bool) []ana
 		return len(buffer) == 1 && index == 0
 	}
 	flushBigram := func() {
-		t := analyzedToken{term: string(buffer[index]) + string(buffer[index+1]),
-			start: startOff[index], end: endOff[index+1], typ: "<DOUBLE>"}
+		t := Token{Term: string(buffer[index]) + string(buffer[index+1]),
+			Start: startOff[index], End: endOff[index+1], Type: "<DOUBLE>"}
 		inc := 1
 		if outputUnigrams {
 			inc = 0
-			t.posLen = 2
+			t.PosLen = 2
 		}
 		out = append(out, cjkStreamTok{tok: t, posInc: inc})
 		index++
 	}
 	flushUnigram := func() {
-		t := analyzedToken{term: string(buffer[index]), start: startOff[index], end: endOff[index], typ: "<SINGLE>"}
+		t := Token{Term: string(buffer[index]), Start: startOff[index], End: endOff[index], Type: "<SINGLE>"}
 		out = append(out, cjkStreamTok{tok: t, posInc: 1})
 		index++
 	}
@@ -91,10 +91,10 @@ func cjkBigramLucene(toks []analyzedToken, flags int, outputUnigrams bool) []ana
 			endOff = []int{endOff[last]}
 			index -= last
 		}
-		rs := []rune(cur.tok.term)
-		start, end := cur.tok.start, cur.tok.end
+		rs := []rune(cur.tok.Term)
+		start, end := cur.tok.Start, cur.tok.End
 		lastEndOffset = end
-		if end-start != utf16Offset(cur.tok.term) {
+		if end-start != UTF16Offset(cur.tok.Term) {
 			for _, r := range rs {
 				buffer = append(buffer, r)
 				startOff = append(startOff, start)
@@ -104,7 +104,7 @@ func cjkBigramLucene(toks []analyzedToken, flags int, outputUnigrams bool) []ana
 			for _, r := range rs {
 				buffer = append(buffer, r)
 				startOff = append(startOff, start)
-				start += runeWidth(r)
+				start += RuneWidth(r)
 				endOff = append(endOff, start)
 			}
 		}
@@ -125,8 +125,8 @@ func cjkBigramLucene(toks []analyzedToken, flags int, outputUnigrams bool) []ana
 			continue
 		}
 		if doNext() {
-			if doType[cur.tok.typ] {
-				if cur.tok.start != lastEndOffset {
+			if doType[cur.tok.Type] {
+				if cur.tok.Start != lastEndOffset {
 					if hasUnigram() {
 						c := cur
 						lone = &c
@@ -154,11 +154,11 @@ func cjkBigramLucene(toks []analyzedToken, flags int, outputUnigrams bool) []ana
 		}
 		break
 	}
-	res := make([]analyzedToken, len(out))
+	res := make([]Token, len(out))
 	pos := -1
 	for i, o := range out {
 		pos += o.posInc
-		o.tok.pos = pos
+		o.tok.Pos = pos
 		res[i] = o.tok
 	}
 	return res

@@ -1,8 +1,9 @@
-package main
+package analysis
 
 import (
 	"slopensearch/internal/snowball"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/lucene"
 )
 
@@ -57,18 +58,18 @@ func init() {
 
 // langFilterOne applies a language filter; handled is false for filters
 // implemented elsewhere.
-func langFilterOne(toks []analyzedToken, spec filterSpec) (out []analyzedToken, err *apiError, handled bool) {
-	p := spec.params
-	if f, ok := langTermFilters[spec.typ]; ok {
+func langFilterOne(toks []Token, spec filterSpec) (out []Token, err *apierr.Error, handled bool) {
+	p := spec.Params
+	if f, ok := langTermFilters[spec.Type]; ok {
 		return langMap(toks, f), nil, true
 	}
-	if f, ok := langStemFilters[spec.typ]; ok {
-		if spec.typ == "german_stem" || spec.typ == "brazilian_stem" {
+	if f, ok := langStemFilters[spec.Type]; ok {
+		if spec.Type == "german_stem" || spec.Type == "brazilian_stem" {
 			toks = langKeywords(toks, langStemExclusion(p))
 		}
 		return langStem(toks, f), nil, true
 	}
-	switch spec.typ {
+	switch spec.Type {
 	case "lowercase":
 		lang, hasLang := p["language"].(string)
 		f := lucene.Lower
@@ -88,7 +89,7 @@ func langFilterOne(toks []analyzedToken, spec filterSpec) (out []analyzedToken, 
 	case "elision":
 		articles := frenchArticles
 		if words := fsStrings(p, "articles"); len(words) > 0 {
-			articles = newLangWordSet(words, fsBool(p, "articles_case", false))
+			articles = newLangWordSet(words, ParamBool(p, "articles_case", false))
 		}
 		return langMap(toks, func(s string) string { return luceneElision(s, articles) }), nil, true
 	case "stemmer":
@@ -106,7 +107,7 @@ func langFilterOne(toks []analyzedToken, spec filterSpec) (out []analyzedToken, 
 		}
 		return langStem(toks, f), nil, true
 	case "cjk_bigram":
-		return cjkBigramLucene(toks, cjkBigramFlags(p), fsBool(p, "output_unigrams", false)), nil, true
+		return cjkBigramLucene(toks, cjkBigramFlags(p), ParamBool(p, "output_unigrams", false)), nil, true
 	}
 	return toks, nil, false
 }

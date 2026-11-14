@@ -1,10 +1,12 @@
-package main
+package analysis
 
 import (
 	"encoding/json"
 	"sort"
 	"strconv"
 	"strings"
+
+	"slopensearch/internal/apierr"
 )
 
 // Analysis chains: an analyzer resolved into char filters, a tokenizer and
@@ -14,40 +16,40 @@ import (
 // and query analysis.
 
 type chainCharFilter struct {
-	name   string
+	Name   string
 	typ    string
 	params map[string]any
 }
 
 type chainFilter struct {
-	name string
-	spec filterSpec
+	Name string
+	Spec filterSpec
 }
 
-type analysisChain struct {
-	name    string
-	custom  bool   // reported as custom_analyzer in explain output
-	builtin string // prebuilt analyzer evaluated by globalAnalyzerTokens
-	chars   []chainCharFilter
-	tokName string
-	tok     tokenizerFunc
-	filters []chainFilter
-	gap     int
-	// keywordAttr reports whether a built-in analyzer carries the keyword
+type Chain struct {
+	Name          string
+	Custom        bool   // reported as custom_analyzer in explain output
+	builtin       string // prebuilt analyzer evaluated by globalAnalyzerTokens
+	Chars         []chainCharFilter
+	TokenizerName string
+	tok           tokenizerFunc
+	Filters       []chainFilter
+	Gap           int
+	// KeywordAttr reports whether a built-in analyzer carries the keyword
 	// attribute (stemming language analyzers).
-	keywordAttr bool
+	KeywordAttr bool
 	// params are the analyzer settings of a built-in language analyzer.
 	params map[string]any
 }
 
 // chainRun is the result of analyzing one text.
 type chainRun struct {
-	toks        []analyzedToken
-	posCount    int // positions consumed, trailing holes included
-	finalOffset int
-	charTexts   []string
-	stages      [][]analyzedToken // tokenizer output, then after each filter
-	stageCounts []int
+	Tokens      []Token
+	PosCount    int // positions consumed, trailing holes included
+	FinalOffset int
+	CharTexts   []string
+	Stages      [][]Token // tokenizer output, then after each filter
+	StageCounts []int
 }
 
 // filteringTypes remove tokens but keep their positions (Lucene's
@@ -63,48 +65,48 @@ var keywordAttrTypes = map[string]bool{
 	"snowball": true, "kstem": true, "stemmer_override": true, "hunspell": true,
 }
 
-func filterHasKeywordAttr(typ string) bool {
+func FilterHasKeywordAttr(typ string) bool {
 	return keywordAttrTypes[typ] || strings.HasSuffix(typ, "_stem")
 }
 
-func lastPosition(toks []analyzedToken) int {
+func lastPosition(toks []Token) int {
 	last := -1
 	for _, t := range toks {
-		if t.pos > last {
-			last = t.pos
+		if t.Pos > last {
+			last = t.Pos
 		}
 	}
 	return last
 }
 
-func copyTokens(toks []analyzedToken) []analyzedToken {
-	return append([]analyzedToken(nil), toks...)
+func copyTokens(toks []Token) []Token {
+	return append([]Token(nil), toks...)
 }
 
-// run analyzes one text. With stages set, every intermediate stream is kept.
-func (c *analysisChain) run(idx *Index, text string, stages bool) (chainRun, *apiError) {
-	res := chainRun{finalOffset: utf16Offset(text)}
+// Run analyzes one text. With stages set, every intermediate stream is kept.
+func (c *Chain) Run(idx *Index, text string, stages bool) (chainRun, *apierr.Error) {
+	res := chainRun{FinalOffset: UTF16Offset(text)}
 	if c.builtin != "" && isLanguageAnalyzer(c.builtin) {
 		toks, _ := languageAnalyzerTokens(c.builtin, text, c.params)
-		res.toks = toks
-		res.posCount = languageAnalyzerPositions(c.builtin, text, toks)
+		res.Tokens = toks
+		res.PosCount = languageAnalyzerPositions(c.builtin, text, toks)
 		return res, nil
 	}
 	if c.builtin != "" {
-		toks, ok := globalAnalyzerTokens(c.builtin, text)
+		toks, ok := GlobalAnalyzerTokens(c.builtin, text)
 		if !ok {
 			toks = tokenizePositions(text, false)
 		}
-		res.toks = toks
-		res.posCount = len(tokenizePositions(text, false))
-		if n := lastPosition(toks) + 1; n > res.posCount {
-			res.posCount = n
+		res.Tokens = toks
+		res.PosCount = len(tokenizePositions(text, false))
+		if n := lastPosition(toks) + 1; n > res.PosCount {
+			res.PosCount = n
 		}
 		return res, nil
 	}
 	cur := text
 	var corrections []func(int) int
-	for _, cf := range c.chars {
+	for _, cf := range c.Chars {
 		out, corr, err := applyCharFilter(cf, cur)
 		if err != nil {
 			return res, err
@@ -112,7 +114,7 @@ func (c *analysisChain) run(idx *Index, text string, stages bool) (chainRun, *ap
 		cur = out
 		corrections = append(corrections, corr)
 		if stages {
-			res.charTexts = append(res.charTexts, out)
+			res.CharTexts = append(res.CharTexts, out)
 		}
 	}
 	toks := c.tok(cur)
@@ -124,20 +126,20 @@ func (c *analysisChain) run(idx *Index, text string, stages bool) (chainRun, *ap
 			return o
 		}
 		for i := range toks {
-			toks[i].start = correct(toks[i].start)
-			toks[i].end = correct(toks[i].end)
+			toks[i].Start = correct(toks[i].Start)
+			toks[i].End = correct(toks[i].End)
 		}
-		res.finalOffset = correct(utf16Offset(cur))
+		res.FinalOffset = correct(UTF16Offset(cur))
 	}
 	posCount := lastPosition(toks) + 1
 	if stages {
-		res.stages = append(res.stages, copyTokens(toks))
-		res.stageCounts = append(res.stageCounts, posCount)
+		res.Stages = append(res.Stages, copyTokens(toks))
+		res.StageCounts = append(res.StageCounts, posCount)
 	}
-	for fi, f := range c.filters {
-		spec := f.spec
-		spec.finalOffset = res.finalOffset
-		if spec.typ == "synonym" || spec.typ == "synonym_graph" {
+	for fi, f := range c.Filters {
+		spec := f.Spec
+		spec.finalOffset = res.FinalOffset
+		if spec.Type == "synonym" || spec.Type == "synonym_graph" {
 			spec.ruleAnalyzer = c.prefixAnalyzer(idx, fi)
 		}
 		before := lastPosition(toks)
@@ -145,70 +147,70 @@ func (c *analysisChain) run(idx *Index, text string, stages bool) (chainRun, *ap
 		if err != nil {
 			return res, err
 		}
-		if !filteringTypes[spec.typ] && len(toks) > 0 {
+		if !filteringTypes[spec.Type] && len(toks) > 0 {
 			posCount += lastPosition(out) - before
 		}
 		toks = out
 		if stages {
-			res.stages = append(res.stages, copyTokens(toks))
-			res.stageCounts = append(res.stageCounts, posCount)
+			res.Stages = append(res.Stages, copyTokens(toks))
+			res.StageCounts = append(res.StageCounts, posCount)
 		}
 	}
-	res.toks = toks
-	res.posCount = posCount
+	res.Tokens = toks
+	res.PosCount = posCount
 	return res, nil
 }
 
 // prefixAnalyzer analyzes synonym rules with the tokenizer and the filters
 // preceding filter i, as OpenSearch does.
-func (c *analysisChain) prefixAnalyzer(idx *Index, i int) func(string) []analyzedToken {
-	return func(s string) []analyzedToken {
-		sub := &analysisChain{tok: c.tok, filters: c.filters[:i]}
+func (c *Chain) prefixAnalyzer(idx *Index, i int) func(string) []Token {
+	return func(s string) []Token {
+		sub := &Chain{tok: c.tok, Filters: c.Filters[:i]}
 		if sub.tok == nil {
 			sub.tok, _ = buildTokenizer("whitespace", nil, 1)
 		}
-		r, err := sub.run(idx, s, false)
+		r, err := sub.Run(idx, s, false)
 		if err != nil {
 			return nil
 		}
-		return r.toks
+		return r.Tokens
 	}
 }
 
 // ---------------------------------------------------------------- resolving
 
-type analysisScope struct {
-	idx *Index
+type Scope struct {
+	Index *Index
 }
 
-func (sc analysisScope) global() bool { return sc.idx == nil }
+func (sc Scope) Global() bool { return sc.Index == nil }
 
-func (sc analysisScope) setting(key string) (any, bool) {
-	if sc.idx == nil {
+func (sc Scope) setting(key string) (any, bool) {
+	if sc.Index == nil {
 		return nil, false
 	}
-	return findSetting(sc.idx.Settings, key)
+	return findSetting(sc.Index.Settings, key)
 }
 
-func (sc analysisScope) maxNgramDiff() int {
-	if sc.idx != nil {
-		if n, ok := settingInt(sc.idx.Settings, "max_ngram_diff"); ok {
+func (sc Scope) maxNgramDiff() int {
+	if sc.Index != nil {
+		if n, ok := settingInt(sc.Index.Settings, "max_ngram_diff"); ok {
 			return n
 		}
 	}
 	return 1
 }
 
-func (sc analysisScope) maxShingleDiff() int {
-	if sc.idx != nil {
-		if n, ok := settingInt(sc.idx.Settings, "max_shingle_diff"); ok {
+func (sc Scope) maxShingleDiff() int {
+	if sc.Index != nil {
+		if n, ok := settingInt(sc.Index.Settings, "max_shingle_diff"); ok {
 			return n
 		}
 	}
 	return 3
 }
 
-func (sc analysisScope) componentType(kind, name string) (string, bool) {
+func (sc Scope) componentType(kind, name string) (string, bool) {
 	raw, ok := sc.setting("analysis." + kind + "." + name + ".type")
 	if !ok {
 		return "", false
@@ -217,41 +219,41 @@ func (sc analysisScope) componentType(kind, name string) (string, bool) {
 	return s, true
 }
 
-func (sc analysisScope) componentDefined(kind, name string) bool {
-	if sc.idx == nil {
+func (sc Scope) componentDefined(kind, name string) bool {
+	if sc.Index == nil {
 		return false
 	}
-	return len(subSettings(sc.idx.Settings, "analysis."+kind+"."+name)) > 0
+	return len(subSettings(sc.Index.Settings, "analysis."+kind+"."+name)) > 0
 }
 
-func (sc analysisScope) componentParams(kind, name string) map[string]any {
-	if sc.idx == nil {
+func (sc Scope) componentParams(kind, name string) map[string]any {
+	if sc.Index == nil {
 		return nil
 	}
-	return subSettings(sc.idx.Settings, "analysis."+kind+"."+name)
+	return subSettings(sc.Index.Settings, "analysis."+kind+"."+name)
 }
 
-func notFound(sc analysisScope, kind, name string) *apiError {
-	if sc.global() {
-		return analyzeRequestError("illegal_argument_exception", "failed to find global "+kind+" under ["+name+"]")
+func notFound(sc Scope, kind, name string) *apierr.Error {
+	if sc.Global() {
+		return RequestError("illegal_argument_exception", "failed to find global "+kind+" under ["+name+"]")
 	}
-	return analyzeRequestError("illegal_argument_exception", "failed to find "+kind+" under ["+name+"]")
+	return RequestError("illegal_argument_exception", "failed to find "+kind+" under ["+name+"]")
 }
 
-func anonymousJSON(def map[string]any) string {
+func AnonymousJSON(def map[string]any) string {
 	b, _ := json.Marshal(def)
 	return string(b)
 }
 
 // resolveTokenizer resolves a tokenizer name or inline definition.
-func (sc analysisScope) resolveTokenizer(name string, inline map[string]any) (string, tokenizerFunc, *apiError) {
+func (sc Scope) resolveTokenizer(name string, inline map[string]any) (string, tokenizerFunc, *apierr.Error) {
 	if inline != nil {
 		typ, _ := inline["type"].(string)
 		if typ == "" {
-			return "", nil, analyzeRequestError("illegal_argument_exception", "Missing [type] setting for anonymous tokenizer: "+anonymousJSON(inline))
+			return "", nil, RequestError("illegal_argument_exception", "Missing [type] setting for anonymous tokenizer: "+AnonymousJSON(inline))
 		}
 		if !tokenizerTypeKnown[typ] {
-			return "", nil, analyzeRequestError("illegal_argument_exception", "failed to find global tokenizer under ["+typ+"]")
+			return "", nil, RequestError("illegal_argument_exception", "failed to find global tokenizer under ["+typ+"]")
 		}
 		tok, err := buildTokenizer(typ, inline, sc.maxNgramDiff())
 		if err != nil {
@@ -279,7 +281,7 @@ func (sc analysisScope) resolveTokenizer(name string, inline map[string]any) (st
 	return "", nil, notFound(sc, "tokenizer", name)
 }
 
-func (sc analysisScope) withLimits(p map[string]any) map[string]any {
+func (sc Scope) withLimits(p map[string]any) map[string]any {
 	out := map[string]any{}
 	for k, v := range p {
 		out[k] = v
@@ -290,64 +292,64 @@ func (sc analysisScope) withLimits(p map[string]any) map[string]any {
 }
 
 // resolveFilter resolves a token filter reference.
-func (sc analysisScope) resolveFilter(c analyzeComponent) (chainFilter, *apiError) {
-	if c.inline != nil {
-		typ, _ := c.inline["type"].(string)
+func (sc Scope) resolveFilter(c Component) (chainFilter, *apierr.Error) {
+	if c.Inline != nil {
+		typ, _ := c.Inline["type"].(string)
 		if !knownFilterTypes[typ] {
-			return chainFilter{}, analyzeRequestError("illegal_argument_exception", "failed to find global filter under ["+typ+"]")
+			return chainFilter{}, RequestError("illegal_argument_exception", "failed to find global filter under ["+typ+"]")
 		}
-		return chainFilter{name: "__anonymous__" + typ, spec: filterSpec{typ: typ, params: sc.withLimits(c.inline)}}, nil
+		return chainFilter{Name: "__anonymous__" + typ, Spec: filterSpec{Type: typ, Params: sc.withLimits(c.Inline)}}, nil
 	}
 	if typ, ok := sc.componentType("filter", c.name); ok {
-		return chainFilter{name: c.name, spec: filterSpec{typ: typ, params: sc.withLimits(sc.componentParams("filter", c.name))}}, nil
+		return chainFilter{Name: c.name, Spec: filterSpec{Type: typ, Params: sc.withLimits(sc.componentParams("filter", c.name))}}, nil
 	}
 	if spec, ok := globalFilterSpec(c.name); ok {
-		spec.params = sc.withLimits(spec.params)
-		return chainFilter{name: c.name, spec: spec}, nil
+		spec.Params = sc.withLimits(spec.Params)
+		return chainFilter{Name: c.name, Spec: spec}, nil
 	}
 	return chainFilter{}, notFound(sc, "filter", c.name)
 }
 
 var charFilterTypeKnown = map[string]bool{"html_strip": true, "mapping": true, "pattern_replace": true}
 
-func (sc analysisScope) resolveCharFilter(c analyzeComponent) (chainCharFilter, *apiError) {
-	if c.inline != nil {
-		typ, _ := c.inline["type"].(string)
+func (sc Scope) resolveCharFilter(c Component) (chainCharFilter, *apierr.Error) {
+	if c.Inline != nil {
+		typ, _ := c.Inline["type"].(string)
 		if !charFilterTypeKnown[typ] {
-			return chainCharFilter{}, analyzeRequestError("illegal_argument_exception", "failed to find global char_filter under ["+typ+"]")
+			return chainCharFilter{}, RequestError("illegal_argument_exception", "failed to find global char_filter under ["+typ+"]")
 		}
-		return chainCharFilter{name: "__anonymous__" + typ, typ: typ, params: c.inline}, nil
+		return chainCharFilter{Name: "__anonymous__" + typ, typ: typ, params: c.Inline}, nil
 	}
 	if typ, ok := sc.componentType("char_filter", c.name); ok {
-		return chainCharFilter{name: c.name, typ: typ, params: sc.componentParams("char_filter", c.name)}, nil
+		return chainCharFilter{Name: c.name, typ: typ, params: sc.componentParams("char_filter", c.name)}, nil
 	}
 	if charFilterTypeKnown[c.name] {
-		return chainCharFilter{name: c.name, typ: c.name}, nil
+		return chainCharFilter{Name: c.name, typ: c.name}, nil
 	}
 	return chainCharFilter{}, notFound(sc, "char_filter", c.name)
 }
 
 // validateFilter applies a filter once so configuration errors surface when
 // the chain is built.
-func validateChainFilter(idx *Index, f chainFilter) *apiError {
-	dummy := []analyzedToken{{term: "x", start: 0, end: 1, typ: "word"}}
-	_, err := applyFilterOne(idx, dummy, f.spec)
+func validateChainFilter(idx *Index, f chainFilter) *apierr.Error {
+	dummy := []Token{{Term: "x", Start: 0, End: 1, Type: "word"}}
+	_, err := applyFilterOne(idx, dummy, f.Spec)
 	return err
 }
 
-func validateChainCharFilter(cf chainCharFilter) *apiError {
+func validateChainCharFilter(cf chainCharFilter) *apierr.Error {
 	_, _, err := applyCharFilter(cf, "")
 	return err
 }
 
-// buildRequestChain builds the custom chain of an _analyze request.
-func (sc analysisScope) buildRequestChain(tokName string, tokInline map[string]any, chars, filters []analyzeComponent) (*analysisChain, *apiError) {
-	c := &analysisChain{custom: true, gap: 100}
+// BuildRequestChain builds the custom chain of an _analyze request.
+func (sc Scope) BuildRequestChain(tokName string, tokInline map[string]any, chars, filters []Component) (*Chain, *apierr.Error) {
+	c := &Chain{Custom: true, Gap: 100}
 	name, tok, err := sc.resolveTokenizer(tokName, tokInline)
 	if err != nil {
 		return nil, err
 	}
-	c.tokName, c.tok = name, tok
+	c.TokenizerName, c.tok = name, tok
 	for _, comp := range chars {
 		cf, err := sc.resolveCharFilter(comp)
 		if err != nil {
@@ -356,27 +358,27 @@ func (sc analysisScope) buildRequestChain(tokName string, tokInline map[string]a
 		if err := validateChainCharFilter(cf); err != nil {
 			return nil, err
 		}
-		c.chars = append(c.chars, cf)
+		c.Chars = append(c.Chars, cf)
 	}
 	for _, comp := range filters {
 		f, err := sc.resolveFilter(comp)
 		if err != nil {
 			return nil, err
 		}
-		if err := validateChainFilter(sc.idx, f); err != nil {
+		if err := validateChainFilter(sc.Index, f); err != nil {
 			return nil, err
 		}
-		c.filters = append(c.filters, f)
+		c.Filters = append(c.Filters, f)
 	}
 	return c, nil
 }
 
-// prebuiltChain returns the chain of a prebuilt analyzer, or nil.
-func prebuiltChain(name string) *analysisChain {
+// PrebuiltChain returns the chain of a prebuilt analyzer, or nil.
+func PrebuiltChain(name string) *Chain {
 	c, err := typedAnalyzerChain(name, name, nil)
 	if err != nil || c == nil {
-		if builtinAnalyzer(name) {
-			return &analysisChain{name: name, builtin: name, keywordAttr: languageAnalyzerHasKeyword(name)}
+		if BuiltinAnalyzer(name) {
+			return &Chain{Name: name, builtin: name, KeywordAttr: languageAnalyzerHasKeyword(name)}
 		}
 		return nil
 	}
@@ -388,7 +390,7 @@ func languageAnalyzerHasKeyword(name string) bool {
 	case "standard", "simple", "whitespace", "keyword", "stop", "pattern", "fingerprint", "lowercase", "cjk", "thai":
 		return false
 	}
-	return builtinAnalyzer(name)
+	return BuiltinAnalyzer(name)
 }
 
 func stopFilterSpec(p map[string]any, def string) filterSpec {
@@ -404,20 +406,20 @@ func stopFilterSpec(p map[string]any, def string) filterSpec {
 	if v, ok := p["ignore_case"]; ok {
 		params["ignore_case"] = v
 	}
-	return filterSpec{typ: "stop", params: params}
+	return filterSpec{Type: "stop", Params: params}
 }
 
 // typedAnalyzerChain builds the analyzers OpenSearch implements as fixed
 // Lucene chains (standard, simple, stop, ...) with their parameters. It
 // returns nil for types handled elsewhere (language analyzers).
-func typedAnalyzerChain(name, typ string, p map[string]any) (*analysisChain, *apiError) {
-	c := &analysisChain{name: name}
-	tok := func(t string, params map[string]any) *apiError {
+func typedAnalyzerChain(name, typ string, p map[string]any) (*Chain, *apierr.Error) {
+	c := &Chain{Name: name}
+	tok := func(t string, params map[string]any) *apierr.Error {
 		f, err := buildTokenizer(t, params, 1)
 		if err != nil {
 			return err
 		}
-		c.tokName, c.tok = t, f
+		c.TokenizerName, c.tok = t, f
 		return nil
 	}
 	maxLen := map[string]any{}
@@ -429,7 +431,7 @@ func typedAnalyzerChain(name, typ string, p map[string]any) (*analysisChain, *ap
 		if err := tok("standard", maxLen); err != nil {
 			return nil, err
 		}
-		c.filters = []chainFilter{{name: "lowercase", spec: filterSpec{typ: "lowercase"}}, {name: "stop", spec: stopFilterSpec(p, "_none_")}}
+		c.Filters = []chainFilter{{Name: "lowercase", Spec: filterSpec{Type: "lowercase"}}, {Name: "stop", Spec: stopFilterSpec(p, "_none_")}}
 	case "simple":
 		if err := tok("lowercase", nil); err != nil {
 			return nil, err
@@ -446,7 +448,7 @@ func typedAnalyzerChain(name, typ string, p map[string]any) (*analysisChain, *ap
 		if err := tok("lowercase", nil); err != nil {
 			return nil, err
 		}
-		c.filters = []chainFilter{{name: "stop", spec: stopFilterSpec(p, "_english_")}}
+		c.Filters = []chainFilter{{Name: "stop", Spec: stopFilterSpec(p, "_english_")}}
 	case "pattern":
 		params := map[string]any{}
 		for _, k := range []string{"pattern", "flags"} {
@@ -457,10 +459,10 @@ func typedAnalyzerChain(name, typ string, p map[string]any) (*analysisChain, *ap
 		if err := tok("pattern", params); err != nil {
 			return nil, err
 		}
-		if fsBool(p, "lowercase", true) {
-			c.filters = append(c.filters, chainFilter{name: "lowercase", spec: filterSpec{typ: "lowercase"}})
+		if ParamBool(p, "lowercase", true) {
+			c.Filters = append(c.Filters, chainFilter{Name: "lowercase", Spec: filterSpec{Type: "lowercase"}})
 		}
-		c.filters = append(c.filters, chainFilter{name: "stop", spec: stopFilterSpec(p, "_none_")})
+		c.Filters = append(c.Filters, chainFilter{Name: "stop", Spec: stopFilterSpec(p, "_none_")})
 	case "fingerprint":
 		if err := tok("standard", nil); err != nil {
 			return nil, err
@@ -469,11 +471,11 @@ func typedAnalyzerChain(name, typ string, p map[string]any) (*analysisChain, *ap
 		if v, ok := p["max_output_size"]; ok {
 			fp["max_output_size"] = v
 		}
-		c.filters = []chainFilter{
-			{name: "lowercase", spec: filterSpec{typ: "lowercase"}},
-			{name: "asciifolding", spec: filterSpec{typ: "asciifolding"}},
-			{name: "stop", spec: stopFilterSpec(p, "_none_")},
-			{name: "fingerprint", spec: filterSpec{typ: "fingerprint", params: fp}},
+		c.Filters = []chainFilter{
+			{Name: "lowercase", Spec: filterSpec{Type: "lowercase"}},
+			{Name: "asciifolding", Spec: filterSpec{Type: "asciifolding"}},
+			{Name: "stop", Spec: stopFilterSpec(p, "_none_")},
+			{Name: "fingerprint", Spec: filterSpec{Type: "fingerprint", Params: fp}},
 		}
 	case "snowball":
 		lang := fsString(p, "language", "English")
@@ -484,18 +486,18 @@ func typedAnalyzerChain(name, typ string, p map[string]any) (*analysisChain, *ap
 		if strings.EqualFold(lang, "english") {
 			def = "_english_"
 		}
-		c.filters = []chainFilter{
-			{name: "lowercase", spec: filterSpec{typ: "lowercase"}},
-			{name: "stop", spec: stopFilterSpec(p, def)},
-			{name: "snowball", spec: filterSpec{typ: "snowball", params: map[string]any{"language": lang}}},
+		c.Filters = []chainFilter{
+			{Name: "lowercase", Spec: filterSpec{Type: "lowercase"}},
+			{Name: "stop", Spec: stopFilterSpec(p, def)},
+			{Name: "snowball", Spec: filterSpec{Type: "snowball", Params: map[string]any{"language": lang}}},
 		}
-		c.keywordAttr = true
+		c.KeywordAttr = true
 	case "standard_html_strip":
 		if err := tok("standard", maxLen); err != nil {
 			return nil, err
 		}
-		c.chars = []chainCharFilter{{name: "html_strip", typ: "html_strip"}}
-		c.filters = []chainFilter{{name: "lowercase", spec: filterSpec{typ: "lowercase"}}, {name: "stop", spec: stopFilterSpec(p, "_none_")}}
+		c.Chars = []chainCharFilter{{Name: "html_strip", typ: "html_strip"}}
+		c.Filters = []chainFilter{{Name: "lowercase", Spec: filterSpec{Type: "lowercase"}}, {Name: "stop", Spec: stopFilterSpec(p, "_none_")}}
 	default:
 		return nil, nil
 	}
@@ -508,13 +510,13 @@ var analyzerTypeKnown = map[string]bool{
 }
 
 func analyzerTypeValid(typ string) bool {
-	return analyzerTypeKnown[typ] || (builtinAnalyzer(typ) && typ != "lowercase")
+	return analyzerTypeKnown[typ] || (BuiltinAnalyzer(typ) && typ != "lowercase")
 }
 
-// indexAnalyzerChain builds an analyzer configured in the index settings.
+// IndexAnalyzerChain builds an analyzer configured in the index settings.
 // The returned error is the bare message used inside "Failed to build
 // analyzers" reports.
-func (sc analysisScope) indexAnalyzerChain(name string) (*analysisChain, *apiError) {
+func (sc Scope) IndexAnalyzerChain(name string) (*Chain, *apierr.Error) {
 	p := sc.componentParams("analyzer", name)
 	typ, _ := p["type"].(string)
 	tokName, hasTok := p["tokenizer"].(string)
@@ -532,12 +534,12 @@ func (sc analysisScope) indexAnalyzerChain(name string) (*analysisChain, *apiErr
 		}
 		if c == nil {
 			// Language analyzers keep their prebuilt implementation.
-			c = &analysisChain{name: name, builtin: typ, keywordAttr: languageAnalyzerHasKeyword(typ), params: p}
+			c = &Chain{Name: name, builtin: typ, KeywordAttr: languageAnalyzerHasKeyword(typ), params: p}
 		}
-		c.gap = gap
+		c.Gap = gap
 		return c, nil
 	}
-	c := &analysisChain{name: name, custom: true, gap: gap}
+	c := &Chain{Name: name, Custom: true, Gap: gap}
 	if !hasTok {
 		return nil, filterError("Custom Analyzer [" + name + "] must be configured with a tokenizer")
 	}
@@ -545,67 +547,67 @@ func (sc analysisScope) indexAnalyzerChain(name string) (*analysisChain, *apiErr
 	if err != nil {
 		return nil, filterError("Custom Analyzer [" + name + "] failed to find tokenizer under name [" + tokName + "]")
 	}
-	c.tokName, c.tok = tn, tok
-	for _, cfName := range filterNames(p["char_filter"]) {
-		cf, err := sc.resolveCharFilter(analyzeComponent{name: cfName})
+	c.TokenizerName, c.tok = tn, tok
+	for _, cfName := range FilterNames(p["char_filter"]) {
+		cf, err := sc.resolveCharFilter(Component{name: cfName})
 		if err != nil {
 			return nil, filterError("Custom Analyzer [" + name + "] failed to find char_filter under name [" + cfName + "]")
 		}
-		c.chars = append(c.chars, cf)
+		c.Chars = append(c.Chars, cf)
 	}
-	for _, fName := range filterNames(p["filter"]) {
-		f, err := sc.resolveFilter(analyzeComponent{name: fName})
+	for _, fName := range FilterNames(p["filter"]) {
+		f, err := sc.resolveFilter(Component{name: fName})
 		if err != nil {
 			return nil, filterError("Custom Analyzer [" + name + "] failed to find filter under name [" + fName + "]")
 		}
-		c.filters = append(c.filters, f)
+		c.Filters = append(c.Filters, f)
 	}
 	return c, nil
 }
 
-// indexHasAnalyzer reports whether the analyzer is configured on the index.
-func (sc analysisScope) indexHasAnalyzer(name string) bool {
+// IndexHasAnalyzer reports whether the analyzer is configured on the index.
+func (sc Scope) IndexHasAnalyzer(name string) bool {
 	return sc.componentDefined("analyzer", name)
 }
 
-// analyzerChain resolves an analyzer name in this scope.
-func (sc analysisScope) analyzerChain(name string) (*analysisChain, *apiError) {
-	if sc.idx != nil && sc.indexHasAnalyzer(name) {
-		return sc.indexAnalyzerChain(name)
+// AnalyzerChain resolves an analyzer name in this scope.
+func (sc Scope) AnalyzerChain(name string) (*Chain, *apierr.Error) {
+	if sc.Index != nil && sc.IndexHasAnalyzer(name) {
+		return sc.IndexAnalyzerChain(name)
 	}
-	if sc.idx != nil && (name == "default" || name == "default_search") {
-		return sc.defaultIndexChain(), nil
+	if sc.Index != nil && (name == "default" || name == "default_search") {
+		return sc.DefaultIndexChain(), nil
 	}
-	c := prebuiltChain(name)
+	c := PrebuiltChain(name)
 	if c == nil {
-		if sc.global() {
-			return nil, analyzeRequestError("illegal_argument_exception", "failed to find global analyzer ["+name+"]")
+		if sc.Global() {
+			return nil, RequestError("illegal_argument_exception", "failed to find global analyzer ["+name+"]")
 		}
-		return nil, analyzeRequestError("illegal_argument_exception", "failed to find analyzer ["+name+"]")
+		return nil, RequestError("illegal_argument_exception", "failed to find analyzer ["+name+"]")
 	}
-	if sc.idx != nil {
-		c.gap = 100
+	if sc.Index != nil {
+		c.Gap = 100
 	}
 	return c, nil
 }
 
-// defaultIndexChain is the index default analyzer (analysis.analyzer.default
+// DefaultIndexChain is the index default analyzer (analysis.analyzer.default
 // or standard).
-func (sc analysisScope) defaultIndexChain() *analysisChain {
-	if sc.idx != nil && sc.indexHasAnalyzer("default") {
-		if c, err := sc.indexAnalyzerChain("default"); err == nil {
+func (sc Scope) DefaultIndexChain() *Chain {
+	if sc.Index != nil && sc.IndexHasAnalyzer("default") {
+		if c, err := sc.IndexAnalyzerChain("default"); err == nil {
 			return c
 		}
 	}
-	c := prebuiltChain("standard")
-	if sc.idx != nil {
-		c.gap = 100
+	c := PrebuiltChain("standard")
+	if sc.Index != nil {
+		c.Gap = 100
 	}
 	return c
 }
 
-// normalizerFilterAllowed lists the filters normalizers may use.
-var normalizerFilterAllowed = map[string]bool{
+// NormalizerFilterAllowed lists the filters normalizers may use.
+var NormalizerFilterAllowed = map[string]bool{
 	"lowercase": true, "uppercase": true, "asciifolding": true, "cjk_width": true,
 	"decimal_digit": true, "elision": true, "german_normalization": true,
 	"hindi_normalization": true, "indic_normalization": true, "persian_normalization": true,
@@ -619,33 +621,33 @@ var normalizerFilterAllowed = map[string]bool{
 
 var normalizerCharFilterAllowed = map[string]bool{"mapping": true, "pattern_replace": true}
 
-// normalizerChain resolves a normalizer (keyword tokenizer plus filters).
-func (sc analysisScope) normalizerChain(name string) (*analysisChain, *apiError) {
+// NormalizerChain resolves a normalizer (keyword tokenizer plus filters).
+func (sc Scope) NormalizerChain(name string) (*Chain, *apierr.Error) {
 	kw, _ := buildTokenizer("keyword", nil, 1)
-	c := &analysisChain{name: name, custom: true, tokName: "keyword", tok: kw}
-	if sc.idx != nil && sc.componentDefined("normalizer", name) {
+	c := &Chain{Name: name, Custom: true, TokenizerName: "keyword", tok: kw}
+	if sc.Index != nil && sc.componentDefined("normalizer", name) {
 		p := sc.componentParams("normalizer", name)
-		for _, cfName := range filterNames(p["char_filter"]) {
-			cf, err := sc.resolveCharFilter(analyzeComponent{name: cfName})
+		for _, cfName := range FilterNames(p["char_filter"]) {
+			cf, err := sc.resolveCharFilter(Component{name: cfName})
 			if err != nil {
 				return nil, err
 			}
-			c.chars = append(c.chars, cf)
+			c.Chars = append(c.Chars, cf)
 		}
-		for _, fName := range filterNames(p["filter"]) {
-			f, err := sc.resolveFilter(analyzeComponent{name: fName})
+		for _, fName := range FilterNames(p["filter"]) {
+			f, err := sc.resolveFilter(Component{name: fName})
 			if err != nil {
 				return nil, err
 			}
-			c.filters = append(c.filters, f)
+			c.Filters = append(c.Filters, f)
 		}
 		return c, nil
 	}
-	if builtinNormalizer(name) {
-		c.filters = []chainFilter{{name: name, spec: filterSpec{typ: name}}}
+	if BuiltinNormalizer(name) {
+		c.Filters = []chainFilter{{Name: name, Spec: filterSpec{Type: name}}}
 		return c, nil
 	}
-	return nil, analyzeRequestError("illegal_argument_exception", "failed to find normalizer under ["+name+"]")
+	return nil, RequestError("illegal_argument_exception", "failed to find normalizer under ["+name+"]")
 }
 
 // ---------------------------------------------------------------- settings validation
@@ -671,14 +673,14 @@ func analysisNames(settings map[string]any, kind string) []string {
 	return out
 }
 
-func plainArgError(reason string) *apiError {
-	return &apiError{Type: "illegal_argument_exception", Status: 400, Reason: reason}
+func plainArgError(reason string) *apierr.Error {
+	return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: reason}
 }
 
-// validateAnalysisSettings builds every analysis component configured in the
+// ValidateSettings builds every analysis component configured in the
 // (flattened) index settings and reports the first error OpenSearch would.
-func validateAnalysisSettings(settings map[string]any) *apiError {
-	sc := analysisScope{idx: &Index{Settings: settings}}
+func ValidateSettings(settings map[string]any) *apierr.Error {
+	sc := Scope{Index: &Index{Settings: settings}}
 	for _, name := range analysisNames(settings, "char_filter") {
 		typ, ok := sc.componentType("char_filter", name)
 		if !ok {
@@ -687,7 +689,7 @@ func validateAnalysisSettings(settings map[string]any) *apiError {
 		if !charFilterTypeKnown[typ] {
 			return plainArgError("Unknown char_filter type [" + typ + "] for [" + name + "]")
 		}
-		if err := validateChainCharFilter(chainCharFilter{name: name, typ: typ, params: sc.componentParams("char_filter", name)}); err != nil {
+		if err := validateChainCharFilter(chainCharFilter{Name: name, typ: typ, params: sc.componentParams("char_filter", name)}); err != nil {
 			return plainArgError(err.Reason)
 		}
 	}
@@ -714,8 +716,8 @@ func validateAnalysisSettings(settings map[string]any) *apiError {
 		if typ == "synonym" || typ == "synonym_graph" {
 			continue
 		}
-		f := chainFilter{name: name, spec: filterSpec{typ: typ, params: sc.withLimits(sc.componentParams("filter", name))}}
-		if err := validateChainFilter(sc.idx, f); err != nil && err.Status == 400 {
+		f := chainFilter{Name: name, Spec: filterSpec{Type: typ, Params: sc.withLimits(sc.componentParams("filter", name))}}
+		if err := validateChainFilter(sc.Index, f); err != nil && err.Status == 400 {
 			return plainArgError(err.Reason)
 		}
 	}
@@ -734,12 +736,12 @@ func validateAnalysisSettings(settings map[string]any) *apiError {
 		}
 	}
 	var failed []string
-	var suppressed []*apiError
+	var suppressed []*apierr.Error
 	for _, name := range analyzers {
-		c, err := sc.indexAnalyzerChain(name)
+		c, err := sc.IndexAnalyzerChain(name)
 		if err == nil && c != nil {
-			for _, f := range c.filters {
-				if ferr := validateChainFilter(sc.idx, f); ferr != nil {
+			for _, f := range c.Filters {
+				if ferr := validateChainFilter(sc.Index, f); ferr != nil {
 					err = ferr
 					break
 				}
@@ -747,18 +749,18 @@ func validateAnalysisSettings(settings map[string]any) *apiError {
 		}
 		if err != nil {
 			failed = append(failed, name)
-			suppressed = append(suppressed, &apiError{Type: "illegal_argument_exception", Reason: "[" + name + "] " + err.Reason,
-				CausedBy: &apiError{Type: "illegal_argument_exception", Reason: err.Reason}})
+			suppressed = append(suppressed, &apierr.Error{Type: "illegal_argument_exception", Reason: "[" + name + "] " + err.Reason,
+				CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: err.Reason}})
 		}
 	}
 	if len(failed) > 0 {
-		return &apiError{Type: "illegal_argument_exception", Status: 400,
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "Failed to build analyzers: [" + strings.Join(failed, ", ") + "]", Suppressed: suppressed}
 	}
 	for _, name := range analysisNames(settings, "normalizer") {
 		p := sc.componentParams("normalizer", name)
-		for _, cfName := range filterNames(p["char_filter"]) {
-			cf, err := sc.resolveCharFilter(analyzeComponent{name: cfName})
+		for _, cfName := range FilterNames(p["char_filter"]) {
+			cf, err := sc.resolveCharFilter(Component{name: cfName})
 			if err != nil {
 				return plainArgError("Custom normalizer [" + name + "] failed to find char_filter under name [" + cfName + "]")
 			}
@@ -766,12 +768,12 @@ func validateAnalysisSettings(settings map[string]any) *apiError {
 				return plainArgError("Custom normalizer [" + name + "] may not use char filter [" + cfName + "]")
 			}
 		}
-		for _, fName := range filterNames(p["filter"]) {
-			f, err := sc.resolveFilter(analyzeComponent{name: fName})
+		for _, fName := range FilterNames(p["filter"]) {
+			f, err := sc.resolveFilter(Component{name: fName})
 			if err != nil {
 				return plainArgError("Custom normalizer [" + name + "] failed to find filter under name [" + fName + "]")
 			}
-			if !normalizerFilterAllowed[f.spec.typ] {
+			if !NormalizerFilterAllowed[f.Spec.Type] {
 				return plainArgError("Custom normalizer [" + name + "] may not use filter [" + fName + "]")
 			}
 		}
@@ -781,26 +783,26 @@ func validateAnalysisSettings(settings map[string]any) *apiError {
 
 // ---------------------------------------------------------------- index helpers
 
-// indexAnalyzerTokens analyzes text with an analyzer configured on the
+// IndexAnalyzerTokens analyzes text with an analyzer configured on the
 // index; ok is false when the index does not configure it.
-func indexAnalyzerTokens(idx *Index, analyzer, text string) ([]analyzedToken, bool) {
-	sc := analysisScope{idx: idx}
-	if idx == nil || analyzer == "" || !sc.indexHasAnalyzer(analyzer) {
+func IndexAnalyzerTokens(idx *Index, analyzer, text string) ([]Token, bool) {
+	sc := Scope{Index: idx}
+	if idx == nil || analyzer == "" || !sc.IndexHasAnalyzer(analyzer) {
 		return nil, false
 	}
-	c, err := sc.indexAnalyzerChain(analyzer)
+	c, err := sc.IndexAnalyzerChain(analyzer)
 	if err != nil {
 		return nil, false
 	}
-	r, rerr := c.run(idx, text, false)
+	r, rerr := c.Run(idx, text, false)
 	if rerr != nil {
 		return nil, false
 	}
-	return r.toks, true
+	return r.Tokens, true
 }
 
-// tokenBytes formats a term like Lucene's BytesRef.toString().
-func tokenBytes(term string) string {
+// TokenBytes formats a term like Lucene's BytesRef.toString().
+func TokenBytes(term string) string {
 	var b strings.Builder
 	b.WriteByte('[')
 	for i := 0; i < len(term); i++ {
@@ -811,4 +813,28 @@ func tokenBytes(term string) string {
 	}
 	b.WriteByte(']')
 	return b.String()
+}
+
+func BuiltinAnalyzer(name string) bool {
+	switch name {
+	case "standard", "simple", "whitespace", "keyword", "stop", "english",
+		"lowercase", "pattern", "fingerprint",
+		// Language analyzers.
+		"arabic", "armenian", "basque", "bengali", "brazilian", "bulgarian",
+		"catalan", "cjk", "czech", "danish", "dutch", "estonian", "finnish",
+		"french", "galician", "german", "greek", "hindi", "hungarian",
+		"indonesian", "irish", "italian", "latvian", "lithuanian",
+		"norwegian", "persian", "portuguese", "romanian", "russian",
+		"sorani", "spanish", "swedish", "thai", "turkish", "chinese":
+		return true
+	}
+	return false
+}
+
+func BuiltinNormalizer(name string) bool {
+	switch name {
+	case "lowercase", "uppercase", "asciifolding":
+		return true
+	}
+	return false
 }

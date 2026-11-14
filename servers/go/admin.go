@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"slopensearch/internal/analysis"
 )
 
 // ---------------------------------------------------------------- name rules
@@ -746,7 +748,7 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 			Reason:   "Failed to parse mapping [_doc]: " + reason,
 			CausedBy: &apiError{Type: "illegal_argument_exception", Reason: reason}}
 	}
-	if err := validateAnalysisSettings(canonical); err != nil {
+	if err := analysis.ValidateSettings(canonical); err != nil {
 		return nil, err
 	}
 	if err := validateMappingFull(mergedMappings); err != nil {
@@ -1268,7 +1270,7 @@ func (s *Server) putSettingsAPI(w http.ResponseWriter, r *http.Request, spec str
 					merged[k] = v
 				}
 			}
-			if err := validateAnalysisSettings(merged); err != nil {
+			if err := analysis.ValidateSettings(merged); err != nil {
 				writeError(w, err)
 				return
 			}

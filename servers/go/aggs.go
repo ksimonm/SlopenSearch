@@ -11,6 +11,7 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"slopensearch/internal/analysis"
 	"slopensearch/internal/painless"
 )
 
@@ -103,8 +104,8 @@ func injectAggDocValues(h aggHit, doc map[string]any) {
 			toks := []any{}
 			for _, v := range vals {
 				s, _ := valueScalarString(v)
-				for _, t := range analyzeTokensWithIndex(h.idx, analyzer, s) {
-					toks = append(toks, t.term)
+				for _, t := range analysis.Tokens(analysisIndex(h.idx), analyzer, s) {
+					toks = append(toks, t.Term)
 				}
 			}
 			if len(toks) > 0 {

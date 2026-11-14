@@ -1,10 +1,11 @@
-package main
+package analysis
 
 import (
 	"strconv"
 	"strings"
 	"unicode"
 
+	"slopensearch/internal/apierr"
 	"slopensearch/internal/jregex"
 )
 
@@ -12,13 +13,13 @@ import (
 // configuration errors surface, as in OpenSearch) and then run on texts.
 // Offsets are UTF-16 code units of the text handed to the tokenizer.
 
-type tokenizerFunc func(text string) []analyzedToken
+type tokenizerFunc func(text string) []Token
 
 // runeOffsets returns the UTF-16 offset of every rune boundary.
 func runeOffsets(rs []rune) []int {
 	offs := make([]int, len(rs)+1)
 	for i, r := range rs {
-		offs[i+1] = offs[i] + runeWidth(r)
+		offs[i+1] = offs[i] + RuneWidth(r)
 	}
 	return offs
 }
@@ -48,13 +49,13 @@ func javaIsSymbol(r rune) bool {
 
 // charTokenize implements Lucene's CharTokenizer: runs of token chars, split
 // when they reach maxLen UTF-16 units.
-func charTokenize(text string, isTokenChar func(rune) bool, normalize func(rune) rune, maxLen int) []analyzedToken {
+func charTokenize(text string, isTokenChar func(rune) bool, normalize func(rune) rune, maxLen int) []Token {
 	if maxLen <= 0 {
 		maxLen = 255
 	}
 	rs := []rune(text)
 	offs := runeOffsets(rs)
-	out := []analyzedToken{}
+	out := []Token{}
 	pos := 0
 	i := 0
 	for i < len(rs) {
@@ -66,7 +67,7 @@ func charTokenize(text string, isTokenChar func(rune) bool, normalize func(rune)
 		var term []rune
 		length := 0
 		for i < len(rs) && isTokenChar(rs[i]) {
-			w := runeWidth(rs[i])
+			w := RuneWidth(rs[i])
 			if length+w > maxLen && length > 0 {
 				break
 			}
@@ -81,14 +82,14 @@ func charTokenize(text string, isTokenChar func(rune) bool, normalize func(rune)
 				break
 			}
 		}
-		out = append(out, analyzedToken{term: string(term), start: offs[start], end: offs[i], pos: pos, typ: "word"})
+		out = append(out, Token{Term: string(term), Start: offs[start], End: offs[i], Pos: pos, Type: "word"})
 		pos++
 	}
 	return out
 }
 
-func tokenizerParamError(reason string) *apiError {
-	return analyzeRequestError("illegal_argument_exception", reason)
+func tokenizerParamError(reason string) *apierr.Error {
+	return RequestError("illegal_argument_exception", reason)
 }
 
 // tokenizerTypeKnown lists the tokenizer types available without plugins.
@@ -102,34 +103,34 @@ var tokenizerTypeKnown = map[string]bool{
 
 // buildTokenizer creates a tokenizer of the given type. maxNgramDiff is the
 // index.max_ngram_diff limit in effect.
-func buildTokenizer(typ string, params map[string]any, maxNgramDiff int) (tokenizerFunc, *apiError) {
+func buildTokenizer(typ string, params map[string]any, maxNgramDiff int) (tokenizerFunc, *apierr.Error) {
 	maxLen := paramInt(params, "max_token_length", 255)
 	switch typ {
 	case "standard":
 		if maxLen > 1024*1024 {
 			return nil, tokenizerParamError("maxTokenLength must be greater than 0 and less than 1048576 passed: " + strconv.Itoa(maxLen))
 		}
-		return func(text string) []analyzedToken { return tokenizePositionsCase(text, false, false, maxLen) }, nil
+		return func(text string) []Token { return tokenizePositionsCase(text, false, false, maxLen) }, nil
 	case "keyword":
-		return func(text string) []analyzedToken {
-			return []analyzedToken{{term: text, start: 0, end: utf16Offset(text), pos: 0, typ: "word"}}
+		return func(text string) []Token {
+			return []Token{{Term: text, Start: 0, End: UTF16Offset(text), Pos: 0, Type: "word"}}
 		}, nil
 	case "whitespace":
-		return func(text string) []analyzedToken {
+		return func(text string) []Token {
 			return charTokenize(text, func(r rune) bool { return !javaIsWhitespace(r) }, nil, maxLen)
 		}, nil
 	case "letter":
-		return func(text string) []analyzedToken { return charTokenize(text, javaIsLetter, nil, maxLen) }, nil
+		return func(text string) []Token { return charTokenize(text, javaIsLetter, nil, maxLen) }, nil
 	case "lowercase":
-		return func(text string) []analyzedToken {
+		return func(text string) []Token {
 			return charTokenize(text, javaIsLetter, unicode.ToLower, maxLen)
 		}, nil
 	case "uax_url_email":
-		return func(text string) []analyzedToken { return uaxTokens(text, maxLen) }, nil
+		return func(text string) []Token { return uaxTokens(text, maxLen) }, nil
 	case "classic":
-		return func(text string) []analyzedToken { return classicTokens(text, maxLen) }, nil
+		return func(text string) []Token { return classicTokens(text, maxLen) }, nil
 	case "thai":
-		return func(text string) []analyzedToken { return thaiTokens(text) }, nil
+		return func(text string) []Token { return thaiTokens(text) }, nil
 	case "char_group":
 		return buildCharGroupTokenizer(params, maxLen)
 	case "ngram", "nGram", "edge_ngram", "edgeNGram":
@@ -143,16 +144,16 @@ func buildTokenizer(typ string, params map[string]any, maxNgramDiff int) (tokeni
 			return nil, err
 		}
 		if typ == "simple_pattern" {
-			return func(text string) []analyzedToken { return simplePatternTokens(re, text) }, nil
+			return func(text string) []Token { return simplePatternTokens(re, text) }, nil
 		}
-		return func(text string) []analyzedToken { return simplePatternSplitTokens(re, text) }, nil
+		return func(text string) []Token { return simplePatternSplitTokens(re, text) }, nil
 	case "path_hierarchy", "PathHierarchy":
 		return buildPathHierarchyTokenizer(params)
 	}
 	return nil, nil
 }
 
-func buildCharGroupTokenizer(params map[string]any, maxLen int) (tokenizerFunc, *apiError) {
+func buildCharGroupTokenizer(params map[string]any, maxLen int) (tokenizerFunc, *apierr.Error) {
 	var classes []func(rune) bool
 	chars := map[rune]bool{}
 	for _, c := range paramStrings(params, "tokenize_on_chars") {
@@ -210,14 +211,14 @@ func buildCharGroupTokenizer(params map[string]any, maxLen int) (tokenizerFunc, 
 		}
 		return false
 	}
-	return func(text string) []analyzedToken {
+	return func(text string) []Token {
 		return charTokenize(text, func(r rune) bool { return !split(r) }, nil, maxLen)
 	}, nil
 }
 
 // tokenCharMatcher builds the token_chars matcher used by the ngram
 // tokenizers; nil means every character is a token character.
-func tokenCharMatcher(params map[string]any) (func(rune) bool, *apiError) {
+func tokenCharMatcher(params map[string]any) (func(rune) bool, *apierr.Error) {
 	classes := paramStrings(params, "token_chars")
 	if len(classes) == 0 {
 		return nil, nil
@@ -260,7 +261,7 @@ func tokenCharMatcher(params map[string]any) (func(rune) bool, *apiError) {
 	}, nil
 }
 
-func buildNgramTokenizer(edge bool, params map[string]any, maxNgramDiff int) (tokenizerFunc, *apiError) {
+func buildNgramTokenizer(edge bool, params map[string]any, maxNgramDiff int) (tokenizerFunc, *apierr.Error) {
 	minGram := paramInt(params, "min_gram", 1)
 	maxGram := paramInt(params, "max_gram", 2)
 	if !edge && maxGram-minGram > maxNgramDiff {
@@ -277,17 +278,17 @@ func buildNgramTokenizer(edge bool, params map[string]any, maxNgramDiff int) (to
 	if err != nil {
 		return nil, err
 	}
-	return func(text string) []analyzedToken {
+	return func(text string) []Token {
 		return ngramTokenize(text, minGram, maxGram, edge, isTokenChar)
 	}, nil
 }
 
 // ngramTokenize mirrors Lucene's NGramTokenizer: grams never cross non token
 // characters; for each start the grams grow from minGram to maxGram.
-func ngramTokenize(text string, minGram, maxGram int, edge bool, isTokenChar func(rune) bool) []analyzedToken {
+func ngramTokenize(text string, minGram, maxGram int, edge bool, isTokenChar func(rune) bool) []Token {
 	rs := []rune(text)
 	offs := runeOffsets(rs)
-	out := []analyzedToken{}
+	out := []Token{}
 	pos := 0
 	i := 0
 	for i < len(rs) {
@@ -304,7 +305,7 @@ func ngramTokenize(text string, minGram, maxGram int, edge bool, isTokenChar fun
 				break
 			}
 			for n := minGram; n <= maxGram && s+n <= j; n++ {
-				out = append(out, analyzedToken{term: string(rs[s : s+n]), start: offs[s], end: offs[s+n], pos: pos, typ: "word"})
+				out = append(out, Token{Term: string(rs[s : s+n]), Start: offs[s], End: offs[s+n], Pos: pos, Type: "word"})
 				pos++
 			}
 		}
@@ -313,7 +314,7 @@ func ngramTokenize(text string, minGram, maxGram int, edge bool, isTokenChar fun
 	return out
 }
 
-func buildPatternTokenizer(params map[string]any) (tokenizerFunc, *apiError) {
+func buildPatternTokenizer(params map[string]any) (tokenizerFunc, *apierr.Error) {
 	pat := `\W+`
 	if v, ok := params["pattern"].(string); ok {
 		pat = v
@@ -327,16 +328,16 @@ func buildPatternTokenizer(params map[string]any) (tokenizerFunc, *apiError) {
 		return nil, err
 	}
 	group := paramInt(params, "group", -1)
-	return func(text string) []analyzedToken { return patternTokenize(re, group, text) }, nil
+	return func(text string) []Token { return patternTokenize(re, group, text) }, nil
 }
 
-func patternTokenize(re *jregex.Regexp, group int, text string) []analyzedToken {
+func patternTokenize(re *jregex.Regexp, group int, text string) []Token {
 	rs := []rune(text)
 	offs := runeOffsets(rs)
-	out := []analyzedToken{}
+	out := []Token{}
 	pos := 0
 	emit := func(s, e int) {
-		out = append(out, analyzedToken{term: string(rs[s:e]), start: offs[s], end: offs[e], pos: pos, typ: "word"})
+		out = append(out, Token{Term: string(rs[s:e]), Start: offs[s], End: offs[e], Pos: pos, Type: "word"})
 		pos++
 	}
 	matches := re.FindAll(rs)
@@ -365,15 +366,15 @@ func patternTokenize(re *jregex.Regexp, group int, text string) []analyzedToken 
 	return out
 }
 
-func simplePatternTokens(re *jregex.Regexp, text string) []analyzedToken {
+func simplePatternTokens(re *jregex.Regexp, text string) []Token {
 	rs := []rune(text)
 	offs := runeOffsets(rs)
-	out := []analyzedToken{}
+	out := []Token{}
 	pos := 0
 	for i := 0; i < len(rs); {
 		e := re.LongestAt(rs, i)
 		if e > i {
-			out = append(out, analyzedToken{term: string(rs[i:e]), start: offs[i], end: offs[e], pos: pos, typ: "word"})
+			out = append(out, Token{Term: string(rs[i:e]), Start: offs[i], End: offs[e], Pos: pos, Type: "word"})
 			pos++
 			i = e
 			continue
@@ -383,17 +384,17 @@ func simplePatternTokens(re *jregex.Regexp, text string) []analyzedToken {
 	return out
 }
 
-func simplePatternSplitTokens(re *jregex.Regexp, text string) []analyzedToken {
+func simplePatternSplitTokens(re *jregex.Regexp, text string) []Token {
 	rs := []rune(text)
 	offs := runeOffsets(rs)
-	out := []analyzedToken{}
+	out := []Token{}
 	pos := 0
 	start := 0
 	for i := 0; i < len(rs); {
 		e := re.LongestAt(rs, i)
 		if e > i {
 			if i > start {
-				out = append(out, analyzedToken{term: string(rs[start:i]), start: offs[start], end: offs[i], pos: pos, typ: "word"})
+				out = append(out, Token{Term: string(rs[start:i]), Start: offs[start], End: offs[i], Pos: pos, Type: "word"})
 				pos++
 			}
 			i = e
@@ -403,12 +404,12 @@ func simplePatternSplitTokens(re *jregex.Regexp, text string) []analyzedToken {
 		i++
 	}
 	if start < len(rs) {
-		out = append(out, analyzedToken{term: string(rs[start:]), start: offs[start], end: offs[len(rs)], pos: pos, typ: "word"})
+		out = append(out, Token{Term: string(rs[start:]), Start: offs[start], End: offs[len(rs)], Pos: pos, Type: "word"})
 	}
 	return out
 }
 
-func singleCharParam(params map[string]any, key string, def rune) (rune, *apiError) {
+func singleCharParam(params map[string]any, key string, def rune) (rune, *apierr.Error) {
 	v, ok := params[key].(string)
 	if !ok {
 		return def, nil
@@ -420,7 +421,7 @@ func singleCharParam(params map[string]any, key string, def rune) (rune, *apiErr
 	return rs[0], nil
 }
 
-func buildPathHierarchyTokenizer(params map[string]any) (tokenizerFunc, *apiError) {
+func buildPathHierarchyTokenizer(params map[string]any) (tokenizerFunc, *apierr.Error) {
 	delim, err := singleCharParam(params, "delimiter", '/')
 	if err != nil {
 		return nil, err
@@ -430,8 +431,8 @@ func buildPathHierarchyTokenizer(params map[string]any) (tokenizerFunc, *apiErro
 		return nil, err
 	}
 	skip := paramInt(params, "skip", 0)
-	reverse := fsBool(params, "reverse", false)
-	return func(text string) []analyzedToken {
+	reverse := ParamBool(params, "reverse", false)
+	return func(text string) []Token {
 		if reverse {
 			return reversePathTokens(text, delim, repl, skip)
 		}
@@ -440,10 +441,10 @@ func buildPathHierarchyTokenizer(params map[string]any) (tokenizerFunc, *apiErro
 }
 
 // pathTokens ports Lucene's PathHierarchyTokenizer.
-func pathTokens(text string, delim, repl rune, skip int) []analyzedToken {
+func pathTokens(text string, delim, repl rune, skip int) []Token {
 	in := []rune(text)
 	offs := runeOffsets(in)
-	out := []analyzedToken{}
+	out := []Token{}
 	var result []rune
 	startPos := 0
 	skipped := 0
@@ -500,13 +501,13 @@ func pathTokens(text string, delim, repl rune, skip int) []analyzedToken {
 			if skipped > skip && added {
 				term = append(term, extra...)
 				end := startPos + len(term)
-				out = append(out, analyzedToken{term: string(term), start: offs[min(startPos, len(in))], end: offs[min(end, len(in))], typ: "word"})
+				out = append(out, Token{Term: string(term), Start: offs[min(startPos, len(in))], End: offs[min(end, len(in))], Type: "word"})
 			}
 			done = true
 		} else {
 			term = append(term, extra...)
 			end := startPos + len(term)
-			out = append(out, analyzedToken{term: string(term), start: offs[min(startPos, len(in))], end: offs[min(end, len(in))], typ: "word"})
+			out = append(out, Token{Term: string(term), Start: offs[min(startPos, len(in))], End: offs[min(end, len(in))], Type: "word"})
 			result = term
 		}
 		if done {
@@ -514,12 +515,12 @@ func pathTokens(text string, delim, repl rune, skip int) []analyzedToken {
 		}
 	}
 	for i := range out {
-		out[i].pos = i
+		out[i].Pos = i
 	}
 	return out
 }
 
-func reversePathTokens(text string, delim, repl rune, skip int) []analyzedToken {
+func reversePathTokens(text string, delim, repl rune, skip int) []Token {
 	in := []rune(text)
 	offs := runeOffsets(in)
 	positions := []int{0}
@@ -536,7 +537,7 @@ func reversePathTokens(text string, delim, repl rune, skip int) []analyzedToken 
 		positions = append(positions, len(in))
 	}
 	count := len(positions)
-	out := []analyzedToken{}
+	out := []Token{}
 	idx := count - 1 - skip
 	if idx < 0 {
 		return out
@@ -544,14 +545,14 @@ func reversePathTokens(text string, delim, repl rune, skip int) []analyzedToken 
 	end := positions[idx]
 	for k := 0; k < count-skip-1; k++ {
 		s := positions[k]
-		out = append(out, analyzedToken{term: string(buf[s:end]), start: offs[s], end: offs[end], pos: k, typ: "word"})
+		out = append(out, Token{Term: string(buf[s:end]), Start: offs[s], End: offs[end], Pos: k, Type: "word"})
 	}
 	return out
 }
 
 // thaiTokens approximates Lucene's ThaiTokenizer (dictionary based word
 // breaking is not available): runs of letters and digits become words.
-func thaiTokens(text string) []analyzedToken {
+func thaiTokens(text string) []Token {
 	return thaiAnalyzedTokens(text)
 }
 
@@ -599,10 +600,10 @@ func isClassicCJ(r rune) bool {
 
 // classicTokens implements the JFlex grammar of Lucene's ClassicTokenizer:
 // longest match wins, ties go to the earlier rule.
-func classicTokens(text string, maxLen int) []analyzedToken {
+func classicTokens(text string, maxLen int) []Token {
 	rs := []rune(text)
 	offs := runeOffsets(rs)
-	out := []analyzedToken{}
+	out := []Token{}
 	pos := 0
 	rules := []struct {
 		re  *jregex.Regexp
@@ -652,7 +653,7 @@ func classicTokens(text string, maxLen int) []analyzedToken {
 			term = string(rs[i : best-1])
 		}
 		if offs[best]-offs[i] <= maxLen {
-			out = append(out, analyzedToken{term: term, start: offs[i], end: offs[best], pos: pos, typ: typ})
+			out = append(out, Token{Term: term, Start: offs[i], End: offs[best], Pos: pos, Type: typ})
 		}
 		pos++
 		i = best

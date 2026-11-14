@@ -13,7 +13,10 @@ import (
 	"time"
 	"unicode"
 
+	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/settings"
 )
 
 var validTypes = map[string]bool{
@@ -149,32 +152,9 @@ func (idx *Index) numReplicas() int {
 	return 1
 }
 
-func settingInt(settings map[string]any, key string) (int, bool) {
-	v, ok := findSetting(settings, key)
-	if !ok {
-		return 0, false
-	}
-	f, ok := toFloat(v)
-	if !ok {
-		return 0, false
-	}
-	return int(f), true
-}
+func settingInt(m map[string]any, key string) (int, bool) { return settings.Int(m, key) }
 
-func findSetting(settings map[string]any, key string) (any, bool) {
-	if v, ok := settings["index."+key]; ok {
-		return v, true
-	}
-	if v, ok := settings[key]; ok {
-		return v, true
-	}
-	if m, ok := settings["index"].(map[string]any); ok {
-		if v, ok := m[key]; ok {
-			return v, true
-		}
-	}
-	return nil, false
-}
+func findSetting(m map[string]any, key string) (any, bool) { return settings.Find(m, key) }
 
 // apiError is the API error type (internal/apierr).
 type apiError = apierr.Error
@@ -343,36 +323,7 @@ func autoFuzziness(term string) int {
 	}
 }
 
-func toFloat(v any) (float64, bool) {
-	switch t := v.(type) {
-	case float64:
-		return t, true
-	case float32:
-		return float64(t), true
-	case rawFloat:
-		return float64(t), true
-	case int:
-		return float64(t), true
-	case int64:
-		return float64(t), true
-	case uint64:
-		return float64(t), true
-	case json.Number:
-		f, err := t.Float64()
-		return f, err == nil
-	case bool:
-		if t {
-			return 1, true
-		}
-		return 0, true
-	case string:
-		f, err := strconv.ParseFloat(strings.TrimSpace(t), 64)
-		return f, err == nil
-	case nil:
-		return 0, false
-	}
-	return 0, false
-}
+func toFloat(v any) (float64, bool) { return jsonv.ToFloat(v) }
 
 func toString(v any) (string, bool) {
 	switch t := v.(type) {
@@ -1183,4 +1134,12 @@ func httpPortNum() int {
 		return 9200
 	}
 	return n
+}
+
+// analysisIndex is the analysis view of idx (nil for nil).
+func analysisIndex(idx *Index) *analysis.Index {
+	if idx == nil {
+		return nil
+	}
+	return &analysis.Index{Settings: idx.Settings}
 }
