@@ -259,7 +259,11 @@ pub fn handle_stats_api(store: &mut Store, req: &Req, spec: &str, metrics: &str)
     if level != "cluster" {
         resp.insert("indices".to_string(), Value::Object(indices_out));
     }
-    json_response(200, Value::Object(resp))
+    let mut resp = Value::Object(resp);
+    if req.bool_param("human") {
+        crate::human::humanize_stats(&mut resp);
+    }
+    json_response(200, resp)
 }
 
 // --------------------------------------------------------------- segments

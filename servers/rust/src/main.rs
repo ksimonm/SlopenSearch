@@ -15,6 +15,7 @@ mod fields;
 mod hashes;
 mod hdr;
 mod highlight;
+mod human;
 mod ingest;
 mod ingest_script;
 mod lang;
@@ -488,24 +489,16 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
         if status >= 400 && error_trace {
             if let Ok(mut v) = serde_json::from_slice::<Value>(&body) {
                 if let Some(err_obj) = v.get_mut("error").and_then(|e| e.as_object_mut()) {
-                    let stk = serde_json::json!([
-                        format!(
-                            "java.lang.IllegalArgumentException: {}",
-                            err_obj
-                                .get("reason")
-                                .and_then(|r| r.as_str())
-                                .unwrap_or("")
-                        ),
-                        "\tat org.opensearch.action.support.master.TransportMasterNodeAction$AsyncSingleAction.doExecute(TransportMasterNodeAction.java:210)"
-                    ]);
-                    err_obj.insert("stack_trace".to_string(), stk.clone());
+                    let stk = Value::String(errors::stack_trace(err_obj));
                     if let Some(rc) = err_obj.get_mut("root_cause").and_then(|r| r.as_array_mut()) {
                         for c in rc.iter_mut() {
                             if let Some(cm) = c.as_object_mut() {
-                                cm.insert("stack_trace".to_string(), stk.clone());
+                                let st = Value::String(errors::stack_trace(cm));
+                                cm.insert("stack_trace".to_string(), st);
                             }
                         }
                     }
+                    err_obj.insert("stack_trace".to_string(), stk);
                 }
                 body = serde_json::to_vec(&v).unwrap_or_default();
             }
@@ -552,7 +545,36 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
     resp
 }
 
+/// True when the path has a `%` not followed by two hex digits.
+fn has_bad_escape(path: &str) -> bool {
+    let b = path.as_bytes();
+    (0..b.len()).any(|i| {
+        b[i] == b'%'
+            && !(i + 2 < b.len() && b[i + 1].is_ascii_hexdigit() && b[i + 2].is_ascii_hexdigit())
+    })
+}
+
 pub fn dispatch(store: &mut Store, req: &Req) -> axum::response::Response {
+    if req.method != "OPTIONS" && has_bad_escape(&req.path) {
+        // the URI cannot be decoded: RestController reports the methods of the route
+        let probe = Req {
+            method: "OPTIONS".to_string(),
+            path: req.path.clone(),
+            query: vec![],
+            headers: HeaderMap::new(),
+            body: vec![],
+        };
+        let r = dispatch(store, &probe);
+        if let Some(allow) = r.headers().get("allow").and_then(|v| v.to_str().ok()) {
+            return json_response(
+                405,
+                serde_json::json!({
+                    "error": format!("Unexpected HTTP method, allowed: [{}]", allow.replace(',', ", ")),
+                    "status": 405,
+                }),
+            );
+        }
+    }
     let path = req.path.trim_matches('/').to_string();
     let segs: Vec<String> = if path.is_empty() {
         vec![]
@@ -753,7 +775,7 @@ pub fn dispatch(store: &mut Store, req: &Req) -> axum::response::Response {
                 }
                 "GET" | "HEAD" => docs::handle_get_doc(store, req, index, &segs[2]),
                 "DELETE" => docs::handle_delete_doc(store, req, index, &segs[2]),
-                _ => no_handler(&req.method, &req.path),
+                _ => errors::method_not_allowed(req, &["HEAD", "PUT", "GET", "POST", "DELETE"]),
             },
             "_source" => {
                 if req.method != "GET" && req.method != "HEAD" {
