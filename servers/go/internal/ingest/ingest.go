@@ -210,13 +210,6 @@ func (e *ingestEnv) render(s string) string {
 	})
 }
 
-func (e *ingestEnv) renderValue(v any) any {
-	if s, ok := v.(string); ok {
-		return e.render(s)
-	}
-	return v
-}
-
 func setNested(root map[string]any, path string, value any) *apierr.Error {
 	parts := strings.Split(path, ".")
 	cur := root

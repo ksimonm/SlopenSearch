@@ -1541,28 +1541,6 @@ func validTimeoutString(s string) bool {
 	return false
 }
 
-func multiDocs(hits []search.MultiHit) []map[string]any {
-	out := make([]map[string]any, 0, len(hits))
-	for _, h := range hits {
-		out = append(out, h.Doc)
-	}
-	return out
-}
-
-type hit struct {
-	id    string
-	doc   map[string]any
-	score float64
-}
-
-func matchedDocs(matched []hit) []map[string]any {
-	out := make([]map[string]any, 0, len(matched))
-	for _, m := range matched {
-		out = append(out, m.doc)
-	}
-	return out
-}
-
 func isQueryShardCause(e *apierr.Error) bool {
 	return e.Type == "mapper_parsing_exception" || e.Type == "query_shard_exception" || e.SearchFailure != ""
 }
@@ -1813,104 +1791,6 @@ func writeCustomSearchFailure(w http.ResponseWriter, idx *model.Index, e *apierr
 		{"caused_by", topCaused},
 	}
 	writeJSON(w, status, ojson.Object{{"error", errObj}, {"status", status}})
-}
-
-func filterSource(doc map[string]any, spec any) map[string]any {
-	var includes []string
-	switch t := spec.(type) {
-	case string:
-		includes = []string{t}
-	case []any:
-		for _, e := range t {
-			if s, ok := jsonv.ToString(e); ok {
-				includes = append(includes, s)
-			}
-		}
-	case map[string]any:
-		if inc, ok := t["includes"].([]any); ok {
-			for _, e := range inc {
-				if s, ok := jsonv.ToString(e); ok {
-					includes = append(includes, s)
-				}
-			}
-		}
-	}
-	if len(includes) == 0 {
-		return doc
-	}
-	out := map[string]any{}
-	for _, f := range includes {
-		if v, ok := doc[f]; ok {
-			out[f] = v
-		}
-	}
-	return out
-}
-
-func highlightFieldsOf(body map[string]any) []string {
-	hl, ok := body["highlight"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	fields, ok := hl["fields"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	out := []string{}
-	for f := range fields {
-		out = append(out, f)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func highlightFragment(text string, tokens map[string]bool) string {
-	fields := strings.Fields(text)
-	for i, w := range fields {
-		clean := strings.ToLower(strings.Trim(w, ".,!?"))
-		if tokens[clean] {
-			fields[i] = "<em>" + w + "</em>"
-		}
-	}
-	return strings.Join(fields, " ")
-}
-
-func collectTokens(query map[string]any) map[string]bool {
-	out := map[string]bool{}
-	var walk func(m map[string]any)
-	walk = func(m map[string]any) {
-		for clause, raw := range m {
-			switch clause {
-			case "match", "match_phrase":
-				if mm, ok := raw.(map[string]any); ok {
-					_, val, _ := search.SingleEntry(mm)
-					text, _ := search.QueryText(val)
-					for _, t := range mapping.Analyze(text) {
-						out[t] = true
-					}
-				}
-			case "multi_match":
-				if mm, ok := raw.(map[string]any); ok {
-					text, _ := jsonv.ToString(mm["query"])
-					for _, t := range mapping.Analyze(text) {
-						out[t] = true
-					}
-				}
-			case "bool":
-				if bm, ok := raw.(map[string]any); ok {
-					for _, key := range []string{"must", "should", "filter"} {
-						for _, q := range search.AsQueryList(bm[key]) {
-							if qm, ok := q.(map[string]any); ok {
-								walk(qm)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	walk(query)
-	return out
 }
 
 func queryHighlightTerms(q any) []string {

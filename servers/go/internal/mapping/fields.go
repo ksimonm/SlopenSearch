@@ -1007,10 +1007,6 @@ func strOf(v any) string {
 	return s
 }
 
-func base64DecodeLenient(s string) ([]byte, error) {
-	return nil, nil
-}
-
 // flattenScalars flattens arrays into individual scalar values. An empty array
 // yields no values; nested arrays are flattened recursively.
 func (c *ParseContext) flattenScalars(path string, raw any) ([]any, *apierr.Error) {

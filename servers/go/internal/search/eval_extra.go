@@ -25,8 +25,6 @@ import (
 // time helpers used by date range queries
 // ---------------------------------------------------------------------------
 
-func TimeLoadLocation(name string) (*time.Location, error) { return time.LoadLocation(name) }
-
 func timeNowIn(loc *time.Location) (time.Time, int) {
 	now := time.Now().In(loc)
 	_, off := now.Zone()
@@ -3528,38 +3526,6 @@ func (c *QueryCtx) filterIntervalSpans(spans []intervalSpan, filter map[string]a
 		}
 	}
 	return out, nil
-}
-
-func (c *QueryCtx) evalTermSingle(field string, bm map[string]any) (bool, float64, *apierr.Error) {
-	q, _ := bm["query"].(string)
-	if field == "" {
-		for f := range c.valuesMap() {
-			ok, _, _ := c.evalTerm(f, q, 1.0)
-			if ok {
-				return true, 1, nil
-			}
-		}
-		return false, 0, nil
-	}
-	ok, _, err := c.evalTerm(field, q, 1.0)
-	return ok, 1, err
-}
-
-func (c *QueryCtx) evalIntervalsSimple(pred func(field string, tokens []string) bool) bool {
-	for f, vals := range c.valuesMap() {
-		tokens := []string{}
-		for _, v := range vals {
-			s, ok := jsonv.ScalarString(v)
-			if !ok {
-				continue
-			}
-			tokens = append(tokens, mapping.Analyze(s)...)
-		}
-		if pred(f, tokens) {
-			return true
-		}
-	}
-	return false
 }
 
 // ---------------------------------------------------------------------------

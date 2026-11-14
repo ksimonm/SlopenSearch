@@ -267,38 +267,6 @@ func tvFields(r *http.Request, body map[string]any, idx *model.Index, doc map[st
 	return fields
 }
 
-func (s *Server) termVectorResponse(r *http.Request, idx *model.Index, id string, doc map[string]any, artificial bool) map[string]any {
-	body, _ := readJSON(r)
-	if body == nil {
-		body = map[string]any{}
-	}
-	termStats := tvBoolParam(r, body, "term_statistics", false)
-	fieldStats := tvBoolParam(r, body, "field_statistics", true)
-	positions := tvBoolParam(r, body, "positions", true)
-	offsets := tvBoolParam(r, body, "offsets", true)
-	filter, _ := body["filter"].(map[string]any)
-	analyzers, _ := body["per_field_analyzer"].(map[string]any)
-	out := map[string]any{"_index": idx.Name, "found": true, "took": int64(0)}
-	if artificial {
-		out["_version"] = int64(0)
-	} else {
-		out["_id"] = id
-		out["_version"] = idx.CurrentVersion(id)
-	}
-	tvs := map[string]any{}
-	for _, f := range tvFields(r, body, idx, doc) {
-		override := ""
-		if analyzers != nil {
-			override, _ = analyzers[f].(string)
-		}
-		if tv := termVectorFor(idx, f, doc, override, termStats, fieldStats, positions, offsets, filter); tv != nil {
-			tvs[f] = tv
-		}
-	}
-	out["term_vectors"] = tvs
-	return out
-}
-
 func (s *Server) handleTermVectors(w http.ResponseWriter, r *http.Request, name, id string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

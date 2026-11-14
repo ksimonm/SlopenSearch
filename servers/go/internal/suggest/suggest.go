@@ -4,7 +4,6 @@ package suggest
 
 import (
 	"slopensearch/internal/apierr"
-	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 )
 
@@ -54,16 +53,4 @@ func Evaluate(suggest map[string]any, indices []*model.Index, typed bool, search
 		}
 	}
 	return out, nil
-}
-
-func suggestText(spec map[string]any) string {
-	if v, ok := spec["text"]; ok {
-		s, _ := jsonv.ToString(v)
-		return s
-	}
-	if v, ok := spec["prefix"]; ok {
-		s, _ := jsonv.ToString(v)
-		return s
-	}
-	return ""
 }

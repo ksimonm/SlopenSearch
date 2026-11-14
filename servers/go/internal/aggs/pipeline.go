@@ -47,21 +47,6 @@ func isPipelineType(t string) bool {
 	return isParentPipelineType(t) || isSiblingPipelineType(t)
 }
 
-func withoutPipelines(sub map[string]any) map[string]any {
-	if sub == nil {
-		return nil
-	}
-	out := map[string]any{}
-	for k, v := range sub {
-		def, _ := v.(map[string]any)
-		if def != nil && isPipelineType(aggTypeOf(def)) {
-			continue
-		}
-		out[k] = v
-	}
-	return out
-}
-
 func applyParentPipelines(sub map[string]any, buckets []map[string]any, kind string, idx *model.Index) ([]map[string]any, *apierr.Error) {
 	if sub == nil {
 		return buckets, nil
@@ -383,10 +368,6 @@ func parentMetricValue(bucket map[string]any, path, gap string) (any, bool) {
 		return nil, false
 	}
 	return v, true
-}
-
-func pipelineValue(out any) any {
-	return out
 }
 
 func applyDerivative(name string, body map[string]any, buckets []map[string]any, kind string) *apierr.Error {
@@ -753,17 +734,6 @@ func applyBucketSort(name string, body map[string]any, buckets []map[string]any)
 		end = from + size
 	}
 	return buckets[from:end], nil
-}
-
-func bucketHasMetric(buckets []map[string]any, name string) bool {
-	for _, b := range buckets {
-		if v, ok := b[name]; ok {
-			if _, isMap := v.(map[string]any); isMap {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func bucketSortVal(b map[string]any, field string) (any, bool) {

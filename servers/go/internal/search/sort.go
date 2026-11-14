@@ -235,22 +235,6 @@ func SortOutputValue(h MultiHit, sp SortSpec) any {
 	return nil
 }
 
-func parseSort(spec any) (string, bool) {
-	switch t := spec.(type) {
-	case string:
-		return t, false
-	case map[string]any:
-		for k, v := range t {
-			if k == "_score" {
-				continue
-			}
-			dir, _ := jsonv.ToString(v)
-			return k, dir == "desc"
-		}
-	}
-	return "", false
-}
-
 func nestedSortValues(h MultiHit, sp SortSpec) []any {
 	pathParts := strings.Split(sp.NestedPath, ".")
 	fieldParts := strings.Split(sp.Field, ".")

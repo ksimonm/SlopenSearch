@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"slopensearch/internal/analysis"
-	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/ojson"
@@ -79,12 +78,6 @@ func (e *ScriptError) ErrorBody() ojson.Object {
 	errObj := ojson.Object{{"root_cause", []any{e.Object(false)}}}
 	errObj = append(errObj, e.Object(true)...)
 	return ojson.Object{{"error", errObj}, {"status", 400}}
-}
-
-// asAPIError wraps the script error for callers that report apiErrors.
-func (e *ScriptError) asAPIError() *apierr.Error {
-	return &apierr.Error{Type: "script_exception", Status: 400, Reason: map[bool]string{true: "compile error", false: "runtime error"}[e.Compile],
-		Extra: e, CausedBy: &apierr.Error{Type: e.CauseType, Reason: e.Reason}}
 }
 
 func plCompileFailure(src, name string, ce *painless.CompileError) *ScriptError {

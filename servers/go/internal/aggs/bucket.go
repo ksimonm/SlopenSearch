@@ -1005,10 +1005,6 @@ func multiKeyString(v any) string {
 	return strings.Join(parts, "|")
 }
 
-func fmtIP(ip net.IP) string {
-	return ip.String()
-}
-
 var _ = math.Floor
 
 type compositeSource struct {

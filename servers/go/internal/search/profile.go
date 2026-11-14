@@ -95,32 +95,3 @@ func profileQuery(query map[string]any) map[string]any {
 	base["description"] = ""
 	return base
 }
-
-func explainDescription(query map[string]any) string {
-	if q, ok := query["match"].(map[string]any); ok {
-		for field, raw := range q {
-			text, _ := QueryText(raw)
-			term := ""
-			if toks := mapping.Analyze(text); len(toks) > 0 {
-				term = toks[0]
-			}
-			return "weight(" + field + ":" + term + " in 0) [PerFieldSimilarity], result of:"
-		}
-	}
-	if q, ok := query["match_phrase"].(map[string]any); ok {
-		for field, raw := range q {
-			text, _ := QueryText(raw)
-			term := ""
-			if toks := mapping.Analyze(text); len(toks) > 0 {
-				term = toks[0]
-			}
-			return "weight(" + field + ":" + term + " in 0) [PerFieldSimilarity], result of:"
-		}
-	}
-	for k := range query {
-		if k == "match_all" {
-			return "match_all"
-		}
-	}
-	return "sum of:"
-}

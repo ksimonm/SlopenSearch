@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
@@ -453,25 +454,6 @@ func numericLess(a, b any) int {
 	as, _ := jsonv.ToString(a)
 	bs, _ := jsonv.ToString(b)
 	return strings.Compare(as, bs)
-}
-
-func numberKey(v any) string {
-	switch t := v.(type) {
-	case int64:
-		return strconv.FormatInt(t, 10)
-	case uint64:
-		return strconv.FormatUint(t, 10)
-	case json.Number:
-		return t.String()
-	case float64:
-		return jsonv.FormatNumber(t)
-	case bool:
-		return strconv.FormatBool(t)
-	case nil:
-		return "null"
-	default:
-		return fmt.Sprintf("%v", t)
-	}
 }
 
 // parseTermValue converts a term query value into the indexed representation
@@ -1622,7 +1604,7 @@ func ParseTZOffset(tz string) (int64, error) {
 		}
 		return sign * (hours*3600 + mins*60) * 1000, nil
 	}
-	loc, err := TimeLoadLocation(tz)
+	loc, err := time.LoadLocation(tz)
 	if err != nil {
 		return 0, err
 	}
@@ -2156,38 +2138,6 @@ func (c *QueryCtx) evalFuzzy(field string, raw any, boost float64) (bool, float6
 // ---------------------------------------------------------------------------
 // full text
 // ---------------------------------------------------------------------------
-
-func (c *QueryCtx) fieldTokens(field string) ([]string, bool) {
-	vals, present := c.Values(field)
-	if !present {
-		return nil, false
-	}
-	out := []string{}
-	for _, v := range vals {
-		s, ok := jsonv.ScalarString(v)
-		if !ok {
-			continue
-		}
-		out = append(out, mapping.Analyze(s)...)
-	}
-	return out, true
-}
-
-func (c *QueryCtx) fieldStrings(field string) ([]string, bool) {
-	vals, present := c.Values(field)
-	if !present {
-		return nil, false
-	}
-	out := []string{}
-	for _, v := range vals {
-		s, ok := jsonv.ScalarString(v)
-		if !ok {
-			continue
-		}
-		out = append(out, s)
-	}
-	return out, true
-}
 
 // analyzerName returns the search analyzer of field for a query.
 func (c *QueryCtx) analyzerName(field string, opts any) string {

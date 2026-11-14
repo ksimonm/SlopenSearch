@@ -114,10 +114,6 @@ func ParseAny(def map[string]any, s string) (int64, bool) {
 	return 0, false
 }
 
-func parseDateDefault(s string) (int64, bool) {
-	return parseStrictDateOptionalTime(s)
-}
-
 func parseStrictDateOptionalTime(s string) (int64, bool) {
 	sec, nsec, ok := parseStrictDateOptionalTimeParts(s)
 	if !ok {

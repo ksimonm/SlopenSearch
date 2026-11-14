@@ -8,7 +8,6 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/mapping"
-	"slopensearch/internal/model"
 	"slopensearch/internal/settings"
 	"slopensearch/internal/wildcard"
 )
@@ -848,6 +847,3 @@ func (s *Server) handleIndexTemplateSimulate(w http.ResponseWriter, r *http.Requ
 	}
 	s.simulateTemplate(w, r, "", nil)
 }
-
-// applyTemplatesToNewIndex is retained for compatibility.
-func applyTemplatesToNewIndex(s *Server, idx *model.Index) {}

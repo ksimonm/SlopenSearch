@@ -68,20 +68,6 @@ func injectAliasValues(mappings map[string]any, prefix string, doc map[string]an
 	}
 }
 
-func numericValues(docs []map[string]any, field, pathPrefix string) []float64 {
-	out := []float64{}
-	for _, d := range docs {
-		v, ok := aggFieldValue(d, field, pathPrefix)
-		if !ok {
-			continue
-		}
-		if f, ok := jsonv.ToFloat(v); ok {
-			out = append(out, f)
-		}
-	}
-	return out
-}
-
 // Hit is a matched document as seen by aggregations.
 type Hit struct {
 	Idx   *model.Index
@@ -1332,7 +1318,7 @@ func loadAggLocation(tz string) (*time.Location, *apierr.Error) {
 		}
 		return time.FixedZone(tz, int(off/1000)), nil
 	}
-	loc, err := search.TimeLoadLocation(tz)
+	loc, err := time.LoadLocation(tz)
 	if err != nil {
 		return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 			Reason:   "Failed to parse aggregation [x]",
@@ -2107,58 +2093,6 @@ func filterAgg(spec map[string]any, docs []map[string]any, idx *model.Index, pat
 	return out, nil
 }
 
-func rangeAgg(field string, rangesRaw any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
-	ranges, ok := rangesRaw.([]any)
-	if !ok {
-		return nil, apierr.Parsing("range requires ranges")
-	}
-	buckets := []any{}
-	for _, rRaw := range ranges {
-		r, ok := rRaw.(map[string]any)
-		if !ok {
-			continue
-		}
-		from, hasFrom := jsonv.ToFloat(r["from"])
-		to, hasTo := jsonv.ToFloat(r["to"])
-		var bucketDocs []map[string]any
-		for _, d := range docs {
-			v, ok := aggFieldValue(d, field, pathPrefix)
-			if !ok {
-				continue
-			}
-			n, ok := jsonv.ToFloat(v)
-			if !ok {
-				continue
-			}
-			if hasFrom && !(n >= from) {
-				continue
-			}
-			if hasTo && !(n < to) {
-				continue
-			}
-			bucketDocs = append(bucketDocs, d)
-		}
-		b := map[string]any{"doc_count": len(bucketDocs)}
-		if hasFrom {
-			b["from"] = from
-		}
-		if hasTo {
-			b["to"] = to
-		}
-		if sub != nil {
-			subRes, err := Evaluate(sub, docsToHits(bucketDocs, idx), idx, pathPrefix, typed)
-			if err != nil {
-				return nil, err
-			}
-			for sk, sv := range subRes {
-				b[sk] = sv
-			}
-		}
-		buckets = append(buckets, b)
-	}
-	return map[string]any{"buckets": buckets}, nil
-}
-
 type nestedCtx struct {
 	rootID    string
 	ancestors map[string]map[string]any
@@ -2248,14 +2182,6 @@ func walkNested(cur any, parts []string, full string, ancestors map[string]map[s
 	}
 }
 
-func mapKeysOf(m map[string]any) []string {
-	out := []string{}
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
-}
-
 func reverseNestedAgg(name, path string, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool) (any, *apierr.Error) {
 	selected := []map[string]any{}
 	seen := map[string]bool{}
@@ -2317,13 +2243,6 @@ func reverseNestedAgg(name, path string, docs []map[string]any, idx *model.Index
 		}
 	}
 	return res, nil
-}
-
-func mean(vals []float64) any {
-	if len(vals) == 0 {
-		return nil
-	}
-	return sumOf(vals) / float64(len(vals))
 }
 
 func sumOf(vals []float64) float64 {

@@ -95,11 +95,6 @@ func (s *Server) handleScriptsRoute(w http.ResponseWriter, r *http.Request, segs
 	return true
 }
 
-// runPainless executes a painless/expression script against a context map.
-func runPainless(source string, ctx map[string]any) (any, *apierr.Error) {
-	return nil, nil
-}
-
 // buildStoredScript validates a stored script body like StoredScriptSource.
 func buildStoredScript(body map[string]any) (map[string]any, *apierr.Error) {
 	raw, has := body["script"]
