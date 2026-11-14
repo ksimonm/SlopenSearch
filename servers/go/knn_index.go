@@ -310,7 +310,7 @@ func knnMergeConflicts(existing, incoming map[string]any) *apiError {
 	return nil
 }
 
-var knnFieldKeyOrder =[]string{"type", "dimension", "data_type", "mode", "compression_level", "method",
+var knnFieldKeyOrder = []string{"type", "dimension", "data_type", "mode", "compression_level", "method",
 	"model_id", "space_type", "doc_values"}
 
 // knnOrderMappings returns a rendering copy of a mapping in which

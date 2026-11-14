@@ -953,6 +953,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			}
 			anyMapped := false
 			for _, idx := range indices {
+				if kerr := knnUnsupportedSort(idx, sp.field); kerr != nil {
+					writeError(w, kerr)
+					return
+				}
 				if sortFieldMapped(idx, sp.field) {
 					anyMapped = true
 					break
@@ -2388,6 +2392,9 @@ func validateQuery(idx *Index, query map[string]any) *apiError {
 		}
 		switch clause {
 		case "term":
+			if err := knnTermCheck(idx, raw); err != nil {
+				return err
+			}
 			if err := validateTermQuery(idx, raw); err != nil {
 				return err
 			}

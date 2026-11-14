@@ -283,6 +283,26 @@ func knnParseVector(raw []byte, e jsonEntry) *apiError {
 	}
 }
 
+// knnTermCheck rejects term queries on knn_vector fields.
+func knnTermCheck(idx *Index, raw any) *apiError {
+	bm, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	for field := range bm {
+		def, _ := mappingFieldDef(idx, field)
+		if t, _ := def["type"].(string); t != "knn_vector" {
+			continue
+		}
+		reason := "KNN vector do not support exact searching, use KNN queries instead: [" + field + "]"
+		obj := orderedJSON{{"type", "query_shard_exception"}, {"reason", reason},
+			{"index", idx.Name}, {"index_uuid", idx.UUID}}
+		f := &shardFailure{status: 400, index: idx.Name, root: obj, shard: obj, top: obj}
+		return &apiError{Type: "query_shard_exception", Status: 400, Reason: reason, Shard: f}
+	}
+	return nil
+}
+
 // validateKnnQuery runs the shard-level checks of a knn query.
 func validateKnnQuery(idx *Index, raw any) *apiError {
 	bm, ok := raw.(map[string]any)
