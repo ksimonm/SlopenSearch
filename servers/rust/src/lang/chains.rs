@@ -631,6 +631,12 @@ pub const LANGUAGE_ANALYZERS: &[&str] = &[
 /// Runs a language analyzer (with optional provider settings: stopwords,
 /// stopwords_case, stem_exclusion) over a text.
 pub fn language_analyzer(name: &str, p: &Map<String, Value>, text: &str) -> Option<Vec<Tok>> {
+    language_analyzer_end(name, p, text).map(|(t, _)| t)
+}
+
+/// `language_analyzer`, with the position increment left after the last
+/// token (stop words at the end of the text).
+pub fn language_analyzer_end(name: &str, p: &Map<String, Value>, text: &str) -> Option<(Vec<Tok>, usize)> {
     use super::*;
     if !LANGUAGE_ANALYZERS.contains(&name) {
         return None;
@@ -798,11 +804,21 @@ pub fn language_analyzer(name: &str, p: &Map<String, Value>, text: &str) -> Opti
         }
         _ => return None,
     }
+    let src: Vec<(usize, usize)> = source.iter().map(|t| (t.start, t.pos_inc)).collect();
     let mut toks = source;
     for f in &chain {
         toks = f(toks);
     }
-    Some(toks)
+    // The final position increment (TokenStream.end()): positions of
+    // tokens removed after the last emitted one. The CJK bigram filter
+    // regroups positions, so it keeps none.
+    let trailing = if name == "cjk" {
+        0
+    } else {
+        let last = toks.last().map(|t| t.start);
+        src.iter().filter(|(s, _)| last.map(|l| *s > l).unwrap_or(true)).map(|(_, inc)| inc).sum()
+    };
+    Some((toks, trailing))
 }
 
 /// The Snowball stemmer class name as a static string, if Lucene ships it.

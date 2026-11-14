@@ -285,10 +285,18 @@ impl Tokenizer {
     }
 }
 
+impl Tokenizer {
+    /// Whether the stream carries Lucene's KeywordAttribute: language
+    /// analyzers with a stemmer (and its keyword marker) do.
+    pub fn uses_keyword_attr(&self) -> bool {
+        matches!(self, Tokenizer::Language { name, .. } if !matches!(name.as_str(), "chinese" | "cjk" | "thai"))
+    }
+}
+
 /// A whole Lucene language analyzer chain from `crate::lang` (it runs as
 /// the tokenizer of a filter-less chain).
 fn language_analyzer(name: &str, params: &Map<String, Value>, text: &str) -> Stream {
-    let toks = crate::lang::chains::language_analyzer(name, params, text).unwrap_or_default();
+    let (toks, trailing) = crate::lang::chains::language_analyzer_end(name, params, text).unwrap_or_default();
     let mut pos: isize = -1;
     let mut end_pos = 0usize;
     let mut out = Vec::with_capacity(toks.len());
@@ -297,10 +305,11 @@ fn language_analyzer(name: &str, params: &Map<String, Value>, text: &str) -> Str
         let p = pos.max(0) as usize;
         let mut tok = Token::new(t.term, t.start, t.end, &t.typ, p);
         tok.pos_len = t.pos_len;
+        tok.keyword = t.keyword;
         end_pos = end_pos.max(p + t.pos_len);
         out.push(tok);
     }
-    Stream { tokens: out, end_pos }
+    Stream { tokens: out, end_pos: end_pos + trailing }
 }
 
 // ------------------------------------------------------------ char tokenizers
