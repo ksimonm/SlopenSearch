@@ -22,8 +22,6 @@ pub mod romance_stem;
 pub mod rslp;
 mod rslp_data;
 pub mod slavic_baltic;
-pub mod snowball;
-pub mod snowball_gen;
 pub mod stem_util;
 pub mod std_tok;
 mod std_tok_data;

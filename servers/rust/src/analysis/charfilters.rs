@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use serde_json::{Map, Value};
 
-use super::jregex::{self, JRegex};
+use crate::jregex::{self, JRegex};
 use super::{bad, p_bool, p_list, p_str, AResult};
 
 #[derive(Debug, Clone, Default)]
@@ -385,7 +385,7 @@ fn html_strip(text: &str, escaped: &HashSet<String>) -> (String, OffsetMap) {
     // Replaces c[i..j] by `rep`, recording the offset correction after it.
     let replace = |out: &mut String, out_len: &mut usize, cum: &mut i64, map: &mut OffsetMap, i: usize, j: usize, rep: &str| {
         let in_len = u16len(&c[i..j]) as i64;
-        let rep_len = super::uchar::utf16_len(rep);
+        let rep_len = crate::uchar::utf16_len(rep);
         out.push_str(rep);
         *out_len += rep_len;
         *cum += in_len - rep_len as i64;

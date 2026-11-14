@@ -1319,7 +1319,7 @@ fn ctx_expr(
     p.insert("__ctx_version".to_string(), json!(version));
     let v = Value::Null;
     let ctx = crate::eval::QueryCtx::new(idx, idx.name.as_str(), &v);
-    let env = crate::painless::ScriptEnv { c: &ctx, params: p };
+    let env = crate::script_env::ScriptEnv { c: &ctx, params: p };
     env.eval_script_expression(e)
 }
 
@@ -1359,7 +1359,7 @@ pub(crate) fn run_ctx_script(
             };
             let condv = ctx_expr(cond, idx, source, params, id, version)
                 .map_err(|_| (false, "compile error".into()))?;
-            let taken = crate::painless::truthy(&condv);
+            let taken = crate::script_env::truthy(&condv);
             if taken {
                 run_ctx_script(then_block, idx, source, params, id, version, op, meta)?;
             }
@@ -1436,7 +1436,7 @@ pub(crate) fn run_ctx_script(
             };
             if !path.is_empty() {
                 let cur = src_path_get(source, path);
-                let n = crate::painless::script_float(&cur) + delta;
+                let n = crate::script_env::script_float(&cur) + delta;
                 src_path_set(source, path, json!(n as i64));
                 continue;
             }
@@ -1447,10 +1447,10 @@ pub(crate) fn run_ctx_script(
                     .map_err(|_| (false, "compile error".into()))?;
                 let cur = src_path_get(source, path);
                 let nv = if let Value::String(ls) = &cur {
-                    let rs = crate::painless::_value_to_script_string_public(&val).unwrap_or_default();
+                    let rs = crate::script_env::_value_to_script_string_public(&val).unwrap_or_default();
                     Value::String(format!("{}{}", ls, rs))
                 } else {
-                    json!(crate::painless::script_float(&cur) + crate::painless::script_float(&val))
+                    json!(crate::script_env::script_float(&cur) + crate::script_env::script_float(&val))
                 };
                 src_path_set(source, path, nv);
                 continue;
@@ -1461,7 +1461,7 @@ pub(crate) fn run_ctx_script(
                 let val = ctx_expr(rhs, idx, source, params, id, version)
                     .map_err(|_| (false, "compile error".into()))?;
                 let cur = src_path_get(source, path);
-                src_path_set(source, path, json!(crate::painless::script_float(&cur) - crate::painless::script_float(&val)));
+                src_path_set(source, path, json!(crate::script_env::script_float(&cur) - crate::script_env::script_float(&val)));
                 continue;
             }
             if let Some(pos) = rest.find('=') {
@@ -2692,7 +2692,7 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
             };
             let mut sparams = script_val
                 .and_then(|v| v.as_object())
-                .map(crate::painless::script_params_of)
+                .map(crate::script_env::script_params_of)
                 .unwrap_or_default();
             let target = match resolve_write_target(store, &idx_name) {
                 Ok(t) => t.name.clone(),

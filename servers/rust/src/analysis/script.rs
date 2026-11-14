@@ -2,7 +2,7 @@
 //! scripts: expressions over the `token` object (getTerm(), getPosition(),
 //! getType(), ...), with literals, arithmetic, comparisons and boolean logic.
 
-use super::uchar::utf16_len;
+use crate::uchar::utf16_len;
 use super::Token;
 
 #[derive(Debug, Clone, PartialEq)]

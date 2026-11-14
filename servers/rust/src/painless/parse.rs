@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::pl_lex::{lex, CompileErr, Tok, TokKind};
-use crate::pl_value::{parse_number, PV};
+use crate::painless::lex::{lex, CompileErr, Tok, TokKind};
+use crate::painless::value::{parse_number, PV};
 
 pub struct Expr {
     /// Unique per program: the key of the checker's type information.

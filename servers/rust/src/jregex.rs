@@ -5,7 +5,7 @@
 //!
 //! Matching works on `&[char]`; positions are char indices.
 
-use super::uchar;
+use crate::uchar;
 
 pub const UNIX_LINES: u32 = 0x01;
 pub const CASE_INSENSITIVE: u32 = 0x02;

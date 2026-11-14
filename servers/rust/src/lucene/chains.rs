@@ -2,7 +2,7 @@
 //! Lucene 10.5.1's `createComponents` and OpenSearch's analyzer providers.
 
 use super::case_width::{cjk_width, decimal_digit, irish_lowercase, lowercase, turkish_lowercase, uppercase};
-use super::snowball::stem_units;
+use crate::snowball::stem_units;
 use super::Tok;
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -172,7 +172,7 @@ pub fn map_stem(f: fn(&mut Vec<u16>)) -> Filter {
 /// SnowballFilter with a stemmer class ("English", "German", ...).
 pub fn snowball(lang: &'static str) -> Filter {
     Box::new(move |mut toks: Vec<Tok>| {
-        let Some(mut st) = super::snowball_gen::new_stemmer(lang) else { return toks };
+        let Some(mut st) = crate::snowball::stemmers::new_stemmer(lang) else { return toks };
         for t in toks.iter_mut().filter(|t| !t.keyword) {
             let u = units(t);
             let out = stem_units(st.as_mut(), &u);
@@ -397,7 +397,7 @@ impl TermStem {
             TermStem::F(f) => f(&mut u),
             TermStem::P => english_possessive(&mut u),
             TermStem::S(c) => {
-                if let Some(mut st) = super::snowball_gen::new_stemmer(c) {
+                if let Some(mut st) = crate::snowball::stemmers::new_stemmer(c) {
                     u = stem_units(st.as_mut(), &u);
                 }
             }

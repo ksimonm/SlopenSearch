@@ -19,14 +19,13 @@ pub mod api;
 pub mod charfilters;
 pub mod filters;
 mod fold_table;
-pub mod jregex;
+use crate::jregex;
 pub mod script;
 pub mod search;
 pub mod settings;
 pub mod stem;
 pub mod stopwords;
 pub mod tokenizers;
-pub mod uchar;
 
 use serde_json::{Map, Value};
 
@@ -560,7 +559,7 @@ pub fn builtin_analyzer(typ: &str, p: &Map<String, Value>, ctx: &Ctx) -> AResult
             simple_chain(Tokenizer::Standard { max_len: 255 }, "standard", f)
         }
         // Language analyzers ("english", "french", ...) are resolved here.
-        lang if crate::lang::chains::LANGUAGE_ANALYZERS.contains(&lang) => simple_chain(
+        lang if crate::lucene::chains::LANGUAGE_ANALYZERS.contains(&lang) => simple_chain(
             Tokenizer::Language { name: lang.to_string(), params: p.clone() },
             if lang == "thai" { "thai" } else { "standard" },
             vec![],

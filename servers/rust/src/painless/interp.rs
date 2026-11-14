@@ -4,12 +4,12 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::pl_check::{static_field, Info};
-use crate::pl_lex::is_type_name;
-use crate::pl_lib::{get_field, index_get, index_set, iter_items, new_object, set_field, static_enum};
-use crate::pl_parse::{Expr, FuncDef, LBody, Lambda, Program, Stmt, EK, SK};
-use crate::pl_regex::compile_pattern;
-use crate::pl_value::*;
+use crate::painless::check::{static_field, Info};
+use crate::painless::lex::is_type_name;
+use crate::painless::lib::{get_field, index_get, index_set, iter_items, new_object, set_field, static_enum};
+use crate::painless::parse::{Expr, FuncDef, LBody, Lambda, Program, Stmt, EK, SK};
+use crate::painless::regex::compile_pattern;
+use crate::painless::value::*;
 
 pub struct Var {
     pub v: PV,
@@ -436,7 +436,7 @@ impl<'a> Interp<'a> {
         };
         if let EK::Type(class) = &obj.kind {
             let arg_pos = args.first().map(|e| e.pos);
-            return crate::pl_lib::call_static(self, class, name, a, x.pos, arg_pos);
+            return crate::painless::lib::call_static(self, class, name, a, x.pos, arg_pos);
         }
         let recv = self.eval(obj, env)?;
         if recv.is_null() {
@@ -445,7 +445,7 @@ impl<'a> Interp<'a> {
             }
             return Err(npe(x.pos));
         }
-        crate::pl_lib::call_method(self, &recv, name, a, x.pos)
+        crate::painless::lib::call_method(self, &recv, name, a, x.pos)
     }
 
     /// Runs f one call level deeper, failing past the call depth limit.
@@ -519,7 +519,7 @@ impl<'a> Interp<'a> {
                 Some(v) => v.borrow().v.clone(),
                 None => return Err(iae(off, &format!("cannot resolve symbol [{}]", typ))),
             };
-            return Ok(native(move |inp, args, o| crate::pl_lib::call_method(inp, &recv, &method, args, o)));
+            return Ok(native(move |inp, args, o| crate::painless::lib::call_method(inp, &recv, &method, args, o)));
         }
         let typ = typ.to_string();
         if method == "new" {
@@ -527,14 +527,14 @@ impl<'a> Interp<'a> {
         }
         Ok(native(move |inp, mut args, o| {
             let key = format!("{}/{}", method, args.len());
-            if crate::pl_check::static_methods().get(typ.as_str()).map(|m| m.contains_key(&key)).unwrap_or(false) {
-                return crate::pl_lib::call_static(inp, &typ, &method, args, o, None);
+            if crate::painless::check::static_methods().get(typ.as_str()).map(|m| m.contains_key(&key)).unwrap_or(false) {
+                return crate::painless::lib::call_static(inp, &typ, &method, args, o, None);
             }
             if args.is_empty() {
                 return Err(iae(o, &format!("Unknown reference [{}::{}]", typ, method)));
             }
             let recv = args.remove(0);
-            crate::pl_lib::call_method(inp, &recv, &method, args, o)
+            crate::painless::lib::call_method(inp, &recv, &method, args, o)
         }))
     }
 
@@ -579,7 +579,7 @@ impl<'a> Interp<'a> {
                     PV::Null => return Err(npe(off)),
                     other => jstr(other),
                 };
-                let mut m = crate::pl_regex::PMatcher::new(p, &s);
+                let mut m = crate::painless::regex::PMatcher::new(p, &s);
                 let ok = if op == "=~" { m.find(off)? } else { m.matches(off)? };
                 return Ok(PV::Bool(ok));
             }

@@ -6,10 +6,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde_json::{Map, Value};
 
-use super::jregex::{self, JRegex};
+use crate::jregex::{self, JRegex};
 use super::script::Script;
 use super::stem::{self, Stemmer};
-use super::uchar::{self, utf16_len};
+use crate::uchar::{self, utf16_len};
 use super::{bad, p_bool, p_int, p_list, p_str, specs_of, stopwords_param, AResult, Chain, Ctx, Named, Spec, Stream, Token};
 use crate::errors::ApiError;
 
@@ -49,7 +49,7 @@ pub enum Norm {
     Arabic,
     Serbian,
     DecimalDigit,
-    /// A language normalization filter of `crate::lang` by name.
+    /// A language normalization filter of `crate::lucene` by name.
     Lang(&'static str),
 }
 
@@ -1140,7 +1140,7 @@ impl Filter {
                     Norm::Arabic => arabic_normalize(&t.term),
                     Norm::Serbian => serbian_normalize(&t.term),
                     Norm::DecimalDigit => decimal_digit(&t.term),
-                    Norm::Lang(name) => crate::lang::chains::normalize_term(name, &t.term),
+                    Norm::Lang(name) => crate::lucene::chains::normalize_term(name, &t.term),
                 })
             }
         }

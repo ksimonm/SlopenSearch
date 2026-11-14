@@ -15,9 +15,9 @@ use std::rc::Rc;
 
 use serde_json::Value;
 
-use crate::pl_interp::PFn;
-use crate::pl_regex::{PMatcher, PPattern};
-use crate::pl_time::{Dtf, Zdt};
+use crate::painless::interp::PFn;
+use crate::painless::regex::{PMatcher, PPattern};
+use crate::painless::time::{Dtf, Zdt};
 
 pub type R<T> = Result<T, RtErr>;
 
@@ -812,10 +812,10 @@ pub fn jstr(v: &PV) -> String {
         },
         PV::StaticRef(s) => s.to_string(),
         PV::Zdt(z) => z.to_string_java(),
-        PV::LocalDate(d) => crate::pl_time::fmt_local_date(*d),
-        PV::Instant(ms, nanos) => crate::pl_time::fmt_instant(*ms, *nanos),
-        PV::Duration(d) => crate::pl_time::fmt_duration(*d),
-        PV::DayOfWeek(d) => crate::pl_time::DAY_NAMES[(*d as usize).clamp(1, 7) - 1].to_string(),
+        PV::LocalDate(d) => crate::painless::time::fmt_local_date(*d),
+        PV::Instant(ms, nanos) => crate::painless::time::fmt_instant(*ms, *nanos),
+        PV::Duration(d) => crate::painless::time::fmt_duration(*d),
+        PV::DayOfWeek(d) => crate::painless::time::DAY_NAMES[(*d as usize).clamp(1, 7) - 1].to_string(),
         PV::ChronoUnit(u) => {
             let mut s = u[..1].to_string();
             s.push_str(&u[1..].to_lowercase());

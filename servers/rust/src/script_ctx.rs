@@ -12,7 +12,7 @@ use crate::expressions;
 use crate::store::{Index, NODE_ID};
 use serde_json::{json, Map, Value};
 use crate::pl_api;
-use crate::pl_value::{from_json, to_json, MapKind, PV};
+use crate::painless::value::{from_json, to_json, MapKind, PV};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -496,7 +496,7 @@ pub fn script_to_string(raw: &Value) -> String {
         Ok(s) => s,
         Err(_) => return String::new(),
     };
-    let params = crate::painless::format_script_value(&Value::Object(spec.params.clone()));
+    let params = crate::script_env::format_script_value(&Value::Object(spec.params.clone()));
     match &spec.id {
         Some(id) => format!("Script{{type=stored, lang='null', idOrCode='{}', options=null, params={}}}", id, params),
         None => format!(

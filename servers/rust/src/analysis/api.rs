@@ -4,7 +4,7 @@ use axum::response::Response;
 use serde_json::{json, Map, Value};
 
 use super::tokenizers::Tokenizer;
-use super::uchar::utf16_len;
+use crate::uchar::utf16_len;
 use super::{bad, specs_of, Analyzer, Chain, Ctx, Named, Spec, Stream, Token};
 use crate::errors::{err_response, json_response, ApiError};
 use crate::store::{Index, Store};

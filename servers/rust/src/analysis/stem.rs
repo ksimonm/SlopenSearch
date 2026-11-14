@@ -12,8 +12,8 @@ pub enum Stemmer {
     PossessiveEnglish,
     /// A known language whose algorithm is not implemented yet.
     Unimplemented,
-    /// A Lucene language stemmer from `crate::lang`.
-    Lang(crate::lang::chains::TermStem),
+    /// A Lucene language stemmer from `crate::lucene`.
+    Lang(crate::lucene::chains::TermStem),
 }
 
 impl Stemmer {
@@ -54,7 +54,7 @@ fn invalid_class(lang: &str) -> ApiError {
 /// The stemmer for a `stemmer` filter `language` (OpenSearch's
 /// StemmerTokenFilterFactory names).
 pub fn stemmer_for(language: &str) -> Result<Stemmer, ApiError> {
-    if let Some(t) = crate::lang::chains::term_stemmer(language) {
+    if let Some(t) = crate::lucene::chains::term_stemmer(language) {
         return Ok(Stemmer::Lang(t));
     }
     let l = language.to_lowercase();
@@ -117,8 +117,8 @@ pub fn snowball_for(language: &str) -> Result<Stemmer, ApiError> {
 fn lang_snowball(cls: &str) -> Stemmer {
     // Snowball folded "German2" into "German".
     let cls = if cls == "German2" { "German" } else { cls };
-    match crate::lang::chains::snowball_class(cls) {
-        Some(c) => Stemmer::Lang(crate::lang::chains::TermStem::S(c)),
+    match crate::lucene::chains::snowball_class(cls) {
+        Some(c) => Stemmer::Lang(crate::lucene::chains::TermStem::S(c)),
         None => Stemmer::Unimplemented,
     }
 }

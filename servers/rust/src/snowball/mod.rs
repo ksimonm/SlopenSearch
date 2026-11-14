@@ -1,6 +1,8 @@
 //! Port of Lucene's Snowball runtime (org.tartarus.snowball.SnowballProgram)
-//! used by the stemmers in `snowball_gen.rs`. Works on UTF-16 code units,
+//! used by the stemmers in `stemmers.rs`. Works on UTF-16 code units,
 //! exactly like the Java original.
+
+pub(crate) mod stemmers;
 
 pub struct Among<T: 'static> {
     pub s: &'static [u16],
@@ -153,8 +155,6 @@ impl Env {
         }
         adjustment
     }
-
-    pub fn slice_check(&self) {}
 
     pub fn slice_from(&mut self, s: &[u16]) {
         let (b, k) = (self.bra, self.ket);

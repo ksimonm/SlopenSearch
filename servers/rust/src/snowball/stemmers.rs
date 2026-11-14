@@ -4,7 +4,7 @@
     non_snake_case, non_upper_case_globals, unreachable_code, dead_code, clippy::all)]
 
 pub mod arabic {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<ArabicStemmer>; 144] = [
         Among { s: &[1600], substring_i: -1, result: 1, method: None },
@@ -1221,7 +1221,7 @@ pub mod arabic {
 }
 
 pub mod armenian {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<ArmenianStemmer>; 23] = [
         Among { s: &[1408, 1400, 1408, 1380], substring_i: -1, result: 1, method: None },
@@ -1573,7 +1573,7 @@ pub mod armenian {
 }
 
 pub mod basque {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<BasqueStemmer>; 109] = [
         Among { s: &[105, 100, 101, 97], substring_i: -1, result: 1, method: None },
@@ -2324,7 +2324,7 @@ pub mod basque {
 }
 
 pub mod catalan {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<CatalanStemmer>; 13] = [
         Among { s: &[], substring_i: -1, result: 7, method: None },
@@ -3165,7 +3165,7 @@ pub mod catalan {
 }
 
 pub mod danish {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<DanishStemmer>; 32] = [
         Among { s: &[104, 101, 100], substring_i: -1, result: 1, method: None },
@@ -3424,7 +3424,7 @@ pub mod danish {
 }
 
 pub mod dutch {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<DutchStemmer>; 11] = [
         Among { s: &[], substring_i: -1, result: 6, method: None },
@@ -3952,7 +3952,7 @@ pub mod dutch {
 }
 
 pub mod english {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<EnglishStemmer>; 3] = [
         Among { s: &[97, 114, 115, 101, 110], substring_i: -1, result: -1, method: None },
@@ -4808,7 +4808,7 @@ pub mod english {
 }
 
 pub mod estonian {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<EstonianStemmer>; 2] = [
         Among { s: &[103, 105], substring_i: -1, result: 1, method: None },
@@ -5738,7 +5738,7 @@ pub mod estonian {
 }
 
 pub mod finnish {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<FinnishStemmer>; 10] = [
         Among { s: &[112, 97], substring_i: -1, result: 1, method: None },
@@ -6381,7 +6381,7 @@ pub mod finnish {
 }
 
 pub mod french {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<FrenchStemmer>; 3] = [
         Among { s: &[99, 111, 108], substring_i: -1, result: -1, method: None },
@@ -7404,7 +7404,7 @@ pub mod french {
 }
 
 pub mod german {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<GermanStemmer>; 6] = [
         Among { s: &[], substring_i: -1, result: 5, method: None },
@@ -7885,7 +7885,7 @@ pub mod german {
 }
 
 pub mod greek {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<GreekStemmer>; 46] = [
         Among { s: &[], substring_i: -1, result: 25, method: None },
@@ -10156,7 +10156,7 @@ pub mod greek {
 }
 
 pub mod hindi {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<HindiStemmer>; 132] = [
         Among { s: &[2310, 2305], substring_i: -1, result: -1, method: None },
@@ -10331,7 +10331,7 @@ pub mod hindi {
 }
 
 pub mod hungarian {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<HungarianStemmer>; 8] = [
         Among { s: &[99, 115], substring_i: -1, result: -1, method: None },
@@ -10915,7 +10915,7 @@ pub mod hungarian {
 }
 
 pub mod indonesian {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<IndonesianStemmer>; 3] = [
         Among { s: &[107, 97, 104], substring_i: -1, result: 1, method: None },
@@ -11249,7 +11249,7 @@ pub mod indonesian {
 }
 
 pub mod irish {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<IrishStemmer>; 24] = [
         Among { s: &[98, 39], substring_i: -1, result: 1, method: None },
@@ -11580,7 +11580,7 @@ pub mod irish {
 }
 
 pub mod italian {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<ItalianStemmer>; 7] = [
         Among { s: &[], substring_i: -1, result: 7, method: None },
@@ -12398,7 +12398,7 @@ pub mod italian {
 }
 
 pub mod lithuanian {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<LithuanianStemmer>; 204] = [
         Among { s: &[97], substring_i: -1, result: -1, method: None },
@@ -12893,7 +12893,7 @@ pub mod lithuanian {
 }
 
 pub mod nepali {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<NepaliStemmer>; 17] = [
         Among { s: &[2354, 2366, 2311], substring_i: -1, result: 1, method: None },
@@ -13178,7 +13178,7 @@ pub mod nepali {
 }
 
 pub mod norwegian {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<NorwegianStemmer>; 29] = [
         Among { s: &[97], substring_i: -1, result: 1, method: None },
@@ -13402,7 +13402,7 @@ pub mod norwegian {
 }
 
 pub mod porter {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<PorterStemmer>; 4] = [
         Among { s: &[115], substring_i: -1, result: 3, method: None },
@@ -13985,7 +13985,7 @@ pub mod porter {
 }
 
 pub mod portuguese {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<PortugueseStemmer>; 3] = [
         Among { s: &[], substring_i: -1, result: 3, method: None },
@@ -14726,7 +14726,7 @@ pub mod portuguese {
 }
 
 pub mod romanian {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<RomanianStemmer>; 2] = [
         Among { s: &[351], substring_i: -1, result: 1, method: None },
@@ -15497,7 +15497,7 @@ pub mod romanian {
 }
 
 pub mod russian {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<RussianStemmer>; 9] = [
         Among { s: &[1074], substring_i: -1, result: 1, method: None },
@@ -16016,7 +16016,7 @@ pub mod russian {
 }
 
 pub mod serbian {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<SerbianStemmer>; 30] = [
         Among { s: &[1072], substring_i: -1, result: 1, method: None },
@@ -19599,7 +19599,7 @@ pub mod serbian {
 }
 
 pub mod spanish {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<SpanishStemmer>; 6] = [
         Among { s: &[], substring_i: -1, result: 6, method: None },
@@ -20391,7 +20391,7 @@ pub mod spanish {
 }
 
 pub mod swedish {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<SwedishStemmer>; 37] = [
         Among { s: &[97], substring_i: -1, result: 1, method: None },
@@ -20623,7 +20623,7 @@ pub mod swedish {
 }
 
 pub mod tamil {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<TamilStemmer>; 4] = [
         Among { s: &[2997, 3009], substring_i: -1, result: 3, method: None },
@@ -21596,7 +21596,7 @@ pub mod tamil {
 }
 
 pub mod turkish {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<TurkishStemmer>; 10] = [
         Among { s: &[109], substring_i: -1, result: -1, method: None },
@@ -23504,7 +23504,7 @@ pub mod turkish {
 }
 
 pub mod yiddish {
-    use super::super::snowball::{find_among, find_among_b, Among, Env, Stemmer};
+    use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<YiddishStemmer>; 8] = [
         Among { s: &[1493, 1493], substring_i: -1, result: 1, method: None },
@@ -24378,7 +24378,7 @@ pub mod yiddish {
 }
 
 /// Creates the Snowball stemmer of a language by its Lucene class prefix ("English").
-pub fn new_stemmer(lang: &str) -> Option<Box<dyn super::snowball::Stemmer + Send>> {
+pub fn new_stemmer(lang: &str) -> Option<Box<dyn super::Stemmer + Send>> {
     match lang {
         "Arabic" => Some(Box::new(arabic::ArabicStemmer::default())),
         "Armenian" => Some(Box::new(armenian::ArmenianStemmer::default())),
