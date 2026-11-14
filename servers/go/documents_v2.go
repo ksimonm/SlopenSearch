@@ -15,47 +15,17 @@ import (
 	"strings"
 
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
 )
 
-type orderedKV struct {
-	k string
-	v any
-}
-
-type orderedJSON []orderedKV
-
-type verbatimJSON []byte
-
-func (v verbatimJSON) MarshalJSON() ([]byte, error) { return v, nil }
-
-func (o orderedJSON) MarshalJSON() ([]byte, error) {
-	var b bytes.Buffer
-	b.WriteByte('{')
-	for i, kv := range o {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		b.Write(jsonMustMarshal(kv.k))
-		b.WriteByte(':')
-		switch t := kv.v.(type) {
-		case verbatimJSON:
-			b.Write(t)
-		case json.RawMessage:
-			b.Write(t)
-		default:
-			var vb bytes.Buffer
-			enc := json.NewEncoder(&vb)
-			enc.SetEscapeHTML(false)
-			if err := enc.Encode(kv.v); err != nil {
-				return nil, err
-			}
-			b.Write(bytes.TrimRight(vb.Bytes(), "\n"))
-		}
-	}
-	b.WriteByte('}')
-	return b.Bytes(), nil
-}
+// The ordered JSON types live in internal/ojson; these aliases keep the
+// short names used throughout the server.
+type (
+	orderedKV    = ojson.KV
+	orderedJSON  = ojson.Object
+	verbatimJSON = ojson.Verbatim
+)
 
 func ensureDocState(idx *Index) {
 	if idx.Versions == nil {
@@ -684,7 +654,7 @@ func filterRawSource(raw []byte, includes, excludes []string) ([]byte, bool) {
 			want[p] = true
 		}
 		for _, kv := range obj {
-			if want[kv.k] {
+			if want[kv.K] {
 				out = append(out, kv)
 			}
 		}
@@ -696,7 +666,7 @@ func filterRawSource(raw []byte, includes, excludes []string) ([]byte, bool) {
 		}
 		kept := out[:0]
 		for _, kv := range out {
-			if !drop[kv.k] {
+			if !drop[kv.K] {
 				kept = append(kept, kv)
 			}
 		}

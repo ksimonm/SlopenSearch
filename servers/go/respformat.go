@@ -145,7 +145,7 @@ func toPlain(v any) any {
 	case orderedJSON:
 		m := make(map[string]any, len(t))
 		for _, kv := range t {
-			m[kv.k] = toPlain(kv.v)
+			m[kv.K] = toPlain(kv.V)
 		}
 		return m
 	case []any:
@@ -170,9 +170,9 @@ func reorderLike(orig, filtered any) any {
 		if o, ok := orig.(orderedJSON); ok {
 			seen := map[string]bool{}
 			for _, kv := range o {
-				if v, has := f[kv.k]; has && !seen[kv.k] {
-					seen[kv.k] = true
-					out = append(out, orderedKV{kv.k, reorderLike(kv.v, v)})
+				if v, has := f[kv.K]; has && !seen[kv.K] {
+					seen[kv.K] = true
+					out = append(out, orderedKV{kv.K, reorderLike(kv.V, v)})
 				}
 			}
 			for _, k := range sortedKeys(f) {
@@ -210,9 +210,9 @@ func writeCompactOrdered(buf *bytes.Buffer, v any) {
 			if i > 0 {
 				buf.WriteByte(',')
 			}
-			buf.WriteString(encodeString(kv.k))
+			buf.WriteString(encodeString(kv.K))
 			buf.WriteByte(':')
-			writeCompactOrdered(buf, kv.v)
+			writeCompactOrdered(buf, kv.V)
 		}
 		buf.WriteByte('}')
 	case []any:
@@ -251,13 +251,13 @@ func writePrettyOrdered(buf *bytes.Buffer, o orderedJSON, indent int) {
 	buf.WriteString("{\n")
 	for i, kv := range o {
 		writeIndent(buf, indent+1)
-		buf.WriteString(encodeString(kv.k))
-		if raw, ok := kv.v.(verbatimJSON); ok {
+		buf.WriteString(encodeString(kv.K))
+		if raw, ok := kv.V.(verbatimJSON); ok {
 			buf.WriteByte(':')
 			buf.Write(raw)
 		} else {
 			buf.WriteString(" : ")
-			writePretty(buf, kv.v, indent+1)
+			writePretty(buf, kv.V, indent+1)
 		}
 		if i < len(o)-1 {
 			buf.WriteByte(',')
@@ -292,7 +292,7 @@ var javaLangExceptions = map[string]bool{
 func stackTraceFor(e orderedJSON) string {
 	get := func(k string) string {
 		if i := findKey(e, k); i >= 0 {
-			if s, ok := e[i].v.(string); ok {
+			if s, ok := e[i].V.(string); ok {
 				return s
 			}
 		}
@@ -321,12 +321,12 @@ func addStackTraces(tree any) any {
 	if i < 0 {
 		return tree
 	}
-	errObj, ok := top[i].v.(orderedJSON)
+	errObj, ok := top[i].V.(orderedJSON)
 	if !ok {
 		return tree
 	}
 	if rc := findKey(errObj, "root_cause"); rc >= 0 {
-		if list, ok := errObj[rc].v.([]any); ok {
+		if list, ok := errObj[rc].V.([]any); ok {
 			for j, c := range list {
 				if co, ok := c.(orderedJSON); ok {
 					list[j] = append(co, orderedKV{"stack_trace", stackTraceFor(co)})
@@ -335,7 +335,7 @@ func addStackTraces(tree any) any {
 		}
 	}
 	errObj = append(errObj, orderedKV{"stack_trace", stackTraceFor(errObj)})
-	top[i].v = errObj
+	top[i].V = errObj
 	return top
 }
 
@@ -366,15 +366,15 @@ func humanizeStats(v any) any {
 	case orderedJSON:
 		out := make(orderedJSON, 0, len(t))
 		for _, kv := range t {
-			if strings.HasSuffix(kv.k, "_in_bytes") {
-				base := strings.TrimSuffix(kv.k, "_in_bytes")
+			if strings.HasSuffix(kv.K, "_in_bytes") {
+				base := strings.TrimSuffix(kv.K, "_in_bytes")
 				if findKey(t, base) < 0 {
-					if n, ok := toFloat(kv.v); ok {
+					if n, ok := toFloat(kv.V); ok {
 						out = append(out, orderedKV{base, humanBytes(int64(n))})
 					}
 				}
 			}
-			out = append(out, orderedKV{kv.k, humanizeStats(kv.v)})
+			out = append(out, orderedKV{kv.K, humanizeStats(kv.V)})
 		}
 		return out
 	case []any:
@@ -409,9 +409,9 @@ func humanizeSettings(v any, inIndex bool) any {
 	}
 	out := make(orderedJSON, 0, len(t))
 	for _, kv := range t {
-		val := kv.v
+		val := kv.V
 		switch {
-		case inIndex && kv.k == "creation_date":
+		case inIndex && kv.K == "creation_date":
 			if s, ok := val.(string); ok {
 				var ms int64
 				if _, err := fmt.Sscan(s, &ms); err == nil {
@@ -419,21 +419,21 @@ func humanizeSettings(v any, inIndex bool) any {
 						time.UnixMilli(ms).UTC().Format("2006-01-02T15:04:05.000Z")})
 				}
 			}
-		case inIndex && kv.k == "version":
+		case inIndex && kv.K == "version":
 			if vo, ok := val.(orderedJSON); ok {
 				nv := make(orderedJSON, 0, len(vo)+2)
 				for _, x := range vo {
-					if x.k == "created" || x.k == "upgraded" {
-						nv = append(nv, orderedKV{x.k + "_string", nodeVersion})
+					if x.K == "created" || x.K == "upgraded" {
+						nv = append(nv, orderedKV{x.K + "_string", nodeVersion})
 					}
 					nv = append(nv, x)
 				}
 				val = nv
 			}
 		default:
-			val = humanizeSettings(val, kv.k == "index")
+			val = humanizeSettings(val, kv.K == "index")
 		}
-		out = append(out, orderedKV{kv.k, val})
+		out = append(out, orderedKV{kv.K, val})
 	}
 	return out
 }
@@ -491,9 +491,9 @@ func writeYAMLNode(buf *bytes.Buffer, v any, indent int) {
 		}
 		for _, kv := range o {
 			writeIndent(buf, indent)
-			buf.WriteString(yamlKey(kv.k))
+			buf.WriteString(yamlKey(kv.K))
 			buf.WriteByte(':')
-			writeYAMLValue(buf, kv.v, indent)
+			writeYAMLValue(buf, kv.V, indent)
 		}
 		return
 	}

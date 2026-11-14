@@ -418,7 +418,7 @@ func taskStatus(out map[string]any, batchSize int64, rps float64, asResponse, fa
 			sum += b
 			arr = append(arr, build(m, st, b, i))
 		}
-		res[findKey(res, "batches")].v = sum
+		res[findKey(res, "batches")].V = sum
 		res = append(res, orderedKV{"slices", arr})
 	}
 	if asResponse {
@@ -433,7 +433,7 @@ func taskStatus(out map[string]any, batchSize int64, rps float64, asResponse, fa
 
 func findKey(o orderedJSON, k string) int {
 	for i, kv := range o {
-		if kv.k == k {
+		if kv.K == k {
 			return i
 		}
 	}

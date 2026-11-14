@@ -1735,21 +1735,21 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		resp["_scroll_id"] = scrollID
 	}
 	if pitID != "" {
-		ordered := orderedJSON{{k: "pit_id", v: pitID}}
+		ordered := orderedJSON{{K: "pit_id", V: pitID}}
 		for k, v := range resp {
-			ordered = append(ordered, orderedKV{k: k, v: v})
+			ordered = append(ordered, orderedKV{K: k, V: v})
 		}
 		writeJSON(w, 200, ordered)
 		return
 	}
 
 	if terminateAfter > 0 {
-		ordered := orderedJSON{{k: "took", v: resp["took"]}, {k: "timed_out", v: resp["timed_out"]}, {k: "terminated_early", v: terminatedEarly}}
+		ordered := orderedJSON{{K: "took", V: resp["took"]}, {K: "timed_out", V: resp["timed_out"]}, {K: "terminated_early", V: terminatedEarly}}
 		for k, v := range resp {
 			if k == "took" || k == "timed_out" || k == "terminated_early" {
 				continue
 			}
-			ordered = append(ordered, orderedKV{k: k, v: v})
+			ordered = append(ordered, orderedKV{K: k, V: v})
 		}
 		writeJSON(w, 200, ordered)
 		return

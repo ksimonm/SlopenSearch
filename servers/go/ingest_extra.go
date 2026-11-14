@@ -1019,7 +1019,7 @@ func ingestScriptError(se *plScriptErr, tag string) *apiError {
 		}
 	}
 	for _, kv := range se.extra {
-		fields[kv.k] = kv.v
+		fields[kv.K] = kv.V
 	}
 	return &apiError{Type: "script_exception", Status: 400, Reason: kind, Fields: fields,
 		CausedBy: &apiError{Type: se.causeType, Reason: se.reason}}

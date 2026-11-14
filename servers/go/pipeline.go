@@ -325,8 +325,8 @@ func metricScalar(v any) (any, bool) {
 
 func orderedGet(o orderedJSON, key string) (any, bool) {
 	for _, kv := range o {
-		if kv.k == key {
-			return kv.v, true
+		if kv.K == key {
+			return kv.V, true
 		}
 	}
 	return nil, false

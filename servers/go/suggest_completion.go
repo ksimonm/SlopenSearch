@@ -993,7 +993,7 @@ func completionSuggest(spec, body map[string]any, indices []*Index, globalText a
 					ctxOut = append(ctxOut, orderedKV{ch.name, []any{ch.value}})
 					continue
 				}
-				vals := ctxOut[pos].v.([]any)
+				vals := ctxOut[pos].V.([]any)
 				dup := false
 				for _, x := range vals {
 					if x == ch.value {
@@ -1001,7 +1001,7 @@ func completionSuggest(spec, body map[string]any, indices []*Index, globalText a
 					}
 				}
 				if !dup {
-					ctxOut[pos].v = append(vals, ch.value)
+					ctxOut[pos].V = append(vals, ch.value)
 				}
 			}
 			opt = append(opt, orderedKV{"contexts", ctxOut})

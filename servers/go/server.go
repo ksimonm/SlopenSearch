@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/ojson"
 )
 
 type captureWriter struct {
@@ -315,13 +317,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeFinal(w, r, status, body)
 }
 
-func jsonMustMarshal(v any) []byte {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	enc.Encode(v)
-	return bytes.TrimRight(buf.Bytes(), "\n")
-}
+func jsonMustMarshal(v any) []byte { return ojson.Marshal(v) }
 
 func methodNotAllowed(w http.ResponseWriter, r *http.Request, allowed ...string) {
 	allow := strings.Join(allowed, ",")

@@ -270,23 +270,23 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 		}
 	}
 	if total > 0 {
-		report[3].v = deleted
-		report[4].v = int64(1)
+		report[3].V = deleted
+		report[4].V = int64(1)
 	} else {
-		report[3].v = deleted
-		report[4].v = int64(0)
+		report[3].V = deleted
+		report[4].V = int64(0)
 	}
-	report[2].v = total
-	report[5].v = versionConflicts
-	report[6].v = noops
+	report[2].V = total
+	report[5].V = versionConflicts
+	report[6].V = noops
 	if failures == nil {
 		failures = []any{}
 	}
-	report[11].v = failures
+	report[11].V = failures
 	if !isDelete {
 		report = append(report, orderedKV{"updated", updated})
 	}
-	report[0].v = time.Since(start).Milliseconds()
+	report[0].V = time.Since(start).Milliseconds()
 	if sliceCount > 0 {
 		arr := make([]any, sliceCount)
 		for i, st := range slices {
