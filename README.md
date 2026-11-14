@@ -14,6 +14,7 @@ The goal: same REST API, same responses, same errors — in a single small binar
 > SlopenSearch is under active development and not production-ready yet: part of the API
 > is still missing (see [Status](#status)), there is a single node only, and there is no
 > authentication or TLS so far. Until those land, keep it on localhost or a trusted network.
+> Planned work is listed in [ROADMAP.md](ROADMAP.md).
 
 SlopenSearch aims to speak the OpenSearch 3.9 REST API closely enough that an existing
 client does not notice the difference. There are two independent implementations, one in
@@ -46,9 +47,8 @@ Share of the suite passing (2026-11-14, `make go-score` / `make rust-score`):
 | **Total** | **99.99%** | **99.99%** |
 
 Both servers miss one test (a literal `NaN` in a k-NN vector, which needs lenient JSON
-parsing). A few tests in `test_61_concurrency` depend on timing
-and can fail now and then. The multi-node and cross-DC suites (`test_96`, `test_97`) are
-not implemented: both servers are single-node.
+parsing). The multi-node and cross-DC suites (`test_96`, `test_97`) are not implemented:
+both servers are single-node (see [ROADMAP.md](ROADMAP.md)).
 Both servers store their state on disk by default (`SLOP_DATA_DIR`, default `./data`; in Docker a named volume per server) and survive restarts and crashes; `SLOP_IN_MEMORY=true` keeps everything in memory instead (see [servers/go/README.md](servers/go/README.md#persistence) and [servers/rust/README.md](servers/rust/README.md)).
 
 ## Quick start
