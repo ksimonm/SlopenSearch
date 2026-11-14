@@ -1,0 +1,438 @@
+package mapping
+
+import (
+	"strconv"
+	"strings"
+
+	"slopensearch/internal/analysis"
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/model"
+	"slopensearch/internal/settings"
+)
+
+// ---------------------------------------------------------------------------
+// Dotted field names
+//
+// OpenSearch expands names like "a.b.c" into nested object mappings, both for
+// explicit mappings and for dynamically detected document fields.
+// ---------------------------------------------------------------------------
+
+func dottedConflict(name string) *apierr.Error {
+	reason := "can't merge a non object mapping [" + name + "] with an object mapping"
+	return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: reason}
+}
+
+func isObjectMappingDef(def map[string]any) bool {
+	t, _ := def["type"].(string)
+	return t == "" || t == "object" || t == "nested"
+}
+
+// insertDottedProperty inserts one explicit mapping entry, expanding any dots
+// into object mappings.
+func insertDottedProperty(root map[string]any, key string, val map[string]any) *apierr.Error {
+	name := strings.TrimRight(key, ".")
+	if name == "" {
+		name = key
+	}
+	parts := strings.Split(name, ".")
+	cur := root
+	for i, part := range parts {
+		last := i == len(parts)-1
+		existingRaw, has := cur[part]
+		if last {
+			if !has {
+				cur[part] = val
+				return nil
+			}
+			existing, ok := existingRaw.(map[string]any)
+			if !ok {
+				return dottedConflict(part)
+			}
+			if !isObjectMappingDef(existing) {
+				return dottedConflict(part)
+			}
+			if !isObjectMappingDef(val) {
+				return dottedConflict(part)
+			}
+			MergeDeep(existing, val)
+			return nil
+		}
+		if !has {
+			child := map[string]any{}
+			sub := map[string]any{}
+			child["properties"] = sub
+			cur[part] = child
+			cur = sub
+			continue
+		}
+		existing, ok := existingRaw.(map[string]any)
+		if !ok || !isObjectMappingDef(existing) {
+			return dottedConflict(part)
+		}
+		sub, ok := existing["properties"].(map[string]any)
+		if !ok {
+			sub = map[string]any{}
+			existing["properties"] = sub
+		}
+		cur = sub
+	}
+	return nil
+}
+
+// ExpandDottedProperties rewrites every properties map so dotted names become
+// nested object mappings.
+func ExpandDottedProperties(props map[string]any) *apierr.Error {
+	keys := SortedAnyKeys(props)
+	out := map[string]any{}
+	for _, key := range keys {
+		def, ok := props[key].(map[string]any)
+		if !ok {
+			def = map[string]any{}
+		}
+		if err := insertDottedProperty(out, key, def); err != nil {
+			return err
+		}
+	}
+	for k := range props {
+		delete(props, k)
+	}
+	for k, v := range out {
+		props[k] = v
+	}
+	for _, raw := range props {
+		def, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if sub, ok := def["properties"].(map[string]any); ok {
+			if err := ExpandDottedProperties(sub); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// ExpandDottedMapping expands the properties of a full mapping document.
+func ExpandDottedMapping(mappings map[string]any) *apierr.Error {
+	if props, ok := mappings["properties"].(map[string]any); ok {
+		return ExpandDottedProperties(props)
+	}
+	return nil
+}
+
+// ExpandDottedObject rewrites a source document into the nested shape used for
+// dynamic mapping detection. The caller keeps the original _source.
+func ExpandDottedObject(src map[string]any) (map[string]any, *apierr.Error) {
+	keys := make([]string, 0, len(src))
+	for k := range src {
+		keys = append(keys, k)
+	}
+	// Stable order keeps conflict reporting deterministic.
+	jsonv.SortStrings(keys)
+	out := map[string]any{}
+	for _, key := range keys {
+		if err := insertDottedObject(out, key, src[key]); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func insertDottedObject(root map[string]any, key string, val any) *apierr.Error {
+	name := strings.TrimRight(key, ".")
+	if name == "" {
+		name = key
+	}
+	parts := strings.Split(name, ".")
+	cur := root
+	for i, part := range parts {
+		last := i == len(parts)-1
+		existing, has := cur[part]
+		if last {
+			if !has {
+				cur[part] = expandDottedValue(val)
+				return nil
+			}
+			em, eok := existing.(map[string]any)
+			vm, vok := val.(map[string]any)
+			if eok && vok {
+				merged, err := ExpandDottedObject(mergeDottedDocs(em, vm))
+				if err != nil {
+					return err
+				}
+				cur[part] = merged
+				return nil
+			}
+			if eok != vok {
+				return dottedConflict(part)
+			}
+			cur[part] = expandDottedValue(val)
+			return nil
+		}
+		if !has {
+			child := map[string]any{}
+			cur[part] = child
+			cur = child
+			continue
+		}
+		em, ok := existing.(map[string]any)
+		if !ok {
+			return dottedConflict(part)
+		}
+		cur = em
+	}
+	return nil
+}
+
+func expandDottedValue(val any) any {
+	switch t := val.(type) {
+	case map[string]any:
+		out, err := ExpandDottedObject(t)
+		if err != nil {
+			return t
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, e := range t {
+			out[i] = expandDottedValue(e)
+		}
+		return out
+	}
+	return val
+}
+
+func mergeDottedDocs(a, b map[string]any) map[string]any {
+	out := map[string]any{}
+	for k, v := range a {
+		out[k] = v
+	}
+	for k, v := range b {
+		am, aok := out[k].(map[string]any)
+		bm, bok := v.(map[string]any)
+		if aok && bok {
+			out[k] = mergeDottedDocs(am, bm)
+		} else {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// Mapping validation that needs index settings
+// ---------------------------------------------------------------------------
+
+// builtinAnalyzer reports whether name is an analyzer that OpenSearch ships
+// with, so a mapping may reference it without declaring it in settings.
+func settingsHasAnalyzer(indexSettings map[string]any, key, name string) bool {
+	if _, ok := settings.Find(indexSettings, "analysis."+key+"."+name); ok {
+		return true
+	}
+	prefix := "index.analysis." + key + "." + name + "."
+	for k := range indexSettings {
+		if strings.HasPrefix(k, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func settingsAnalyzerExists(settings map[string]any, name string) bool {
+	if analysis.BuiltinAnalyzer(name) || name == "default" {
+		return true
+	}
+	return settingsHasAnalyzer(settings, "analyzer", name)
+}
+
+func normalizerFound(settings map[string]any, name string) bool {
+	if analysis.BuiltinNormalizer(name) {
+		return true
+	}
+	return settingsHasAnalyzer(settings, "normalizer", name)
+}
+
+// ValidateAnalyzers checks analyzers and normalizers referenced from a
+// mapping against the index settings.
+func ValidateAnalyzers(props map[string]any, settings map[string]any) *apierr.Error {
+	for _, name := range SortedAnyKeys(props) {
+		def, ok := props[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		if norm, ok := def["normalizer"].(string); ok && norm != "" && !normalizerFound(settings, norm) {
+			reason := "normalizer [" + norm + "] not found for field [" + name + "]"
+			return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
+				Reason:    "Failed to parse mapping [_doc]: " + reason,
+				RootCause: &apierr.Error{Type: "mapper_parsing_exception", Reason: reason},
+				CausedBy:  &apierr.Error{Type: "mapper_parsing_exception", Reason: reason}}
+		}
+		if t, _ := def["type"].(string); t == "keyword" {
+			for _, key := range []string{"analyzer", "search_analyzer", "search_quote_analyzer"} {
+				if _, ok := def[key]; ok {
+					reason := "unknown parameter [" + key + "] on mapper [" + name + "] of type [keyword]"
+					return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
+						Reason:    "Failed to parse mapping [_doc]: " + reason,
+						RootCause: &apierr.Error{Type: "mapper_parsing_exception", Reason: reason},
+						CausedBy:  &apierr.Error{Type: "mapper_parsing_exception", Reason: reason}}
+				}
+			}
+		}
+		if t, _ := def["type"].(string); t == "text" || t == "match_only_text" {
+			// A search analyzer requires an index analyzer; OpenSearch
+			// records the default one.
+			_, hasSearch := def["search_analyzer"]
+			_, hasQuote := def["search_quote_analyzer"]
+			if _, ok := def["analyzer"]; !ok && (hasSearch || hasQuote) {
+				def["analyzer"] = "default"
+			}
+		}
+		for _, key := range []string{"analyzer", "search_analyzer", "search_quote_analyzer"} {
+			if a, ok := def[key].(string); ok && a != "" && !settingsAnalyzerExists(settings, a) {
+				reason := "analyzer [" + a + "] has not been configured in mappings"
+				return &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
+					Reason:    "Failed to parse mapping [_doc]: " + reason,
+					RootCause: &apierr.Error{Type: "mapper_parsing_exception", Reason: "Failed to parse mapping [_doc]: " + reason},
+					CausedBy:  &apierr.Error{Type: "illegal_argument_exception", Reason: reason}}
+			}
+		}
+		if sub, ok := def["properties"].(map[string]any); ok {
+			if err := ValidateAnalyzers(sub, settings); err != nil {
+				return err
+			}
+		}
+		if fields, ok := def["fields"].(map[string]any); ok {
+			if err := ValidateAnalyzers(fields, settings); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// builtinMetadataFields lists the built-in field names checked against
+// index.mapping.field_name_length.limit when an index is created.
+var builtinMetadataFields = []string{
+	"_ignored", "_id", "_index", "_routing", "_source", "_data_stream_timestamp",
+}
+
+func ValidateBuiltinFieldNameLength(indexSettings map[string]any) *apierr.Error {
+	limit, ok := settings.Int(indexSettings, "mapping.field_name_length.limit")
+	if !ok {
+		return nil
+	}
+	for _, name := range builtinMetadataFields {
+		if len(name) > limit {
+			return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
+				Reason: "Field name [" + name + "] is longer than the limit of [" + strconv.Itoa(limit) + "] characters"}
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Per-document mapping limits
+// ---------------------------------------------------------------------------
+
+func mappingIntSetting(idx *model.Index, key string, def int) int {
+	if idx != nil {
+		if v, ok := settings.Int(idx.Settings, key); ok {
+			return v
+		}
+	}
+	return def
+}
+
+func checkDocFieldNameLengths(v any, limit int) *apierr.Error {
+	if limit <= 0 {
+		return nil
+	}
+	switch t := v.(type) {
+	case map[string]any:
+		for k, child := range t {
+			for _, part := range strings.Split(k, ".") {
+				if len(part) > limit {
+					return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
+						Reason: "Field name [" + part + "] is longer than the limit of [" + strconv.Itoa(limit) + "] characters"}
+				}
+			}
+			if err := checkDocFieldNameLengths(child, limit); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, e := range t {
+			if err := checkDocFieldNameLengths(e, limit); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func countNestedDocuments(props map[string]any, doc map[string]any) int {
+	count := 0
+	for name, rawDef := range props {
+		def, ok := rawDef.(map[string]any)
+		if !ok {
+			continue
+		}
+		v, present := doc[name]
+		if !present {
+			continue
+		}
+		sub, _ := def["properties"].(map[string]any)
+		switch t, _ := def["type"].(string); t {
+		case "nested":
+			values := []any{v}
+			if arr, ok := v.([]any); ok {
+				values = arr
+			}
+			for _, el := range values {
+				if m, ok := el.(map[string]any); ok {
+					count++
+					if sub != nil {
+						count += countNestedDocuments(sub, m)
+					}
+				}
+			}
+		default:
+			if sub == nil {
+				continue
+			}
+			switch tv := v.(type) {
+			case map[string]any:
+				count += countNestedDocuments(sub, tv)
+			case []any:
+				for _, el := range tv {
+					if m, ok := el.(map[string]any); ok {
+						count += countNestedDocuments(sub, m)
+					}
+				}
+			}
+		}
+	}
+	return count
+}
+
+func nestedObjectsLimitError(limit int) *apierr.Error {
+	reason := "The number of nested documents has exceeded the allowed limit of [" + strconv.Itoa(limit) +
+		"]. This limit can be set by changing the [index.mapping.nested_objects.limit] index level setting."
+	return &apierr.Error{Type: "mapper_parsing_exception", Status: 400, Reason: reason}
+}
+
+// IndexDocCount returns the number of documents including nested documents,
+// which is what _cat/indices reports as docs.count.
+func IndexDocCount(idx *model.Index) int {
+	count := len(idx.Docs)
+	props, _ := idx.Mappings["properties"].(map[string]any)
+	if props == nil {
+		return count
+	}
+	for _, doc := range idx.Docs {
+		count += countNestedDocuments(props, doc)
+	}
+	return count
+}

@@ -1,0 +1,359 @@
+package httpapi
+
+import (
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
+	"slopensearch/internal/ojson"
+	"slopensearch/internal/painless"
+	"slopensearch/internal/search"
+)
+
+var byQueryParams = map[string]bool{
+	"refresh": true, "conflicts": true, "max_docs": true, "slices": true,
+	"q": true, "routing": true, "timeout": true, "wait_for_active_shards": true,
+	"wait_for_completion": true, "requests_per_second": true, "scroll": true,
+	"scroll_size": true, "search_timeout": true, "search_type": true,
+	"error_trace": true, "human": true, "pretty": true, "filter_path": true,
+	"ignore_unavailable": true, "allow_no_indices": true, "expand_wildcards": true,
+	"pipeline": true,
+}
+
+func byQueryReport() ojson.Object {
+	return ojson.Object{
+		{"took", int64(0)}, {"timed_out", false}, {"total", int64(0)},
+		{"deleted", int64(0)}, {"batches", int64(0)}, {"version_conflicts", int64(0)},
+		{"noops", int64(0)}, {"retries", map[string]any{"bulk": 0, "search": 0}},
+		{"throttled_millis", int64(0)}, {"requests_per_second", -1.0},
+		{"throttled_until_millis", int64(0)}, {"failures", []any{}},
+	}
+}
+
+func (s *Server) handleDeleteByQuery(w http.ResponseWriter, r *http.Request, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runByQuery(w, r, name, true)
+}
+
+func (s *Server) handleUpdateByQuery(w http.ResponseWriter, r *http.Request, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runByQuery(w, r, name, false)
+}
+
+func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string, isDelete bool) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, r, "POST")
+		return
+	}
+	if err := unknownParams(r, byQueryParams); err != nil {
+		writeError(w, err)
+		return
+	}
+	conflicts := r.URL.Query().Get("conflicts")
+	if conflicts != "" && conflicts != "proceed" && conflicts != "abort" {
+		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
+			Reason: fmt.Sprintf("conflicts may only be \"proceed\" or \"abort\" but was [%s]", conflicts)})
+		return
+	}
+	rv, rerr := refreshValue(r)
+	if rerr != nil {
+		writeError(w, rerr)
+		return
+	}
+	idx, apiErr := s.resolveReadTarget(name)
+	if apiErr != nil {
+		writeError(w, apiErr)
+		return
+	}
+	if idx.Closed {
+		writeError(w, errIndexClosed(idx))
+		return
+	}
+	body, apiErr := readJSON(r)
+	if apiErr != nil {
+		writeError(w, apiErr)
+		return
+	}
+	query, hasQuery := body["query"]
+	if qp := r.URL.Query().Get("q"); qp != "" {
+		query = parseQParam(qp)
+		hasQuery = true
+	}
+	if !hasQuery {
+		if isDelete {
+			writeError(w, &apierr.Error{Type: "action_request_validation_exception", Status: 400,
+				Reason: "Validation Failed: 1: query is missing;"})
+			return
+		}
+		query = map[string]any{"match_all": map[string]any{}}
+	}
+	qmap, ok := query.(map[string]any)
+	if !ok {
+		writeError(w, apierr.Parsing("[query] malformed"))
+		return
+	}
+	maxDocs := int64(-1)
+	if v, ok := body["max_docs"]; ok {
+		if n, ok := jsonv.ToFloat(v); ok {
+			maxDocs = int64(n)
+		}
+	}
+	if v := r.URL.Query().Get("max_docs"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			maxDocs = n
+		}
+	}
+	sliceCount := 0
+	if v := r.URL.Query().Get("slices"); v != "" && v != "auto" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			sliceCount = n
+		}
+	}
+	script, hasScript := body["script"]
+	if hasScript && !isDelete {
+		if err := validateByQueryScript(script); err != nil {
+			writeError(w, err)
+			return
+		}
+	}
+	type sliceStat struct {
+		total   int64
+		deleted int64
+		updated int64
+		noops   int64
+	}
+	slices := make([]sliceStat, sliceCount)
+	report := byQueryReport()
+	total, deleted, updated, noops := int64(0), int64(0), int64(0), int64(0)
+	versionConflicts := int64(0)
+	var failures []any
+	start := time.Now()
+	for _, id := range append([]string(nil), idx.Order...) {
+		if maxDocs >= 0 && total >= maxDocs {
+			break
+		}
+		doc, live := idx.Docs[id]
+		if !live {
+			continue
+		}
+		if _, pending := idx.Pending[id]; pending {
+			continue
+		}
+		qc := search.NewQueryCtxForDoc(idx, id, doc)
+		match, _, qerr := qc.Eval(qmap)
+		if qerr != nil {
+			writeError(w, qerr)
+			return
+		}
+		if !match {
+			continue
+		}
+		total++
+		if idx.SearchSeesStale(id) {
+			// the search hit carries the refreshed version: if_seq_no fails
+			versionConflicts++
+			if conflicts != "proceed" {
+				failures = append(failures, map[string]any{"index": idx.Name, "id": id, "status": 409,
+					"cause": map[string]any{"type": "version_conflict_engine_exception",
+						"reason": fmt.Sprintf("[%s]: version conflict, required seqNo [%d], primary term [1]. current document has seqNo [%d] and primary term [1]",
+							id, idx.SeqNos[id]-1, idx.SeqNos[id]),
+						"index_uuid": idx.UUID, "shard": "0", "index": idx.Name}})
+			}
+			continue
+		}
+		si := -1
+		if sliceCount > 0 {
+			si = int((total - 1) % int64(sliceCount))
+			slices[si].total++
+		}
+		if isDelete {
+			base := idx.CurrentVersion(id)
+			seq := idx.AllocSeqNo()
+			delete(idx.Docs, id)
+			delete(idx.Pending, id)
+			mapping.RemoveDocValues(idx, id)
+			idx.DeleteTotal++
+			idx.Versions[id] = base + 1
+			idx.SeqNos[id] = seq
+			deleted++
+			if si >= 0 {
+				slices[si].deleted++
+			}
+			continue
+		}
+		newDoc := deepCopyMap(doc)
+		op := "index"
+		if hasScript {
+			res, serr := runUpdateScriptCtx(script, newDoc, idx.Name, id, -1, "index", idx.Routing[id])
+			if serr != nil {
+				if se, ok := serr.Extra.(*search.ScriptError); ok {
+					writeJSON(w, 400, se.ErrorBody())
+					return
+				}
+				if serr.CausedBy != nil {
+					writeError(w, &apierr.Error{Type: serr.CausedBy.Type, Status: 400, Reason: serr.CausedBy.Reason})
+					return
+				}
+				failures = append(failures, byQueryFailure(idx.Name, id, serr))
+				continue
+			}
+			if verr := checkByQueryCtx(res, idx.Name, id); verr != nil {
+				writeError(w, verr)
+				return
+			}
+			op = res.op
+			newDoc = res.source
+		}
+		if op == "delete" {
+			base := idx.CurrentVersion(id)
+			seq := idx.AllocSeqNo()
+			delete(idx.Docs, id)
+			delete(idx.Pending, id)
+			mapping.RemoveDocValues(idx, id)
+			idx.DeleteTotal++
+			idx.Versions[id] = base + 1
+			idx.SeqNos[id] = seq
+			deleted++
+			if si >= 0 {
+				slices[si].deleted++
+			}
+			continue
+		}
+		pparams := map[string]any{}
+		if pn := r.URL.Query().Get("pipeline"); pn != "" {
+			pparams["pipeline"] = pn
+		} else if pn, ok := body["pipeline"].(string); ok && pn != "" {
+			pparams["pipeline"] = pn
+		}
+		newDoc, apiErr = s.ingest.Apply(idx, newDoc, pparams)
+		if apiErr != nil {
+			failures = append(failures, byQueryFailure(idx.Name, id, apiErr))
+			continue
+		}
+		if op == "none" || op == "noop" {
+			noops++
+			if si >= 0 {
+				slices[si].noops++
+			}
+			continue
+		}
+		props := mapping.EnsureProperties(idx.Mappings)
+		if derr := mappingShapeConflict(props, newDoc); derr != nil {
+			failures = append(failures, byQueryFailure(idx.Name, id, derr))
+			continue
+		}
+		if derr := mergeMappingForIndex(idx, props, newDoc); derr != nil {
+			failures = append(failures, byQueryFailure(idx.Name, id, derr))
+			continue
+		}
+		mapping.EnsureFieldTypes(idx)
+		if derr := mapping.ComputeDocValues(idx, id, newDoc); derr != nil {
+			failures = append(failures, byQueryFailure(idx.Name, id, derr))
+			continue
+		}
+		seq := idx.AllocSeqNo()
+		idx.Docs[id] = newDoc
+		idx.Versions[id] = idx.CurrentVersion(id) + 1
+		idx.SeqNos[id] = seq
+		idx.PrimaryTerms[id] = 1
+		idx.IndexTotal++
+		if rv == "true" || rv == "wait_for" || !idx.RefreshDisabled() {
+			delete(idx.Pending, id)
+		} else {
+			idx.MarkPending(id, newDoc, true)
+		}
+		updated++
+		if si >= 0 {
+			slices[si].updated++
+		}
+	}
+	if total > 0 {
+		report[3].V = deleted
+		report[4].V = int64(1)
+	} else {
+		report[3].V = deleted
+		report[4].V = int64(0)
+	}
+	report[2].V = total
+	report[5].V = versionConflicts
+	report[6].V = noops
+	if failures == nil {
+		failures = []any{}
+	}
+	report[11].V = failures
+	if !isDelete {
+		report = append(report, ojson.KV{"updated", updated})
+	}
+	report[0].V = time.Since(start).Milliseconds()
+	if sliceCount > 0 {
+		arr := make([]any, sliceCount)
+		for i, st := range slices {
+			obj := ojson.Object{{"slice_id", i}, {"total", st.total}}
+			if isDelete {
+				obj = append(obj, ojson.KV{"deleted", st.deleted})
+			} else {
+				obj = append(obj, ojson.KV{"updated", st.updated})
+			}
+			obj = append(obj, ojson.KV{"noops", st.noops})
+			if len(failures) > 0 {
+				obj = append(obj, ojson.KV{"failures", []any{}})
+			}
+			arr[i] = obj
+		}
+		report = append(report, ojson.KV{"slices", arr})
+	}
+	status := 200
+	if len(failures) > 0 {
+		status = 400
+		if versionConflicts > 0 && conflicts != "proceed" {
+			status = 409
+		}
+	}
+	writeJSON(w, status, report)
+}
+
+func validateByQueryScript(script any) *apierr.Error {
+	var src string
+	switch t := script.(type) {
+	case string:
+		src = t
+	case map[string]any:
+		src, _ = t["source"].(string)
+	}
+	trimmed := strings.TrimSpace(src)
+	if strings.HasSuffix(trimmed, "=") || strings.HasSuffix(trimmed, "+") && !strings.HasSuffix(trimmed, "++") ||
+		strings.HasSuffix(trimmed, "-") && !strings.HasSuffix(trimmed, "--") {
+		return &apierr.Error{Type: "script_exception", Status: 400, Reason: "compile error",
+			CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "unexpected end of script"}}
+	}
+	return nil
+}
+
+func byQueryFailure(index, id string, e *apierr.Error) map[string]any {
+	return map[string]any{
+		"index": index, "id": id, "status": e.Status, "cause": errorObject(e),
+	}
+}
+
+// checkByQueryCtx rejects ctx changes a by-query script may not make.
+func checkByQueryCtx(res updateScriptResult, index, id string) *apierr.Error {
+	switch res.rawOp {
+	case "noop", "index", "delete":
+	default:
+		return apierr.BadRequest("Operation type [" + res.rawOp + "] not allowed, only [noop, index, delete] are allowed")
+	}
+	if painless.ToString(res.id) != id {
+		return apierr.BadRequest("Modifying [_id] not allowed")
+	}
+	if painless.ToString(res.index) != index {
+		return apierr.BadRequest("Modifying [_index] not allowed")
+	}
+	return nil
+}

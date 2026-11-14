@@ -1,0 +1,1185 @@
+// Package httpapi is the HTTP adapter of the server: routing, request
+// parsing, the REST handlers, and response and error rendering. It owns the
+// Server (cluster state plus its locks, scroll and PIT contexts, tasks) and
+// calls into the inner packages (search, aggs, suggest, ingest, mapping,
+// storage, model) for the work.
+package httpapi
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+
+	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/mapping"
+	"slopensearch/internal/model"
+	"slopensearch/internal/ojson"
+	"slopensearch/internal/respfmt"
+	"slopensearch/internal/search"
+)
+
+type captureWriter struct {
+	h       http.Header
+	buf     bytes.Buffer
+	status  int
+	ordered bool
+}
+
+func (c *captureWriter) Header() http.Header { return c.h }
+func (c *captureWriter) WriteHeader(s int) {
+	if c.status == 0 {
+		c.status = s
+	}
+}
+func (c *captureWriter) Write(b []byte) (int, error) {
+	if c.status == 0 {
+		c.status = 200
+	}
+	return c.buf.Write(b)
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	w.WriteHeader(status)
+	switch t := v.(type) {
+	case ojson.Object:
+		b, _ := t.MarshalJSON()
+		w.Write(b)
+		return
+	case ojson.Verbatim:
+		w.Write(t)
+		return
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.Encode(v)
+	w.Write(bytes.TrimRight(buf.Bytes(), "\n"))
+}
+
+func writeError(w http.ResponseWriter, e *apierr.Error) {
+	if e.Shard != nil {
+		writeJSON(w, e.Shard.StatusCode(), e.Shard.ResponseBody())
+		return
+	}
+	rcType, rcReason := e.Type, e.Reason
+	if e.RootCause != nil {
+		rcType, rcReason = e.RootCause.Type, e.RootCause.Reason
+	}
+	errType, errReason := e.Type, e.Reason
+	if e.TopType != "" {
+		errType = e.TopType
+	}
+	if e.TopReason != "" {
+		errReason = e.TopReason
+	}
+	fields := map[string]any{}
+	for k, v := range e.Fields {
+		fields[k] = v
+	}
+	if e.Type == "index_not_found_exception" {
+		if _, ok := fields["index"]; !ok {
+			name := e.Reason
+			if i := strings.Index(name, "["); i >= 0 {
+				end := strings.Index(name[i:], "]")
+				if end < 0 {
+					name = name[i+1:]
+				} else {
+					name = name[i+1 : i+end]
+				}
+			}
+			fields["resource.type"] = "index_or_alias"
+			fields["resource.id"] = name
+			fields["index_uuid"] = "_na_"
+			fields["index"] = name
+		}
+	}
+	if e.Type == "shard_not_found_exception" {
+		fields["shard"] = e.Extra
+	}
+	meta := errorMetadata(fields)
+	rootCause := append(ojson.Object{{"type", rcType}, {"reason", rcReason}}, meta...)
+	err := ojson.Object{{"root_cause", []any{rootCause}}, {"type", errType}, {"reason", errReason}}
+	err = append(err, meta...)
+	if e.Phase != "" {
+		err = append(err, ojson.KV{"phase", e.Phase})
+	}
+	if e.CausedBy != nil {
+		err = append(err, ojson.KV{"caused_by", causedByObject(e.CausedBy)})
+	}
+	if len(e.Suppressed) > 0 {
+		sup := make([]any, 0, len(e.Suppressed))
+		for _, s := range e.Suppressed {
+			sup = append(sup, causedByObject(s))
+		}
+		err = append(err, ojson.KV{"suppressed", sup})
+	}
+	writeJSON(w, e.Status, ojson.Object{{"error", err}, {"status", e.Status}})
+}
+
+// errorMetadata orders exception metadata the way OpenSearch prints it.
+func errorMetadata(fields map[string]any) ojson.Object {
+	out := ojson.Object{}
+	for _, k := range []string{"index", "resource.id", "resource.type", "index_uuid", "shard"} {
+		if v, ok := fields[k]; ok {
+			out = append(out, ojson.KV{k, v})
+		}
+	}
+	for _, k := range jsonv.SortedKeys(fields) {
+		switch k {
+		case "index", "resource.id", "resource.type", "index_uuid", "shard":
+			continue
+		}
+		out = append(out, ojson.KV{k, fields[k]})
+	}
+	return out
+}
+
+func causedByObject(e *apierr.Error) map[string]any {
+	m := map[string]any{"type": e.Type, "reason": e.Reason}
+	for k, v := range e.Fields {
+		m[k] = v
+	}
+	if e.CausedBy != nil {
+		m["caused_by"] = causedByObject(e.CausedBy)
+	}
+	return m
+}
+
+func writeSimpleError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]any{"error": msg, "status": status})
+}
+
+func readJSON(r *http.Request) (map[string]any, *apierr.Error) {
+	out, _, apiErr := readJSONRaw(r)
+	return out, apiErr
+}
+
+func readJSONRaw(r *http.Request) (map[string]any, []byte, *apierr.Error) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, nil, apierr.BadRequest("failed to read body")
+	}
+	if len(strings.TrimSpace(string(body))) == 0 {
+		if src := r.URL.Query().Get("source"); src != "" {
+			body = []byte(src)
+		} else {
+			return map[string]any{}, body, nil
+		}
+	}
+	if err := checkDuplicateJSONKeys(body); err != nil {
+		return nil, body, &apierr.Error{Type: "json_parse_exception", Status: 400, Reason: err.Error()}
+	}
+	trimmed := strings.TrimSpace(string(body))
+	if strings.HasPrefix(trimmed, "[") {
+		return nil, body, &apierr.Error{Type: "parsing_exception", Status: 400,
+			Reason: "Expected [START_OBJECT] but found [START_ARRAY]"}
+	}
+	var out map[string]any
+	if err := jsonv.Unmarshal(body, &out); err != nil {
+		return nil, body, &apierr.Error{Type: "json_parse_exception", Status: 400,
+			Reason: "Failed to parse request body: " + err.Error()}
+	}
+	return out, body, nil
+}
+
+func checkDuplicateJSONKeys(body []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var walk func() error
+	walk = func() error {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil
+		}
+		delim, ok := tok.(json.Delim)
+		if !ok {
+			return nil
+		}
+		switch delim {
+		case '{':
+			seen := map[string]bool{}
+			for dec.More() {
+				kt, err := dec.Token()
+				if err != nil {
+					return nil
+				}
+				k, _ := kt.(string)
+				if seen[k] {
+					return fmt.Errorf("Duplicate Object property %q", k)
+				}
+				seen[k] = true
+				if err := walk(); err != nil {
+					return err
+				}
+			}
+			_, _ = dec.Token()
+		case '[':
+			for dec.More() {
+				if err := walk(); err != nil {
+					return err
+				}
+			}
+			_, _ = dec.Token()
+		}
+		return nil
+	}
+	return walk()
+}
+
+func (s *Server) getIndex(name string) (*model.Index, *apierr.Error) {
+	idx, ok := s.Indices[name]
+	if !ok {
+		return nil, apierr.IndexNotFound(name)
+	}
+	return idx, nil
+}
+
+// ServeHTTP answers one REST request.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// http.max_content_length: OpenSearch answers 413 with an empty body
+	if r.ContentLength > maxContentLength {
+		w.Header().Set("Content-Length", "0")
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxContentLength)
+	cw := &captureWriter{h: w.Header()}
+	finish := func() {
+		status := cw.status
+		if status == 0 {
+			status = 200
+		}
+		cw.h.Set("X-OpenSearch-Version", "OpenSearch/3.9.0 (opensearch)")
+		writeFinal(w, r, status, bytes.TrimRight(cw.buf.Bytes(), "\n"))
+	}
+	if ids := r.Header.Values("X-Opaque-Id"); len(ids) > 0 {
+		cw.h.Set("X-Opaque-Id", ids[0])
+		if len(ids) > 1 {
+			writeSimpleError(cw, 400, "multiple values for single-valued header [X-Opaque-Id].")
+			finish()
+			return
+		}
+	}
+	if r.Header.Get(badEscapeHeader) != "" {
+		s.writeBadEscape(cw, r)
+		finish()
+		return
+	}
+	normalizeQuery(r)
+	if r.ContentLength > 0 && checkContentType(cw, r) {
+		finish()
+		return
+	}
+	if e := decodeRequestBody(r); e != nil {
+		writeError(cw, e)
+		finish()
+		return
+	}
+	for _, p := range []string{"pretty", "human", "error_trace"} {
+		if e := strictBoolParam(r, p); e != nil {
+			writeError(cw, e)
+			finish()
+			return
+		}
+	}
+	if !s.handleTaskRoutes(cw, r) && !s.serveRequestCache(cw, r) {
+		s.route(cw, r)
+	}
+	if r.Method == http.MethodHead && cw.buf.Len() == 0 && cw.status < 300 {
+		// HEAD answers carry the Content-Length of the matching GET body
+		g := r.Clone(r.Context())
+		g.Method = http.MethodGet
+		gw := &captureWriter{h: http.Header{}}
+		s.route(gw, g)
+		if gw.status == cw.status || (gw.status == 0 && cw.status == 0) {
+			cw.buf = gw.buf
+			cw.ordered = gw.ordered
+		}
+	}
+	s.persistAfterRequest(r.Method, r.URL.Path)
+	status := cw.status
+	if status == 0 {
+		status = 200
+	}
+	body := cw.buf.Bytes()
+	if cw.h.Get("Content-Type") == "" {
+		cw.h.Set("Content-Type", "application/json; charset=UTF-8")
+	}
+	if strings.HasPrefix(cw.h.Get("Content-Type"), "application/json") {
+		body = respfmt.Process(cw.h, cw.ordered, r, status, body, model.NodeVersion)
+	}
+	cw.h.Set("X-OpenSearch-Version", "OpenSearch/3.9.0 (opensearch)")
+	writeFinal(w, r, status, body)
+}
+
+func methodNotAllowed(w http.ResponseWriter, r *http.Request, allowed ...string) {
+	allow := strings.Join(allowed, ",")
+	w.Header().Set("Allow", allow)
+	writeSimpleError(w, 405, fmt.Sprintf("Incorrect HTTP method for uri [%s] and method [%s], allowed: [%s]", r.URL.Path, r.Method, allow))
+}
+
+func (s *Server) route(w http.ResponseWriter, r *http.Request) {
+	path := strings.Trim(r.URL.EscapedPath(), "/")
+	segs := []string{}
+	if path != "" {
+		for _, rs := range strings.Split(path, "/") {
+			if d, err := url.PathUnescape(rs); err == nil {
+				segs = append(segs, d)
+			} else {
+				segs = append(segs, rs)
+			}
+		}
+	}
+
+	if len(segs) == 0 || segs[0] == "" {
+		s.handleRoot(w, r)
+		return
+	}
+	if handled := s.routeServerEndpoints(w, r, segs); handled {
+		return
+	}
+	if segs[0] == "_plugins" && len(segs) >= 2 && segs[1] == "_knn" && s.handleKnnPlugin(w, r, segs) {
+		return
+	}
+	if segs[0] == "_bulk" {
+		s.handleBulkV2(w, r, "")
+		return
+	}
+	if segs[0] == "_msearch" {
+		if len(segs) >= 2 && segs[1] == "template" {
+			s.handleMsearchTemplate(w, r, "")
+			return
+		}
+		s.handleMsearch(w, r, "")
+		return
+	}
+	if segs[0] == "_ingest" {
+		if s.handleIngestRoute(w, r, segs) {
+			return
+		}
+		writeNoHandler(w, r)
+		return
+	}
+	if (segs[0] == "_script_context" || segs[0] == "_script_language") && len(segs) == 1 {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, r, "GET")
+			return
+		}
+		if segs[0] == "_script_context" {
+			writeJSON(w, 200, ojson.Verbatim(scriptContextListing))
+		} else {
+			writeJSON(w, 200, ojson.Verbatim(scriptLanguageListing))
+		}
+		return
+	}
+	if segs[0] == "_scripts" {
+		if s.handleScriptsRoute(w, r, segs) {
+			return
+		}
+		writeNoHandler(w, r)
+		return
+	}
+	if segs[0] == "_render" {
+		if len(segs) >= 2 && segs[1] == "template" {
+			id := ""
+			if len(segs) >= 3 {
+				id = strings.Join(segs[2:], "/")
+			}
+			s.handleRenderTemplate(w, r, id)
+			return
+		}
+		writeNoHandler(w, r)
+		return
+	}
+	if segs[0] == "_analyze" {
+		s.handleAnalyze(w, r, "")
+		return
+	}
+	if segs[0] == "_search" {
+		if len(segs) >= 2 && segs[1] == "template" {
+			s.handleSearchTemplate(w, r, "")
+			return
+		}
+		if len(segs) >= 2 && segs[1] == "point_in_time" {
+			s.handlePitRoute(w, r, segs[2:])
+			return
+		}
+		if len(segs) >= 2 && segs[1] == "scroll" {
+			s.handleScroll(w, r, segs[2:])
+			return
+		}
+		if len(segs) >= 2 && segs[1] == "pipeline" {
+			if s.handleSearchPipelineRoute(w, r, segs) {
+				return
+			}
+		}
+		s.handleSearch(w, r, "")
+		return
+	}
+	if segs[0] == "_count" {
+		s.handleCount(w, r, "")
+		return
+	}
+	if segs[0] == "_search_shards" {
+		s.handleSearchShards(w, r, "")
+		return
+	}
+	if segs[0] == "_rank_eval" {
+		s.handleRankEval(w, r, "")
+		return
+	}
+	if segs[0] == "_validate" {
+		if len(segs) >= 2 && segs[1] == "query" {
+			s.handleValidateQuery(w, r, "")
+			return
+		}
+		writeNoHandler(w, r)
+		return
+	}
+	if segs[0] == "_field_caps" {
+		s.handleFieldCaps(w, r, "")
+		return
+	}
+	if segs[0] == "_settings" {
+		filter := ""
+		if len(segs) > 1 {
+			filter = strings.Join(segs[1:], "/")
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			methodNotAllowed(w, r, "GET", "HEAD")
+			return
+		}
+		s.getSettingsAPI(w, r, "*", filter)
+		return
+	}
+	switch segs[0] {
+	case "_refresh", "_flush", "_forcemerge":
+		if r.Method != http.MethodPost && r.Method != http.MethodGet {
+			methodNotAllowed(w, r, "POST", "GET")
+			return
+		}
+		s.maintenanceOp(w, r, "*", strings.TrimPrefix(segs[0], "_"))
+		return
+	case "_cache":
+		if len(segs) == 2 && segs[1] == "clear" {
+			s.maintenanceOp(w, r, "*", "cache")
+			return
+		}
+		writeNoHandler(w, r)
+		return
+	case "_mget":
+		s.handleMget(w, r, "")
+		return
+	case "_stats":
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			methodNotAllowed(w, r, "GET", "HEAD")
+			return
+		}
+		metrics := ""
+		if len(segs) > 1 {
+			metrics = strings.Join(segs[1:], ",")
+		}
+		s.handleStatsAPI(w, r, "*", metrics)
+		return
+	case "_segments":
+		s.handleSegmentsAPI(w, r, "*")
+		return
+	case "_recovery":
+		s.handleRecoveryAPI(w, r, "*")
+		return
+	}
+	if segs[0] == "_all" && len(segs) == 1 {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead:
+			s.getIndexMeta(w, r, "_all")
+		case http.MethodDelete:
+			s.deleteIndices(w, r, "_all")
+		default:
+			methodNotAllowed(w, r, "GET", "HEAD", "DELETE")
+		}
+		return
+	}
+	if segs[0] == "_mapping" && len(segs) >= 3 && segs[1] == "field" {
+		s.getMappingAPI(w, r, "*", strings.Join(segs[2:], ","))
+		return
+	}
+	if segs[0] == "_alias" {
+		aliasSpec := ""
+		if len(segs) > 1 {
+			aliasSpec = strings.Join(segs[1:], ",")
+		}
+		switch r.Method {
+		case http.MethodGet:
+			s.getAliasesGlobal(w, r, aliasSpec, false)
+		case http.MethodHead:
+			if aliasSpec == "" {
+				w.WriteHeader(200)
+				return
+			}
+			s.headAliasesGlobal(w, r, aliasSpec)
+		default:
+			methodNotAllowed(w, r, "GET", "HEAD")
+		}
+		return
+	}
+	if segs[0] == "_aliases" {
+		aliasSpec := ""
+		if len(segs) > 1 {
+			aliasSpec = strings.Join(segs[1:], ",")
+		}
+		switch r.Method {
+		case http.MethodPost:
+			s.postAliases(w, r)
+		case http.MethodGet:
+			s.getAliasesGlobal(w, r, aliasSpec, true)
+		case http.MethodHead:
+			if aliasSpec == "" {
+				w.WriteHeader(200)
+				return
+			}
+			s.headAliasesGlobal(w, r, aliasSpec)
+		default:
+			methodNotAllowed(w, r, "GET", "POST", "HEAD")
+		}
+		return
+	}
+	if segs[0] == "_cat" {
+		s.handleCat(w, r, segs[1:])
+		return
+	}
+	if segs[0] == "_all" || segs[0] == "*" {
+		if len(segs) == 2 {
+			switch segs[1] {
+			case "_search":
+				s.handleSearch(w, r, segs[0])
+				return
+			case "_count":
+				s.handleCount(w, r, segs[0])
+				return
+			case "_field_caps":
+				s.handleFieldCaps(w, r, segs[0])
+				return
+			}
+		}
+	}
+	if strings.HasPrefix(segs[0], "_") {
+		if r.Method == http.MethodPut {
+			s.createIndex(w, r, segs[0])
+			return
+		}
+		writeError(w, &apierr.Error{
+			Type:   "invalid_index_name_exception",
+			Reason: "Invalid index name [" + segs[0] + "], must not start with '_'.",
+			Status: 400,
+		})
+		return
+	}
+
+	index := segs[0]
+	switch len(segs) {
+	case 1:
+		switch r.Method {
+		case http.MethodPut:
+			s.createIndex(w, r, index)
+		case http.MethodDelete:
+			s.deleteIndices(w, r, index)
+		case http.MethodGet, http.MethodHead:
+			s.getIndexMeta(w, r, index)
+		default:
+			methodNotAllowed(w, r, "GET", "PUT", "DELETE", "HEAD")
+		}
+	case 2:
+		switch segs[1] {
+		case "_mapping", "_mappings":
+			switch r.Method {
+			case http.MethodGet, http.MethodHead:
+				s.getMappingAPI(w, r, index, "")
+			case http.MethodPut, http.MethodPost:
+				s.putMappingAPI(w, r, index)
+			default:
+				methodNotAllowed(w, r, "GET", "PUT", "POST", "HEAD")
+			}
+		case "_settings":
+			switch r.Method {
+			case http.MethodGet, http.MethodHead:
+				s.getSettingsAPI(w, r, index, "")
+			case http.MethodPut:
+				s.putSettingsAPI(w, r, index)
+			default:
+				methodNotAllowed(w, r, "GET", "PUT", "HEAD")
+			}
+		case "_analyze":
+			s.handleAnalyze(w, r, index)
+		case "_bulk":
+			s.handleBulkV2(w, r, index)
+		case "_msearch":
+			s.handleMsearch(w, r, index)
+		case "_mget":
+			s.handleMget(w, r, index)
+		case "_termvectors":
+			if len(segs) == 2 {
+				s.handleTermVectors(w, r, index, "")
+			} else {
+				s.handleTermVectors(w, r, index, segs[2])
+			}
+		case "_mtermvectors":
+			s.handleMTermVectors(w, r, index)
+		case "_delete_by_query":
+			s.handleDeleteByQuery(w, r, index)
+		case "_update_by_query":
+			s.handleUpdateByQuery(w, r, index)
+		case "_search":
+			if len(segs) >= 3 && segs[2] == "point_in_time" {
+				s.openPit(w, r, index)
+				return
+			}
+			s.handleSearch(w, r, index)
+		case "_count":
+			s.handleCount(w, r, index)
+		case "_search_shards":
+			s.handleSearchShards(w, r, index)
+		case "_rank_eval":
+			s.handleRankEval(w, r, index)
+		case "_validate":
+			if len(segs) >= 3 && segs[2] == "query" {
+				s.handleValidateQuery(w, r, index)
+				return
+			}
+			writeNoHandler(w, r)
+		case "_field_caps":
+			s.handleFieldCaps(w, r, index)
+		case "_refresh", "_flush", "_forcemerge":
+			if r.Method != http.MethodPost && r.Method != http.MethodGet {
+				methodNotAllowed(w, r, "POST", "GET")
+				return
+			}
+			s.maintenanceOp(w, r, index, strings.TrimPrefix(segs[1], "_"))
+		case "_cache":
+			if len(segs) == 2 {
+				s.maintenanceOp(w, r, index, "cache")
+				return
+			}
+			writeNoHandler(w, r)
+		case "_stats":
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				methodNotAllowed(w, r, "GET", "HEAD")
+				return
+			}
+			s.handleStatsAPI(w, r, index, "")
+		case "_segments":
+			s.handleSegmentsAPI(w, r, index)
+		case "_recovery":
+			s.handleRecoveryAPI(w, r, index)
+		case "_rollover":
+			s.handleRollover(w, r, index, "")
+		case "_close":
+			s.handleCloseOpen(w, r, index, true)
+		case "_open":
+			s.handleCloseOpen(w, r, index, false)
+		case "_alias", "_aliases":
+			switch r.Method {
+			case http.MethodGet, http.MethodHead:
+				s.getAliasesIndexed(w, r, index, "")
+			case http.MethodDelete:
+				s.deleteAliasAPI(w, r, index, "")
+			default:
+				methodNotAllowed(w, r, "GET", "HEAD", "DELETE")
+			}
+		case "_doc":
+			if r.Method == http.MethodPost {
+				s.handleIndexDocV2(w, r, index, "", "index")
+			} else {
+				methodNotAllowed(w, r, "POST")
+			}
+		default:
+			writeNoHandler(w, r)
+		}
+	case 3:
+		switch segs[1] {
+		case "_validate":
+			if segs[2] == "query" {
+				s.handleValidateQuery(w, r, index)
+				return
+			}
+			writeNoHandler(w, r)
+		case "_msearch":
+			if segs[2] == "template" {
+				s.handleMsearchTemplate(w, r, index)
+				return
+			}
+			writeNoHandler(w, r)
+		case "_search":
+			if segs[2] == "template" {
+				s.handleSearchTemplate(w, r, index)
+				return
+			}
+			if segs[2] == "point_in_time" {
+				s.openPit(w, r, index)
+				return
+			}
+			writeNoHandler(w, r)
+		case "_doc":
+			switch r.Method {
+			case http.MethodPut, http.MethodPost:
+				s.handleIndexDocV2(w, r, index, segs[2], "index")
+			case http.MethodGet, http.MethodHead:
+				s.handleGetDocV2(w, r, index, segs[2])
+			case http.MethodDelete:
+				s.handleDeleteDocV2(w, r, index, segs[2])
+			case http.MethodOptions:
+				w.Header().Set("Allow", "PUT,POST,GET,HEAD,DELETE")
+				w.Header().Set("Content-Type", "text/plain; charset=UTF-8")
+				w.WriteHeader(200)
+			default:
+				methodNotAllowed(w, r, "PUT", "POST", "GET", "HEAD", "DELETE")
+			}
+		case "_source":
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				methodNotAllowed(w, r, "GET", "HEAD")
+				return
+			}
+			s.handleGetSourceV2(w, r, index, segs[2])
+		case "_termvectors":
+			s.handleTermVectors(w, r, index, segs[2])
+		case "_update":
+			s.handleUpdateDocV2(w, r, index, segs[2])
+		case "_explain":
+			s.handleExplain(w, r, index, segs[2])
+		case "_rollover":
+			s.handleRollover(w, r, index, segs[2])
+		case "_clone", "_shrink", "_split":
+			s.handleResize(w, r, index, strings.TrimPrefix(segs[1], "_"), segs[2])
+		case "_create":
+			s.handleIndexDocV2(w, r, index, segs[2], "create")
+		case "_alias", "_aliases":
+			switch r.Method {
+			case http.MethodGet, http.MethodHead:
+				s.getAliasesIndexed(w, r, index, segs[2])
+			case http.MethodPut, http.MethodPost:
+				s.putAliasAPI(w, r, index, segs[2])
+			case http.MethodDelete:
+				s.deleteAliasAPI(w, r, index, segs[2])
+			default:
+				methodNotAllowed(w, r, "GET", "PUT", "POST", "DELETE", "HEAD")
+			}
+		case "_settings":
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				methodNotAllowed(w, r, "GET", "HEAD")
+				return
+			}
+			s.getSettingsAPI(w, r, index, segs[2])
+		case "_stats":
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				methodNotAllowed(w, r, "GET", "HEAD")
+				return
+			}
+			s.handleStatsAPI(w, r, index, segs[2])
+		case "_cache":
+			if segs[2] == "clear" {
+				s.maintenanceOp(w, r, index, "cache")
+				return
+			}
+			writeNoHandler(w, r)
+		case "_block":
+			if r.Method != http.MethodPut {
+				methodNotAllowed(w, r, "PUT")
+				return
+			}
+			s.putBlockAPI(w, r, index, segs[2])
+		default:
+			writeNoHandler(w, r)
+		}
+	default:
+		if len(segs) == 4 && segs[1] == "_mapping" && segs[2] == "field" {
+			s.getMappingAPI(w, r, index, segs[3])
+			return
+		}
+		writeNoHandler(w, r)
+	}
+}
+
+func rootVersion() map[string]any {
+	return map[string]any{
+		"distribution":                        "opensearch",
+		"number":                              model.NodeVersion,
+		"build_type":                          "tar",
+		"build_hash":                          "0000000000000000000000000000000000000000",
+		"build_date":                          "2026-01-01T00:00:00.000000000Z",
+		"build_snapshot":                      false,
+		"lucene_version":                      luceneVersion,
+		"minimum_wire_compatibility_version":  "2.19.0",
+		"minimum_index_compatibility_version": "2.0.0",
+	}
+}
+
+func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+	case http.MethodDelete:
+		writeError(w, &apierr.Error{Type: "action_request_validation_exception",
+			Reason: "Validation Failed: 1: index / indices is missing;", Status: 400})
+		return
+	case http.MethodOptions:
+		w.Header().Set("Allow", "DELETE,HEAD,GET")
+		w.WriteHeader(200)
+		return
+	default:
+		methodNotAllowed(w, r, "DELETE,HEAD,GET")
+		return
+	}
+	body := map[string]any{
+		"name":         model.NodeName,
+		"cluster_name": model.ClusterName,
+		"cluster_uuid": model.ClusterUUID,
+		"version":      rootVersion(),
+		"tagline":      "The OpenSearch Project: https://opensearch.org/",
+	}
+	if q.Get("format") == "yaml" {
+		if fp := q.Get("filter_path"); fp != "" {
+			body = respfmt.FilterPath(body, fp).(map[string]any)
+		}
+		w.Header().Set("Content-Type", "application/yaml")
+		w.WriteHeader(200)
+		w.Write(respfmt.YAML(body))
+		return
+	}
+	pretty := q.Get("pretty") == "" || (q.Get("pretty") != "false")
+	var buf bytes.Buffer
+	renderOrderedJSON(&buf, []any{
+		"name", body["name"],
+		"cluster_name", body["cluster_name"],
+		"cluster_uuid", body["cluster_uuid"],
+		"version", body["version"],
+		"tagline", body["tagline"],
+	}, pretty)
+	cw := w.(*captureWriter)
+	cw.ordered = true
+	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	w.WriteHeader(200)
+	w.Write(buf.Bytes())
+}
+
+// renderOrderedJSON renders an ordered list of key/value pairs. Nested maps are
+// rendered with sorted keys, matching OpenSearch's Jackson output for root.
+func renderOrderedJSON(buf *bytes.Buffer, pairs []any, pretty bool) {
+	if !pretty {
+		buf.WriteByte('{')
+		for i := 0; i+1 < len(pairs); i += 2 {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			buf.WriteString(jsonv.EncodeString(pairs[i].(string)))
+			buf.WriteByte(':')
+			writeCompact(buf, pairs[i+1])
+		}
+		buf.WriteByte('}')
+		return
+	}
+	buf.WriteString("{\n")
+	for i := 0; i+1 < len(pairs); i += 2 {
+		if i > 0 {
+			buf.WriteString(",\n")
+		}
+		buf.WriteString("  ")
+		buf.WriteString(jsonv.EncodeString(pairs[i].(string)))
+		buf.WriteString(" : ")
+		respfmt.WritePretty(buf, pairs[i+1], 1)
+	}
+	buf.WriteString("\n}\n")
+}
+
+func writeCompact(buf *bytes.Buffer, v any) {
+	switch t := v.(type) {
+	case map[string]any:
+		buf.WriteByte('{')
+		keys := jsonv.SortedKeys(t)
+		for i, k := range keys {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			buf.WriteString(jsonv.EncodeString(k))
+			buf.WriteByte(':')
+			writeCompact(buf, t[k])
+		}
+		buf.WriteByte('}')
+	case []any:
+		buf.WriteByte('[')
+		for i, e := range t {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			writeCompact(buf, e)
+		}
+		buf.WriteByte(']')
+	default:
+		buf.WriteString(string(ojson.Marshal(v)))
+	}
+}
+
+func randomUUID() string {
+	b := make([]byte, 16)
+	for i := range b {
+		b[i] = byte(simpleRand())
+	}
+	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+	out := make([]byte, 22)
+	for i := 0; i < 22; i++ {
+		out[i] = chars[int(b[i%16])%len(chars)]
+	}
+	return string(out)
+}
+
+func writeBlockError(idx *model.Index) *apierr.Error {
+	if err := indexBlockError(idx, "write", 8, 403); err != nil {
+		return err
+	}
+	if err := indexBlockError(idx, "read_only", 5, 403); err != nil {
+		return err
+	}
+	if idx.Blocked("read_only_allow_delete") {
+		return &apierr.Error{Type: "cluster_block_exception", Status: 429,
+			Reason: fmt.Sprintf("index [%s] blocked by: [TOO_MANY_REQUESTS/12/disk usage exceeded flood-stage watermark, index has read-only-allow-delete block];", idx.Name)}
+	}
+	return nil
+}
+
+func readBlockError(idx *model.Index) *apierr.Error {
+	return indexBlockError(idx, "read", 7, 403)
+}
+
+func queryBool(r *http.Request, key string) bool {
+	v := r.URL.Query()[key]
+	if len(v) == 0 {
+		return false
+	}
+	return v[0] == "" || v[0] == "true"
+}
+
+// resolveReadTarget resolves a name to a concrete index for read operations,
+// following aliases when necessary.
+func (s *Server) resolveReadTarget(name string) (*model.Index, *apierr.Error) {
+	if idx, ok := s.Indices[name]; ok {
+		return idx, nil
+	}
+	var withAlias []*model.Index
+	var writeIdx *model.Index
+	for _, idx := range s.Indices {
+		if def, ok := idx.Aliases[name]; ok {
+			withAlias = append(withAlias, idx)
+			if b, _ := def["is_write_index"].(bool); b {
+				writeIdx = idx
+			}
+		}
+	}
+	if writeIdx != nil {
+		return writeIdx, nil
+	}
+	if len(withAlias) > 0 {
+		return withAlias[0], nil
+	}
+	if ds := s.resolveDataStream(name); ds != nil {
+		indices := s.dataStreamIndices(ds)
+		if len(indices) > 0 {
+			return indices[len(indices)-1], nil
+		}
+	}
+	if verr := validateIndexName(name); verr != nil {
+		return nil, verr
+	}
+	return nil, errIndexNotFoundNamed(name)
+}
+
+func parseQParam(q string) map[string]any {
+	m, _ := parseQParamOpts(q, "", "")
+	return m
+}
+
+func parseQParamOpts(q, df, op string) (map[string]any, *apierr.Error) {
+	if op != "" && !strings.EqualFold(op, "and") && !strings.EqualFold(op, "or") {
+		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
+			Reason: "No enum constant org.opensearch.index.query.Operator." + strings.ToUpper(op)}
+	}
+	if q == "" {
+		return map[string]any{"match_none": map[string]any{}}, nil
+	}
+	if q == "*" {
+		return map[string]any{"match_all": map[string]any{}}, nil
+	}
+	qs := map[string]any{"query": q}
+	if df != "" {
+		qs["default_field"] = df
+	}
+	if op != "" {
+		qs["default_operator"] = strings.ToUpper(op)
+	}
+	return map[string]any{"query_string": qs}, nil
+}
+
+func (s *Server) handleCount(w http.ResponseWriter, r *http.Request, name string) {
+	body, bodyRaw, apiErr := readJSONRaw(r)
+	if apiErr != nil {
+		writeError(w, apiErr)
+		return
+	}
+	if _, hasSize := body["size"]; hasSize {
+		writeError(w, &apierr.Error{Type: "parsing_exception", Status: 400,
+			Reason: "request does not support [size]"})
+		return
+	}
+	if _, has := body["suggest"]; has {
+		writeError(w, &apierr.Error{Type: "parsing_exception", Status: 400,
+			Reason: "request does not support [suggest]"})
+		return
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	o := s.parseResolveParams(r, resolveOpts2{closedError: true})
+	indices, apiErr := s.resolveSpec2(name, o)
+	if apiErr != nil {
+		writeError(w, apiErr)
+		return
+	}
+	if pipe, pipeErr := s.resolveSearchPipeline(r, body, indices); pipeErr != nil {
+		writeError(w, pipeErr)
+		return
+	} else if pipe != nil {
+		if _, _, perr := applySearchRequestProcessors(body, pipe, false); perr != nil {
+			writeError(w, perr)
+			return
+		}
+	}
+	query, _ := body["query"].(map[string]any)
+	if vals, has := r.URL.Query()["q"]; has {
+		if query != nil {
+			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
+				Reason: "request [/" + name + "/_count] contains unrecognized parameter: [q]"})
+			return
+		}
+		var qerr *apierr.Error
+		query, qerr = parseQParamOpts(vals[0], r.URL.Query().Get("df"), r.URL.Query().Get("default_operator"))
+		if qerr != nil {
+			writeError(w, qerr)
+			return
+		}
+	}
+	matchAll := false
+	if query == nil {
+		query = map[string]any{"match_all": map[string]any{}}
+	}
+	if _, ok := query["match_all"]; ok {
+		matchAll = true
+	}
+	if len(indices) > 0 {
+		if verr := search.ValidateQuery(indices[0], query); verr != nil {
+			if verr.Clause != "" {
+				annotateQueryClause(verr, bodyRaw)
+				writeError(w, verr)
+			} else if verr.ForceTop {
+				writeError(w, verr)
+			} else {
+				writeQueryShardError(w, indices[0], verr)
+			}
+			return
+		}
+	}
+	total := 0
+	shards := 0
+	sf := newShardFilter(r, indices)
+	for _, idx := range indices {
+		q := query
+		if f := searchAliasFilter(idx, name); f != nil {
+			q = map[string]any{"bool": map[string]any{"must": []any{query, f}}}
+		}
+		if sf != nil {
+			shards += len(sf.allowed[idx])
+		} else {
+			shards += idx.NumShards()
+		}
+		for _, id := range idx.Order {
+			doc, live := idx.Docs[id]
+			if !live {
+				continue
+			}
+			if !sf.allows(idx, id) {
+				continue
+			}
+			if _, pending := idx.Pending[id]; pending {
+				continue
+			}
+			qc := search.NewQueryCtxForDoc(idx, id, doc)
+			matched, _, err := qc.Eval(q)
+			if err != nil {
+				if isQueryShardCause(err) {
+					writeQueryShardError(w, idx, err)
+				} else {
+					writeError(w, err)
+				}
+				return
+			}
+			if matched {
+				total++
+			}
+		}
+	}
+	resp := map[string]any{
+		"count": total,
+		"_shards": map[string]any{
+			"total": shards, "successful": shards, "skipped": 0, "failed": 0,
+		},
+	}
+	if ta := r.URL.Query().Get("terminate_after"); ta != "" {
+		if n, err := strconv.Atoi(ta); err == nil && n > 0 {
+			terminated := matchAll
+			if !terminated && total > n {
+				resp["count"] = n
+				terminated = true
+			}
+			resp["terminated_early"] = terminated
+		}
+	}
+	writeJSON(w, 200, resp)
+}
+
+// checkDynamicStrict enforces a mapping-level "dynamic":"strict" setting.
+func checkDynamicStrict(idx *model.Index, props map[string]any, source map[string]any) *apierr.Error {
+	dyn := mapping.RootDynamicString(idx)
+	if dyn != "strict" && dyn != "strict_allow_templates" {
+		return nil
+	}
+	for k, v := range source {
+		if strings.HasPrefix(k, "_") {
+			continue
+		}
+		if _, known := props[k]; known {
+			continue
+		}
+		if dyn == "strict_allow_templates" {
+			if _, matched, _ := mapping.DynamicDefFor(idx, k, k, v); matched {
+				continue
+			}
+		}
+		return &apierr.Error{Type: "strict_dynamic_mapping_exception", Status: 400,
+			Reason: "mapping set to " + dyn + ", dynamic introduction of [" + k + "] within [_doc] is not allowed"}
+	}
+	return nil
+}
+
+func (s *Server) nextID() string {
+	s.Counter++
+	return fmt.Sprintf("doc-%d", s.Counter)
+}
+
+// maxContentLength mirrors OpenSearch's default http.max_content_length (100mb).
+const maxContentLength = 100 << 20
+
+func writeNoHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 400, map[string]any{"error": "no handler found for uri [" + r.URL.Path + "] and method [" + r.Method + "]"})
+}

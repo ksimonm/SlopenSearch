@@ -2,7 +2,8 @@
 
 Built on the standard library (`net/http`, `encoding/json`) so far; third-party modules
 are welcome where they save real work (see [CONTRIBUTING.md](../../CONTRIBUTING.md)).
-The server is `package main` plus leaf libraries under `internal/` (see [Layout](#layout)). State is durable by default (stored in `./data`);
+The server is a layered set of packages under `internal/` with a small `main.go` (see
+[Layout](#layout)). State is durable by default (stored in `./data`);
 `SLOP_IN_MEMORY=true` keeps it in memory only (see [Persistence](#persistence)).
 
 ## Loop
@@ -28,18 +29,41 @@ reference with `make ref-up` and `curl localhost:9290/...`.
 
 ## Layout
 
-The code is moving towards a layered layout. `internal/` holds libraries with no
-server state; they never import `package main` and inner packages never import outer
-ones. Build with `go build .` in `servers/go` as before.
+The code is layered: `package main` (`main.go`) only reads the configuration from the
+environment and wires the server; everything else lives under `internal/`. Packages
+never import `package main`, and inner layers never import outer ones:
+
+```
+main ─► httpapi ─► suggest ─► search ─► mapping ─► model
+               ├─► aggs ───►┘           │           └─► settings
+               ├─► ingest ─► model      └─► analysis, dates
+               └─► storage ─► model
+         (all of them may use the leaf libraries: apierr, jsonv, ojson, painless, ...)
+```
+
+Domain and engine packages:
+
+| Package | Contents | Depends on (internal) |
+|---|---|---|
+| `internal/model` | the domain state: `State` (indices, cluster settings, templates, data streams, pipelines, stored scripts), `Index` (metadata, settings, mappings, documents, versions, seq_nos, routing, pending/stale writes) with its accessors, `DataStream`, node identity constants | settings |
+| `internal/dates` | date parsing and formatting as OpenSearch does it: Java format names and patterns, epoch values, ISO detection, range date math | jsonv |
+| `internal/mapping` | mappings and field types: validation, merging, dotted names, dynamic mappings and templates, alias resolution (`FieldDef`), index-time parsing of documents into doc values (`ParseContext`, `ComputeDocValues`), knn_vector/completion/geo field values | analysis, apierr, dates, jsonv, model, ojson, settings, wildcard |
+| `internal/search` | query evaluation (`QueryCtx`, `EvalQuery`), scoring, query_string, inner hits, percolate, function_score, k-NN queries, highlighting, source filtering, sort specs and hit sorting, `search_after`, collapse, rescore, shard-level query validation, profile; the painless/expressions glue for script queries, scores, fields and sorts. Other indices and stored scripts are reached through `search.Cluster` (`ClusterLookup`, set by the server) | analysis, apierr, dates, expressions, jsonv, mapping, model, mustache, ojson, painless, settings |
+| `internal/aggs` | bucket, metric and pipeline aggregations, scripted aggregations (`aggs.Evaluate` over `aggs.Hit`) | search, mapping, model, ... |
+| `internal/suggest` | term, phrase (with collate) and completion suggesters (`suggest.Evaluate`) | search, mapping, model, ... |
+| `internal/ingest` | ingest pipelines: validation, processors, `on_failure`, `_simulate`, default/final pipelines (`ingest.Engine`); script processors compile through the `ingest.Scripts` interface | apierr, jsonv, model, painless, settings, wildcard |
+| `internal/storage` | durable state: snapshot + synced journal of a `model.State` (`storage.Open`, `Store.Persist`); the server's locks are passed in (`storage.Locks`) | model |
+| `internal/httpapi` | the HTTP adapter: `Server` (embeds `model.State`, owns the locks, scroll/PIT contexts, tasks), routing, request parsing, all REST handlers, response and error rendering, `_cat`, `_nodes`, tasks, the request cache | everything above |
+
+Leaf libraries (no server state):
 
 | Package | Contents | Depends on |
 |---|---|---|
 | `internal/ojson` | ordered JSON objects (`Object`, `KV`), `Verbatim`, `Marshal` | - |
-| `internal/jsonv` | decoded JSON value helpers: `ToFloat`, `Float` (Java-style doubles), `FormatNumber`, `EncodeString`, `DeepCopy`, `SortedKeys`, `Unmarshal` | - |
+| `internal/jsonv` | decoded JSON value helpers: `ToFloat`, `ToString`, `ScalarString`, `Float` (Java-style doubles), `FormatNumber`, `EncodeString`, `DeepCopy`, `SortedKeys`, `Unmarshal` | - |
 | `internal/wildcard` | `*` pattern matching | - |
-| `internal/settings` | index settings lookup (`Find`, `Int`) | jsonv |
-| `internal/apierr` | the API error type (`Error`, `Response` for pre-rendered bodies) | - |
-| `internal/model` | domain state: `Index` (metadata, mappings, settings, documents) | - |
+| `internal/settings` | index settings lookup (`Find`, `Int`, `ValueString`, `ValueInt`) | jsonv |
+| `internal/apierr` | the API error type (`Error`, `Response` for pre-rendered bodies), common errors (`BadRequest`, `Parsing`, `IndexNotFound`) | - |
 | `internal/jregex` | backtracking `java.util.regex` subset (lookaround, possessive, `\p{..}`) | - |
 | `internal/painless` | Painless: lexer, parser, type checks, interpreter, values with Java semantics, class library, `java.time`, script contexts and compile cache | - |
 | `internal/expressions` | Lucene expressions; doc values, fields and params are passed in (`Env`, `Doc`) | painless |
@@ -49,30 +73,24 @@ ones. Build with `go build .` in `servers/go` as before.
 | `internal/analysis` | tokenizers, token/char filters, synonyms, built-in and language analyzers, analysis chains from index settings (`analysis.Index`) | apierr, jregex, jsonv, lucene, settings, snowball |
 | `internal/respfmt` | response rendering: pretty JSON, `filter_path`, `human`, `error_trace`, YAML | jsonv, ojson, wildcard |
 
-`package main` still holds the server (state, handlers, routing) and the subsystems not
-moved yet. The old names stay available there as aliases (`apiError`, `Index`,
-`orderedJSON`, `rawFloat`, ...), and small adapter files connect it to the libraries:
-`pl_api.go` (script errors, doc lookup, `_execute`), `expressions_api.go`,
-`mustache_api.go`, `analyze_api.go` (`_analyze`), `analysisIndex` in `model.go`.
+Files of `internal/httpapi`:
 
 | File | Area |
 |---|---|
-| `server.go`, `httpconn.go`, `httplayer.go` | HTTP entry point, routing, error rendering |
-| `model.go` | server state, node/cluster constants, settings and mapping helpers |
+| `server.go`, `httpconn.go`, `httplayer.go`, `utf8check.go` | HTTP entry point, routing, error rendering, wire-level quirks |
+| `state.go` | `Server`, `NewServer`, the `search.Cluster` adapter |
 | `meta.go` | index pattern resolution, cluster/meta routes |
-| `admin.go` | index create/delete/get, settings |
-| `maps.go`, `fields.go`, `mapping_*.go` | mappings, index-time field extraction, dates |
+| `admin.go`, `maps_api.go` | index create/delete/get, settings, `_mapping` |
 | `alias.go`, `templates.go`, `datastreams.go`, `rollover.go` | aliases, index templates, data streams, rollover |
 | `resize.go`, `reindex.go`, `resolve_index.go`, `maintenance.go` | clone/shrink/split, `_reindex`, `_resolve/index`, refresh/flush/forcemerge |
-| `documents_v2.go`, `bulk_v2.go`, `byquery.go`, `termvectors.go` | document CRUD, `_bulk`, by-query APIs, term vectors |
-| `search.go`, `eval.go`, `eval_extra.go`, `highlight.go`, `lang_highlight.go`, `explain.go`, `validate.go` | search API, query evaluation, highlighting, `_explain`, `_validate` |
+| `documents.go`, `bulk.go`, `byquery.go`, `termvectors.go` | document CRUD, `_bulk`, by-query APIs, term vectors |
+| `search.go`, `explain.go`, `validate.go`, `field_caps.go`, `source.go` | `_search` request handling and response assembly, `_explain`, `_validate`, `_field_caps` |
 | `scroll.go`, `pit.go`, `msearch.go`, `search_templates.go`, `rank_eval.go` | scroll, point in time, `_msearch`, search templates, `_rank_eval` |
-| `search_pipelines.go`, `search_shards.go`, `shard_routing.go`, `field_caps.go` | search pipelines, `_search_shards`, routing, `_field_caps` |
-| `aggs*.go`, `pipeline.go`, `suggest*.go`, `knn*.go` | aggregations, pipeline aggs, suggesters, k-NN |
-| `ingest.go`, `ingest_processors.go`, `ingest_extra.go` | ingest pipelines and processors |
-| `persist.go`, `persist_sync_*.go` | durable state: snapshot + synced journal (`SLOP_DATA_DIR`, `SLOP_IN_MEMORY`) |
+| `search_pipelines.go`, `search_shards.go`, `shard_routing.go`, `requestcache.go` | search pipelines, `_search_shards`, shard routing, request cache |
+| `ingest_api.go`, `knn_plugin.go`, `analyze_api.go` | `_ingest` routes (and the `ingest.Scripts` adapter), `_plugins/_knn`, `_analyze` |
+| `scripts.go`, `script_ctx.go`, `script_meta.go`, `painless.go`, `pl_api.go` | stored scripts, `_scripts/painless/_execute` |
+| `storage_api.go` | opening `internal/storage`, which requests are followed by a journal write |
 | `cat.go`, `nodes.go`, `tasks*.go` | `_cat`, `_nodes`/`_cluster`, tasks |
-| `script_ctx.go`, `scripts.go`, `painless.go` | script contexts, stored scripts, script queries and `script_fields` |
 
 ## Persistence
 
@@ -108,7 +126,7 @@ survive `kill -9`. Concurrent requests share one sync (group commit), and the jo
 file is zero-filled ahead of the frames so a sync needs no metadata update.
 On start (and when the journal outgrows the snapshot) the full state is written to
 `go-snapshot` (temp file, fsync, rename) and a new journal generation begins. One process
-per directory (`flock` on `<dir>/go.lock`; a second instance refuses to start). Code: `persist.go`.
+per directory (`flock` on `<dir>/go.lock`; a second instance refuses to start). Code: `internal/storage`.
 
 Cost: one sync per state-changing request, about 2-3 ms on a consumer NVMe disk, so
 sequential admin-heavy test files run several times slower than in memory (e.g.
