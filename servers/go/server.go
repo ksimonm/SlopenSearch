@@ -285,7 +285,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if !s.handleTaskRoutes(cw, r) {
+	if !s.handleTaskRoutes(cw, r) && !s.serveRequestCache(cw, r) {
 		s.route(cw, r)
 	}
 	if r.Method == http.MethodHead && cw.buf.Len() == 0 && cw.status < 300 {
