@@ -733,7 +733,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	for _, idx := range indices {
 		window := 10000
 		if v, ok := settings.Find(idx.Settings, "max_result_window"); ok {
-			if n, ok := settingsValueInt(v); ok {
+			if n, ok := settings.ValueInt(v); ok {
 				window = n
 			}
 		}
@@ -808,7 +808,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			if sf != nil {
 				shards += len(sf.allowed[idx])
 			} else {
-				shards += numShards(idx)
+				shards += idx.NumShards()
 			}
 			for _, id := range idx.Order {
 				if !sf.allows(idx, id) {
@@ -2129,7 +2129,7 @@ func searchSortSpecValueRaw(h multiHit, sp searchSortSpec) (any, bool, bool) {
 				break
 			}
 		}
-		ns := numShards(h.idx)
+		ns := h.idx.NumShards()
 		if ns < 1 {
 			ns = 1
 		}

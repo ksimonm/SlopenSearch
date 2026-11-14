@@ -8,6 +8,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/model"
+	"slopensearch/internal/settings"
 	"slopensearch/internal/wildcard"
 )
 
@@ -21,7 +22,7 @@ func templateSettingsCanonical(raw any) map[string]any {
 		flat := map[string]any{}
 		flattenSettings(m, flat)
 		for k, v := range flat {
-			out[k] = settingsValueString(v)
+			out[k] = settings.ValueString(v)
 		}
 	}
 	return out
@@ -36,7 +37,7 @@ func templateSettingsView(raw any) map[string]any {
 	canon := templateSettingsCanonical(m)
 	inner := map[string]any{}
 	for k, v := range canon {
-		inner[strings.TrimPrefix(k, "index.")] = settingsValueString(v)
+		inner[strings.TrimPrefix(k, "index.")] = settings.ValueString(v)
 	}
 	return map[string]any{"index": inner}
 }
@@ -100,7 +101,7 @@ func validatePatternList(patterns []any) *apierr.Error {
 		ps, ok := p.(string)
 		if !ok || ps == "" {
 			return &apierr.Error{Type: "invalid_index_template_exception", Status: 400,
-				Reason: "index_pattern [" + settingsValueString(p) + "] must not be empty"}
+				Reason: "index_pattern [" + settings.ValueString(p) + "] must not be empty"}
 		}
 		if strings.HasPrefix(ps, "_") || strings.HasPrefix(ps, "-") || strings.HasPrefix(ps, "+") {
 			return &apierr.Error{Type: "invalid_index_template_exception", Status: 400,
@@ -151,7 +152,7 @@ func indexTemplateGetView(raw map[string]any) map[string]any {
 }
 
 func priorityOf(raw map[string]any) int {
-	if n, ok := settingsValueInt(raw["priority"]); ok {
+	if n, ok := settings.ValueInt(raw["priority"]); ok {
 		return n
 	}
 	return 0
@@ -175,8 +176,8 @@ func (s *Server) handleComposableTemplate(w http.ResponseWriter, r *http.Request
 			return
 		}
 		out := []any{}
-		for _, n := range sortedNames(s.composableTemplates) {
-			out = append(out, map[string]any{"name": n, "index_template": indexTemplateGetView(s.composableTemplates[n])})
+		for _, n := range sortedNames(s.ComposableTemplates) {
+			out = append(out, map[string]any{"name": n, "index_template": indexTemplateGetView(s.ComposableTemplates[n])})
 		}
 		writeJSON(w, 200, map[string]any{"index_templates": out})
 		return
@@ -196,26 +197,26 @@ func (s *Server) handleComposableTemplate(w http.ResponseWriter, r *http.Request
 		s.bumpState()
 		writeJSON(w, 200, map[string]any{"acknowledged": true})
 	case http.MethodDelete:
-		if _, ok := s.composableTemplates[name]; !ok {
+		if _, ok := s.ComposableTemplates[name]; !ok {
 			writeError(w, &apierr.Error{Type: "index_template_missing_exception", Status: 404,
 				Reason: "index_template [" + name + "] missing"})
 			return
 		}
-		for _, ds := range s.dataStreams {
+		for _, ds := range s.DataStreams {
 			if ds.Template == name {
 				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "index templates [" + name + "] cannot be removed as they are in use by a data streams [" + ds.Name + "]"})
 				return
 			}
 		}
-		delete(s.composableTemplates, name)
+		delete(s.ComposableTemplates, name)
 		s.bumpState()
 		writeJSON(w, 200, map[string]any{"acknowledged": true})
 	case http.MethodGet, http.MethodHead:
 		out := []any{}
-		for _, n := range sortedNames(s.composableTemplates) {
+		for _, n := range sortedNames(s.ComposableTemplates) {
 			if n == name || wildcard.Match(name, n) {
-				out = append(out, map[string]any{"name": n, "index_template": indexTemplateGetView(s.composableTemplates[n])})
+				out = append(out, map[string]any{"name": n, "index_template": indexTemplateGetView(s.ComposableTemplates[n])})
 			}
 		}
 		if len(out) == 0 {
@@ -249,7 +250,7 @@ func (s *Server) validateAndStoreIndexTemplate(name string, body map[string]any,
 		return err
 	}
 	if p, has := body["priority"]; has && p != nil {
-		n, ok := settingsValueInt(p)
+		n, ok := settings.ValueInt(p)
 		if !ok || n < 0 {
 			return &apierr.Error{Type: "action_request_validation_exception", Status: 400,
 				Reason: "Validation Failed: 1: index template priority must be >= 0;"}
@@ -259,7 +260,7 @@ func (s *Server) validateAndStoreIndexTemplate(name string, body map[string]any,
 		var missing []string
 		for _, c := range comps {
 			cs, _ := c.(string)
-			if _, ok := s.componentTemplates[cs]; !ok {
+			if _, ok := s.ComponentTemplates[cs]; !ok {
 				missing = append(missing, cs)
 			}
 		}
@@ -284,7 +285,7 @@ func (s *Server) validateAndStoreIndexTemplate(name string, body map[string]any,
 		}
 	}
 	if createOnly {
-		if _, exists := s.composableTemplates[name]; exists {
+		if _, exists := s.ComposableTemplates[name]; exists {
 			return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "index template [" + name + "] already exists"}
 		}
@@ -293,7 +294,7 @@ func (s *Server) validateAndStoreIndexTemplate(name string, body map[string]any,
 	if _, has := body["priority"]; !has {
 		prio = 0
 	}
-	for otherName, other := range s.composableTemplates {
+	for otherName, other := range s.ComposableTemplates {
 		if otherName == name {
 			continue
 		}
@@ -315,7 +316,7 @@ func (s *Server) validateAndStoreIndexTemplate(name string, body map[string]any,
 	for k, v := range body {
 		stored[k] = v
 	}
-	s.composableTemplates[name] = stored
+	s.ComposableTemplates[name] = stored
 	return nil
 }
 
@@ -359,8 +360,8 @@ func (s *Server) handleComponentTemplate(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		out := []any{}
-		for _, n := range sortedNames(s.componentTemplates) {
-			out = append(out, view(n, s.componentTemplates[n]))
+		for _, n := range sortedNames(s.ComponentTemplates) {
+			out = append(out, view(n, s.ComponentTemplates[n]))
 		}
 		writeJSON(w, 200, map[string]any{"component_templates": out})
 		return
@@ -373,16 +374,16 @@ func (s *Server) handleComponentTemplate(w http.ResponseWriter, r *http.Request,
 			writeError(w, apiErr)
 			return
 		}
-		s.componentTemplates[name] = body
+		s.ComponentTemplates[name] = body
 		s.bumpState()
 		writeJSON(w, 200, map[string]any{"acknowledged": true})
 	case http.MethodDelete:
-		if _, ok := s.componentTemplates[name]; !ok {
+		if _, ok := s.ComponentTemplates[name]; !ok {
 			writeError(w, &apierr.Error{Type: "index_template_missing_exception", Status: 404,
 				Reason: "component template [" + name + "] missing"})
 			return
 		}
-		for otherName, tpl := range s.composableTemplates {
+		for otherName, tpl := range s.ComposableTemplates {
 			if comps, ok := tpl["composed_of"].([]any); ok {
 				for _, c := range comps {
 					if cs, _ := c.(string); cs == name {
@@ -393,14 +394,14 @@ func (s *Server) handleComponentTemplate(w http.ResponseWriter, r *http.Request,
 				}
 			}
 		}
-		delete(s.componentTemplates, name)
+		delete(s.ComponentTemplates, name)
 		s.bumpState()
 		writeJSON(w, 200, map[string]any{"acknowledged": true})
 	case http.MethodGet, http.MethodHead:
 		out := []any{}
-		for _, n := range sortedNames(s.componentTemplates) {
+		for _, n := range sortedNames(s.ComponentTemplates) {
 			if n == name || wildcard.Match(name, n) {
-				out = append(out, view(n, s.componentTemplates[n]))
+				out = append(out, view(n, s.ComponentTemplates[n]))
 			}
 		}
 		if len(out) == 0 {
@@ -419,7 +420,7 @@ func (s *Server) handleComponentTemplate(w http.ResponseWriter, r *http.Request,
 func legacyGetView(tpl map[string]any) map[string]any {
 	out := map[string]any{}
 	order := 0
-	if n, ok := settingsValueInt(tpl["order"]); ok {
+	if n, ok := settings.ValueInt(tpl["order"]); ok {
 		order = n
 	}
 	out["order"] = order
@@ -454,7 +455,7 @@ func (s *Server) handleLegacyTemplate(w http.ResponseWriter, r *http.Request, re
 			return
 		}
 		out := map[string]any{}
-		for n, tpl := range s.legacyTemplates {
+		for n, tpl := range s.LegacyTemplates {
 			out[n] = legacyGetView(tpl)
 		}
 		writeJSON(w, 200, out)
@@ -475,27 +476,27 @@ func (s *Server) handleLegacyTemplate(w http.ResponseWriter, r *http.Request, re
 			return
 		}
 		if paramBool(r, "create") {
-			if _, exists := s.legacyTemplates[name]; exists {
+			if _, exists := s.LegacyTemplates[name]; exists {
 				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: "index_template [" + name + "] already exists"})
 				return
 			}
 		}
-		s.legacyTemplates[name] = body
+		s.LegacyTemplates[name] = body
 		s.bumpState()
 		writeJSON(w, 200, map[string]any{"acknowledged": true})
 	case http.MethodDelete:
-		if _, ok := s.legacyTemplates[name]; !ok {
+		if _, ok := s.LegacyTemplates[name]; !ok {
 			writeError(w, &apierr.Error{Type: "index_template_missing_exception", Status: 404,
 				Reason: "index_template [" + name + "] missing"})
 			return
 		}
-		delete(s.legacyTemplates, name)
+		delete(s.LegacyTemplates, name)
 		s.bumpState()
 		writeJSON(w, 200, map[string]any{"acknowledged": true})
 	case http.MethodGet, http.MethodHead:
 		out := map[string]any{}
-		for n, tpl := range s.legacyTemplates {
+		for n, tpl := range s.LegacyTemplates {
 			if n == name || wildcard.Match(name, n) {
 				out[n] = legacyGetView(tpl)
 			}
@@ -531,7 +532,7 @@ func (s *Server) composeForIndex(name string) *composedTemplate {
 	}
 	var bestName string
 	bestPriority := -1 << 31
-	for n, tpl := range s.composableTemplates {
+	for n, tpl := range s.ComposableTemplates {
 		if !templateMatches(tpl, name) {
 			continue
 		}
@@ -539,7 +540,7 @@ func (s *Server) composeForIndex(name string) *composedTemplate {
 		if p > bestPriority || (p == bestPriority && (bestName == "" || n < bestName)) {
 			if bestName != "" {
 				out.overlapping = append(out.overlapping, map[string]any{
-					"name": bestName, "index_patterns": normalizePatterns(s.composableTemplates[bestName]["index_patterns"]),
+					"name": bestName, "index_patterns": normalizePatterns(s.ComposableTemplates[bestName]["index_patterns"]),
 				})
 			}
 			bestName = n
@@ -549,12 +550,12 @@ func (s *Server) composeForIndex(name string) *composedTemplate {
 		}
 	}
 	if bestName != "" {
-		tpl := s.composableTemplates[bestName]
+		tpl := s.ComposableTemplates[bestName]
 		out.template = bestName
 		if comps, ok := tpl["composed_of"].([]any); ok {
 			for _, c := range comps {
 				cs, _ := c.(string)
-				comp, ok := s.componentTemplates[cs]
+				comp, ok := s.ComponentTemplates[cs]
 				if !ok {
 					continue
 				}
@@ -595,7 +596,7 @@ func (s *Server) composeForIndex(name string) *composedTemplate {
 		} else if _, ok := tpl["data_stream"]; ok {
 			out.dsDef = map[string]any{}
 		}
-		for n, ltpl := range s.legacyTemplates {
+		for n, ltpl := range s.LegacyTemplates {
 			if templateMatches(ltpl, name) {
 				out.overlapping = append(out.overlapping, map[string]any{"name": n, "index_patterns": normalizePatterns(ltpl["index_patterns"])})
 			}
@@ -608,8 +609,8 @@ func (s *Server) composeForIndex(name string) *composedTemplate {
 		return out
 	}
 	// legacy templates: merge by ascending order
-	names := make([]string, 0, len(s.legacyTemplates))
-	for n, tpl := range s.legacyTemplates {
+	names := make([]string, 0, len(s.LegacyTemplates))
+	for n, tpl := range s.LegacyTemplates {
 		if templateMatches(tpl, name) {
 			names = append(names, n)
 			out.overlapping = append(out.overlapping, map[string]any{"name": n, "index_patterns": normalizePatterns(tpl["index_patterns"])})
@@ -617,11 +618,11 @@ func (s *Server) composeForIndex(name string) *composedTemplate {
 	}
 	sort.Slice(names, func(i, j int) bool {
 		oi := 0
-		if n, ok := settingsValueInt(s.legacyTemplates[names[i]]["order"]); ok {
+		if n, ok := settings.ValueInt(s.LegacyTemplates[names[i]]["order"]); ok {
 			oi = n
 		}
 		oj := 0
-		if n, ok := settingsValueInt(s.legacyTemplates[names[j]]["order"]); ok {
+		if n, ok := settings.ValueInt(s.LegacyTemplates[names[j]]["order"]); ok {
 			oj = n
 		}
 		if oi != oj {
@@ -635,7 +636,7 @@ func (s *Server) composeForIndex(name string) *composedTemplate {
 		return a < b
 	})
 	for _, n := range names {
-		tpl := s.legacyTemplates[n]
+		tpl := s.LegacyTemplates[n]
 		if st, ok := tpl["settings"]; ok {
 			for k, v := range templateSettingsCanonical(st) {
 				out.settings[k] = v
@@ -700,7 +701,7 @@ func (s *Server) overlappingFor(patterns []any, exclude string) []any {
 		}
 		return false
 	}
-	for n, tpl := range s.composableTemplates {
+	for n, tpl := range s.ComposableTemplates {
 		if n == exclude || seen[n] {
 			continue
 		}
@@ -709,7 +710,7 @@ func (s *Server) overlappingFor(patterns []any, exclude string) []any {
 			out = append(out, map[string]any{"name": n, "index_patterns": normalizePatterns(tpl["index_patterns"])})
 		}
 	}
-	for n, tpl := range s.legacyTemplates {
+	for n, tpl := range s.LegacyTemplates {
 		if n == exclude || seen[n] {
 			continue
 		}
@@ -752,7 +753,7 @@ func (s *Server) simulateTemplate(w http.ResponseWriter, r *http.Request, name s
 		}
 		composed.overlapping = s.overlappingFor(patterns, "")
 	} else if name != "" {
-		tpl, ok := s.composableTemplates[name]
+		tpl, ok := s.ComposableTemplates[name]
 		if !ok {
 			writeError(w, &apierr.Error{Type: "resource_not_found_exception", Status: 404,
 				Reason: "index template matching [" + name + "] not found"})
@@ -763,7 +764,7 @@ func (s *Server) simulateTemplate(w http.ResponseWriter, r *http.Request, name s
 		if comps, ok := tpl["composed_of"].([]any); ok {
 			for _, c := range comps {
 				cs, _ := c.(string)
-				comp, ok := s.componentTemplates[cs]
+				comp, ok := s.ComponentTemplates[cs]
 				if !ok {
 					continue
 				}
@@ -812,7 +813,7 @@ func (s *Server) simulateTemplate(w http.ResponseWriter, r *http.Request, name s
 	})
 	inner := map[string]any{}
 	for k, v := range composed.settings {
-		inner[strings.TrimPrefix(k, "index.")] = settingsValueString(v)
+		inner[strings.TrimPrefix(k, "index.")] = settings.ValueString(v)
 	}
 	tplView := map[string]any{"aliases": composed.aliases}
 	if len(composed.settings) > 0 {
@@ -839,7 +840,7 @@ func (s *Server) simulateForIndex(w http.ResponseWriter, r *http.Request, indexN
 	})
 	inner := map[string]any{}
 	for k, v := range composed.settings {
-		inner[strings.TrimPrefix(k, "index.")] = settingsValueString(v)
+		inner[strings.TrimPrefix(k, "index.")] = settings.ValueString(v)
 	}
 	tplView := map[string]any{"aliases": composed.aliases}
 	if len(composed.settings) > 0 {

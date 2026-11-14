@@ -26,7 +26,7 @@ func (s *Server) maintenanceOp(w http.ResponseWriter, r *http.Request, spec, op 
 			writeError(w, errIndexClosed(idx))
 			return
 		}
-		shards += numShards(idx)
+		shards += idx.NumShards()
 		switch op {
 		case "refresh":
 			idx.Pending = nil
@@ -192,7 +192,7 @@ func (s *Server) handleStatsAPI(w http.ResponseWriter, r *http.Request, spec, me
 			writeError(w, errIndexClosed(idx))
 			return
 		}
-		shards += numShards(idx)
+		shards += idx.NumShards()
 		prim := s.indexMetrics(idx, requested)
 		total := s.indexMetrics(idx, requested)
 		entry := map[string]any{
@@ -275,9 +275,9 @@ func (s *Server) handleSegmentsAPI(w http.ResponseWriter, r *http.Request, spec 
 			writeError(w, errIndexClosed(idx))
 			return
 		}
-		shards += numShards(idx)
+		shards += idx.NumShards()
 		shardMap := map[string]any{}
-		for i := 0; i < numShards(idx); i++ {
+		for i := 0; i < idx.NumShards(); i++ {
 			numDocs := 0
 			deleted := 0
 			if i == 0 {
@@ -288,7 +288,7 @@ func (s *Server) handleSegmentsAPI(w http.ResponseWriter, r *http.Request, spec 
 					"generation":    0,
 					"num_docs":      numDocs,
 					"deleted_docs":  deleted,
-					"size_in_bytes": storeBytes(idx) / int64(numShards(idx)+1),
+					"size_in_bytes": storeBytes(idx) / int64(idx.NumShards()+1),
 					"committed":     true,
 					"search":        true,
 					"compound":      false,
@@ -329,7 +329,7 @@ func (s *Server) handleRecoveryAPI(w http.ResponseWriter, r *http.Request, spec 
 	out := map[string]any{}
 	for _, idx := range indices {
 		shardList := []any{}
-		for i := 0; i < numShards(idx); i++ {
+		for i := 0; i < idx.NumShards(); i++ {
 			shardList = append(shardList, map[string]any{
 				"id": i, "type": "EMPTY_STORE", "stage": "DONE", "primary": true,
 				"start_time_in_millis": idx.CreationDate,

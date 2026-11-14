@@ -47,15 +47,15 @@ var nowDateMath = regexp.MustCompile(`"now[-+/|"]|"now\|\||(?i)random`)
 // dataFingerprint identifies the searchable state of every index and the
 // cluster state; the caller holds s.mu (read).
 func (s *Server) dataFingerprint() string {
-	names := make([]string, 0, len(s.indices))
-	for n := range s.indices {
+	names := make([]string, 0, len(s.Indices))
+	for n := range s.Indices {
 		names = append(names, n)
 	}
 	sort.Strings(names)
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d", s.stateVersion)
+	fmt.Fprintf(&b, "%d", s.StateVersion)
 	for _, n := range names {
-		idx := s.indices[n]
+		idx := s.Indices[n]
 		var pp uintptr
 		if idx.Pending != nil {
 			pp = reflect.ValueOf(idx.Pending).Pointer()
@@ -122,11 +122,11 @@ func (s *Server) requestCacheKey(r *http.Request, raw []byte) string {
 		return ""
 	}
 	for _, idx := range indices {
-		if v, ok := settings.Find(idx.Settings, "search.default_pipeline"); ok && settingsValueString(v) != "_none" {
+		if v, ok := settings.Find(idx.Settings, "search.default_pipeline"); ok && settings.ValueString(v) != "_none" {
 			return ""
 		}
 		if explicit == "" {
-			if v, ok := settings.Find(idx.Settings, "requests.cache.enable"); ok && settingsValueString(v) == "false" {
+			if v, ok := settings.Find(idx.Settings, "requests.cache.enable"); ok && settings.ValueString(v) == "false" {
 				return ""
 			}
 		}

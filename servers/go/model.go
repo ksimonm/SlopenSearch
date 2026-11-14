@@ -17,7 +17,6 @@ import (
 	"slopensearch/internal/dates"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
-	"slopensearch/internal/settings"
 	"slopensearch/internal/wildcard"
 )
 
@@ -38,66 +37,6 @@ var validTypes = map[string]bool{
 
 const versionCreated = "137307827"
 
-func isHidden(idx *model.Index) bool {
-	v, ok := settings.Find(idx.Settings, "hidden")
-	if !ok {
-		return false
-	}
-	return settingsValueString(v) == "true"
-}
-
-func blockOn(idx *model.Index, name string) bool {
-	v, ok := settings.Find(idx.Settings, "blocks."+name)
-	if !ok {
-		return false
-	}
-	return settingsValueString(v) == "true"
-}
-
-func refreshDisabled(idx *model.Index) bool {
-	v, ok := settings.Find(idx.Settings, "refresh_interval")
-	if !ok {
-		return false
-	}
-	return settingsValueString(v) == "-1"
-}
-
-func settingsValueString(v any) string {
-	switch t := v.(type) {
-	case string:
-		return t
-	case json.Number:
-		return t.String()
-	case float64:
-		return jsonv.FormatNumber(t)
-	case bool:
-		return strconv.FormatBool(t)
-	case nil:
-		return "null"
-	default:
-		return fmt.Sprintf("%v", v)
-	}
-}
-
-func settingsValueInt(v any) (int, bool) {
-	switch t := v.(type) {
-	case float64:
-		return int(t), t == float64(int(t))
-	case json.Number:
-		n, err := t.Int64()
-		return int(n), err == nil
-	case int64:
-		return int(t), true
-	case string:
-		n, err := strconv.Atoi(strings.TrimSpace(t))
-		if err != nil {
-			return 0, false
-		}
-		return n, true
-	}
-	return 0, false
-}
-
 const (
 	clusterName = "opensearch"
 	clusterUUID = "slopensearch-cluster-uuid"
@@ -105,20 +44,6 @@ const (
 	nodeName    = "slopensearch-node"
 	nodeVersion = "3.9.0"
 )
-
-func numShards(idx *model.Index) int {
-	if v, ok := settings.Int(idx.Settings, "number_of_shards"); ok {
-		return v
-	}
-	return 1
-}
-
-func numReplicas(idx *model.Index) int {
-	if v, ok := settings.Int(idx.Settings, "number_of_replicas"); ok {
-		return v
-	}
-	return 1
-}
 
 func errNotFound(index string) *apierr.Error {
 	return &apierr.Error{Type: "index_not_found_exception", Reason: "no such index [" + index + "]", Status: 404}
@@ -129,61 +54,33 @@ func errParsing(reason string) *apierr.Error {
 }
 
 type Server struct {
-	mu                  sync.RWMutex
-	indices             map[string]*model.Index
-	counter             int64
-	stateVersion        int64
-	clusterPersistent   map[string]any
-	clusterTransient    map[string]any
-	legacyTemplates     map[string]map[string]any
-	composableTemplates map[string]map[string]any
-	componentTemplates  map[string]map[string]any
-	dataStreams         map[string]*dataStreamInfo
-	ingestPipelines     map[string]map[string]any
-	searchPipelines     map[string]map[string]any
-	scripts             map[string]map[string]any
-	ingestMu            sync.RWMutex
-	scriptsMu           sync.RWMutex
-	scrolls             map[string]*scrollContext
-	scrollMu            sync.Mutex
-	scrollCounter       int64
-	pits                map[string]*pitContext
-	pitMu               sync.Mutex
-	pitCounter          int64
-	persist             *persister // nil in memory-only mode (SLOP_IN_MEMORY=true)
-}
-
-type dataStreamInfo struct {
-	Name           string
-	BackingIndices []string
-	Generation     int64
-	TimestampField string
-	Template       string
+	// mu guards State except IngestPipelines (ingestMu) and Scripts (scriptsMu).
+	mu sync.RWMutex
+	model.State
+	ingestMu      sync.RWMutex
+	scriptsMu     sync.RWMutex
+	scrolls       map[string]*scrollContext
+	scrollMu      sync.Mutex
+	scrollCounter int64
+	pits          map[string]*pitContext
+	pitMu         sync.Mutex
+	pitCounter    int64
+	persist       *persister // nil in memory-only mode (SLOP_IN_MEMORY=true)
 }
 
 var globalServer *Server
 
 func NewServer() *Server {
 	s := &Server{
-		indices:             map[string]*model.Index{},
-		stateVersion:        1,
-		clusterPersistent:   map[string]any{},
-		clusterTransient:    map[string]any{},
-		legacyTemplates:     map[string]map[string]any{},
-		composableTemplates: map[string]map[string]any{},
-		componentTemplates:  map[string]map[string]any{},
-		dataStreams:         map[string]*dataStreamInfo{},
-		ingestPipelines:     map[string]map[string]any{},
-		searchPipelines:     map[string]map[string]any{},
-		scripts:             map[string]map[string]any{},
-		scrolls:             map[string]*scrollContext{},
-		pits:                map[string]*pitContext{},
+		State:   model.NewState(),
+		scrolls: map[string]*scrollContext{},
+		pits:    map[string]*pitContext{},
 	}
 	globalServer = s
 	return s
 }
 
-func (s *Server) bumpState() { s.stateVersion++ }
+func (s *Server) bumpState() { s.StateVersion++ }
 
 var randState uint64 = 88172645463325252
 

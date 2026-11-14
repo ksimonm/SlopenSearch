@@ -857,7 +857,7 @@ func (s *Server) procPipeline(cfg map[string]any, env *ingestEnv) (bool, *apierr
 		}
 	}
 	s.ingestMu.RLock()
-	p, ok := s.ingestPipelines[name]
+	p, ok := s.IngestPipelines[name]
 	s.ingestMu.RUnlock()
 	if !ok {
 		return false, &apierr.Error{Type: "illegal_state_exception", Status: 400,

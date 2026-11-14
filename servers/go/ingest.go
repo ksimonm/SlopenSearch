@@ -363,7 +363,7 @@ func (s *Server) handleIngestRoute(w http.ResponseWriter, r *http.Request, segs 
 		}
 		s.ingestMu.RLock()
 		out := map[string]any{}
-		for name, body := range s.ingestPipelines {
+		for name, body := range s.IngestPipelines {
 			out[name] = body
 		}
 		s.ingestMu.RUnlock()
@@ -385,7 +385,7 @@ func (s *Server) handleIngestRoute(w http.ResponseWriter, r *http.Request, segs 
 		s.ingestMu.RLock()
 		out := map[string]any{}
 		for _, n := range names {
-			if b, ok := s.ingestPipelines[n]; ok {
+			if b, ok := s.IngestPipelines[n]; ok {
 				out[n] = b
 			}
 		}
@@ -404,14 +404,14 @@ func (s *Server) handleIngestRoute(w http.ResponseWriter, r *http.Request, segs 
 			return true
 		}
 		s.ingestMu.Lock()
-		s.ingestPipelines[nameExpr] = norm
+		s.IngestPipelines[nameExpr] = norm
 		s.ingestMu.Unlock()
 		writeJSON(w, 200, map[string]any{"acknowledged": true})
 		return true
 	case http.MethodDelete:
 		s.ingestMu.Lock()
-		_, ok := s.ingestPipelines[nameExpr]
-		delete(s.ingestPipelines, nameExpr)
+		_, ok := s.IngestPipelines[nameExpr]
+		delete(s.IngestPipelines, nameExpr)
 		s.ingestMu.Unlock()
 		if !ok {
 			writeError(w, &apierr.Error{Type: "resource_not_found_exception", Status: 404,
@@ -440,13 +440,13 @@ func (s *Server) resolvePipelineNames(expr string) []string {
 	defer s.ingestMu.RUnlock()
 	for _, p := range parts {
 		if strings.Contains(p, "*") {
-			for n := range s.ingestPipelines {
+			for n := range s.IngestPipelines {
 				if wildcard.Match(p, n) && !seen[n] {
 					seen[n] = true
 					out = append(out, n)
 				}
 			}
-		} else if _, ok := s.ingestPipelines[p]; ok && !seen[p] {
+		} else if _, ok := s.IngestPipelines[p]; ok && !seen[p] {
 			seen[p] = true
 			out = append(out, p)
 		}
@@ -792,7 +792,7 @@ func (s *Server) simulatePipeline(w http.ResponseWriter, r *http.Request, stored
 	name := stored
 	if stored != "" {
 		s.ingestMu.RLock()
-		p, ok := s.ingestPipelines[stored]
+		p, ok := s.IngestPipelines[stored]
 		s.ingestMu.RUnlock()
 		if !ok {
 			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
@@ -1076,12 +1076,12 @@ func (s *Server) applyPipelines(idx *model.Index, doc map[string]any, params map
 	pipeline, _ := params["pipeline"].(string)
 	if pipeline == "" {
 		if v, ok := settings.Find(idx.Settings, "default_pipeline"); ok {
-			pipeline = settingsValueString(v)
+			pipeline = settings.ValueString(v)
 		}
 	}
 	if pipeline != "" && pipeline != "_none" {
 		s.ingestMu.RLock()
-		p, ok := s.ingestPipelines[pipeline]
+		p, ok := s.IngestPipelines[pipeline]
 		s.ingestMu.RUnlock()
 		if !ok {
 			return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
@@ -1101,10 +1101,10 @@ func (s *Server) applyPipelines(idx *model.Index, doc map[string]any, params map
 		doc = env.source
 	}
 	if v, ok := settings.Find(idx.Settings, "final_pipeline"); ok {
-		fp := settingsValueString(v)
+		fp := settings.ValueString(v)
 		if fp != "" && fp != "_none" {
 			s.ingestMu.RLock()
-			p, ok := s.ingestPipelines[fp]
+			p, ok := s.IngestPipelines[fp]
 			s.ingestMu.RUnlock()
 			if !ok {
 				return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,

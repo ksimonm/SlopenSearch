@@ -82,7 +82,7 @@ func storedScript(id string) (map[string]any, *apierr.Error) {
 		return nil, &apierr.Error{Type: "resource_not_found_exception", Status: 404, Reason: "unable to find script [" + id + "] in cluster state"}
 	}
 	globalServer.scriptsMu.RLock()
-	sc, ok := globalServer.scripts[id]
+	sc, ok := globalServer.Scripts[id]
 	globalServer.scriptsMu.RUnlock()
 	if !ok {
 		return nil, &apierr.Error{Type: "resource_not_found_exception", Status: 404,

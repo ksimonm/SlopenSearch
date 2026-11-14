@@ -50,10 +50,10 @@ func newIndexCtx(idx *model.Index, docID string) *indexCtx {
 	}
 	c.indexCoerce = true
 	if v, ok := settings.Find(idx.Settings, "mapping.coerce"); ok {
-		c.indexCoerce = settingsValueString(v) != "false"
+		c.indexCoerce = settings.ValueString(v) != "false"
 	}
 	if v, ok := settings.Find(idx.Settings, "mapping.ignore_malformed"); ok {
-		c.indexIgnoreMal = settingsValueString(v) == "true"
+		c.indexIgnoreMal = settings.ValueString(v) == "true"
 	}
 	c.totalFields = 1000
 	if v, ok := settings.Int(idx.Settings, "mapping.total_fields.limit"); ok {

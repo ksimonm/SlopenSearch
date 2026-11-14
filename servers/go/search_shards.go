@@ -19,7 +19,7 @@ func (s *Server) handleSearchShards(w http.ResponseWriter, r *http.Request, inde
 	shardsOut := []any{}
 	for _, idx := range indices {
 		indicesOut[idx.Name] = map[string]any{}
-		for shard := 0; shard < numShards(idx); shard++ {
+		for shard := 0; shard < idx.NumShards(); shard++ {
 			if !sf.allowsShard(idx, shard) {
 				continue
 			}

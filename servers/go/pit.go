@@ -37,7 +37,7 @@ func (s *Server) openPit(w http.ResponseWriter, r *http.Request, name string) {
 		return
 	}
 	s.mu.RLock()
-	idx, ok := s.indices[name]
+	idx, ok := s.Indices[name]
 	if !ok {
 		s.mu.RUnlock()
 		writeError(w, errNotFound(name))
@@ -54,7 +54,7 @@ func (s *Server) openPit(w http.ResponseWriter, r *http.Request, name string) {
 		}
 		hits = append(hits, multiHit{idx: idx, id: id, doc: doc, score: 1})
 	}
-	shards := numShards(idx)
+	shards := idx.NumShards()
 	creation := time.Now().UnixMilli()
 	s.mu.RUnlock()
 

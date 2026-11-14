@@ -11,6 +11,7 @@ import (
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
+	"slopensearch/internal/settings"
 )
 
 var rolloverSuffixRE = regexp.MustCompile(`^(.*)-(\d+)$`)
@@ -86,7 +87,7 @@ func (s *Server) handleRollover(w http.ResponseWriter, r *http.Request, target, 
 
 	dryRun := queryBool(r, "dry_run")
 
-	if _, isConcrete := s.indices[target]; isConcrete {
+	if _, isConcrete := s.Indices[target]; isConcrete {
 		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "rollover target is a [concrete index] but one of [alias,data_stream] was expected"})
 		return
@@ -99,7 +100,7 @@ func (s *Server) handleRollover(w http.ResponseWriter, r *http.Request, target, 
 			return
 		}
 		last := ds.BackingIndices[len(ds.BackingIndices)-1]
-		oldIdx := s.indices[last]
+		oldIdx := s.Indices[last]
 		if oldIdx == nil {
 			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "rollover target [" + target + "] does not exist"})
@@ -118,7 +119,7 @@ func (s *Server) handleRollover(w http.ResponseWriter, r *http.Request, target, 
 		}
 		ack := false
 		if rolledOver && !dryRun {
-			if _, err := s.createBackingIndex(&dataStreamInfo{Name: ds.Name, Generation: ds.Generation + 1, TimestampField: ds.TimestampField, Template: ds.Template}, nil); err != nil {
+			if _, err := s.createBackingIndex(&model.DataStream{Name: ds.Name, Generation: ds.Generation + 1, TimestampField: ds.TimestampField, Template: ds.Template}, nil); err != nil {
 				writeError(w, err)
 				return
 			}
@@ -144,7 +145,7 @@ func (s *Server) handleRollover(w http.ResponseWriter, r *http.Request, target, 
 	var withAlias []*model.Index
 	var writeIdx *model.Index
 	for _, name := range sortedIndexNames(s) {
-		idx := s.indices[name]
+		idx := s.Indices[name]
 		if def, ok := idx.Aliases[target]; ok {
 			withAlias = append(withAlias, idx)
 			if b, _ := def["is_write_index"].(bool); b {
@@ -214,7 +215,7 @@ func (s *Server) handleRollover(w http.ResponseWriter, r *http.Request, target, 
 		} else {
 			delete(oldIdx.Aliases, target)
 		}
-		s.indices[newName].Aliases[target] = newDef
+		s.Indices[newName].Aliases[target] = newDef
 		ack = true
 		s.bumpState()
 	}
@@ -239,7 +240,7 @@ func (s *Server) evaluateRolloverConditions(raw map[string]any, names []string, 
 		met := false
 		switch name {
 		case "max_docs", "max_primary_shard_docs":
-			n, ok := settingsValueInt(v)
+			n, ok := settings.ValueInt(v)
 			if ok {
 				met = int64(len(idx.Order)) >= int64(n)
 			}

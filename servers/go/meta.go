@@ -77,7 +77,7 @@ func (s *Server) resolveIndices(spec string, opts resolveOpts) ([]*model.Index, 
 			continue
 		}
 		if token == "_all" || token == "*" {
-			for _, idx := range s.indices {
+			for _, idx := range s.Indices {
 				if idx.Closed && !opts.wildcardClosed {
 					continue
 				}
@@ -87,7 +87,7 @@ func (s *Server) resolveIndices(spec string, opts resolveOpts) ([]*model.Index, 
 		}
 		if strings.ContainsAny(token, "*?") {
 			matched := false
-			for _, idx := range s.indices {
+			for _, idx := range s.Indices {
 				if wildcard.Match(token, idx.Name) {
 					if idx.Closed && !opts.wildcardClosed {
 						continue
@@ -97,7 +97,7 @@ func (s *Server) resolveIndices(spec string, opts resolveOpts) ([]*model.Index, 
 				}
 			}
 			if !matched {
-				for _, idx := range s.indices {
+				for _, idx := range s.Indices {
 					if idx.Closed && !opts.wildcardClosed {
 						continue
 					}
@@ -111,7 +111,7 @@ func (s *Server) resolveIndices(spec string, opts resolveOpts) ([]*model.Index, 
 			}
 			continue
 		}
-		if idx, ok := s.indices[token]; ok {
+		if idx, ok := s.Indices[token]; ok {
 			if idx.Closed && !opts.namedClosed && !opts.wildcardClosed {
 				add(idx)
 				continue
@@ -120,7 +120,7 @@ func (s *Server) resolveIndices(spec string, opts resolveOpts) ([]*model.Index, 
 			continue
 		}
 		matchedAlias := false
-		for _, idx := range s.indices {
+		for _, idx := range s.Indices {
 			if _, ok := idx.Aliases[token]; ok {
 				add(idx)
 				matchedAlias = true
@@ -206,7 +206,7 @@ type indexHealth struct {
 }
 
 func computeIndexHealth(idx *model.Index) indexHealth {
-	h := indexHealth{NumShards: numShards(idx), NumReplicas: numReplicas(idx), Status: "green"}
+	h := indexHealth{NumShards: idx.NumShards(), NumReplicas: idx.NumReplicas(), Status: "green"}
 	if idx.Closed {
 		h.Shards = nil
 		return h
@@ -473,7 +473,7 @@ func (s *Server) handleClusterState(w http.ResponseWriter, r *http.Request, metr
 		"cluster_uuid": clusterUUID,
 	}
 	if requested["version"] {
-		body["version"] = s.stateVersion
+		body["version"] = s.StateVersion
 		body["state_uuid"] = stateUUIDConst
 	}
 	if requested["master_node"] {
@@ -560,8 +560,8 @@ func (s *Server) buildStateMetadata(indices []*model.Index) map[string]any {
 
 func indexSettingsForMetadata(idx *model.Index) map[string]any {
 	inner := map[string]any{
-		"number_of_shards":   settingsString(numShards(idx)),
-		"number_of_replicas": settingsString(numReplicas(idx)),
+		"number_of_shards":   settingsString(idx.NumShards()),
+		"number_of_replicas": settingsString(idx.NumReplicas()),
 		"provided_name":      idx.Name,
 		"creation_date":      settingsString(idx.CreationDate),
 		"uuid":               idx.UUID,
@@ -598,7 +598,7 @@ func (s *Server) buildRoutingTable(indices []*model.Index) map[string]any {
 	for _, idx := range indices {
 		shards := map[string]any{}
 		if !idx.Closed {
-			for i := 0; i < numShards(idx); i++ {
+			for i := 0; i < idx.NumShards(); i++ {
 				copies := []any{}
 				copies = append(copies, map[string]any{
 					"index":           idx.Name,
@@ -610,7 +610,7 @@ func (s *Server) buildRoutingTable(indices []*model.Index) map[string]any {
 					"recovery_source": map[string]any{"type": "PEER"},
 					"unassigned_info": nil,
 				})
-				for r := 0; r < numReplicas(idx); r++ {
+				for r := 0; r < idx.NumReplicas(); r++ {
 					copies = append(copies, map[string]any{
 						"index":           idx.Name,
 						"shard":           i,
@@ -641,11 +641,11 @@ func (s *Server) buildRoutingNodes(indices []*model.Index) map[string]any {
 		if idx.Closed {
 			continue
 		}
-		for i := 0; i < numShards(idx); i++ {
+		for i := 0; i < idx.NumShards(); i++ {
 			assigned = append(assigned, map[string]any{
 				"index": idx.Name, "shard": i, "primary": true, "state": "STARTED", "node": nodeID,
 			})
-			for r := 0; r < numReplicas(idx); r++ {
+			for r := 0; r < idx.NumReplicas(); r++ {
 				unassigned = append(unassigned, map[string]any{
 					"index": idx.Name, "shard": i, "primary": false, "state": "UNASSIGNED", "node": nil,
 				})
@@ -876,18 +876,18 @@ func (s *Server) handleClusterSettings(w http.ResponseWriter, r *http.Request) {
 		defer s.mu.RUnlock()
 		body := map[string]any{}
 		if flat {
-			body["persistent"] = flatCopy(s.clusterPersistent)
-			body["transient"] = flatCopy(s.clusterTransient)
+			body["persistent"] = flatCopy(s.ClusterPersistent)
+			body["transient"] = flatCopy(s.ClusterTransient)
 		} else {
-			body["persistent"] = nestFlat(flatCopy(s.clusterPersistent))
-			body["transient"] = nestFlat(flatCopy(s.clusterTransient))
+			body["persistent"] = nestFlat(flatCopy(s.ClusterPersistent))
+			body["transient"] = nestFlat(flatCopy(s.ClusterTransient))
 		}
 		if includeDefaults {
 			defs := clusterDefaultsFor()
-			for k := range s.clusterPersistent {
+			for k := range s.ClusterPersistent {
 				delete(defs, k)
 			}
-			for k := range s.clusterTransient {
+			for k := range s.ClusterTransient {
 				delete(defs, k)
 			}
 			if flat {
@@ -969,22 +969,22 @@ func (s *Server) handleClusterSettingsPut(w http.ResponseWriter, r *http.Request
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := apply("persistent", persistentRaw, s.clusterPersistent); err != nil {
+	if _, err := apply("persistent", persistentRaw, s.ClusterPersistent); err != nil {
 		writeError(w, err)
 		return
 	}
-	if _, err := apply("transient", transientRaw, s.clusterTransient); err != nil {
+	if _, err := apply("transient", transientRaw, s.ClusterTransient); err != nil {
 		writeError(w, err)
 		return
 	}
 	s.bumpState()
 	resp := map[string]any{"acknowledged": true}
 	if flat {
-		resp["persistent"] = flatCopy(s.clusterPersistent)
-		resp["transient"] = flatCopy(s.clusterTransient)
+		resp["persistent"] = flatCopy(s.ClusterPersistent)
+		resp["transient"] = flatCopy(s.ClusterTransient)
 	} else {
-		resp["persistent"] = nestFlat(flatCopy(s.clusterPersistent))
-		resp["transient"] = nestFlat(flatCopy(s.clusterTransient))
+		resp["persistent"] = nestFlat(flatCopy(s.ClusterPersistent))
+		resp["transient"] = nestFlat(flatCopy(s.ClusterTransient))
 	}
 	if ctype == "application/yaml" {
 		w.Header().Set("Content-Type", "application/yaml")
@@ -1111,7 +1111,7 @@ func (s *Server) handleAllocationExplain(w http.ResponseWriter, r *http.Request)
 	}
 	if indexName == "" {
 		for _, name := range sortedIndexNames(s) {
-			idx := s.indices[name]
+			idx := s.Indices[name]
 			if idx.Closed {
 				continue
 			}
@@ -1130,7 +1130,7 @@ func (s *Server) handleAllocationExplain(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	idx, ok := s.indices[indexName]
+	idx, ok := s.Indices[indexName]
 	if !ok {
 		writeError(w, errNotFound(indexName))
 		return
@@ -1140,13 +1140,13 @@ func (s *Server) handleAllocationExplain(w http.ResponseWriter, r *http.Request)
 			Reason: "Validation Failed: 1: shard must be specified;2: primary must be specified;", Status: 400})
 		return
 	}
-	if shardNum >= numShards(idx) {
+	if shardNum >= idx.NumShards() {
 		writeError(w, &apierr.Error{Type: "shard_not_found_exception",
 			Reason: "no shard with id [" + strconv.Itoa(shardNum) + "]", Status: 404, Extra: strconv.Itoa(shardNum)})
 		return
 	}
 	h := computeIndexHealth(idx)
-	if !primary && h.Unassigned == 0 || primary && numReplicas(idx) == 0 && false {
+	if !primary && h.Unassigned == 0 || primary && idx.NumReplicas() == 0 && false {
 	}
 	if primary {
 		writeJSON(w, 200, map[string]any{
@@ -1197,8 +1197,8 @@ func (s *Server) handleAllocationExplain(w http.ResponseWriter, r *http.Request)
 }
 
 func sortedIndexNames(s *Server) []string {
-	names := make([]string, 0, len(s.indices))
-	for name := range s.indices {
+	names := make([]string, 0, len(s.Indices))
+	for name := range s.Indices {
 		names = append(names, name)
 	}
 	jsonv.SortStrings(names)
@@ -1238,7 +1238,7 @@ func (s *Server) handleAliases(w http.ResponseWriter, r *http.Request, name stri
 	if aliasName != "" {
 		spec = aliasName
 	}
-	for _, idx := range s.indices {
+	for _, idx := range s.Indices {
 		for alias, def := range idx.Aliases {
 			if wildcard.Match(spec, alias) {
 				entry := map[string]any{}
@@ -1276,7 +1276,7 @@ func (s *Server) handleGlobalAliases(w http.ResponseWriter, r *http.Request) {
 					s.applyAliasRemove(def, false)
 				case "remove_index":
 					name, _ := def["index"].(string)
-					delete(s.indices, name)
+					delete(s.Indices, name)
 				}
 			}
 		}
@@ -1302,7 +1302,7 @@ func (s *Server) applyAliasAdd(def map[string]any) {
 		}
 	}
 	for _, name := range names {
-		idx, ok := s.indices[name]
+		idx, ok := s.Indices[name]
 		if !ok {
 			continue
 		}
@@ -1338,7 +1338,7 @@ func (s *Server) applyAliasRemove(def map[string]any, removeIndex bool) {
 		}
 	}
 	for _, name := range names {
-		idx, ok := s.indices[name]
+		idx, ok := s.Indices[name]
 		if !ok {
 			continue
 		}

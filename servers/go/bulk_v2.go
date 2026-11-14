@@ -228,7 +228,7 @@ func parseBulkActionLine(line string) (string, map[string]any, *apierr.Error) {
 
 func (s *Server) bulkResolve(name string, requireAlias bool) (*model.Index, *apierr.Error) {
 	if requireAlias {
-		if _, concrete := s.indices[name]; concrete {
+		if _, concrete := s.Indices[name]; concrete {
 			return nil, &apierr.Error{Type: "index_not_found_exception", Status: 404,
 				Reason: "no such index [" + name + "] and [require_alias] request flag is [true] and is not an alias",
 				Fields: map[string]any{"index": name, "resource.type": "index_or_alias", "resource.id": name, "index_uuid": "_na_"}}
@@ -391,7 +391,7 @@ func (s *Server) runBulkAction(a bulkAction, rv string, requireAliasURL bool, ur
 	if berr := writeBlockError(idx); berr != nil {
 		return bulkErrItem(a.op, idx.Name, a.id, berr), true
 	}
-	ensureDocState(idx)
+	idx.EnsureDocState()
 	routing := metaString(a.meta, "routing")
 	if routing == "" {
 		routing = urlRouting
@@ -457,7 +457,7 @@ func (s *Server) runBulkIndex(idx *model.Index, a bulkAction, id, routing, rv, u
 		pipeline = urlPipeline
 	}
 	if pipeline != "" && pipeline != "_none" {
-		if _, ok := s.ingestPipelines[pipeline]; !ok {
+		if _, ok := s.IngestPipelines[pipeline]; !ok {
 			return bulkErrItem(a.op, idx.Name, id, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "pipeline with id [" + pipeline + "] does not exist"}), true
 		}

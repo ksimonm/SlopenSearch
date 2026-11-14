@@ -8,6 +8,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/model"
+	"slopensearch/internal/settings"
 )
 
 var knownMappingBodyKeys = map[string]bool{
@@ -386,9 +387,9 @@ func mergeFieldDef(name string, oldDef, newDef map[string]any) *apierr.Error {
 			}
 			newVal = def
 		}
-		if settingsValueString(oldVal) != settingsValueString(newVal) {
+		if settings.ValueString(oldVal) != settings.ValueString(newVal) {
 			return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
-				Reason: "Mapper for [" + name + "] conflicts with existing mapper:\n\tCannot update parameter [" + param + "] from [" + settingsValueString(oldVal) + "] to [" + settingsValueString(newVal) + "]"}
+				Reason: "Mapper for [" + name + "] conflicts with existing mapper:\n\tCannot update parameter [" + param + "] from [" + settings.ValueString(oldVal) + "] to [" + settings.ValueString(newVal) + "]"}
 		}
 	}
 	for pk, pv := range newDef {

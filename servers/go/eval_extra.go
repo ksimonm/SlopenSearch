@@ -2084,7 +2084,7 @@ func lookupIndexedShape(spec map[string]any) (any, bool) {
 	}
 	// Callers already hold globalServer.mu (read or write); taking it again
 	// here deadlocks once a writer is queued.
-	idx, ok := globalServer.indices[idxName]
+	idx, ok := globalServer.Indices[idxName]
 	if !ok {
 		return nil, false
 	}

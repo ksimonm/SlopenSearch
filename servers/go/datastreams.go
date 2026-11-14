@@ -19,7 +19,7 @@ import (
 func (s *Server) findDataStreamTemplate(name string) (string, map[string]any) {
 	var bestName string
 	bestPrio := -1 << 31
-	for n, tpl := range s.composableTemplates {
+	for n, tpl := range s.ComposableTemplates {
 		if _, ok := tpl["data_stream"]; !ok {
 			continue
 		}
@@ -35,7 +35,7 @@ func (s *Server) findDataStreamTemplate(name string) (string, map[string]any) {
 	if bestName == "" {
 		return "", nil
 	}
-	return bestName, s.composableTemplates[bestName]
+	return bestName, s.ComposableTemplates[bestName]
 }
 
 func timestampFieldOf(tpl map[string]any) string {
@@ -64,13 +64,13 @@ func backingIndexName(dsName string, generation int64) string {
 
 // createDataStream creates a data stream and its first backing index.
 // Called with s.mu held.
-func (s *Server) createDataStream(name, tplName string, tpl map[string]any) (*dataStreamInfo, *apierr.Error) {
+func (s *Server) createDataStream(name, tplName string, tpl map[string]any) (*model.DataStream, *apierr.Error) {
 	if name != strings.ToLower(name) {
 		return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "data_stream [" + name + "] must be lowercase"}
 	}
 	tsField := timestampFieldOf(tpl)
-	info := &dataStreamInfo{
+	info := &model.DataStream{
 		Name:           name,
 		Generation:     1,
 		TimestampField: tsField,
@@ -81,13 +81,13 @@ func (s *Server) createDataStream(name, tplName string, tpl map[string]any) (*da
 		return nil, err
 	}
 	info.BackingIndices = append(info.BackingIndices, idx.Name)
-	s.dataStreams[name] = info
+	s.DataStreams[name] = info
 	return info, nil
 }
 
 // createBackingIndex builds the next backing index for a data stream.
 // Called with s.mu held.
-func (s *Server) createBackingIndex(info *dataStreamInfo, tpl map[string]any) (*model.Index, *apierr.Error) {
+func (s *Server) createBackingIndex(info *model.DataStream, tpl map[string]any) (*model.Index, *apierr.Error) {
 	composed := s.composeForIndex(info.Name)
 	body := map[string]any{}
 	settings := map[string]any{}
@@ -128,7 +128,7 @@ func (s *Server) createBackingIndex(info *dataStreamInfo, tpl map[string]any) (*
 // matching data stream template exists. Called with s.mu held.
 func (s *Server) maybeAutoCreateDataStream(name string) (*model.Index, *apierr.Error) {
 	if ds := s.resolveDataStream(name); ds != nil {
-		idx := s.indices[ds.BackingIndices[len(ds.BackingIndices)-1]]
+		idx := s.Indices[ds.BackingIndices[len(ds.BackingIndices)-1]]
 		if idx != nil {
 			return idx, nil
 		}
@@ -141,34 +141,34 @@ func (s *Server) maybeAutoCreateDataStream(name string) (*model.Index, *apierr.E
 	if err != nil {
 		return nil, err
 	}
-	idx := s.indices[info.BackingIndices[len(info.BackingIndices)-1]]
+	idx := s.Indices[info.BackingIndices[len(info.BackingIndices)-1]]
 	if idx == nil {
 		return nil, errIndexNotFoundNamed(name)
 	}
 	return idx, nil
 }
 
-func (s *Server) resolveDataStream(name string) *dataStreamInfo {
-	if ds, ok := s.dataStreams[name]; ok {
+func (s *Server) resolveDataStream(name string) *model.DataStream {
+	if ds, ok := s.DataStreams[name]; ok {
 		return ds
 	}
 	return nil
 }
 
-func (s *Server) dataStreamIndices(ds *dataStreamInfo) []*model.Index {
+func (s *Server) dataStreamIndices(ds *model.DataStream) []*model.Index {
 	out := []*model.Index{}
 	for _, name := range ds.BackingIndices {
-		if idx, ok := s.indices[name]; ok {
+		if idx, ok := s.Indices[name]; ok {
 			out = append(out, idx)
 		}
 	}
 	return out
 }
 
-func (s *Server) dataStreamView(ds *dataStreamInfo) map[string]any {
+func (s *Server) dataStreamView(ds *model.DataStream) map[string]any {
 	indices := []any{}
 	for _, name := range ds.BackingIndices {
-		idx, ok := s.indices[name]
+		idx, ok := s.Indices[name]
 		if !ok {
 			continue
 		}
@@ -225,7 +225,7 @@ func (s *Server) handleDataStream(w http.ResponseWriter, r *http.Request, spec s
 			}
 			if strings.ContainsAny(n, "*?") {
 				for _, dsName := range sortedDataStreamNames(s) {
-					ds := s.dataStreams[dsName]
+					ds := s.DataStreams[dsName]
 					if wildcard.Match(n, dsName) && !matched[dsName] {
 						out = append(out, s.dataStreamView(ds))
 						matched[dsName] = true
@@ -254,20 +254,20 @@ func (s *Server) handleDataStream(w http.ResponseWriter, r *http.Request, spec s
 			}
 			if ds := s.resolveDataStream(n); ds != nil {
 				for _, bn := range ds.BackingIndices {
-					delete(s.indices, bn)
+					delete(s.Indices, bn)
 				}
-				delete(s.dataStreams, n)
+				delete(s.DataStreams, n)
 				deleted = true
 				continue
 			}
 			if strings.ContainsAny(n, "*?") {
 				for _, dsName := range sortedDataStreamNames(s) {
 					if wildcard.Match(n, dsName) {
-						ds := s.dataStreams[dsName]
+						ds := s.DataStreams[dsName]
 						for _, bn := range ds.BackingIndices {
-							delete(s.indices, bn)
+							delete(s.Indices, bn)
 						}
-						delete(s.dataStreams, dsName)
+						delete(s.DataStreams, dsName)
 						deleted = true
 					}
 				}
@@ -287,8 +287,8 @@ func (s *Server) handleDataStream(w http.ResponseWriter, r *http.Request, spec s
 }
 
 func sortedDataStreamNames(s *Server) []string {
-	names := make([]string, 0, len(s.dataStreams))
-	for n := range s.dataStreams {
+	names := make([]string, 0, len(s.DataStreams))
+	for n := range s.DataStreams {
 		names = append(names, n)
 	}
 	sort.Strings(names)
@@ -306,12 +306,12 @@ func (s *Server) handleDataStreamStats(w http.ResponseWriter, r *http.Request, s
 		if !wildcard.Match(spec, n) {
 			continue
 		}
-		ds := s.dataStreams[n]
+		ds := s.DataStreams[n]
 		count++
 		backing += len(ds.BackingIndices)
 		maxTs := int64(0)
 		for _, bn := range ds.BackingIndices {
-			idx, ok := s.indices[bn]
+			idx, ok := s.Indices[bn]
 			if !ok {
 				continue
 			}
@@ -346,7 +346,7 @@ func (s *Server) handleDataStreamStats(w http.ResponseWriter, r *http.Request, s
 }
 
 // validateDataStreamDoc enforces timestamp requirements for DS writes.
-func (s *Server) validateDataStreamDoc(idx *model.Index, ds *dataStreamInfo, body map[string]any) *apierr.Error {
+func (s *Server) validateDataStreamDoc(idx *model.Index, ds *model.DataStream, body map[string]any) *apierr.Error {
 	if ds == nil {
 		return nil
 	}

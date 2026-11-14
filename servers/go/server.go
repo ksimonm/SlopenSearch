@@ -231,7 +231,7 @@ func checkDuplicateJSONKeys(body []byte) error {
 }
 
 func (s *Server) getIndex(name string) (*model.Index, *apierr.Error) {
-	idx, ok := s.indices[name]
+	idx, ok := s.Indices[name]
 	if !ok {
 		return nil, errNotFound(name)
 	}
@@ -928,7 +928,7 @@ func (s *Server) handleCreateIndex(w http.ResponseWriter, r *http.Request, name 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, exists := s.indices[name]; exists {
+	if _, exists := s.Indices[name]; exists {
 		writeError(w, &apierr.Error{
 			Type:   "resource_already_exists_exception",
 			Reason: "index [" + name + "]", Status: 400,
@@ -958,7 +958,7 @@ func (s *Server) handleCreateIndex(w http.ResponseWriter, r *http.Request, name 
 		Aliases:      map[string]map[string]any{},
 	}
 	buildFieldTypes(mappings, "", idx.FieldTypes)
-	s.indices[name] = idx
+	s.Indices[name] = idx
 	s.bumpState()
 	writeJSON(w, 200, map[string]any{"acknowledged": true, "shards_acknowledged": true, "index": name})
 }
@@ -979,11 +979,11 @@ func randomUUID() string {
 func (s *Server) handleDeleteIndex(w http.ResponseWriter, r *http.Request, name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.indices[name]; !ok {
+	if _, ok := s.Indices[name]; !ok {
 		writeError(w, errNotFound(name))
 		return
 	}
-	delete(s.indices, name)
+	delete(s.Indices, name)
 	s.bumpState()
 	writeJSON(w, 200, map[string]any{"acknowledged": true})
 }
@@ -991,7 +991,7 @@ func (s *Server) handleDeleteIndex(w http.ResponseWriter, r *http.Request, name 
 func (s *Server) handleGetIndex(w http.ResponseWriter, r *http.Request, name string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	idx, ok := s.indices[name]
+	idx, ok := s.Indices[name]
 	if !ok {
 		writeError(w, errNotFound(name))
 		return
@@ -1038,7 +1038,7 @@ func writeBlockError(idx *model.Index) *apierr.Error {
 	if err := indexBlockError(idx, "read_only", 5, 403); err != nil {
 		return err
 	}
-	if blockOn(idx, "read_only_allow_delete") {
+	if idx.Blocked("read_only_allow_delete") {
 		return &apierr.Error{Type: "cluster_block_exception", Status: 429,
 			Reason: fmt.Sprintf("index [%s] blocked by: [TOO_MANY_REQUESTS/12/disk usage exceeded flood-stage watermark, index has read-only-allow-delete block];", idx.Name)}
 	}
@@ -1133,7 +1133,7 @@ func (s *Server) handleIndexDoc(w http.ResponseWriter, r *http.Request, name, id
 	}
 	if queryBool(r, "refresh") {
 		delete(idx.Pending, id)
-	} else if refreshDisabled(idx) {
+	} else if idx.RefreshDisabled() {
 		if idx.Pending == nil {
 			idx.Pending = map[string]map[string]any{}
 		}
@@ -1285,7 +1285,7 @@ func (s *Server) handleUpdateDoc(w http.ResponseWriter, r *http.Request, name, i
 		return
 	}
 	idx.Docs[id] = doc
-	if !queryBool(r, "refresh") && refreshDisabled(idx) {
+	if !queryBool(r, "refresh") && idx.RefreshDisabled() {
 		if idx.Pending == nil {
 			idx.Pending = map[string]map[string]any{}
 		}
@@ -1299,12 +1299,12 @@ func (s *Server) handleUpdateDoc(w http.ResponseWriter, r *http.Request, name, i
 // resolveReadTarget resolves a name to a concrete index for read operations,
 // following aliases when necessary.
 func (s *Server) resolveReadTarget(name string) (*model.Index, *apierr.Error) {
-	if idx, ok := s.indices[name]; ok {
+	if idx, ok := s.Indices[name]; ok {
 		return idx, nil
 	}
 	var withAlias []*model.Index
 	var writeIdx *model.Index
-	for _, idx := range s.indices {
+	for _, idx := range s.Indices {
 		if def, ok := idx.Aliases[name]; ok {
 			withAlias = append(withAlias, idx)
 			if b, _ := def["is_write_index"].(bool); b {
@@ -1434,7 +1434,7 @@ func (s *Server) handleCount(w http.ResponseWriter, r *http.Request, name string
 		if sf != nil {
 			shards += len(sf.allowed[idx])
 		} else {
-			shards += numShards(idx)
+			shards += idx.NumShards()
 		}
 		for _, id := range idx.Order {
 			doc, live := idx.Docs[id]
@@ -1683,7 +1683,7 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, name string)
 			}
 			idx.Routing[docID] = routing
 		}
-		if !queryBool(r, "refresh") && refreshDisabled(idx) {
+		if !queryBool(r, "refresh") && idx.RefreshDisabled() {
 			if idx.Pending == nil {
 				idx.Pending = map[string]map[string]any{}
 			}
@@ -1698,7 +1698,7 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, name string)
 		items = append(items, map[string]any{op: map[string]any{"_index": idx.Name, "_id": docID, "status": status}})
 	}
 	if queryBool(r, "refresh") {
-		for _, idx := range s.indices {
+		for _, idx := range s.Indices {
 			idx.Pending = nil
 		}
 	}
@@ -1744,8 +1744,8 @@ func bulkErr(op, index, id string, status int, typ, reason string) map[string]an
 }
 
 func (s *Server) nextID() string {
-	s.counter++
-	return fmt.Sprintf("doc-%d", s.counter)
+	s.Counter++
+	return fmt.Sprintf("doc-%d", s.Counter)
 }
 
 // maxContentLength mirrors OpenSearch's default http.max_content_length (100mb).

@@ -9,6 +9,7 @@ import (
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 	"slopensearch/internal/painless"
+	"slopensearch/internal/settings"
 )
 
 type reindexFailure struct {
@@ -104,7 +105,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 	}
 	maxDocs := -1
 	if v, ok := body["max_docs"]; ok && v != nil {
-		n, isInt := settingsValueInt(v)
+		n, isInt := settings.ValueInt(v)
 		if !isInt {
 			writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
 				Reason: "[1:0] [reindex] failed to parse field [max_docs]",
@@ -134,7 +135,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 	}
 	size := 1000
 	if v, ok := srcRaw["size"]; ok {
-		if n, isInt := settingsValueInt(v); isInt && n > 0 {
+		if n, isInt := settings.ValueInt(v); isInt && n > 0 {
 			size = n
 		}
 	}
@@ -196,7 +197,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 
 	created, updated, deleted, noops, versionConflicts := 0, 0, 0, 0, 0
 	failures := []any{}
-	destIdx := s.indices[destName]
+	destIdx := s.Indices[destName]
 	destNameErr := validateIndexName(destName)
 	for _, it := range items {
 		doc := jsonv.DeepCopy(it.doc).(map[string]any)
@@ -239,7 +240,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		destName := targetName
-		destIdx := s.indices[targetName]
+		destIdx := s.Indices[targetName]
 		destUUID := "_na_"
 		if destIdx != nil {
 			destUUID = destIdx.UUID
@@ -334,7 +335,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 		destIdx.Docs[id] = doc
 		destIdx.IndexTotal++
 	}
-	destIdx = s.indices[destName]
+	destIdx = s.Indices[destName]
 	if destIdx != nil {
 		s.bumpState()
 	}

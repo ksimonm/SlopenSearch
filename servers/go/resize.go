@@ -7,6 +7,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
+	"slopensearch/internal/settings"
 )
 
 // handleResize implements POST /{src}/_clone|_shrink|_split/{target}.
@@ -22,17 +23,17 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request, src, op, t
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	idx, ok := s.indices[src]
+	idx, ok := s.Indices[src]
 	if !ok {
 		writeError(w, errIndexNotFoundNamed(src))
 		return
 	}
-	if !blockOn(idx, "write") {
+	if !idx.Blocked("write") {
 		writeError(w, &apierr.Error{Type: "illegal_state_exception", Status: 500,
 			Reason: fmt.Sprintf("index %s must block write operations to resize index", src)})
 		return
 	}
-	if _, exists := s.indices[target]; exists {
+	if _, exists := s.Indices[target]; exists {
 		writeError(w, &apierr.Error{Type: "resource_already_exists_exception", Status: 400,
 			Reason: "index [" + target + "] already exists", Fields: map[string]any{"index": target}})
 		return
@@ -45,7 +46,7 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request, src, op, t
 	bodySettings := map[string]any{}
 	flattenSettings(settingsBody, bodySettings)
 	nRaw, hasN := bodySettings["index.number_of_shards"]
-	srcShards, ok := settingsValueInt(idx.Settings["index.number_of_shards"])
+	srcShards, ok := settings.ValueInt(idx.Settings["index.number_of_shards"])
 	if !ok {
 		srcShards = 1
 	}
@@ -53,9 +54,9 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request, src, op, t
 	switch op {
 	case "clone":
 		if hasN {
-			n, ok := settingsValueInt(nRaw)
+			n, ok := settings.ValueInt(nRaw)
 			if !ok {
-				writeError(w, apierr.BadRequest("Failed to parse value ["+settingsValueString(nRaw)+"] for setting [index.number_of_shards]"))
+				writeError(w, apierr.BadRequest("Failed to parse value ["+settings.ValueString(nRaw)+"] for setting [index.number_of_shards]"))
 				return
 			}
 			want = n
@@ -73,9 +74,9 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request, src, op, t
 		}
 		want = 1
 		if hasN {
-			n, ok := settingsValueInt(nRaw)
+			n, ok := settings.ValueInt(nRaw)
 			if !ok {
-				writeError(w, apierr.BadRequest("Failed to parse value ["+settingsValueString(nRaw)+"] for setting [index.number_of_shards]"))
+				writeError(w, apierr.BadRequest("Failed to parse value ["+settings.ValueString(nRaw)+"] for setting [index.number_of_shards]"))
 				return
 			}
 			want = n
@@ -91,9 +92,9 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request, src, op, t
 				Reason: "Validation Failed: 1: index.number_of_shards is required for split operations;"})
 			return
 		}
-		n, ok := settingsValueInt(nRaw)
+		n, ok := settings.ValueInt(nRaw)
 		if !ok {
-			writeError(w, apierr.BadRequest("Failed to parse value ["+settingsValueString(nRaw)+"] for setting [index.number_of_shards]"))
+			writeError(w, apierr.BadRequest("Failed to parse value ["+settings.ValueString(nRaw)+"] for setting [index.number_of_shards]"))
 			return
 		}
 		want = n

@@ -64,13 +64,13 @@ func (s *Server) handleScriptsRoute(w http.ResponseWriter, r *http.Request, segs
 			}
 		}
 		s.scriptsMu.Lock()
-		s.scripts[id] = sc
+		s.Scripts[id] = sc
 		s.scriptsMu.Unlock()
 		writeJSON(w, 200, map[string]any{"acknowledged": true})
 		return true
 	case http.MethodGet:
 		s.scriptsMu.RLock()
-		sc, ok := s.scripts[id]
+		sc, ok := s.Scripts[id]
 		s.scriptsMu.RUnlock()
 		if !ok {
 			writeJSON(w, 404, map[string]any{"_id": id, "found": false})
@@ -80,8 +80,8 @@ func (s *Server) handleScriptsRoute(w http.ResponseWriter, r *http.Request, segs
 		return true
 	case http.MethodDelete:
 		s.scriptsMu.Lock()
-		_, ok := s.scripts[id]
-		delete(s.scripts, id)
+		_, ok := s.Scripts[id]
+		delete(s.Scripts, id)
 		s.scriptsMu.Unlock()
 		if !ok {
 			writeError(w, &apierr.Error{Type: "resource_not_found_exception", Status: 404,

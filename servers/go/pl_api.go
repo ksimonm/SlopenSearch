@@ -428,7 +428,7 @@ func (s *Server) handlePainlessExecute(w http.ResponseWriter, r *http.Request) {
 		setup, _ := body["context_setup"].(map[string]any)
 		idxName, _ := setup["index"].(string)
 		s.mu.RLock()
-		idx := s.indices[idxName]
+		idx := s.Indices[idxName]
 		s.mu.RUnlock()
 		if idx == nil {
 			e := errNotFound(idxName)

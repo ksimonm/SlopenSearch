@@ -109,11 +109,11 @@ func (s *Server) handleValidateQuery(w http.ResponseWriter, r *http.Request, nam
 			writeJSON(w, 200, map[string]any{"valid": false})
 		} else {
 			writeJSON(w, 200, map[string]any{"valid": false, "_shards": map[string]any{
-				"total": numShards(idx), "successful": numShards(idx), "failed": 0}})
+				"total": idx.NumShards(), "successful": idx.NumShards(), "failed": 0}})
 		}
 		return
 	}
-	shards := map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}
+	shards := map[string]any{"total": idx.NumShards(), "successful": idx.NumShards(), "failed": 0}
 	if explain {
 		exp := map[string]any{"index": idx.Name, "valid": true, "explanation": validateExplanationWithCtx(query, qc)}
 		if allShards {

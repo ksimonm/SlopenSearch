@@ -42,7 +42,7 @@ func (s *Server) handleResolveIndex(w http.ResponseWriter, r *http.Request, spec
 		isPattern := token == "_all" || token == "*" || strings.ContainsAny(token, "*?")
 		if isPattern {
 			for _, name := range sortedIndexNames(s) {
-				idx := s.indices[name]
+				idx := s.Indices[name]
 				if !wildcard.Match(token, name) && token != "_all" && token != "*" {
 					continue
 				}
@@ -56,7 +56,7 @@ func (s *Server) handleResolveIndex(w http.ResponseWriter, r *http.Request, spec
 			}
 			// aliases whose target indices all pass the expansion filter
 			for _, name := range sortedIndexNames(s) {
-				idx := s.indices[name]
+				idx := s.Indices[name]
 				if !acceptClass(idx, expand) {
 					continue
 				}
@@ -72,14 +72,14 @@ func (s *Server) handleResolveIndex(w http.ResponseWriter, r *http.Request, spec
 				}
 			}
 		} else {
-			if idx, ok := s.indices[token]; ok {
+			if idx, ok := s.Indices[token]; ok {
 				if acceptClass(idx, expand) && !seenIdx[token] {
 					seenIdx[token] = true
 					idxNames = append(idxNames, token)
 				}
 			} else {
 				for _, name := range sortedIndexNames(s) {
-					idx := s.indices[name]
+					idx := s.Indices[name]
 					if _, ok := idx.Aliases[token]; ok {
 						addAlias(token, name)
 					}
@@ -94,7 +94,7 @@ func (s *Server) handleResolveIndex(w http.ResponseWriter, r *http.Request, spec
 	sort.Strings(idxNames)
 	indicesOut := []any{}
 	for _, name := range idxNames {
-		idx := s.indices[name]
+		idx := s.Indices[name]
 		entry := map[string]any{"name": name}
 		var aliasNames []string
 		for alias := range idx.Aliases {
@@ -109,7 +109,7 @@ func (s *Server) handleResolveIndex(w http.ResponseWriter, r *http.Request, spec
 			entry["aliases"] = arr
 		}
 		attrs := []any{}
-		if isHidden(idx) {
+		if idx.Hidden() {
 			attrs = append(attrs, "hidden")
 		}
 		if idx.Closed {
@@ -147,7 +147,7 @@ func (s *Server) handleResolveIndex(w http.ResponseWriter, r *http.Request, spec
 	sort.Strings(dsList)
 	dsOut := []any{}
 	for _, n := range dsList {
-		ds := s.dataStreams[n]
+		ds := s.DataStreams[n]
 		bi := []any{}
 		for _, b := range ds.BackingIndices {
 			bi = append(bi, b)

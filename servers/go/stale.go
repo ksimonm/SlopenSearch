@@ -14,7 +14,7 @@ import (
 // noteStaleOverwrite is called for writes that leave the previously
 // refreshed version of the document visible to searches.
 func noteStaleOverwrite(idx *model.Index, id string) {
-	if !refreshDisabled(idx) {
+	if !idx.RefreshDisabled() {
 		return
 	}
 	if idx.Pending == nil {

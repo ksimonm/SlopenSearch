@@ -88,7 +88,7 @@ func (s *Server) getAliasesGlobal(w http.ResponseWriter, r *http.Request, aliasS
 	missing := ""
 	if aliasSpec == "" {
 		for _, name := range sortedIndexNames(s) {
-			idx := s.indices[name]
+			idx := s.Indices[name]
 			aliases := map[string]any{}
 			for an, def := range idx.Aliases {
 				entry := map[string]any{}
@@ -108,7 +108,7 @@ func (s *Server) getAliasesGlobal(w http.ResponseWriter, r *http.Request, aliasS
 	names := strings.Split(aliasSpec, ",")
 	found := map[string]bool{}
 	for _, name := range sortedIndexNames(s) {
-		idx := s.indices[name]
+		idx := s.Indices[name]
 		aliases := map[string]any{}
 		for _, want := range names {
 			for an, def := range idx.Aliases {
@@ -151,7 +151,7 @@ func (s *Server) getAliasesGlobal(w http.ResponseWriter, r *http.Request, aliasS
 func (s *Server) headAliasesGlobal(w http.ResponseWriter, r *http.Request, aliasSpec string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for _, idx := range s.indices {
+	for _, idx := range s.Indices {
 		for an := range idx.Aliases {
 			if an == aliasSpec || wildcard.Match(aliasSpec, an) {
 				w.WriteHeader(200)
@@ -164,7 +164,7 @@ func (s *Server) headAliasesGlobal(w http.ResponseWriter, r *http.Request, alias
 
 func (s *Server) aliasHiddenConflict(aliasName string, def map[string]any) *apierr.Error {
 	newHidden, hasNew := def["is_hidden"]
-	for _, idx := range s.indices {
+	for _, idx := range s.Indices {
 		existing, ok := idx.Aliases[aliasName]
 		if !ok {
 			continue
@@ -196,7 +196,7 @@ func (s *Server) putAliasAPI(w http.ResponseWriter, r *http.Request, indexSpec, 
 		return
 	}
 	for _, an := range strings.Split(aliasName, ",") {
-		if _, clash := s.indices[an]; clash {
+		if _, clash := s.Indices[an]; clash {
 			writeError(w, &apierr.Error{Type: "invalid_alias_name_exception", Status: 400,
 				Reason: "Invalid alias name [" + an + "], an index exists with the same name as the alias"})
 			return
@@ -237,7 +237,7 @@ func (s *Server) putAliasAPI(w http.ResponseWriter, r *http.Request, indexSpec, 
 	for _, idx := range indices {
 		if isWrite, ok := def["is_write_index"].(bool); ok && isWrite {
 			var others []string
-			for _, other := range s.indices {
+			for _, other := range s.Indices {
 				if other == idx {
 					continue
 				}
@@ -433,12 +433,12 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 
 	resolveForAction := func(name string, requireExisting bool) ([]*model.Index, *apierr.Error) {
 		var matched []*model.Index
-		direct, exists := s.indices[name]
+		direct, exists := s.Indices[name]
 		if exists {
 			matched = append(matched, direct)
 		} else if strings.ContainsAny(name, "*?") {
 			for _, n := range sortedIndexNames(s) {
-				idx := s.indices[n]
+				idx := s.Indices[n]
 				if wildcard.Match(name, idx.Name) {
 					matched = append(matched, idx)
 					continue
@@ -452,7 +452,7 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			for _, n := range sortedIndexNames(s) {
-				idx := s.indices[n]
+				idx := s.Indices[n]
 				if _, ok := idx.Aliases[name]; ok {
 					matched = append(matched, idx)
 				}
@@ -512,7 +512,7 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 				for _, aliasName := range aliasNames {
 					if isWrite, ok := def["is_write_index"].(bool); ok && isWrite {
 						var others []string
-						for _, other := range s.indices {
+						for _, other := range s.Indices {
 							if other == idx {
 								continue
 							}
@@ -567,8 +567,8 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 		case "remove_index":
 			indexNames, _ := expandNames(a.def)
 			for _, in := range indexNames {
-				if _, ok := s.indices[in]; ok {
-					removeIndexes = append(removeIndexes, s.indices[in])
+				if _, ok := s.Indices[in]; ok {
+					removeIndexes = append(removeIndexes, s.Indices[in])
 					continue
 				}
 				if strings.ContainsAny(in, "*?") {
@@ -581,7 +581,7 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				aliasHit := false
-				for _, idx := range s.indices {
+				for _, idx := range s.Indices {
 					if _, ok := idx.Aliases[in]; ok {
 						aliasHit = true
 					}
@@ -630,7 +630,7 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, idx := range removeIndexes {
-		delete(s.indices, idx.Name)
+		delete(s.Indices, idx.Name)
 	}
 	s.bumpState()
 	writeJSON(w, 200, map[string]any{"acknowledged": true})
@@ -638,12 +638,12 @@ func (s *Server) postAliases(w http.ResponseWriter, r *http.Request) {
 
 // resolveWriteTarget finds the concrete index a write operation targets.
 func (s *Server) resolveWriteTarget(name string) (*model.Index, *apierr.Error) {
-	if idx, ok := s.indices[name]; ok {
+	if idx, ok := s.Indices[name]; ok {
 		return idx, nil
 	}
 	var withAlias []*model.Index
 	var writeIdx *model.Index
-	for _, idx := range s.indices {
+	for _, idx := range s.Indices {
 		if def, ok := idx.Aliases[name]; ok {
 			withAlias = append(withAlias, idx)
 			if b, _ := def["is_write_index"].(bool); b {

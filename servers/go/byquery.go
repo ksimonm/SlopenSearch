@@ -262,7 +262,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 		idx.SeqNos[id] = seq
 		idx.PrimaryTerms[id] = 1
 		idx.IndexTotal++
-		if rv == "true" || rv == "wait_for" || !refreshDisabled(idx) {
+		if rv == "true" || rv == "wait_for" || !idx.RefreshDisabled() {
 			delete(idx.Pending, id)
 		} else {
 			markPending(idx, id, newDoc, true)

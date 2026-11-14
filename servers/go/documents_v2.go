@@ -22,27 +22,6 @@ import (
 	"slopensearch/internal/settings"
 )
 
-func ensureDocState(idx *model.Index) {
-	if idx.Versions == nil {
-		idx.Versions = map[string]int64{}
-	}
-	if idx.SeqNos == nil {
-		idx.SeqNos = map[string]int64{}
-	}
-	if idx.PrimaryTerms == nil {
-		idx.PrimaryTerms = map[string]int64{}
-	}
-	if idx.Pending == nil {
-		idx.Pending = map[string]map[string]any{}
-	}
-	if idx.RawDocs == nil {
-		idx.RawDocs = map[string][]byte{}
-	}
-	if idx.Routing == nil {
-		idx.Routing = map[string]string{}
-	}
-}
-
 func (s *Server) resolveWriteTargetV2(name string) (*model.Index, *apierr.Error) {
 	idx, err := s.resolveWriteTarget(name)
 	if err == nil {
@@ -126,14 +105,14 @@ func readDocBody(r *http.Request) (map[string]any, []byte, *apierr.Error) {
 }
 
 func nextSeq(idx *model.Index) int64 {
-	ensureDocState(idx)
+	idx.EnsureDocState()
 	n := idx.NextSeq
 	idx.NextSeq++
 	return n
 }
 
 func currentVersion(idx *model.Index, id string) int64 {
-	ensureDocState(idx)
+	idx.EnsureDocState()
 	if v, ok := idx.Versions[id]; ok {
 		return v
 	}
@@ -178,7 +157,7 @@ func shardOf(v string, n int) int {
 }
 
 func routingMatches(idx *model.Index, id, routing string) bool {
-	if numShards(idx) <= 1 {
+	if idx.NumShards() <= 1 {
 		return true
 	}
 	assigned := idx.Routing[id]
@@ -189,7 +168,7 @@ func routingMatches(idx *model.Index, id, routing string) bool {
 	if probe == "" {
 		probe = id
 	}
-	return shardOf(probe, numShards(idx)) == shardOf(assigned, numShards(idx))
+	return shardOf(probe, idx.NumShards()) == shardOf(assigned, idx.NumShards())
 }
 
 func requestRouting(r *http.Request) string {
@@ -295,9 +274,9 @@ func waitForActiveShards(r *http.Request, idx *model.Index) *apierr.Error {
 		return nil
 	}
 	n, err := strconv.Atoi(v)
-	if err == nil && n > numShards(idx) {
+	if err == nil && n > idx.NumShards() {
 		return &apierr.Error{Type: "unavailable_shards_exception", Status: 503,
-			Reason: fmt.Sprintf("Timeout waiting for [%d] shards to become active, only [%d] are active", n, numShards(idx))}
+			Reason: fmt.Sprintf("Timeout waiting for [%d] shards to become active, only [%d] are active", n, idx.NumShards())}
 	}
 	return nil
 }
@@ -989,7 +968,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 		return
 	}
 	if p := r.URL.Query().Get("pipeline"); p != "" && p != "_none" {
-		if _, ok := s.ingestPipelines[p]; !ok {
+		if _, ok := s.IngestPipelines[p]; !ok {
 			writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "pipeline with id [" + p + "] does not exist"})
 			return
@@ -1006,7 +985,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 			return
 		}
 	}
-	ensureDocState(idx)
+	idx.EnsureDocState()
 	if derr := checkMixedArray(idx, body, ""); derr != nil {
 		writeError(w, derr)
 		return
@@ -1050,7 +1029,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 			return
 		}
 		idx = target
-		ensureDocState(idx)
+		idx.EnsureDocState()
 	}
 	if v, ok := params["_id"].(string); ok && v != "" {
 		id = v
@@ -1133,7 +1112,7 @@ func (s *Server) handleIndexDocV2(w http.ResponseWriter, r *http.Request, name, 
 	if rv == "true" {
 		resp = append(resp, ojson.KV{"forced_refresh", true})
 	}
-	resp = append(resp, ojson.KV{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
+	resp = append(resp, ojson.KV{"_shards", map[string]any{"total": idx.NumShards(), "successful": idx.NumShards(), "failed": 0}},
 		ojson.KV{"_seq_no", seq}, ojson.KV{"_primary_term", int64(1)})
 	if routing != "" {
 		resp = append(resp, ojson.KV{"_routing", routing})
@@ -1358,7 +1337,7 @@ func (s *Server) handleDeleteDocV2(w http.ResponseWriter, r *http.Request, name,
 		writeError(w, routingMissing(idx, id))
 		return
 	}
-	ensureDocState(idx)
+	idx.EnsureDocState()
 	if err := checkIfSeq(r, idx, id); err != nil {
 		writeError(w, err)
 		return
@@ -1379,7 +1358,7 @@ func (s *Server) handleDeleteDocV2(w http.ResponseWriter, r *http.Request, name,
 		idx.Versions[id] = ver
 		resp := ojson.Object{
 			{"_index", idx.Name}, {"_id", id}, {"_version", ver}, {"result", "not_found"},
-			{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
+			{"_shards", map[string]any{"total": idx.NumShards(), "successful": idx.NumShards(), "failed": 0}},
 			{"_seq_no", seq}, {"_primary_term", int64(1)},
 		}
 		writeJSON(w, 404, resp)
@@ -1397,7 +1376,7 @@ func (s *Server) handleDeleteDocV2(w http.ResponseWriter, r *http.Request, name,
 	if rv == "true" {
 		resp = append(resp, ojson.KV{"forced_refresh", true})
 	}
-	resp = append(resp, ojson.KV{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
+	resp = append(resp, ojson.KV{"_shards", map[string]any{"total": idx.NumShards(), "successful": idx.NumShards(), "failed": 0}},
 		ojson.KV{"_seq_no", seq}, ojson.KV{"_primary_term", int64(1)})
 	writeJSON(w, 200, resp)
 }
@@ -1482,7 +1461,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 			Reason: "Validation Failed: 1: can't provide both script and doc;"})
 		return
 	}
-	ensureDocState(idx)
+	idx.EnsureDocState()
 	if err := checkIfSeq(r, idx, id); err != nil {
 		writeError(w, err)
 		return
@@ -1582,7 +1561,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		if rv == "true" {
 			resp = append(resp, ojson.KV{"forced_refresh", true})
 		}
-		resp = append(resp, ojson.KV{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
+		resp = append(resp, ojson.KV{"_shards", map[string]any{"total": idx.NumShards(), "successful": idx.NumShards(), "failed": 0}},
 			ojson.KV{"_seq_no", seq}, ojson.KV{"_primary_term", int64(1)})
 		if getSpecified(r, body) {
 			resp = append(resp, ojson.KV{"get", updateGetObject(idx, id, src, seq, r, body)})
@@ -1614,7 +1593,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 		idx.SeqNos[id] = seq
 		resp := ojson.Object{
 			{"_index", idx.Name}, {"_id", id}, {"_version", ver}, {"result", "deleted"},
-			{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
+			{"_shards", map[string]any{"total": idx.NumShards(), "successful": idx.NumShards(), "failed": 0}},
 			{"_seq_no", seq}, {"_primary_term", int64(1)},
 		}
 		writeJSON(w, 200, resp)
@@ -1681,7 +1660,7 @@ func (s *Server) handleUpdateDocV2(w http.ResponseWriter, r *http.Request, name,
 	if rv == "true" {
 		resp = append(resp, ojson.KV{"forced_refresh", true})
 	}
-	resp = append(resp, ojson.KV{"_shards", map[string]any{"total": numShards(idx), "successful": numShards(idx), "failed": 0}},
+	resp = append(resp, ojson.KV{"_shards", map[string]any{"total": idx.NumShards(), "successful": idx.NumShards(), "failed": 0}},
 		ojson.KV{"_seq_no", seq}, ojson.KV{"_primary_term", int64(1)})
 	if getSpecified(r, body) {
 		resp = append(resp, ojson.KV{"get", updateGetObject(idx, id, newDoc, seq, r, body)})
@@ -1945,7 +1924,7 @@ func (s *Server) handleMget(w http.ResponseWriter, r *http.Request, pathIndex st
 		}
 		id, _ := e["_id"].(string)
 		doc := map[string]any{"_index": idxName, "_id": id}
-		idx, ok := s.indices[idxName]
+		idx, ok := s.Indices[idxName]
 		if !ok {
 			err := errNotFound(idxName)
 			doc["error"] = errorObject(err)

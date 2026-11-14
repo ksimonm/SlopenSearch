@@ -623,8 +623,8 @@ func (s *Server) catIndices(r *http.Request, spec, endpoint string) ([]catCol, [
 		row.values["status"] = status
 		row.values["index"] = idx.Name
 		row.values["uuid"] = idx.UUID
-		row.values["pri"] = strconv.Itoa(numShards(idx))
-		row.values["rep"] = strconv.Itoa(numReplicas(idx))
+		row.values["pri"] = strconv.Itoa(idx.NumShards())
+		row.values["rep"] = strconv.Itoa(idx.NumReplicas())
 		if idx.Closed {
 			row.values["docs.count"] = nil
 			row.values["docs.deleted"] = nil
@@ -834,7 +834,7 @@ func (s *Server) catAliases(r *http.Request, spec string) ([]catCol, []catRow) {
 	if spec == "" {
 		spec = "*"
 	}
-	for _, idx := range s.indices {
+	for _, idx := range s.Indices {
 		for alias, def := range idx.Aliases {
 			if !wildcard.Match(spec, alias) {
 				continue
@@ -898,8 +898,8 @@ func (s *Server) catShards(r *http.Request, spec string) ([]catCol, []catRow, *a
 	}
 	rows := []catRow{}
 	for _, idx := range indices {
-		perShard := distributeDocs(len(idx.Docs), numShards(idx))
-		for i := 0; i < numShards(idx); i++ {
+		perShard := distributeDocs(len(idx.Docs), idx.NumShards())
+		for i := 0; i < idx.NumShards(); i++ {
 			row := catRow{values: map[string]any{}}
 			row.values["index"] = idx.Name
 			row.values["shard"] = strconv.Itoa(i)
@@ -911,7 +911,7 @@ func (s *Server) catShards(r *http.Request, spec string) ([]catCol, []catRow, *a
 			row.values["node"] = nodeName
 			row.values["unassigned.reason"] = nil
 			rows = append(rows, row)
-			for rp := 0; rp < numReplicas(idx); rp++ {
+			for rp := 0; rp < idx.NumReplicas(); rp++ {
 				replica := catRow{values: map[string]any{}}
 				replica.values["index"] = idx.Name
 				replica.values["shard"] = strconv.Itoa(i)
@@ -1206,7 +1206,7 @@ func (s *Server) catRecovery(r *http.Request, spec string) ([]catCol, []catRow, 
 		if idx.Closed {
 			continue
 		}
-		for i := 0; i < numShards(idx); i++ {
+		for i := 0; i < idx.NumShards(); i++ {
 			row := catRow{values: map[string]any{
 				"index": idx.Name, "shard": strconv.Itoa(i),
 				"start_time": "2026-01-01T00:00:00.000Z", "time": "0ms",
@@ -1252,8 +1252,8 @@ func (s *Server) catSegments(r *http.Request, spec string) ([]catCol, []catRow, 
 		if idx.Closed {
 			continue
 		}
-		perShard := distributeDocs(len(idx.Docs), numShards(idx))
-		for i := 0; i < numShards(idx); i++ {
+		perShard := distributeDocs(len(idx.Docs), idx.NumShards())
+		for i := 0; i < idx.NumShards(); i++ {
 			if perShard[i] == 0 {
 				continue
 			}
@@ -1330,7 +1330,7 @@ func (s *Server) catTemplates(r *http.Request, spec string) ([]catCol, []catRow)
 		}
 		return false
 	}
-	for name, tpl := range s.legacyTemplates {
+	for name, tpl := range s.LegacyTemplates {
 		if !match(name) {
 			continue
 		}
@@ -1344,7 +1344,7 @@ func (s *Server) catTemplates(r *http.Request, spec string) ([]catCol, []catRow)
 		}}
 		rows = append(rows, row)
 	}
-	for name, tpl := range s.composableTemplates {
+	for name, tpl := range s.ComposableTemplates {
 		if !match(name) {
 			continue
 		}

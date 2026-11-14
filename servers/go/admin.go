@@ -128,10 +128,10 @@ var timeSettingPattern = `^-?[0-9]+(ms|s|m|h|d)?$`
 
 func validateSettingValue(key string, raw any, creating bool) (string, *apierr.Error) {
 	rest := strings.TrimPrefix(key, "index.")
-	val := settingsValueString(raw)
+	val := settings.ValueString(raw)
 	switch {
 	case rest == "number_of_shards":
-		n, ok := settingsValueInt(raw)
+		n, ok := settings.ValueInt(raw)
 		if !ok {
 			e := apierr.BadRequest("Failed to parse value [" + val + "] for setting [index.number_of_shards]")
 			e.CausedBy = &apierr.Error{Type: "number_format_exception", Reason: "For input string: \"" + val + "\""}
@@ -145,7 +145,7 @@ func validateSettingValue(key string, raw any, creating bool) (string, *apierr.E
 		}
 		return strconv.Itoa(n), nil
 	case rest == "number_of_replicas":
-		n, ok := settingsValueInt(raw)
+		n, ok := settings.ValueInt(raw)
 		if !ok {
 			e := apierr.BadRequest("Failed to parse value [" + val + "] for setting [index.number_of_replicas]")
 			e.CausedBy = &apierr.Error{Type: "number_format_exception", Reason: "For input string: \"" + val + "\""}
@@ -166,7 +166,7 @@ func validateSettingValue(key string, raw any, creating bool) (string, *apierr.E
 	case rest == "max_result_window" || rest == "max_inner_result_window" ||
 		rest == "max_terms_count" || rest == "max_regex_length" || rest == "max_ngram_diff" ||
 		rest == "max_shingle_diff" || rest == "max_refresh_listeners":
-		n, ok := settingsValueInt(raw)
+		n, ok := settings.ValueInt(raw)
 		if !ok {
 			return "", apierr.BadRequest("Failed to parse value [" + val + "] for setting [" + key + "]")
 		}
@@ -336,10 +336,10 @@ func materializedFlat(idx *model.Index) map[string]any {
 		out[k] = stringifyScalar(v)
 	}
 	if _, ok := out["index.number_of_shards"]; !ok {
-		out["index.number_of_shards"] = strconv.Itoa(numShards(idx))
+		out["index.number_of_shards"] = strconv.Itoa(idx.NumShards())
 	}
 	if _, ok := out["index.number_of_replicas"]; !ok {
-		out["index.number_of_replicas"] = strconv.Itoa(numReplicas(idx))
+		out["index.number_of_replicas"] = strconv.Itoa(idx.NumReplicas())
 	}
 	out["index.uuid"] = idx.UUID
 	out["index.creation_date"] = strconv.FormatInt(idx.CreationDate, 10)
@@ -470,7 +470,7 @@ func acceptClass(idx *model.Index, expand map[string]bool) bool {
 	} else if !expand["open"] {
 		return false
 	}
-	if isHidden(idx) && !expand["hidden"] {
+	if idx.Hidden() && !expand["hidden"] {
 		return false
 	}
 	return true
@@ -521,21 +521,21 @@ func (s *Server) resolveSpec2(spec string, o resolveOpts2) ([]*model.Index, *api
 		var apiErr2 *apierr.Error
 		if token == "_all" || token == "*" {
 			for _, name := range sortedIndexNames(s) {
-				idx := s.indices[name]
+				idx := s.Indices[name]
 				if acceptClass(idx, expand) {
 					matched = append(matched, idx)
 				}
 			}
 		} else if strings.ContainsAny(token, "*?") {
 			for _, name := range sortedIndexNames(s) {
-				idx := s.indices[name]
+				idx := s.Indices[name]
 				if wildcard.Match(token, name) && acceptClass(idx, expand) {
 					matched = append(matched, idx)
 				}
 			}
 			if len(matched) == 0 {
 				for _, name := range sortedIndexNames(s) {
-					idx := s.indices[name]
+					idx := s.Indices[name]
 					if !acceptClass(idx, expand) {
 						continue
 					}
@@ -551,12 +551,12 @@ func (s *Server) resolveSpec2(spec string, o resolveOpts2) ([]*model.Index, *api
 				apiErr2 = errIndexNotFoundNamed(token)
 			}
 		} else {
-			if idx, ok := s.indices[token]; ok {
+			if idx, ok := s.Indices[token]; ok {
 				matched = append(matched, idx)
 			} else {
 				aliasHit := false
 				for _, name := range sortedIndexNames(s) {
-					idx := s.indices[name]
+					idx := s.Indices[name]
 					if _, ok := idx.Aliases[token]; ok {
 						matched = append(matched, idx)
 						aliasHit = true
@@ -662,11 +662,11 @@ func (s *Server) createIndex(w http.ResponseWriter, r *http.Request, name string
 // When isBacking is true, template composition is skipped (the backing body
 // was built from the data stream template already).
 func (s *Server) createIndexInternal(name string, body map[string]any, isBacking bool) (*model.Index, *apierr.Error) {
-	if _, exists := s.indices[name]; exists {
+	if _, exists := s.Indices[name]; exists {
 		return nil, &apierr.Error{Type: "resource_already_exists_exception", Status: 400,
 			Reason: "index [" + name + "]", Fields: map[string]any{"index": name}}
 	}
-	for _, idx := range s.indices {
+	for _, idx := range s.Indices {
 		if _, ok := idx.Aliases[name]; ok {
 			return nil, &apierr.Error{Type: "invalid_index_name_exception", Status: 400,
 				Reason: "Invalid index name [" + name + "], already exists as alias",
@@ -714,7 +714,7 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 			// Analysis settings keep their lists (stopwords, synonyms, ...).
 			items := make([]any, 0, len(list))
 			for _, e := range list {
-				items = append(items, settingsValueString(e))
+				items = append(items, settings.ValueString(e))
 			}
 			canonical[k] = items
 			continue
@@ -797,7 +797,7 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 		if err := validateAliasName(aliasName); err != nil {
 			return err
 		}
-		if _, clash := s.indices[aliasName]; clash {
+		if _, clash := s.Indices[aliasName]; clash {
 			return &apierr.Error{Type: "invalid_alias_name_exception", Status: 400,
 				Reason: "Invalid alias name [" + aliasName + "], an index exists with the same name as the alias"}
 		}
@@ -843,7 +843,7 @@ func (s *Server) createIndexInternal(name string, body map[string]any, isBacking
 		Routing:      map[string]string{},
 	}
 	ensureFieldTypes(idx)
-	s.indices[name] = idx
+	s.Indices[name] = idx
 	s.bumpState()
 	return idx, nil
 }
@@ -1133,14 +1133,14 @@ func (s *Server) deleteIndices(w http.ResponseWriter, r *http.Request, spec stri
 		}
 	}
 	for _, idx := range indices {
-		delete(s.indices, idx.Name)
+		delete(s.Indices, idx.Name)
 	}
 	s.bumpState()
 	writeJSON(w, 200, map[string]any{"acknowledged": true})
 }
 
 func indexBlockError(idx *model.Index, block string, code int, status int) *apierr.Error {
-	if !blockOn(idx, block) {
+	if !idx.Blocked(block) {
 		return nil
 	}
 	return &apierr.Error{Type: "cluster_block_exception", Status: status,

@@ -35,7 +35,7 @@ func (s *Server) handleSearchPipelineRoute(w http.ResponseWriter, r *http.Reques
 			return true
 		}
 		s.mu.Lock()
-		s.searchPipelines[id] = body
+		s.SearchPipelines[id] = body
 		s.mu.Unlock()
 		writeJSON(w, 200, map[string]any{"acknowledged": true})
 		return true
@@ -44,7 +44,7 @@ func (s *Server) handleSearchPipelineRoute(w http.ResponseWriter, r *http.Reques
 		defer s.mu.RUnlock()
 		if id == "" {
 			out := map[string]any{}
-			for k, v := range s.searchPipelines {
+			for k, v := range s.SearchPipelines {
 				out[k] = v
 			}
 			writeJSON(w, 200, out)
@@ -52,7 +52,7 @@ func (s *Server) handleSearchPipelineRoute(w http.ResponseWriter, r *http.Reques
 		}
 		out := map[string]any{}
 		for _, name := range strings.Split(id, ",") {
-			if p, ok := s.searchPipelines[name]; ok {
+			if p, ok := s.SearchPipelines[name]; ok {
 				out[name] = p
 			}
 		}
@@ -64,8 +64,8 @@ func (s *Server) handleSearchPipelineRoute(w http.ResponseWriter, r *http.Reques
 		return true
 	case http.MethodDelete:
 		s.mu.Lock()
-		_, ok := s.searchPipelines[id]
-		delete(s.searchPipelines, id)
+		_, ok := s.SearchPipelines[id]
+		delete(s.SearchPipelines, id)
 		s.mu.Unlock()
 		if !ok {
 			writeError(w, &apierr.Error{Type: "resource_not_found_exception", Status: 404,
@@ -118,7 +118,7 @@ func (s *Server) resolveSearchPipeline(r *http.Request, body map[string]any, ind
 	}
 	if spec == nil && len(indices) > 0 {
 		if v, ok := settings.Find(indices[0].Settings, "search.default_pipeline"); ok {
-			spec = settingsValueString(v)
+			spec = settings.ValueString(v)
 		}
 	}
 	if spec == nil {
@@ -131,7 +131,7 @@ func (s *Server) resolveSearchPipeline(r *http.Request, body map[string]any, ind
 		if t == "" || t == "_none" {
 			return nil, nil
 		}
-		p, ok := s.searchPipelines[t]
+		p, ok := s.SearchPipelines[t]
 		if !ok {
 			return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "Pipeline " + t + " is not defined"}

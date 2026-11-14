@@ -26,7 +26,7 @@ func indexKnnEnabled(idx *model.Index) bool {
 		return false
 	}
 	v, ok := settings.Find(idx.Settings, "knn")
-	return ok && settingsValueString(v) == "true"
+	return ok && settings.ValueString(v) == "true"
 }
 
 func knnValueError(c *indexCtx, path string, preview, causeType, causeReason string) *apierr.Error {
@@ -302,10 +302,10 @@ func knnMergeConflicts(existing, incoming map[string]any) *apierr.Error {
 				os, ns = "float", "float"
 			}
 			if oh {
-				os = strings.ToLower(settingsValueString(ov))
+				os = strings.ToLower(settings.ValueString(ov))
 			}
 			if nh {
-				ns = strings.ToLower(settingsValueString(nv))
+				ns = strings.ToLower(settings.ValueString(nv))
 			}
 			if os != ns {
 				return &apierr.Error{Type: "illegal_argument_exception", Status: 400,

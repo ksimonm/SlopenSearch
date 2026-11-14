@@ -160,8 +160,8 @@ func (s *Server) openPersistence(dir string) error {
 		return err
 	}
 	s.persist = p
-	p.pipelines = encodeNamedMaps(s.ingestPipelines)
-	p.scripts = encodeNamedMaps(s.scripts)
+	p.pipelines = encodeNamedMaps(s.IngestPipelines)
+	p.scripts = encodeNamedMaps(s.Scripts)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p.mu.Lock()
@@ -196,7 +196,7 @@ func (s *Server) persistNow() {
 	var buf pbuf
 	// pipelines and scripts have their own locks
 	s.ingestMu.RLock()
-	pipes := encodeNamedMaps(s.ingestPipelines)
+	pipes := encodeNamedMaps(s.IngestPipelines)
 	s.ingestMu.RUnlock()
 	if !bytes.Equal(pipes, p.pipelines) {
 		buf.byte(recPipelines)
@@ -204,7 +204,7 @@ func (s *Server) persistNow() {
 		p.pipelines = pipes
 	}
 	s.scriptsMu.RLock()
-	scripts := encodeNamedMaps(s.scripts)
+	scripts := encodeNamedMaps(s.Scripts)
 	s.scriptsMu.RUnlock()
 	if !bytes.Equal(scripts, p.scripts) {
 		buf.byte(recScripts)
@@ -281,19 +281,19 @@ func (p *persister) diffLocked(s *Server, buf *pbuf) {
 		p.global = g
 	}
 	for name := range p.indices {
-		if _, ok := s.indices[name]; !ok {
+		if _, ok := s.Indices[name]; !ok {
 			buf.byte(recIndexDrop)
 			buf.str(name)
 			delete(p.indices, name)
 		}
 	}
-	names := make([]string, 0, len(s.indices))
-	for name := range s.indices {
+	names := make([]string, 0, len(s.Indices))
+	for name := range s.Indices {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		idx := s.indices[name]
+		idx := s.Indices[name]
 		st := p.indices[name]
 		if st == nil || st.ptr != idx {
 			st = &idxPersistState{ptr: idx, docs: map[string]docFP{}}
@@ -410,17 +410,17 @@ func encodeDocPut(buf *pbuf, idx *model.Index, name, id string) {
 
 func encodeGlobal(s *Server) []byte {
 	var b pbuf
-	b.varint(s.counter)
-	b.varint(s.stateVersion)
-	b.val(s.clusterPersistent)
-	b.bytes(encodeNamedMaps(s.legacyTemplates))
-	b.bytes(encodeNamedMaps(s.composableTemplates))
-	b.bytes(encodeNamedMaps(s.componentTemplates))
-	b.bytes(encodeNamedMaps(s.searchPipelines))
-	names := persistKeys(s.dataStreams)
+	b.varint(s.Counter)
+	b.varint(s.StateVersion)
+	b.val(s.ClusterPersistent)
+	b.bytes(encodeNamedMaps(s.LegacyTemplates))
+	b.bytes(encodeNamedMaps(s.ComposableTemplates))
+	b.bytes(encodeNamedMaps(s.ComponentTemplates))
+	b.bytes(encodeNamedMaps(s.SearchPipelines))
+	names := persistKeys(s.DataStreams)
 	b.uvarint(uint64(len(names)))
 	for _, n := range names {
-		ds := s.dataStreams[n]
+		ds := s.DataStreams[n]
 		b.str(n)
 		b.str(ds.Name)
 		b.strs(ds.BackingIndices)
@@ -433,24 +433,24 @@ func encodeGlobal(s *Server) []byte {
 
 func decodeGlobal(s *Server, data []byte) error {
 	r := &preader{b: data}
-	s.counter = r.varint()
-	s.stateVersion = r.varint()
-	s.clusterPersistent = persistMap(r.val())
-	s.legacyTemplates = decodeNamedMaps(r.bytes())
-	s.composableTemplates = decodeNamedMaps(r.bytes())
-	s.componentTemplates = decodeNamedMaps(r.bytes())
-	s.searchPipelines = decodeNamedMaps(r.bytes())
+	s.Counter = r.varint()
+	s.StateVersion = r.varint()
+	s.ClusterPersistent = persistMap(r.val())
+	s.LegacyTemplates = decodeNamedMaps(r.bytes())
+	s.ComposableTemplates = decodeNamedMaps(r.bytes())
+	s.ComponentTemplates = decodeNamedMaps(r.bytes())
+	s.SearchPipelines = decodeNamedMaps(r.bytes())
 	n := int(r.uvarint())
-	s.dataStreams = map[string]*dataStreamInfo{}
+	s.DataStreams = map[string]*model.DataStream{}
 	for i := 0; i < n && r.err == nil; i++ {
 		key := r.str()
-		ds := &dataStreamInfo{}
+		ds := &model.DataStream{}
 		ds.Name = r.str()
 		ds.BackingIndices = r.strs()
 		ds.Generation = r.varint()
 		ds.TimestampField = r.str()
 		ds.Template = r.str()
-		s.dataStreams[key] = ds
+		s.DataStreams[key] = ds
 	}
 	return r.err
 }
@@ -549,27 +549,14 @@ func decodeNamedMaps(data []byte) map[string]map[string]any {
 	return out
 }
 
-func newEmptyIndex(name string) *model.Index {
-	idx := &model.Index{
-		Name:       name,
-		Mappings:   map[string]any{},
-		Settings:   map[string]any{},
-		Docs:       map[string]map[string]any{},
-		FieldTypes: map[string]string{},
-		Aliases:    map[string]map[string]any{},
-	}
-	ensureDocState(idx)
-	return idx
-}
-
 // apply replays one frame of records into s.
 func applyFrame(s *Server, data []byte) error {
 	r := &preader{b: data}
 	get := func(name string) *model.Index {
-		idx := s.indices[name]
+		idx := s.Indices[name]
 		if idx == nil {
-			idx = newEmptyIndex(name)
-			s.indices[name] = idx
+			idx = model.NewIndex(name)
+			s.Indices[name] = idx
 		}
 		return idx
 	}
@@ -580,14 +567,14 @@ func applyFrame(s *Server, data []byte) error {
 				return err
 			}
 		case recPipelines:
-			s.ingestPipelines = decodeNamedMaps(r.bytes())
+			s.IngestPipelines = decodeNamedMaps(r.bytes())
 		case recScripts:
-			s.scripts = decodeNamedMaps(r.bytes())
+			s.Scripts = decodeNamedMaps(r.bytes())
 		case recIndexNew:
 			name := r.str()
-			s.indices[name] = newEmptyIndex(name)
+			s.Indices[name] = model.NewIndex(name)
 		case recIndexDrop:
-			delete(s.indices, r.str())
+			delete(s.Indices, r.str())
 		case recIndexMeta:
 			idx := get(r.str())
 			if err := decodeIndexMeta(idx, r.bytes()); err != nil {
@@ -668,8 +655,8 @@ func (p *persister) load(s *Server) error {
 			return fmt.Errorf("persistence: journal: %w", err)
 		}
 	}
-	for _, idx := range s.indices {
-		ensureDocState(idx)
+	for _, idx := range s.Indices {
+		idx.EnsureDocState()
 		if idx.Docs == nil {
 			idx.Docs = map[string]map[string]any{}
 		}

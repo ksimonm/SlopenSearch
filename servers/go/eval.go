@@ -1199,7 +1199,7 @@ func (c *queryCtx) evalTerms(field string, raw map[string]any, boost float64) (b
 	}
 	maxTerms := 65536
 	if v, ok := settings.Find(c.idx.Settings, "max_terms_count"); ok {
-		if n, err := strconv.Atoi(settingsValueString(v)); err == nil {
+		if n, err := strconv.Atoi(settings.ValueString(v)); err == nil {
 			maxTerms = n
 		}
 	}
@@ -1316,7 +1316,7 @@ func resolveTermsLookup(spec map[string]any) ([]any, *apierr.Error) {
 	}
 	// Callers already hold globalServer.mu (read or write); taking it again
 	// here deadlocks once a writer is queued.
-	idx, ok := globalServer.indices[index]
+	idx, ok := globalServer.Indices[index]
 	if !ok {
 		return nil, &apierr.Error{Type: "index_not_found_exception", Status: 404,
 			Reason: "no such index [" + index + "]",
