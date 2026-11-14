@@ -43,6 +43,8 @@ services:
     build: servers/rust
     ports:
       - "127.0.0.1:${RUST_PORT:-9292}:9200"
+    volumes:
+      - rust-data:/data
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9200"]
       interval: 2s
@@ -61,3 +63,6 @@ services:
       HOME: /tmp
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+volumes:
+  rust-data:

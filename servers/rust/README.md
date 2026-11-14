@@ -1,7 +1,8 @@
 # SlopenSearch — Rust implementation
 
 `axum` + `tokio` + `serde_json` (plus `regex` and `base64`); the server keeps all data
-in memory behind one `Arc<Mutex<Store>>`. Much of the query and aggregation code is a port
+in memory behind one `Arc<Mutex<Store>>` and, by default, persists it to a data
+directory (see [Persistence](#persistence)). Much of the query and aggregation code is a port
 of the Go server, which remains a useful second reading of the expected behaviour.
 
 ## Loop
@@ -25,12 +26,55 @@ To see what OpenSearch really answers in a test, without running OpenSearch:
 test then prints the reference exchange). For requests no test makes, start the
 reference with `make ref-up` and `curl localhost:9290/...`.
 
+## Persistence
+
+Persistence is on by default: state goes to `./data` (relative to the working
+directory; `make rust-dev` therefore uses `servers/rust/data`), which is created when
+missing and loaded when it already holds state.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `SLOP_DATA_DIR` (or `--data-dir <dir>`, `-Epath.data=<dir>`) | `data` | data directory |
+| `SLOP_IN_MEMORY` (or `--in-memory`) | `false` | `true`: keep everything in memory only, nothing is read or written |
+
+```bash
+PORT=9292 slopensearch                                    # persists to ./data
+SLOP_DATA_DIR=/var/lib/slop PORT=9292 slopensearch        # another directory
+SLOP_IN_MEMORY=true PORT=9292 slopensearch                # in-memory, state dies with the process
+```
+
+The Docker image uses `SLOP_DATA_DIR=/data`; `compose.yaml` mounts the named volume
+`rust-data` there, so the state survives `docker compose restart rust` and rebuilds
+(`docker compose down -v` drops it).
+
+`src/persist.rs` keeps an atomic snapshot (`rust-state.json`) plus a write-ahead journal
+(`rust-journal-<gen>.log`): every request that changed durable state appends one fsynced
+journal line before its response is sent, so acknowledged writes survive `kill -9`. On
+startup the snapshot is loaded, the journal replayed and compacted into a new snapshot.
+`rust.lock` stops a second Rust server from using the same directory (the `rust-` prefix
+lets a Go server share it). Durable: indices (settings, mappings, aliases, closed state,
+documents with version, seq_no, routing and exact `_source`), templates, data streams,
+ingest/search pipelines, stored scripts, persistent cluster settings. Not durable, as in
+OpenSearch: transient cluster settings, scrolls and PITs; unrefreshed documents are
+searchable after recovery.
+
+`tests/test_95_persistence.py` exercises this (with a crash restart):
+
+```bash
+CMD="servers/restart.sh --signal KILL 9292 env PORT=9292 SLOP_DATA_DIR=/tmp/slop-data target/release/slopensearch"
+OS_RESTART_CMD="$CMD" OS_PORT=9292 .venv/bin/pytest tests/test_95_persistence.py
+# against the compose service: OS_RESTART_CMD='docker compose restart rust' OS_PORT=9292
+```
+
+(`restart.sh` starts the server if nothing listens on the port yet; the binary path is
+relative to the repository root here, adjust it to your build.)
+
 ## Layout
 
 | File | Area |
 |---|---|
 | `main.rs` | entry point, request abstraction (`Req`), routing |
-| `store.rs` | indices, documents, node/cluster constants |
+| `store.rs`, `persist.rs` | indices, documents, node/cluster constants; optional on-disk snapshot + journal |
 | `shared.rs`, `errors.rs`, `resp.rs` | name validation and index resolution, error shapes, response formats (`filter_path`, YAML, ...) |
 | `meta.rs`, `cluster.rs`, `nodes.rs`, `cat.rs` | `_cluster`, `_nodes`, `_tasks`, `_remote`, `_cat` |
 | `admin.rs`, `fields.rs` | index create/delete/get, settings, mappings, index-time field extraction |

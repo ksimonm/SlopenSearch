@@ -184,11 +184,18 @@ pub fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
+static UUID_STATE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0x9E3779B97F4A7C15);
+
+/// Starts the uuid sequence elsewhere (a restarted node must not hand out the uuids
+/// of indices it created before).
+pub fn reseed_uuid(seed: u64) {
+    UUID_STATE.store(seed | 1, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub fn random_uuid() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static STATE: AtomicU64 = AtomicU64::new(0x9E3779B97F4A7C15);
+    use std::sync::atomic::Ordering;
     let mut bytes = [0u8; 16];
-    let mut x = STATE.fetch_add(0x9E3779B97F4A7C15, Ordering::Relaxed);
+    let mut x = UUID_STATE.fetch_add(0x9E3779B97F4A7C15, Ordering::Relaxed);
     for chunk in bytes.chunks_mut(8) {
         x ^= x << 13;
         x ^= x >> 7;

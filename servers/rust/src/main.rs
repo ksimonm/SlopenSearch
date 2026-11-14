@@ -22,6 +22,7 @@ mod maintenance;
 mod meta;
 mod nodes;
 mod painless;
+mod persist;
 mod painless_exec;
 mod pl_api;
 mod pl_check;
@@ -425,12 +426,14 @@ async fn handle(State(store): State<Shared>, request: axum::extract::Request) ->
             // Requests that may compile or run scripts get a large stack: the
             // Painless parser, checker and interpreter recurse.
             let scripted = req.body.windows(6).any(|w| w == b"script") || !guard.pipelines.is_empty();
-            if scripted {
+            let resp = if scripted {
                 let store: &mut Store = &mut guard;
                 crate::pl_api::run_with_stack(|| dispatch(store, &req))
             } else {
                 dispatch(&mut guard, &req)
-            }
+            };
+            persist::after_request(&guard, &req.method, &req.path);
+            resp
         };
         (resp, req)
     })
@@ -827,7 +830,7 @@ async fn main() {
     let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let port = std::env::var("PORT").unwrap_or_else(|_| "9200".to_string());
     let addr = format!("{}:{}", host, port);
-    let store: Shared = Arc::new(Mutex::new(Store::new()));
+    let store: Shared = Arc::new(Mutex::new(persist::open()));
     let app = Router::new().fallback(any(handle)).with_state(store);
     let listener = match tokio::net::TcpListener::bind(&addr).await {
         Ok(l) => l,
