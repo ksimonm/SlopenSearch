@@ -12,7 +12,7 @@ The goal: same REST API, same responses, same errors — in a single small binar
 
 > [!NOTE]
 > SlopenSearch is under active development and not production-ready yet: part of the API
-> is still missing (see [Status](#status)), data lives in memory only, and there is no
+> is still missing (see [Status](#status)), there is a single node only, and there is no
 > authentication or TLS so far. Until those land, keep it on localhost or a trusted network.
 
 SlopenSearch aims to speak the OpenSearch 3.9 REST API closely enough that an existing
@@ -49,7 +49,7 @@ Go all of it, Rust all but 18 tests in text analysis and languages. The open wor
 the newest test files: the phrase and completion suggesters (`test_50`), `knn_score` and
 the Painless vector functions (`test_72`), long-running async tasks and, for Rust,
 compression and the task API (`test_62`), and a shard request cache (`test_61`).
-Both servers keep data in memory only.
+Both servers store their state on disk by default (`SLOP_DATA_DIR`, default `./data`; in Docker a named volume per server) and survive restarts and crashes; `SLOP_IN_MEMORY=true` keeps everything in memory instead (see [servers/go/README.md](servers/go/README.md#persistence) and [servers/rust/README.md](servers/rust/README.md)).
 
 ## Quick start
 

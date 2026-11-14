@@ -230,6 +230,7 @@ type Server struct {
 	pits                map[string]*pitContext
 	pitMu               sync.Mutex
 	pitCounter          int64
+	persist             *persister // nil in memory-only mode (SLOP_IN_MEMORY=true)
 }
 
 type dataStreamInfo struct {

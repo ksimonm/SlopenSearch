@@ -299,6 +299,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			cw.ordered = gw.ordered
 		}
 	}
+	s.persistAfterRequest(r.Method, r.URL.Path)
 	status := cw.status
 	if status == 0 {
 		status = 200
@@ -1859,13 +1860,18 @@ func main() {
 		port = "9200"
 	}
 	addr := net.JoinHostPort(host, port)
+	server := NewServer()
+	if err := server.openPersistence(persistenceDir()); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           NewServer(),
+		Handler:           server,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
-	fmt.Println("slopensearch (go) listening on " + addr)
+	fmt.Println("slopensearch (go) listening on " + addr + persistenceDescription(server))
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

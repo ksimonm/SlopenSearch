@@ -32,6 +32,8 @@ services:
 
   go:
     build: servers/go
+    volumes:
+      - go-data:/data
     ports:
       - "127.0.0.1:${GO_PORT:-9291}:9200"
     healthcheck:
@@ -65,4 +67,5 @@ services:
       - "host.docker.internal:host-gateway"
 
 volumes:
+  go-data:
   rust-data:
