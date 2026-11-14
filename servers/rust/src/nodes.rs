@@ -205,7 +205,7 @@ fn node_info_for_metric(metric: &str) -> Map<String, Value> {
         "process" => json!({
             "process": {
                 "refresh_interval_in_millis": 1000,
-                "id": 1,
+                "id": std::process::id(),
                 "mlockall": false,
                 "cpu": {"percent": 0, "total_in_millis": 0},
                 "mem": {"total_virtual_in_bytes": 1},
