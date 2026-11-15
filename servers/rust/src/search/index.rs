@@ -1183,24 +1183,35 @@ fn direct_range(q: &Map<String, Value>, p: &Plan) -> Option<DirectRange> {
     Some(DirectRange { field: field.clone(), cond: cond.as_object()?.clone() })
 }
 
-/// [`DirectRange`] results of the documents `docs` (None: let the evaluator decide).
-fn range_results(idx: &Index, inv: &InvertedIndex, dr: &DirectRange, docs: impl Iterator<Item = u32>) -> Option<Vec<(bool, f64)>> {
-    let ctx = QueryCtx::new(idx, "", &NULL);
-    let prep = ctx.range_prep(&dr.field, &dr.cond);
-    if prep.ftype == "wildcard" || prep.bounds.is_err() {
+/// [`DirectRange`] results of the documents `docs` (None: let the evaluator
+/// decide); large sets on several threads.
+fn range_results(idx: &Index, inv: &InvertedIndex, dr: &DirectRange, docs: &[u32]) -> Option<Vec<(bool, f64)>> {
+    // the bounds are prepared once (one `now` for the whole request)
+    let shared = QueryCtx::new(idx, "", &NULL).range_prep(&dr.field, &dr.cond);
+    if shared.ftype == "wildcard" || shared.bounds.is_err() {
         return None;
     }
-    let mut out = Vec::new();
-    for doc in docs {
-        let raw = inv.ids.get(doc as usize)?.as_ref().and_then(|id| idx.doc_values.get(id)).and_then(|dv| dv.get(&dr.field));
-        let r = match raw {
-            Some(Value::Array(a)) if !a.is_empty() => ctx.range_on_values(&prep, a, 1.0).ok()?,
-            Some(Value::Array(_)) | None => (false, 0.0),
-            Some(v) => ctx.range_on_values(&prep, std::slice::from_ref(v), 1.0).ok()?,
-        };
-        out.push(r);
+    let prep: &crate::search::eval::RangePrep = &shared;
+    let part = |docs: &[u32]| -> Option<Vec<(bool, f64)>> {
+        let ctx = QueryCtx::new(idx, "", &NULL);
+        let mut out = Vec::with_capacity(docs.len());
+        for &doc in docs {
+            let raw = inv.ids.get(doc as usize)?.as_ref().and_then(|id| idx.doc_values.get(id)).and_then(|dv| dv.get(&dr.field));
+            let r = match raw {
+                Some(Value::Array(a)) if !a.is_empty() => ctx.range_on_values(prep, a, 1.0).ok()?,
+                Some(Value::Array(_)) | None => (false, 0.0),
+                Some(v) => ctx.range_on_values(prep, std::slice::from_ref(v), 1.0).ok()?,
+            };
+            out.push(r);
+        }
+        Some(out)
+    };
+    if docs.len() < 8192 {
+        return part(docs);
     }
-    Some(out)
+    use rayon::prelude::*;
+    let parts: Option<Vec<Vec<(bool, f64)>>> = docs.par_chunks(4096).map(part).collect();
+    Some(parts?.into_iter().flatten().collect())
 }
 
 /// The documents `query` can match, or None when every document has to be
@@ -1233,7 +1244,8 @@ pub fn candidates(idx: &Index, query: &Map<String, Value>, extra_values: bool) -
             .collect();
         let mut results = direct.as_ref().map(|dm| match_results(inv, dm, positions.iter().map(|i| order[*i])));
         if let Some(dr) = &direct_r {
-            results = range_results(idx, inv, dr, positions.iter().map(|i| order[*i]));
+            let docs: Vec<u32> = positions.iter().map(|i| order[*i]).collect();
+            results = range_results(idx, inv, dr, &docs);
         }
         Some(Candidates { positions, results, dup_ids })
     })

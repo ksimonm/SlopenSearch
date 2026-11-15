@@ -348,6 +348,46 @@ pub fn run_search(
                 continue;
             }
         }
+        // direct results without per-hit work beyond the hit itself: build the
+        // hits on several threads (in index order)
+        let direct_all = !verify && !dup_ids && !named_queries && routing_tokens.is_none() && pref_shard.is_none();
+        if let (true, Some(c)) = (direct_all, cands.as_ref()) {
+            if let Some(results) = c.results.as_ref().filter(|_| c.positions.len() >= 8192) {
+                use rayon::prelude::*;
+                let parts: Vec<Vec<MultiHit>> = c
+                    .positions
+                    .par_chunks(4096)
+                    .zip(results.par_chunks(4096))
+                    .map(|(ps, rs)| {
+                        ps.iter()
+                            .zip(rs)
+                            .filter_map(|(&i, &(ok, score))| {
+                                if !ok {
+                                    return None;
+                                }
+                                let id = &idx.order[i];
+                                let doc = idx.docs.get(id)?;
+                                if !idx.pending.is_empty() && idx.pending.contains_key(id) {
+                                    return None;
+                                }
+                                Some(MultiHit {
+                                    idx_name: n.clone(),
+                                    id: id.clone(),
+                                    doc,
+                                    score: crate::mapping::knn::f32r(score),
+                                    pos: i as i64,
+                                    named: Vec::new(),
+                                })
+                            })
+                            .collect()
+                    })
+                    .collect();
+                for p in parts {
+                    matched.extend(p);
+                }
+                continue;
+            }
+        }
         for (k, &i) in positions.iter().enumerate() {
             let id = &idx.order[i];
             let cand_at = match &cands {
@@ -671,12 +711,26 @@ pub fn run_search(
     }
     if !specs.is_empty() {
         let mut keyed: Vec<(Vec<(bool, Value)> , MultiHit)> = Vec::with_capacity(matched.len());
-        for h in matched {
-            let mut cells = Vec::with_capacity(specs.len());
-            for sp in &specs {
-                cells.push(compute_sort_cell(store, &h, sp)?);
+        if matched.len() >= 8192 && specs.iter().all(|sp| sp.kind <= 4) {
+            // field/score/id cells of many hits on several threads; the first
+            // error in hit order is the one reported
+            use rayon::prelude::*;
+            let cells: Vec<Result<Vec<(bool, Value)>, ApiError>> = matched
+                .par_iter()
+                .with_min_len(1024)
+                .map(|h| specs.iter().map(|sp| compute_sort_cell(store, h, sp)).collect())
+                .collect();
+            for (c, h) in cells.into_iter().zip(matched) {
+                keyed.push((c?, h));
             }
-            keyed.push((cells, h));
+        } else {
+            for h in matched {
+                let mut cells = Vec::with_capacity(specs.len());
+                for sp in &specs {
+                    cells.push(compute_sort_cell(store, &h, sp)?);
+                }
+                keyed.push((cells, h));
+            }
         }
         // integer cells compare like `compare_sort_values` does (u64/i64 by
         // value): parse them once, not at every comparison
