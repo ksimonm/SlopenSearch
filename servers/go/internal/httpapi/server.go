@@ -297,9 +297,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	s.scheduledRefresh()
 	if !s.handleTaskRoutes(cw, r) && !s.serveRequestCache(cw, r) {
 		s.route(cw, r)
 	}
+	s.scheduledRefresh()
 	if r.Method == http.MethodHead && cw.buf.Len() == 0 && cw.status < 300 {
 		// HEAD answers carry the Content-Length of the matching GET body
 		g := r.Clone(r.Context())
