@@ -1,6 +1,171 @@
 # Benchmarks: reference OpenSearch vs the Go and Rust servers
 
-First results of the harness in [bench/](../bench/README.md), 2026-11-15.
+How to reproduce and extend: [bench/README.md](../bench/README.md). In short:
+`make bench-quick` (a few minutes, Go + Rust vs a cached reference baseline),
+`make bench-full` (hours), `make bench-history` (ratios commit by commit from the
+committed `bench/history.jsonl`). **All ratios: > 1.0 = the SlopenSearch server is better**
+(throughput ours/ref; latency, CPU per operation, memory and disk ref/ours).
+
+## 2026-11-15: opensearch-benchmark geonames and the quick level
+
+- Host `p7760`: Intel i7-11850H (8 cores / 16 threads), 91 GB RAM, NVMe, Linux 7.0, Docker.
+  **Not idle**: another agent worked on the Rust server, and an unrelated test suite
+  (several OpenSearch containers) ran at times. 1-minute load average 4-5 during the Go
+  and Rust geonames runs; a spike to 55 hit the first reference run, so the reference was
+  re-run at load 7-8 (the numbers below). Treat ratios as ±30 %.
+- Each target alone in its own container, `--cpus 4 --memory 8g` (no swap), data on a
+  Docker volume. Reference: OpenSearch 3.9.0, single node, security off, heap 4 GB
+  (pre-allocated, so its memory is ≥ 4.7 GB whatever it does). Go/Rust: images built from
+  servers at `53539b0` (main `3f75a11`), persistence on.
+- opensearch-benchmark 2.5.0, `--pipeline=benchmark-only`, one client per query task.
+
+### OSB geonames, `sample` preset
+
+1 % of the corpus (`ingest_percentage=1`: 113,965 documents, 5 shards as the workload
+defines), bulk 5000 docs × 8 clients, then every query task of the default
+`append-no-conflicts` procedure with 2 warm-up + 10 measured iterations, unthrottled.
+Watchdog: a task that takes longer than 240 s (Go) / 90 s (Rust) is killed and recorded
+as `timeout`; Rust additionally had a 25-minute budget, after which the remaining tasks
+were not started (`not_run`). Latencies are OSB's service times; p99 needs ≥ 100 samples
+and is not available with 10 iterations. Run directory: `bench/results/20261115-osb-geonames-sample`
+(not committed; the records are in `bench/history.jsonl`).
+
+| summary (ratio, > 1 = ours better) | Go | Rust |
+|---|---:|---:|
+| throughput, geomean over completed tasks | 0.05 | 0.13 (6 tasks only) |
+| latency p50, geomean | 0.04 | 0.38 (6 tasks only) |
+| CPU seconds per operation, geomean | 0.02 | 0.26 |
+| memory peak (ref 5.0 GB incl. 4 GB heap) | 2.93 (1.7 GB) | 1.02 (4.9 GB) |
+| disk after indexing (ref 41 MiB) | 0.85 (48 MiB) | 0.49 (84 MiB) |
+| bulk indexing (ref 12,242 docs/s) | **1.41** (17,212 docs/s) | **1.31** (15,982 docs/s) |
+| tasks completed (ours / ref / all) | 21 / 27 / 27 | 6 / 27 / 27 |
+
+| task | ref ops/s | ref p50 ms | Go thr× | Go p50× | Rust thr× | Rust p50× |
+|---|---:|---:|---:|---:|---:|---:|
+| index-append (docs/s) | 12,242 | 1,681 | 1.41 | 0.70 | 1.31 | 0.38 |
+| index-stats | 62.9 | 11.6 | error | | 7.33 | 8.76 |
+| node-stats | 110 | 6.8 | 5.80 | 8.61 | 4.04 | 6.68 |
+| match-all | 117 | 6.6 | 0.08 | 0.08 | timeout | |
+| term | 107 | 6.0 | 0.04 | 0.03 | 0.01 | 0.008 |
+| phrase | 131 | 5.1 | 0.007 | 0.005 | 0.004 | 0.003 |
+| country_agg_uncached | 22.9 | 9.3 | 0.03 | 0.005 | timeout | |
+| country_agg_cached | 135 | 5.5 | 0.02 | 4.10 | 0.002 | 6.01 |
+| scroll (pages/s) | 68.8 | 280 | timeout | | timeout | |
+| expression | 23.6 | 10.1 | 0.05 | 0.01 | timeout | |
+| painless_static | 3.5 | 19.7 | 0.26 | 0.02 | timeout | |
+| painless_dynamic | 30.1 | 10.1 | 0.03 | 0.008 | timeout | |
+| decay_geo_gauss_function_score | 22.9 | 26.9 | 0.10 | 0.07 | timeout | |
+| decay_geo_gauss_script_score | 43.0 | 10.4 | error | | error | |
+| field_value_function_score | 114 | 6.4 | 0.04 | 0.03 | timeout | |
+| field_value_script_score | 72.2 | 6.9 | 0.02 | 0.01 | timeout | |
+| large_terms | 6.8 | 53.6 | timeout | | not run | |
+| large_filtered_terms | 14.3 | 57.4 | timeout | | not run | |
+| large_prohibited_terms | 16.8 | 51.5 | timeout | | not run | |
+| desc_sort_population | 71.0 | 7.1 | 0.03 | 0.01 | not run | |
+| asc_sort_population | 177 | 4.8 | 0.01 | 0.009 | not run | |
+| asc_sort_with_after_population | 149 | 4.8 | 0.03 | 0.02 | not run | |
+| desc_sort_geonameid | 80.6 | 11.1 | 0.009 | 0.005 | not run | |
+| desc_sort_with_after_geonameid | 73.0 | 6.7 | 0.02 | 0.01 | not run | |
+| asc_sort_geonameid | 162 | 5.0 | 0.02 | 0.02 | not run | |
+| asc_sort_with_after_geonameid | 104 | 7.4 | 0.03 | 0.03 | not run | |
+| numeric-term-cardinality-agg-high | 1.6 | 268 | 0.39 | 0.18 | not run | |
+
+The reference's throughput at these latencies (5-10 ms service time, ~120 ops/s) is
+bounded by OSB's own per-request overhead with one client, so its ratios understate the
+gap rather than overstate it. `country_agg_cached` p50 > 1 for both servers: their
+request caches answer the repeated identical aggregation in microseconds, but the median
+throughput still includes the uncached first requests.
+
+Absolute numbers for orientation (median, one client): Go `match-all` 822 ms, `term`
+1.8 s, `phrase` 8.5 s, `country_agg_uncached` 13 s, sorts 2-12 s, `scroll` (25 pages)
+and the three `large_*terms` queries > 20 s; Rust `term` 5.2 s, `phrase` 14 s,
+`match-all` > 7.5 s — at 114 k documents of 310 bytes.
+
+### OSB operations the servers reject
+
+From geonames in test mode through the recording proxy (`bench/proxy.py`) and the
+`sample` run. Everything else OSB calls is accepted (`GET /`, `_cluster/health` with
+`wait_for_status`/`wait_for_no_relocating_shards`, `_nodes/_all`, `_nodes/stats/_all`,
+index creation with the workload's settings and strict mapping, `_bulk`, `_forcemerge`,
+`_cat/indices`, searches with `scroll`/`sort`/`request_cache`, `_search/scroll`,
+`DELETE _search/scroll`, function_score decay and field_value_factor, painless
+`script_score` and script fields, `search_after`).
+
+| # | call | Go | Rust | effect in OSB |
+|---|---|---|---|---|
+| 1 | `GET /_nodes/stats/_all`: `jvm.gc.collectors.{young,old}.collection_time_in_millis` and `jvm.mem.pools.*.peak_used_in_bytes` missing (only `collection_count` is there, `pools` is absent) | missing | missing | **OSB aborts the whole run** at benchmark start (`KeyError: 'collection_time_in_millis'`, then `'pools'`); worked around client-side by `bench/slop_osb_compat.py` |
+| 2 | `POST /_all/_refresh` | 400 `invalid_index_name_exception: Invalid index name [_all], must not start with '_'` | ok | tasks `refresh-after-index`, `refresh-after-force-merge` 100 % errors (Go's scheduled refresh still makes the docs visible) |
+| 3 | `GET /_all/_stats/_all` (also with `?level=shards`) | 400, same error | ok | `index-stats` 100 % errors, `wait-until-merges-finish` fails, OSB's end-of-run index stats (store size, segment counts, …) are missing |
+| 4 | `script_score` with the Painless function `decayGeoGauss(params.origin, params.scale, params.offset, params.decay, doc['location'].value)` | 400 `search_phase_execution_exception: runtime error` | same | `decay_geo_gauss_script_score` 100 % errors |
+
+Not a server gap: the http_logs workload does not start in `--test-mode` with OSB 2.5.0 for
+any target, the reference included ("Cannot download data because no base URL is
+provided"); run it with `--preset sample`/`full` (1.2 GB download) instead.
+
+### Quick level (`make bench-quick`)
+
+`make bench-quick` took 6.5 minutes including the reference baseline (which it ran because
+`bench/history.jsonl` had none yet; the next quick runs reuse it): harness `tiny` corpus
+(10 k docs; index, 5 search types × 3 s with 4 clients, updates/deletes with 8 clients)
+and OSB geonames `--test-mode` (1 k docs, one request per task) through the recording
+proxy. Load average 3.5-8.8.
+
+| summary (ratio, > 1 = ours better) | harness Go | harness Rust | OSB test Go | OSB test Rust |
+|---|---:|---:|---:|---:|
+| throughput, geomean | 0.15 | 0.06 | 1.16 | 0.76 |
+| latency p50, geomean | 0.11 | 0.05 | 0.78 | 0.48 |
+| latency p99, geomean | 0.38 | 0.21 | - | - |
+| CPU per operation, geomean | 0.24 | 0.33 | 8.41 | 4.02 |
+| memory peak | 18.1 | 16.7 | 97.3 | 34.7 |
+| tasks completed (ours / ref / all) | 11 / 11 / 11 | 11 / 11 / 11 | 25 / 27 / 27 | 26 / 27 / 27 |
+
+| harness task (tiny) | ref | Go × | Rust × |
+|---|---:|---:|---:|
+| bulk index (docs/s) | 4,751 | **4.50** | **1.60** |
+| bulk partial update (docs/s) | 5,064 | **1.44** | **1.87** |
+| `match` (ops/s) | 860 | 0.004 | 0.002 |
+| term + date range filter | 1,023 | 0.23 | 0.03 |
+| sort by price | 1,156 | 0.19 | 0.01 |
+| terms aggregation | 2,416 | 0.002 | 0.0006 |
+| geo_distance | 990 | 0.09 | 0.02 |
+| single `_update` | 575 | 0.46 | 0.46 |
+| single `DELETE` | 747 | 0.24 | 0.43 |
+| `_delete_by_query` | 95.9 | 0.32 | 0.27 |
+
+The OSB test-mode ratios are a smoke test (1 k documents, one request each, through the
+proxy, mostly client overhead), not a performance result: at 1 k documents a full scan is
+as cheap as an index lookup. Memory ratios are dominated by the reference's 4 GB heap.
+
+### Findings
+
+- **Indexing is already faster than OpenSearch** on this slice: Go 1.41× and Rust 1.31×
+  the reference's bulk throughput (8 clients × 5000 docs), and Go needs a third of the
+  memory. This is the one area where the "better than OpenSearch" goal is in reach today.
+- The quick level confirms it on the harness corpus: bulk indexing Go 4.5× / Rust 1.6×,
+  bulk partial updates 1.4× / 1.9× the reference; but single-document `_update` /
+  `DELETE` are at 0.2-0.5× (every write is fsynced before the response).
+- **Every query is 10-250× slower** than the reference at only 114 k documents (geomean
+  0.05× for Go), because both servers still scan all documents per query; with 11.4 M
+  documents (the full geonames corpus) a single query would take minutes. Until there is
+  an inverted index and doc values (ROADMAP "Performance"), the full OSB workloads cannot
+  run against the SlopenSearch servers in any useful time; the `sample` preset and the
+  watchdog exist for that reason.
+- **Rust is ~3-4× slower than Go on queries and single-threaded** (CPU never above 1.0
+  core): it timed out on 11 of the 21 tasks it reached in 90 s (12 requests each), and
+  holds 4.9 GB for 114 k small documents (Go 1.7 GB, the reference 5.0 GB of which 4 GB
+  is the pre-allocated heap).
+- **Stats APIs are cheap**: `node-stats` 4-6× and Rust's `index-stats` 7× faster than the
+  reference (no JVM / Lucene statistics to collect).
+- **Compatibility**: four gaps, two of them Go-only (`_all` as an index name), one shared
+  (`decayGeoGauss` in Painless), and one (`_nodes/stats` JVM fields) that makes OSB abort
+  entirely — the first thing to fix for OSB users, and trivial (report zeros).
+- Disk: Go stores the slice in 48 MiB (ref 41 MiB after flush), Rust 84 MiB.
+
+---
+
+# Earlier report: first harness runs (2026-11-15)
+
+First results of the harness in [bench/](../bench/README.md), 2026-11-15 (servers at main `7c83c2a`).
 
 **Read with care: the machine was not idle.** Several other agents ran test suites at the
 same time (load average 3.5-16.5 on 16 CPUs during the runs), so absolute numbers are

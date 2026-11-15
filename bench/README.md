@@ -38,7 +38,7 @@ make bench-osb WORKLOAD=geonames PRESET=sample TARGETS=ref,go,rust ARGS="--param
 | level | harness (`bench/run.py`) | OSB (`bench/osb.py`) | targets |
 |---|---|---|---|
 | `quick` | `tiny` (10 k docs): index, 5 search types × 3 s, updates | geonames `--test-mode` (1 k docs, 1 iteration per task) through the recording proxy | go, rust (+ ref only when no baseline) |
-| `full` | `large` (2 M docs), every workload | geonames and http_logs with the workloads' own iteration counts and target throughputs | go, rust (+ ref only when no baseline) |
+| `full` | `large` (2 M docs), every workload | geonames and http_logs with the workloads' own iteration counts and target throughputs (http_logs: 1.2 GB download, 31 GB unpacked; not yet run) | go, rust (+ ref only when no baseline) |
 
 `bench/levels.py` runs a level into `bench/results/<timestamp>/` and, when
 `bench/history.jsonl` has no reference record of exactly that configuration, also runs the

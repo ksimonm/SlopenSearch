@@ -216,6 +216,9 @@ def append(recs: list[dict], path: Path = HISTORY) -> int:
     with path.open("a") as f:
         for r in new:
             r = {k: v for k, v in r.items() if k not in ("host",)} | {"host": (r.get("host") or {}).get("name")}
+            # compact: drop per-task fields that the ratios do not use
+            r["tasks"] = {n: {k: v for k, v in t.items() if k not in ("cpu_s", "dur_s", "n", "p95")}
+                          for n, t in r.get("tasks", {}).items()}
             f.write(json.dumps(r, separators=(",", ":")) + "\n")
     return len(new)
 
@@ -226,9 +229,11 @@ def baseline_for(rec: dict, same_run: list[dict], hist: list[dict]) -> dict | No
     for r in same_run:
         if r["target"] == "ref" and r["config"] == rec["config"]:
             return r
-    cands = [r for r in hist if r["target"] == "ref" and r["config"] == rec["config"]
-             and (r.get("date") or "") <= (rec.get("date") or "~")]
-    return cands[-1] if cands else None
+    refs = [r for r in hist if r["target"] == "ref" and r["config"] == rec["config"]]
+    before = [r for r in refs if (r.get("date") or "") <= (rec.get("date") or "~")]
+    # the latest reference run before this one, else the first one after it (a level that
+    # had no baseline yet runs the reference right after the SlopenSearch targets)
+    return before[-1] if before else (refs[0] if refs else None)
 
 
 def ratios(rec: dict, ref: dict) -> dict:
@@ -336,7 +341,8 @@ def report(recs: list[dict], hist: list[dict]) -> str:
             out.append(f"| {tn} | {fr(t.get('thr'))} {u if t.get('thr') else ''} | {fr(t.get('p50'))} | "
                        + " | ".join(cells) + " |")
         out.append("")
-        ref_rej = {" ".join(c.split(" ", 2)[:2]) for r in group if r["target"] == "ref" for c in r.get("rejected_calls", [])}
+        ref_recs = [r for r in group if r["target"] == "ref"] + [b for b in refs.values() if b]
+        ref_rej = {" ".join(c.split(" ", 2)[:2]) for r in ref_recs for c in r.get("rejected_calls", [])}
         rej = {r["target"]: [c for c in r.get("rejected_calls", []) if " ".join(c.split(" ", 2)[:2]) not in ref_rej]
                for r in group if r["target"] != "ref"}
         if any(rej.values()):
