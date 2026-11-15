@@ -1037,14 +1037,46 @@ struct Matcher<'a> {
     caps: Caps,
     steps: usize,
     limit: usize,
+    /// Stack address at the start of the match: the backtracking recursion
+    /// gives up (like an exhausted step budget) before it overflows.
+    stack_base: usize,
 }
 
 const STEP_LIMIT: usize = 5_000_000;
+
+/// Stack the recursion of one match may use.
+const STACK_BUDGET: usize = 1 << 20;
+
+fn stack_addr() -> usize {
+    let x = 0u8;
+    std::hint::black_box(&x) as *const u8 as usize
+}
+
+impl<'a> Matcher<'a> {
+    fn new(text: &'a [char], groups: usize, limit: usize) -> Self {
+        Matcher { text, caps: vec![None; groups + 1], steps: 0, limit, stack_base: stack_addr() }
+    }
+
+    /// Matches one char with a single-char node (None: not such a node).
+    fn single(&self, n: &Node, i: usize) -> Option<bool> {
+        let t = self.text;
+        Some(match n {
+            Node::Char(c, ci) => i < t.len() && chars_eq(t[i], *c, *ci),
+            Node::Any(dotall) => i < t.len() && (*dotall || !is_line_term(t[i])),
+            Node::Class(cls, ci, uni) => i < t.len() && class_match(cls, t[i], *ci, *uni),
+            _ => return None,
+        })
+    }
+}
 
 impl<'a> Matcher<'a> {
     fn m(&mut self, n: &Node, i: usize, k: &mut dyn FnMut(&mut Matcher<'a>, usize) -> bool) -> bool {
         self.steps += 1;
         if self.steps > self.limit {
+            return false;
+        }
+        if stack_addr().abs_diff(self.stack_base) > STACK_BUDGET {
+            self.steps = self.limit + 1;
             return false;
         }
         let t = self.text;
@@ -1189,6 +1221,35 @@ impl<'a> Matcher<'a> {
         i: usize,
         k: &mut dyn FnMut(&mut Matcher<'a>, usize) -> bool,
     ) -> bool {
+        if count == 0 && self.single(node, i).is_some() {
+            // a repeated single char: count the run, then backtrack over it
+            // without recursing per char
+            let mut n = 0u32;
+            while n < max {
+                self.steps += 1;
+                if self.steps > self.limit || self.single(node, i + n as usize) != Some(true) {
+                    break;
+                }
+                n += 1;
+            }
+            if n < min || self.steps > self.limit {
+                return false;
+            }
+            if greedy {
+                for c in (min..=n).rev() {
+                    if k(self, i + c as usize) {
+                        return true;
+                    }
+                }
+            } else {
+                for c in min..=n {
+                    if k(self, i + c as usize) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
         if greedy {
             if count < max {
                 let ok = self.m(node, i, &mut |s: &mut Matcher<'a>, j| {
@@ -1237,7 +1298,7 @@ impl JRegex {
     /// Finds the first match starting at or after `start`. Returns the
     /// capture groups (group 0 is the whole match).
     pub fn find_at(&self, text: &[char], start: usize) -> Option<Caps> {
-        let mut m = Matcher { text, caps: vec![None; self.groups + 1], steps: 0, limit: STEP_LIMIT };
+        let mut m = Matcher::new(text, self.groups, STEP_LIMIT);
         for s in start..=text.len() {
             for c in m.caps.iter_mut() {
                 *c = None;
@@ -1259,7 +1320,7 @@ impl JRegex {
 
     /// Whole-input match (`Matcher.matches()`).
     pub fn matches(&self, text: &[char]) -> bool {
-        let mut m = Matcher { text, caps: vec![None; self.groups + 1], steps: 0, limit: STEP_LIMIT };
+        let mut m = Matcher::new(text, self.groups, STEP_LIMIT);
         let n = text.len();
         m.m(&self.root, 0, &mut |_, j| j == n)
     }
@@ -1366,7 +1427,7 @@ impl JRegex {
     /// The first match at or after `start` (`Matcher.find(int)`), with at
     /// most `limit` matcher steps. Look-behind sees the text before `start`.
     pub fn find_from(&self, text: &[char], start: usize, limit: usize) -> Result<Option<Caps>, Exceeded> {
-        let mut m = Matcher { text, caps: vec![None; self.groups + 1], steps: 0, limit };
+        let mut m = Matcher::new(text, self.groups, limit);
         for s in start..=text.len() {
             for c in m.caps.iter_mut() {
                 *c = None;
@@ -1389,7 +1450,7 @@ impl JRegex {
     /// An anchored match at 0: the whole text (`matches`, `full`) or a
     /// prefix (`lookingAt`).
     pub fn match_start(&self, text: &[char], full: bool, limit: usize) -> Result<Option<Caps>, Exceeded> {
-        let mut m = Matcher { text, caps: vec![None; self.groups + 1], steps: 0, limit };
+        let mut m = Matcher::new(text, self.groups, limit);
         let n = text.len();
         let mut end = None;
         let ok = m.m(&self.root, 0, &mut |_, j| {
