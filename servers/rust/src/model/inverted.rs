@@ -169,7 +169,30 @@ impl FieldIndex {
 
     /// Appends `other`, built over documents numbered above every document of
     /// this field.
-    pub fn append(&mut self, other: FieldIndex) {
+    pub fn append(&mut self, mut other: FieldIndex) {
+        if self.postings.is_empty() && self.lens.iter().all(|l| *l == 0) && self.nums.is_empty() && self.fwd.is_empty() {
+            // nothing here yet: take the other side as it is
+            other.sig = std::mem::take(&mut self.sig);
+            other.nums_sorted = 0;
+            *self = other;
+            return;
+        }
+        if self.postings.len() < other.postings.len() && self.lens.len() <= other.lens.len() {
+            // merge the smaller map into the larger one, keeping doc order
+            std::mem::swap(&mut self.postings, &mut other.postings);
+            for (t, p) in other.postings.drain() {
+                match self.postings.get_mut(&t) {
+                    Some(mine) => {
+                        let mut merged = p;
+                        merged.extend_from_slice(mine);
+                        *mine = merged;
+                    }
+                    None => {
+                        self.postings.insert(t, p);
+                    }
+                }
+            }
+        }
         if self.lens.len() < other.lens.len() {
             self.lens.resize(other.lens.len(), 0);
         }

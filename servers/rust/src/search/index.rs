@@ -206,7 +206,9 @@ fn fill(idx: &Index, key: &str, f: &mut FieldIndex, docs: &[(u32, String)]) {
     }
     use rayon::prelude::*;
     let chunk = docs.len().div_ceil(threads * 2).max(min_chunk);
-    let parts: Vec<FieldIndex> = docs
+    // chunks in order, merged pairwise in parallel (each merge appends
+    // the postings of higher doc numbers)
+    let built = docs
         .par_chunks(chunk)
         .map(|part| {
             let ix = Indexer::new(idx, key);
@@ -218,10 +220,11 @@ fn fill(idx: &Index, key: &str, f: &mut FieldIndex, docs: &[(u32, String)]) {
             }
             local
         })
-        .collect();
-    for p in parts {
-        f.append(p);
-    }
+        .reduce(FieldIndex::default, |mut a, b| {
+            a.append(b);
+            a
+        });
+    f.append(built);
 }
 
 /// Builds the fields `keys` over the documents `docs`, several fields at once.
