@@ -111,7 +111,7 @@ impl<V> TrackedMap<V> {
 /// number (dead numbers included; check [`InvertedIndex::live`]).
 #[derive(Default)]
 pub struct FieldIndex {
-    pub postings: HashMap<String, Vec<(u32, u32)>>,
+    pub postings: hashbrown::HashMap<String, Vec<(u32, u32)>>,
     /// Per doc number: the number of tokens (0: no value).
     pub lens: Vec<u32>,
     /// Live documents with at least one token, and their total token count.
@@ -132,7 +132,7 @@ pub struct FieldIndex {
 
 impl FieldIndex {
     /// Adds the tokens of document `doc` (higher than every number added before).
-    pub fn add(&mut self, doc: u32, mut tokens: Vec<String>) {
+    pub fn add(&mut self, doc: u32, tokens: Vec<String>) {
         let len = tokens.len() as u32;
         let d = doc as usize;
         if self.lens.len() <= d {
@@ -144,24 +144,16 @@ impl FieldIndex {
         }
         self.docs_with += 1;
         self.sum_len += len as u64;
-        tokens.sort_unstable();
-        let mut it = tokens.into_iter();
-        let mut cur = it.next();
-        while let Some(t) = cur {
-            let mut n = 1u32;
-            loop {
-                match it.next() {
-                    Some(x) if x == t => n += 1,
-                    other => {
-                        cur = other;
-                        break;
-                    }
-                }
-            }
+        // documents come in ascending order: a term's last posting is this
+        // document's when the term occurred before in it
+        for t in tokens {
             match self.postings.get_mut(&t) {
-                Some(p) => p.push((doc, n)),
+                Some(p) => match p.last_mut() {
+                    Some(last) if last.0 == doc => last.1 += 1,
+                    _ => p.push((doc, 1)),
+                },
                 None => {
-                    self.postings.insert(t, vec![(doc, n)]);
+                    self.postings.insert(t, vec![(doc, 1)]);
                 }
             }
         }
@@ -336,7 +328,7 @@ impl FieldIndex {
 pub struct InvertedIndex {
     /// Doc number -> id (None: dead).
     pub ids: Vec<Option<String>>,
-    pub by_id: HashMap<String, u32>,
+    pub by_id: hashbrown::HashMap<String, u32>,
     pub dead: usize,
     /// Field key (kind prefix + field name) -> postings.
     pub fields: HashMap<String, FieldIndex>,

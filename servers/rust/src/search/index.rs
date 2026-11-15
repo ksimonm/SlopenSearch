@@ -236,7 +236,7 @@ fn fill_fields(idx: &Index, inv: &mut InvertedIndex, keys: &[String], docs: &[(u
             (k.clone(), f)
         })
         .collect();
-    if taken.len() > 1 && docs.len() >= 4096 {
+    if taken.len() > 1 && docs.len() >= 128 {
         use rayon::prelude::*;
         taken.par_iter_mut().for_each(|(k, f)| fill(idx, k, f, docs));
     } else {
