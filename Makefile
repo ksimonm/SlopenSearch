@@ -20,7 +20,8 @@ PYTEST := pytest -n $(JOBS) --dist loadfile --tb=$(TB)
 .DEFAULT_GOAL := help
 .PHONY: help go-up rust-up ref-up go-test rust-test ref-test go-score rust-score ref-score \
         ref-show ref-record \
-        go-dev rust-dev go-unit test go-logs rust-logs down bench bench-report
+        go-dev rust-dev go-unit test go-logs rust-logs down bench bench-report \
+        bench-osb-setup bench-quick bench-full bench-osb bench-history bench-scorecard
 
 help: ## list targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -81,6 +82,31 @@ bench: ## benchmark ref vs Go vs Rust in Docker: make bench SIZE=small|medium|la
 
 bench-report: ## Markdown report of a benchmark run: make bench-report DIR=bench/results/<timestamp>
 	$(BENCH_PY) bench/report.py $(DIR)
+
+OSB := bench/.venv-osb/bin/opensearch-benchmark
+WORKLOAD ?= geonames
+PRESET ?= test
+
+$(OSB):
+	sh bench/osb_setup.sh
+
+bench-osb-setup: ## (re)create bench/.venv-osb with opensearch-benchmark and the compat shim
+	sh bench/osb_setup.sh
+
+bench-quick: $(OSB) ## few minutes: Go+Rust, tiny harness + OSB geonames test mode, ratios vs cached ref
+	$(BENCH_PY) bench/levels.py quick $(ARGS)
+
+bench-full: $(OSB) ## hours: large harness + full OSB geonames and http_logs (ref when no baseline)
+	$(BENCH_PY) bench/levels.py full $(ARGS)
+
+bench-osb: $(OSB) ## one OSB workload: make bench-osb WORKLOAD=geonames PRESET=test|sample|full TARGETS=ref,go,rust
+	$(BENCH_PY) bench/osb.py --workload $(WORKLOAD) --preset $(PRESET) --targets $(TARGETS) $(ARGS)
+
+bench-scorecard: ## ratios vs ref for one run: make bench-scorecard DIR=bench/results/<timestamp>
+	$(BENCH_PY) bench/scorecard.py report $(DIR)
+
+bench-history: ## scorecard ratios commit by commit (bench/history.jsonl): ARGS="--target go"
+	$(BENCH_PY) bench/scorecard.py history $(ARGS)
 
 go-logs: ## follow Go server logs
 	$(COMPOSE) logs -f go

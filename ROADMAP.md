@@ -32,7 +32,9 @@ implemented.
 ## Performance
 
 The benchmark harness is in [bench/](bench/README.md); the first report, from a busy
-machine, is [docs/benchmarks.md](docs/benchmarks.md). Ordered by impact:
+machine, is [docs/benchmarks.md](docs/benchmarks.md); it now includes standard
+opensearch-benchmark workloads (geonames) and a ratio scorecard per commit
+(`make bench-quick`, `make bench-history`). Ordered by impact:
 
 - **Inverted index and doc values.** Both servers scan every document for every query:
   a `match` over 100k docs takes 12–16 s (reference: 11 ms), term/range filters are

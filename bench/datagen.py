@@ -48,7 +48,7 @@ TRUTH_K = 100
 
 
 def default_data_dir() -> Path:
-    return Path(os.environ.get("BENCH_DATA_DIR", "/tmp/agent-bench/data"))
+    return Path(os.environ.get("BENCH_DATA_DIR", Path.home() / ".cache" / "slopbench" / "data"))
 
 
 def _vocabulary(rng: np.random.Generator) -> list[str]:
