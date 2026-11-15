@@ -367,6 +367,17 @@ pub fn f32r(x: f64) -> f64 {
     if !x.is_finite() {
         return x;
     }
+    thread_local! {
+        // the last rounding: constant-score searches repeat one score
+        static LAST: std::cell::Cell<(u64, f64)> = const { std::cell::Cell::new((u64::MAX, 0.0)) };
+    }
+    let bits = x.to_bits();
+    let (b, r) = LAST.with(|c| c.get());
+    if b == bits {
+        return r;
+    }
     let f = x as f32;
-    format!("{}", f).parse::<f64>().unwrap_or(x)
+    let r = format!("{}", f).parse::<f64>().unwrap_or(x);
+    LAST.with(|c| c.set((bits, r)));
+    r
 }

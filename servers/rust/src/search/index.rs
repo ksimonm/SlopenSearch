@@ -459,6 +459,8 @@ pub fn all_docs_have_values(idx: &Index) -> Option<bool> {
 #[derive(Clone)]
 enum Plan {
     Empty,
+    /// Every document.
+    AllDocs,
     /// Documents with any of the terms.
     Any(String, Vec<String>),
     /// Documents with all of the terms.
@@ -483,7 +485,7 @@ impl Plan {
                 }
             }
             Plan::And(ps) | Plan::Or(ps) => ps.iter().for_each(|p| p.keys(out)),
-            Plan::Empty | Plan::Ids(_) => {}
+            Plan::Empty | Plan::AllDocs | Plan::Ids(_) => {}
         }
     }
 }
@@ -689,6 +691,12 @@ fn plan_node(ctx: &QueryCtx, q: &Map<String, Value>) -> Option<Plan> {
     let bm = body.as_object();
     match kind.as_str() {
         "match_none" => Some(Plan::Empty),
+        "match_all" => {
+            if !keys_subset(bm?, &["boost", "_name"]) {
+                return None;
+            }
+            Some(Plan::AllDocs)
+        }
         "match" => {
             let bm = bm?;
             if bm.len() != 1 {
@@ -999,6 +1007,7 @@ fn live_docs(inv: &InvertedIndex, p: &[(u32, u32)]) -> Vec<u32> {
 fn run(inv: &InvertedIndex, p: &Plan) -> Vec<u32> {
     match p {
         Plan::Empty => Vec::new(),
+        Plan::AllDocs => (0..inv.ids.len() as u32).filter(|d| inv.live(*d)).collect(),
         Plan::Any(k, terms) => {
             let f = &inv.fields[k];
             if terms.len() > 2 {
@@ -1103,6 +1112,10 @@ pub struct Candidates {
     pub results: Option<Vec<(bool, f64)>>,
     /// Whether an id occurs more than once in the index order.
     pub dup_ids: bool,
+    /// The doc number of each position.
+    pub docs: Vec<u32>,
+    /// The index content version the doc numbers belong to.
+    pub version: u64,
 }
 
 impl Candidates {
@@ -1263,6 +1276,8 @@ enum Direct {
     Term { key: String, term: String, boost: f64 },
     /// Matches the documents with any of the terms (constant score `boost`).
     Terms { key: String, terms: Vec<String>, boost: f64 },
+    /// Every document (constant score `boost`).
+    All { boost: f64 },
     Bool(Box<DirectBool>),
 }
 
@@ -1287,6 +1302,7 @@ impl Direct {
             Direct::Match(m) => add(m.key.clone()),
             Direct::Range(r) => add(field_key(Kind::Numeric, &r.field)),
             Direct::Term { key, .. } | Direct::Terms { key, .. } => add(key.clone()),
+            Direct::All { .. } => {}
             Direct::Bool(b) => {
                 for d in b.must.iter().chain(&b.filter).chain(&b.should).chain(&b.must_not) {
                     d.keys(out);
@@ -1314,6 +1330,10 @@ fn direct_query(ctx: &QueryCtx, q: &Map<String, Value>) -> Option<Direct> {
                 Some(Direct::Term { key, term: terms.pop()?, boost })
             }
         },
+        "match_all" => {
+            let boost = body.as_object()?.get("boost").and_then(to_f64).unwrap_or(1.0);
+            Some(Direct::All { boost })
+        }
         "terms" => {
             let (key, terms) = match p {
                 Plan::Any(k, t) => (k, t),
@@ -1359,6 +1379,7 @@ enum Prepared<'a> {
     Term { list: Option<&'a Vec<(u32, u32)>>, boost: f64 },
     /// Bit per doc number: has one of the terms.
     Terms { bits: Vec<u64>, boost: f64 },
+    All { boost: f64 },
     Bool { b: &'a DirectBool, must: Vec<Prepared<'a>>, filter: Vec<Prepared<'a>>, should: Vec<Prepared<'a>>, must_not: Vec<Prepared<'a>> },
 }
 
@@ -1399,6 +1420,7 @@ fn prepare<'a>(ctx: &QueryCtx, inv: &'a InvertedIndex, d: &'a Direct, preps: &mu
             }
             Prepared::Terms { bits, boost: *boost }
         }
+        Direct::All { boost } => Prepared::All { boost: *boost },
         Direct::Bool(b) => {
             let mut all = |v: &'a [Direct]| -> Option<Vec<Prepared<'a>>> { v.iter().map(|d| prepare(ctx, inv, d, preps)).collect() };
             let must = all(&b.must)?;
@@ -1448,6 +1470,7 @@ fn direct_result(idx: &Index, inv: &InvertedIndex, ctx: &QueryCtx, preps: &[&cra
                 (false, 0.0)
             }
         }
+        Prepared::All { boost } => (true, *boost),
         Prepared::Terms { bits, boost } => {
             if bits.get(doc as usize / 64).is_some_and(|w| w & (1 << (doc % 64)) != 0) {
                 (true, *boost)
@@ -1533,8 +1556,14 @@ fn direct_results(idx: &Index, inv: &InvertedIndex, d: &Direct, docs: &[u32]) ->
 /// The documents `query` can match, or None when every document has to be
 /// evaluated (unsupported query, or documents without doc values).
 pub fn candidates(idx: &Index, query: &Map<String, Value>, extra_values: bool) -> Option<Candidates> {
-    if disabled() || extra_values || query.is_empty() || idx.uuid.is_empty() {
+    if disabled() || extra_values || idx.uuid.is_empty() {
         return None;
+    }
+    if query.is_empty() {
+        // no query: every document, score 1 (`QueryCtx::eval`)
+        let mut all = Map::new();
+        all.insert("match_all".to_string(), Value::Object(Map::new()));
+        return candidates(idx, &all, extra_values);
     }
     let ctx = QueryCtx::new(idx, "", &NULL);
     // the query is borrowed for the whole call: node addresses are stable
@@ -1567,13 +1596,23 @@ pub fn candidates(idx: &Index, query: &Map<String, Value>, extra_values: bool) -
             .filter(|(_, d)| **d != NO_DOC && bits[**d as usize])
             .map(|(i, _)| i)
             .collect();
-        let mut results = direct.as_ref().map(|dm| match_results(inv, dm, positions.iter().map(|i| order[*i])));
+        let docs: Vec<u32> = positions.iter().map(|i| order[*i]).collect();
+        let mut results = direct.as_ref().map(|dm| match_results(inv, dm, docs.iter().copied()));
         if let Some(g) = &general {
-            let docs: Vec<u32> = positions.iter().map(|i| order[*i]).collect();
             results = direct_results(idx, inv, g, &docs);
         }
-        Some(Candidates { positions, results, dup_ids })
+        Some(Candidates { positions, results, dup_ids, docs, version: inv.version })
     })
+}
+
+/// Runs `f` on the index content version and the id of each doc number
+/// (None: dead), with the numbering up to date (None when index-backed
+/// execution is off).
+pub fn with_doc_ids<R>(idx: &Index, f: impl FnOnce(u64, &[Option<String>]) -> R) -> Option<R> {
+    if disabled() || idx.uuid.is_empty() {
+        return None;
+    }
+    Some(with_index(idx, &[], |inv| f(inv.version, &inv.ids)))
 }
 
 /// The metric column of a numeric/date field (see `Kind::Metric`) and the

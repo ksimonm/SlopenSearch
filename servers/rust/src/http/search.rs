@@ -260,6 +260,22 @@ pub fn run_search(
         && req.query.iter().all(|(k, _)| {
             matches!(k.as_str(), "pretty" | "human" | "error_trace" | "filter_path" | "from" | "size" | "track_total_hits" | "rest_total_hits_as_int" | "timeout" | "typed_keys")
         });
+    // a search sorted by fields (and `_doc`) where only the page is read:
+    // select the page from sort columns (see search::sort_topk)
+    let sort_topk_specs = if names.len() == 1
+        && bodym.contains_key("sort")
+        && bodym.keys().all(|k| matches!(k.as_str(), "query" | "from" | "size" | "_source" | "track_total_hits" | "timeout" | "sort" | "search_after"))
+        && req.query.iter().all(|(k, _)| {
+            matches!(k.as_str(), "pretty" | "human" | "error_trace" | "filter_path" | "from" | "size" | "track_total_hits" | "rest_total_hits_as_int" | "timeout" | "typed_keys" | "sort" | "scroll")
+        }) {
+        let body_text = String::from_utf8_lossy(&req.body);
+        let loc = crate::search::sort::SortLocation { body: &body_text, path: vec!["sort".to_string()] };
+        crate::search::sort::parse_sort_specs_at(bodym.get("sort"), Some(&loc))
+            .ok()
+            .filter(|sp| crate::search::sort_topk::eligible(sp))
+    } else {
+        None
+    };
     let mut topk_total: Option<usize> = None;
     for n in names {
         let idx = &store.indices[n];
@@ -304,6 +320,9 @@ pub fn run_search(
             }
         };
         let dup_ids = cands.as_ref().is_none_or(|c| c.dup_ids);
+        // every candidate (a doc number: it has doc values) has a source when
+        // both tables hold as many ids (no document lacks doc values here)
+        let docs_match = cands.is_some() && idx.docs.len() == idx.doc_values.len();
         let named_queries = crate::search::request::find_query_name(&qv).is_some();
         let topk = topk_body
             && !verify
@@ -312,34 +331,71 @@ pub fn run_search(
             && routing_tokens.is_none()
             && pref_shard.is_none()
             && cands.as_ref().is_some_and(|c| c.results.is_some());
+        let sort_topk = sort_topk_specs.is_some()
+            && !verify
+            && !dup_ids
+            && !named_queries
+            && routing_tokens.is_none()
+            && pref_shard.is_none()
+            && cands.as_ref().is_some_and(|c| c.results.is_some());
+        if sort_topk {
+            let c = cands.as_ref().unwrap();
+            let results = c.results.as_ref().unwrap();
+            let cand: Vec<(usize, u32)> = c
+                .positions
+                .iter()
+                .zip(&c.docs)
+                .zip(results)
+                .filter(|((&i, _), &(ok, _))| {
+                    ok && (docs_match || idx.docs.contains_key(&idx.order[i]))
+                        && (idx.pending.is_empty() || !idx.pending.contains_key(&idx.order[i]))
+                })
+                .map(|((&i, &d), _)| (i, d))
+                .collect();
+            let want = (from.max(0) + size.max(0)) as usize;
+            let after = bodym.get("search_after").and_then(|v| v.as_array()).map(|a| a.as_slice());
+            let specs = sort_topk_specs.as_deref().unwrap_or_default();
+            if let Some(sel) = crate::search::sort_topk::select(store, n, idx, c.version, &cand, specs, after, want) {
+                for i in sel.positions {
+                    let Ok(k) = c.positions.binary_search(&i) else { continue };
+                    let id = &idx.order[i];
+                    let Some(doc) = idx.docs.get(id) else { continue };
+                    let score = crate::mapping::knn::f32r(results[k].1);
+                    matched.push(MultiHit { idx_name: n.clone(), id: id.clone(), doc, score, pos: i as i64, named: Vec::new() });
+                }
+                topk_total = Some(sel.count);
+                continue;
+            }
+        }
         if topk {
             let c = cands.as_ref().unwrap();
             let results = c.results.as_ref().unwrap();
-            let mut best: Vec<(f64, usize)> = Vec::new();
+            // the best `from + size` by (score desc, position asc); positions
+            // come ascending, so an equal score never displaces a kept hit
+            let want = (from.max(0) + size.max(0)) as usize;
+            let mut heap: std::collections::BinaryHeap<crate::search::topk::Worse> = std::collections::BinaryHeap::with_capacity(want.min(1 << 16) + 1);
             let mut count = 0usize;
             let mut nan = false;
             for (k, &i) in c.positions.iter().enumerate() {
                 let (ok, score) = results[k];
-                if !ok || !idx.docs.contains_key(&idx.order[i]) || (!idx.pending.is_empty() && idx.pending.contains_key(&idx.order[i])) {
+                if !ok || (!docs_match && !idx.docs.contains_key(&idx.order[i])) || (!idx.pending.is_empty() && idx.pending.contains_key(&idx.order[i])) {
                     continue;
                 }
                 let score = crate::mapping::knn::f32r(score);
                 nan |= score.is_nan();
                 count += 1;
-                best.push((score, i));
+                if want == 0 {
+                    continue;
+                }
+                if heap.len() < want {
+                    heap.push(crate::search::topk::Worse(score, i));
+                } else if heap.peek().is_some_and(|w| score > w.0) {
+                    heap.pop();
+                    heap.push(crate::search::topk::Worse(score, i));
+                }
             }
             if !nan {
-                let want = (from.max(0) + size.max(0)) as usize;
-                let cmp = |a: &(f64, usize), b: &(f64, usize)| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal).then(a.1.cmp(&b.1));
-                if best.len() > want {
-                    if want == 0 {
-                        best.clear();
-                    } else {
-                        best.select_nth_unstable_by(want - 1, cmp);
-                        best.truncate(want);
-                    }
-                }
-                best.sort_by(cmp);
+                let best: Vec<(f64, usize)> = heap.into_sorted_vec().into_iter().map(|w| (w.0, w.1)).collect();
                 for (score, i) in best {
                     let id = &idx.order[i];
                     let Some(doc) = idx.docs.get(id) else { continue };
