@@ -54,11 +54,11 @@ fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<
         return vec![];
     }
     let base = resolve_field(field, prefix);
-    let rf = crate::search::eval::resolve_alias_field(idx, &base);
+    let rf = crate::mapping::resolve_alias_field(idx, &base);
     if is_under_nested_path(&rf) {
         return vec![];
     }
-    if crate::search::eval::mapping_field_def(idx, &rf).is_none() {
+    if crate::mapping::mapping_field_def(idx, &rf).is_none() {
         let dyn_off = match idx.mappings.get("dynamic") {
             Some(Value::Bool(false)) => true,
             Some(Value::String(s)) => s == "false" || s == "false_allow_templates",
@@ -103,7 +103,7 @@ fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<
             }
         }
     }
-    if let Some(def) = crate::search::eval::mapping_field_def(idx, &rf) {
+    if let Some(def) = crate::mapping::mapping_field_def(idx, &rf) {
         if def.get("type").and_then(|v| v.as_str()) == Some("join") {
             vals = vals
                 .into_iter()
@@ -245,9 +245,9 @@ fn nested_leaf_values(
     out: &mut Map<String, Value>,
 ) {
     let def = if prefix.is_empty() {
-        crate::search::eval::mapping_field_def(idx, p0).cloned()
+        crate::mapping::mapping_field_def(idx, p0).cloned()
     } else {
-        crate::search::eval::mapping_field_def(idx, &format!("{}.{}", p0, prefix)).cloned()
+        crate::mapping::mapping_field_def(idx, &format!("{}.{}", p0, prefix)).cloned()
     };
     let def = match def {
         Some(d) => d,
@@ -335,7 +335,7 @@ fn is_mapped_field(idx: &Index, field: &str, prefix: &str) -> bool {
 
 fn field_kind(idx: &Index, field: &str, prefix: &str) -> String {
     let resolved = resolve_field(field, prefix);
-    field_type(idx, &crate::search::eval::resolve_alias_field(idx, &resolved))
+    field_type(idx, &crate::mapping::resolve_alias_field(idx, &resolved))
 }
 
 #[derive(Clone, PartialEq)]
@@ -2047,7 +2047,7 @@ fn metric_num_type_check(idx: &Index, field: &str, prefix: &str, agg: &str) -> R
     if field.is_empty() {
         return Ok(());
     }
-    let resolved = crate::search::eval::resolve_alias_field(idx, &resolve_field(field, prefix));
+    let resolved = crate::mapping::resolve_alias_field(idx, &resolve_field(field, prefix));
     let ft = match idx.field_types.get(&resolved) {
         Some(f) => f.clone(),
         None => return Ok(()),
@@ -2473,7 +2473,7 @@ fn weighted_avg_type_check(idx: &Index, field: &str, prefix: &str) -> Result<(),
     if field.is_empty() {
         return Ok(());
     }
-    let resolved = crate::search::eval::resolve_alias_field(idx, &resolve_field(field, prefix));
+    let resolved = crate::mapping::resolve_alias_field(idx, &resolve_field(field, prefix));
     let ft = match idx.field_types.get(&resolved) {
         Some(f) => f.clone(),
         None => return Ok(()),
@@ -2614,7 +2614,7 @@ fn th_sort_value(idx: &Index, doc: &Value, id: &str, field: &str, desc: bool) ->
     }
     let f = field.to_string();
     let mut is_date = false;
-    if let Some(def) = crate::search::eval::mapping_field_def(idx, &f) {
+    if let Some(def) = crate::mapping::mapping_field_def(idx, &f) {
         let ft = def.get("type").and_then(|t| t.as_str()).unwrap_or("");
         is_date = ft == "date" || ft == "date_nanos";
     }
@@ -5214,7 +5214,7 @@ fn terms_agg(
         return Err(e);
     }
     if !field.is_empty() {
-        if let Some(def) = crate::search::eval::mapping_field_def(idx, &field) {
+        if let Some(def) = crate::mapping::mapping_field_def(idx, &field) {
             if def.get("type").and_then(|v| v.as_str()) == Some("search_as_you_type") {
                 let reason = format!(
                     "Fielddata is not supported on field [{}] of type [search_as_you_type]",
@@ -5262,9 +5262,9 @@ fn terms_agg(
         }
     }
     let field = map_str(t, "field");
-    let resolved = crate::search::eval::resolve_alias_field(idx, &resolve_field(&field, prefix));
+    let resolved = crate::mapping::resolve_alias_field(idx, &resolve_field(&field, prefix));
     if let Some(ft) = idx.field_types.get(&resolved) {
-        let fd = crate::search::eval::mapping_field_def(idx, &resolved)
+        let fd = crate::mapping::mapping_field_def(idx, &resolved)
             .and_then(|d| d.get("fielddata"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false);

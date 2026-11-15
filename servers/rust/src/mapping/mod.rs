@@ -2,11 +2,14 @@
 
 use serde_json::{json, Map, Value};
 
+pub(crate) mod completion;
 pub(crate) mod fields;
+pub(crate) mod geo;
 pub(crate) mod knn;
 pub(crate) mod knn_index;
 
 use crate::dates::parse_date_string;
+use crate::model::Index;
 
 pub fn valid_type(t: &str) -> bool {
     matches!(
@@ -101,4 +104,58 @@ pub fn merge_mapping(props: &mut Map<String, Value>, src: &Map<String, Value>) {
             }
         }
     }
+}
+
+pub fn resolve_alias_field(idx: &Index, field: &str) -> String {
+    let mut field = field.to_string();
+    for _ in 0..10 {
+        let def = match mapping_field_def(idx, &field) {
+            Some(d) => d,
+            None => return field,
+        };
+        if def.get("type").and_then(|t| t.as_str()) == Some("alias") {
+            let path = def.get("path").and_then(|p| p.as_str()).unwrap_or("");
+            if path.is_empty() || path == field {
+                return field;
+            }
+            field = path.to_string();
+            continue;
+        }
+        return field;
+    }
+    field
+}
+
+pub fn mapping_field_def<'a>(idx: &'a Index, field: &str) -> Option<&'a Map<String, Value>> {
+    if let Some(d) = idx
+        .mappings
+        .get("derived")
+        .and_then(|m| m.get(field))
+        .and_then(|d| d.as_object())
+    {
+        return Some(d);
+    }
+    let props = idx.mappings.get("properties")?.as_object()?;
+    let parts: Vec<&str> = field.split('.').collect();
+    let mut cur = props;
+    for i in 0..parts.len() {
+        if i + 1 < parts.len() {
+            let joined = parts[i..].join(".");
+            if let Some(def) = cur.get(&joined).and_then(|d| d.as_object()) {
+                return Some(def);
+            }
+        }
+        let def = cur.get(parts[i])?.as_object()?;
+        if i == parts.len() - 1 {
+            return Some(def);
+        }
+        let rest = parts[i + 1..].join(".");
+        if let Some(sub) = def.get("fields").and_then(|f| f.as_object()) {
+            if let Some(sd) = sub.get(&rest).and_then(|d| d.as_object()) {
+                return Some(sd);
+            }
+        }
+        cur = def.get("properties")?.as_object()?;
+    }
+    None
 }

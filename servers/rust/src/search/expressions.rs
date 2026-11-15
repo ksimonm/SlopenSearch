@@ -2,7 +2,8 @@
 // language. Everything is a double; variables are bound at link time to doc
 // values, _score, _value or numeric params. Port of servers/go/pl_expr.go.
 
-use crate::search::eval::{mapping_field_def, QueryCtx};
+use crate::search::eval::QueryCtx;
+use crate::mapping::mapping_field_def;
 use crate::search::script_ctx::ScriptErr;
 use crate::model::Index;
 use serde_json::{Map, Value};
@@ -354,15 +355,6 @@ pub fn compile(src: &str) -> Result<Expr, ExprErr> {
     }
     check_funcs(&root, src)?;
     Ok(Expr { root, vars: p.vars })
-}
-
-/// Contexts that the expression engine supports.
-pub fn supports_context(ctx: &str) -> bool {
-    matches!(
-        ctx,
-        "aggregation_selector" | "aggs" | "bucket_aggregation" | "field" | "filter" | "number_sort" | "score"
-            | "terms_set"
-    )
 }
 
 // ---- linking ----

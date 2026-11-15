@@ -29,7 +29,6 @@ pub mod tokenizers;
 use serde_json::{Map, Value};
 
 use crate::errors::ApiError;
-use crate::model::Index;
 
 use charfilters::{CharFilter, OffsetMap};
 use filters::Filter;
@@ -238,10 +237,6 @@ impl Ctx {
             max_ngram_diff: get("max_ngram_diff", 1),
             max_shingle_diff: get("max_shingle_diff", 3),
         }
-    }
-
-    pub fn for_index(idx: &Index) -> Ctx {
-        Ctx::for_settings(&idx.settings)
     }
 
     pub fn section(&self, kind: &str, name: &str) -> Option<&Map<String, Value>> {
@@ -625,14 +620,16 @@ pub fn analyzer_from_def(name: &str, def: &Map<String, Value>, ctx: &Ctx) -> ARe
 // ------------------------------------------------- indexing / search support
 
 /// Whether an analyzer name resolves in the index (or globally).
-pub fn analyzer_exists(idx: &Index, name: &str) -> bool {
-    let ctx = Ctx::for_index(idx);
+/// `settings` are the index settings.
+pub fn analyzer_exists(settings: &Map<String, Value>, name: &str) -> bool {
+    let ctx = Ctx::for_settings(settings);
     matches!(ctx.analyzer(name), Ok(Some(_)))
 }
 
 /// Applies a keyword field's normalizer to a value.
-pub fn normalize_keyword(idx: &Index, normalizer: &str, text: &str) -> Option<String> {
-    let ctx = Ctx::for_index(idx);
+/// `settings` are the index settings.
+pub fn normalize_keyword(settings: &Map<String, Value>, normalizer: &str, text: &str) -> Option<String> {
+    let ctx = Ctx::for_settings(settings);
     let n = ctx.normalizer(normalizer).ok()??;
     let s = n.run(text);
     Some(s.tokens.into_iter().map(|t| t.term).collect::<Vec<_>>().join(""))

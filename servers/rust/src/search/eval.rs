@@ -1,6 +1,7 @@
 // Query evaluation against indexed (doc values) field values.
 // Port of servers/go/eval.go.
 
+use crate::mapping::{mapping_field_def, resolve_alias_field};
 use crate::mapping::fields::{preview_value, value_scalar_string, IndexCtx};
 use crate::resp::format_number;
 use crate::analysis::basic::{analyze, analyze_with, asciifold, auto_fuzziness, english_stem, levenshtein, simple_lower};
@@ -137,60 +138,6 @@ pub fn array_values(v: &Value) -> Vec<Value> {
         Value::Array(a) => a.clone(),
         other => vec![other.clone()],
     }
-}
-
-pub fn resolve_alias_field(idx: &Index, field: &str) -> String {
-    let mut field = field.to_string();
-    for _ in 0..10 {
-        let def = match mapping_field_def(idx, &field) {
-            Some(d) => d,
-            None => return field,
-        };
-        if def.get("type").and_then(|t| t.as_str()) == Some("alias") {
-            let path = def.get("path").and_then(|p| p.as_str()).unwrap_or("");
-            if path.is_empty() || path == field {
-                return field;
-            }
-            field = path.to_string();
-            continue;
-        }
-        return field;
-    }
-    field
-}
-
-pub fn mapping_field_def<'a>(idx: &'a Index, field: &str) -> Option<&'a Map<String, Value>> {
-    if let Some(d) = idx
-        .mappings
-        .get("derived")
-        .and_then(|m| m.get(field))
-        .and_then(|d| d.as_object())
-    {
-        return Some(d);
-    }
-    let props = idx.mappings.get("properties")?.as_object()?;
-    let parts: Vec<&str> = field.split('.').collect();
-    let mut cur = props;
-    for i in 0..parts.len() {
-        if i + 1 < parts.len() {
-            let joined = parts[i..].join(".");
-            if let Some(def) = cur.get(&joined).and_then(|d| d.as_object()) {
-                return Some(def);
-            }
-        }
-        let def = cur.get(parts[i])?.as_object()?;
-        if i == parts.len() - 1 {
-            return Some(def);
-        }
-        let rest = parts[i + 1..].join(".");
-        if let Some(sub) = def.get("fields").and_then(|f| f.as_object()) {
-            if let Some(sd) = sub.get(&rest).and_then(|d| d.as_object()) {
-                return Some(sd);
-            }
-        }
-        cur = def.get("properties")?.as_object()?;
-    }
-    None
 }
 
 pub fn nested_ancestor(idx: &Index, field: &str) -> Option<String> {
@@ -3700,7 +3647,7 @@ fn validate_match_query(idx: &Index, field: &str, raw: &Value) -> Result<(), Api
                     | "indonesian" | "irish" | "italian" | "latvian" | "lithuanian"
                     | "norwegian" | "persian" | "portuguese" | "romanian" | "russian"
                     | "sorani" | "spanish" | "swedish" | "turkish" | "thai"
-            ) || crate::analysis::analyzer_exists(idx, a);
+            ) || crate::analysis::analyzer_exists(&idx.settings, a);
             if !known {
                 let reason = format!("[match] analyzer [{}] not found", a);
                 let mut e = ApiError::new("search_phase_execution_exception", "all shards failed", 400);

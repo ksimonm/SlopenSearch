@@ -56,7 +56,7 @@ fn search_analyzer_name(ctx: &Ctx, def: &Map<String, Value>) -> String {
 fn source_path(idx: &Index, field: &str) -> String {
     let mut path = field.to_string();
     while let Some((parent, child)) = path.rsplit_once('.') {
-        match crate::search::eval::mapping_field_def(idx, parent) {
+        match crate::mapping::mapping_field_def(idx, parent) {
             Some(pd) if pd.get("fields").and_then(|f| f.get(child)).is_some() => path = parent.to_string(),
             _ => break,
         }
@@ -73,7 +73,7 @@ fn has_terms(def: &Map<String, Value>) -> bool {
 
 fn field_stats(idx: &Index, field: &str, def: &Map<String, Value>) -> FieldStats {
     let mut st = FieldStats::default();
-    let ctx = Ctx::for_index(idx);
+    let ctx = Ctx::for_settings(&idx.settings);
     let keyword = def.get("type").and_then(|v| v.as_str()) == Some("keyword");
     let an = if keyword { None } else { ctx.analyzer(&index_analyzer_name(&ctx, def)).ok().flatten() };
     let src = source_path(idx, field);
@@ -682,7 +682,7 @@ fn build_generator(
     rwel: f64,
 ) -> Result<Option<Generator>, ApiError> {
     let field = spec.get("field").and_then(value_to_string).unwrap_or_default();
-    let Some(def) = crate::search::eval::mapping_field_def(idx, &field) else {
+    let Some(def) = crate::mapping::mapping_field_def(idx, &field) else {
         return Err(shard_err(&idx.name, &format!("no mapping found for field [{}]", field)));
     };
     if !has_terms(def) {
@@ -760,8 +760,8 @@ pub fn phrase_suggest(
             return Err(shard_err(&idx.name, "The required text option is missing"));
         };
         entry_text = text.clone();
-        let ctx = Ctx::for_index(idx);
-        let Some(def) = crate::search::eval::mapping_field_def(idx, &field).cloned() else {
+        let ctx = Ctx::for_settings(&idx.settings);
+        let Some(def) = crate::mapping::mapping_field_def(idx, &field).cloned() else {
             return Err(shard_err(&idx.name, &format!("no mapping found for field [{}]", field)));
         };
         let an_name = match body.get("analyzer").and_then(|v| v.as_str()) {

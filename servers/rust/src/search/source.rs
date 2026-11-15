@@ -1,7 +1,7 @@
 //! `_source` filtering and stored fields.
 
 use super::fetch::*;
-use crate::search::eval::mapping_field_def;
+use crate::mapping::mapping_field_def;
 use crate::model::Index;
 use serde_json::{json, Map, Value};
 

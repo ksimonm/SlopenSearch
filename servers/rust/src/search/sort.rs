@@ -1,9 +1,8 @@
 //! Sort specs, sort values of hits, `search_after`.
 
 use super::fetch::*;
-use crate::search::eval::{
-    integer_of, mapping_field_def, resolve_alias_field, QueryCtx,
-};
+use crate::search::eval::{integer_of, QueryCtx};
+use crate::mapping::{mapping_field_def, resolve_alias_field};
 use crate::errors::ApiError;
 use crate::jsonv::{field_value, to_f64, value_to_string};
 use crate::model::{Index, Store};
@@ -271,7 +270,7 @@ pub(crate) fn parse_sort_specs(raw: Option<&Value>) -> Result<Vec<SortSpec>, Api
 }
 
 pub(crate) fn sort_mapping_def(idx: &Index, field: &str) -> Option<Map<String, Value>> {
-    let field = &crate::search::eval::resolve_alias_field(idx, field);
+    let field = &crate::mapping::resolve_alias_field(idx, field);
     if let Some(d) = mapping_field_def(idx, field) {
         return Some(d.clone());
     }
@@ -720,13 +719,13 @@ pub(crate) fn compute_sort_cell(store: &Store, h: &MultiHit, sp: &SortSpec) -> R
     } else if nested_missing {
         vals = vec![];
     } else {
-        let sf = crate::search::eval::resolve_alias_field(idx, &sp.field);
+        let sf = crate::mapping::resolve_alias_field(idx, &sp.field);
         if let Some(dv) = idx.doc_values.get(&h.id).and_then(|m| m.get(&sf)) {
             vals = crate::search::eval::array_values(dv);
         }
     }
     if vals.is_empty() && sp.nested.is_none() && !nested_missing {
-        let sf = crate::search::eval::resolve_alias_field(idx, &sp.field);
+        let sf = crate::mapping::resolve_alias_field(idx, &sp.field);
         vals = source_sort_list(idx, &h.id, &sf);
     }
     if text_fielddata {

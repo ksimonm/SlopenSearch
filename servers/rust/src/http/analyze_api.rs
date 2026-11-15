@@ -286,7 +286,7 @@ fn analyze(idx: Option<&Index>, req: &Req) -> Result<Value, ApiError> {
     }
 
     let ctx = match idx {
-        Some(i) => Ctx::for_index(i),
+        Some(i) => Ctx::for_settings(&i.settings),
         None => Ctx::global(),
     };
     let limit = idx
@@ -411,7 +411,7 @@ fn analyze(idx: Option<&Index>, req: &Req) -> Result<Value, ApiError> {
 /// The analyzer `_analyze` uses for a field: its index analyzer (or
 /// normalizer for keywords), with the field's position_increment_gap.
 fn field_analyzer(idx: &Index, ctx: &Ctx, field: &str) -> Result<Analyzer, ApiError> {
-    let def = match crate::search::eval::mapping_field_def(idx, field) {
+    let def = match crate::mapping::mapping_field_def(idx, field) {
         Some(d) => d,
         None => {
             return Ok(match ctx.analyzer("default")? {

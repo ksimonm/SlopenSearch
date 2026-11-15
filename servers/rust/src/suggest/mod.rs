@@ -204,11 +204,11 @@ fn term_suggester(
 
     let mut entries: Vec<TermEntry> = vec![];
     for (ii, idx) in indices.iter().enumerate() {
-        let def = match crate::search::eval::mapping_field_def(idx, &field) {
+        let def = match crate::mapping::mapping_field_def(idx, &field) {
             Some(d) => d.clone(),
             None => return Err(term_shard_error(idx, &format!("no mapping found for field [{}]", field))),
         };
-        let ctx = crate::analysis::Ctx::for_index(idx);
+        let ctx = crate::analysis::Ctx::for_settings(&idx.settings);
         let index_an = def.get("analyzer").and_then(|v| v.as_str()).unwrap_or("standard").to_string();
         let search_an = body
             .get("analyzer")

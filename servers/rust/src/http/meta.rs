@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 pub fn route_server_endpoints(store: &mut Store, req: &Req, segs: &[String]) -> Option<Response> {
     match segs[0].as_str() {
         "_ingest" => {
-            return Some(crate::ingest::handle_ingest(store, req, &segs[1..]));
+            return Some(crate::http::ingest_api::handle_ingest(store, req, &segs[1..]));
         }
         "_scripts" => {
             return Some(crate::http::scripts::handle_scripts(store, req, &segs[1..]));

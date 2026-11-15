@@ -5,7 +5,8 @@
 use serde_json::{Map, Value};
 
 use crate::analysis::{Analyzer, Ctx, Token};
-use crate::search::eval::{mapping_field_def, resolve_alias_field, QueryCtx};
+use crate::search::eval::QueryCtx;
+use crate::mapping::{mapping_field_def, resolve_alias_field};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Side {
@@ -30,7 +31,7 @@ fn resolve(ctx: &Ctx, name: &str) -> FieldAnalyzer {
 
 impl<'a> QueryCtx<'a> {
     pub fn field_analyzer(&self, field: &str, opts: Option<&Map<String, Value>>, side: Side) -> FieldAnalyzer {
-        let ctx = Ctx::for_index(self.idx);
+        let ctx = Ctx::for_settings(&self.idx.settings);
         if side != Side::Index {
             if let Some(a) = opts.and_then(|m| m.get("analyzer")).and_then(|v| v.as_str()) {
                 if !a.is_empty() {

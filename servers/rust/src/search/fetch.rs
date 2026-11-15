@@ -2,9 +2,8 @@
 //! formatting, script fields, field types.
 
 use crate::dates::*;
-use crate::search::eval::{
-    integer_of, mapping_field_def, QueryCtx,
-};
+use crate::search::eval::{integer_of, QueryCtx};
+use crate::mapping::mapping_field_def;
 use crate::mapping::fields::doc_values_for;
 use crate::errors::ApiError;
 use crate::jsonv::{field_value, to_f64, value_to_string};
@@ -272,7 +271,7 @@ pub(crate) fn doc_values_output(
     spec: &FieldSpec,
     fallback_source: bool,
 ) -> Result<Option<Vec<Value>>, ApiError> {
-    let resolved = crate::search::eval::resolve_alias_field(idx, field);
+    let resolved = crate::mapping::resolve_alias_field(idx, field);
     let mut field = resolved.as_str();
     let mut join_suffix: Option<String> = None;
     if mapping_field_def(idx, field).is_none() {

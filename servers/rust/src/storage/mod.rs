@@ -161,7 +161,7 @@ fn recover(dir: &Path) -> Result<Store, String> {
         idx.ensure_field_types();
         crate::mapping::fields::recompute_all_doc_values(idx);
     }
-    crate::search::script_ctx::sync_stored(&store.scripts);
+    crate::scripting::sync_stored(&store.scripts);
     crate::model::reseed_uuid(crate::model::now_millis() as u64 ^ ((std::process::id() as u64) << 32));
 
     // start a new generation from the recovered state

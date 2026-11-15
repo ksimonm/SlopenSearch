@@ -2,7 +2,8 @@ use crate::errors::ApiError;
 use std::collections::HashSet;
 use super::fetch::query_text;
 use super::eval::as_query_list;
-use crate::search::eval::{mapping_field_def, single_entry, wildcard_regex};
+use crate::search::eval::{single_entry, wildcard_regex};
+use crate::mapping::mapping_field_def;
 use crate::analysis::basic::{analyze, simple_lower};
 use crate::jsonv::{field_value, value_to_string};
 use crate::model::Index;
@@ -757,7 +758,7 @@ pub fn render(
             names.push(pattern.clone());
         }
         for name in names {
-            let target = crate::search::eval::resolve_alias_field(idx, &name);
+            let target = crate::mapping::resolve_alias_field(idx, &name);
             let ftype = mapping_type(idx, &target).unwrap_or_default();
             if !is_text_type(&ftype) {
                 continue;

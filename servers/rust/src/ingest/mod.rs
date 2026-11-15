@@ -3,7 +3,6 @@ pub(crate) mod script;
 use crate::errors::{err_response, json_response, ApiError};
 use crate::resp::format_number;
 use crate::model::Store;
-use crate::http::Req;
 use axum::response::Response;
 use regex::Regex;
 use serde_json::{json, Map, Value};
@@ -165,7 +164,7 @@ fn cfg_strings(cfg: &Map<String, Value>, key: &str) -> Vec<String> {
     }
 }
 
-fn build_inline_pipeline(body: &Map<String, Value>, name: &str) -> Result<Map<String, Value>, ApiError> {
+pub(crate) fn build_inline_pipeline(body: &Map<String, Value>, name: &str) -> Result<Map<String, Value>, ApiError> {
     validate_pipeline_body(body, name)
 }
 
@@ -500,13 +499,13 @@ fn validate_processor(p: &Value, _top: bool) -> Result<(), ApiError> {
                 .field("processor_type", json!(typ)));
             }
             if lang != "painless" {
-                let spec = crate::search::script_ctx::ScriptSpec {
+                let spec = crate::scripting::ScriptSpec {
                     src: cfg_str(c, "source").unwrap_or("").to_string(),
                     lang: lang.to_string(),
                     id: None,
                     params: Map::new(),
                 };
-                crate::search::script_ctx::check_lang(&spec, "ingest")?;
+                crate::scripting::check_lang(&spec, "ingest")?;
             }
         }
         if let Some(src) = cfg_str(c, "source") {
@@ -561,130 +560,14 @@ fn attach_tag(e: &mut ApiError, cfg: &Map<String, Value>) {
     }
 }
 
-pub fn handle_ingest(store: &mut Store, req: &Req, segs: &[String]) -> Response {
-    if segs.is_empty() {
-        return json_response(404, json!({}));
-    }
-    if segs[0] == "processor" {
-        if segs.len() == 2 && req.method == "GET" {
-            if segs[1] == "grok" {
-                return json_response(200, grok_patterns_json());
-            }
-            if PROCESSOR_TYPES.contains(&segs[1].as_str()) || segs[1] == "grok" {
-                return json_response(200, json!({"type": segs[1]}));
-            }
-            return json_response(404, json!({}));
-        }
-        return json_response(404, json!({}));
-    }
-    if segs[0] != "pipeline" {
-        return json_response(404, json!({}));
-    }
-    match req.method.as_str() {
-        "GET" if segs.len() == 1 => {
-            let out: Map<String, Value> = store
-                .pipelines
-                .iter()
-                .map(|(k, v)| (k.clone(), Value::Object(v.clone())))
-                .collect();
-            json_response(200, Value::Object(out))
-        }
-        "GET" if segs.len() == 2 => {
-            let name = &segs[1];
-            if name.contains(',') || name.contains('*') || name.contains('?') {
-                let out: Map<String, Value> = store
-                    .pipelines
-                    .iter()
-                    .filter(|(k, _)| name.split(',').any(|part| glob_match(part, k)))
-                    .map(|(k, v)| (k.clone(), Value::Object(v.clone())))
-                    .collect();
-                return json_response(200, Value::Object(out));
-            }
-            match store.pipelines.get(name) {
-                Some(p) => json_response(200, json!({name: Value::Object(p.clone())})),
-                None => json_response(404, json!({})),
-            }
-        }
-        "PUT" | "POST" if segs.len() == 2 && segs[1] != "_simulate" => {
-            let body = match req.json_body() {
-                Ok(b) => b,
-                Err(e) => return err_response(e),
-            };
-            let name = &segs[1];
-            match build_inline_pipeline(&body, name) {
-                Ok(p) => {
-                    store.pipelines.insert(name.clone(), p);
-                    json_response(200, json!({"acknowledged": true}))
-                }
-                Err(e) => err_response(e),
-            }
-        }
-        "DELETE" if segs.len() == 2 => {
-            let name = &segs[1];
-            if store.pipelines.remove(name).is_some() {
-                json_response(200, json!({"acknowledged": true}))
-            } else {
-                err_response(ApiError::new(
-                    "resource_not_found_exception",
-                    &format!("pipeline [{}] is missing", name),
-                    404,
-                ))
-            }
-        }
-        "POST" if segs.len() == 2 && segs[1] == "_simulate" => {
-            let body = match req.json_body() {
-                Ok(b) => b,
-                Err(e) => return err_response(e),
-            };
-            simulate(store, req, body, None)
-        }
-        "POST" if segs.len() == 3 && segs[2] == "_simulate" => {
-            let body = match req.json_body() {
-                Ok(b) => b,
-                Err(e) => return err_response(e),
-            };
-            let name = segs[1].clone();
-            if !store.pipelines.contains_key(&name) {
-                return err_response(ApiError::bad(&format!(
-                    "pipeline [{}] does not exist",
-                    name
-                )));
-            }
-            simulate(store, req, body, Some(name))
-        }
-        _ => json_response(404, json!({})),
-    }
-}
-
-fn glob_match(pattern: &str, name: &str) -> bool {
-    if pattern == "*" || pattern == "_all" {
-        return true;
-    }
-    let mut p = String::new();
-    for c in pattern.chars() {
-        match c {
-            '*' => p.push_str(".*"),
-            '?' => p.push('.'),
-            _ => {
-                if ".+()|[]{}^$\\".contains(c) {
-                    p.push('\\');
-                }
-                p.push(c)
-            }
-        }
-    }
-    Regex::new(&format!("^{}$", p))
-        .map(|r| r.is_match(name))
-        .unwrap_or(false)
-}
-
-fn simulate(
+/// `_simulate` of a stored (`stored`) or inline pipeline; `verbose` is the
+/// request's `verbose` flag.
+pub(crate) fn simulate(
     store: &Store,
-    req: &Req,
+    verbose: bool,
     body: Map<String, Value>,
     stored: Option<String>,
 ) -> Response {
-    let verbose = req.bool_param("verbose");
     let (name, pipeline) = if let Some(n) = stored {
         let p = store.pipelines.get(&n).cloned().unwrap_or_default();
         (n, p)
@@ -4443,11 +4326,12 @@ pub fn prepare_search_pipeline(
     store: &Store,
     index: &str,
     body: &mut Map<String, Value>,
-    req: &Req,
+    verbose_pipeline: bool,
+    search_pipeline: Option<&str>,
 ) -> Result<SearchPipelineState, ApiError> {
     let mut state = SearchPipelineState::default();
-    state.verbose = req.bool_param("verbose_pipeline");
-    let param = req.param("search_pipeline").unwrap_or("").to_string();
+    state.verbose = verbose_pipeline;
+    let param = search_pipeline.unwrap_or("").to_string();
     let body_sp = body.remove("search_pipeline");
     let mut inline: Option<Map<String, Value>> = None;
     let mut name = String::new();
@@ -4754,57 +4638,4 @@ pub fn apply_search_response(
         }
     }
     Ok(())
-}
-
-pub fn handle_search_pipeline(store: &mut Store, req: &Req, segs: &[String]) -> Response {
-    match req.method.as_str() {
-        "GET" if segs.is_empty() => {
-            let out: Map<String, Value> = store
-                .search_pipelines
-                .iter()
-                .map(|(k, v)| (k.clone(), Value::Object(v.clone())))
-                .collect();
-            json_response(200, Value::Object(out))
-        }
-        "GET" if segs.len() == 1 => {
-            let name = &segs[0];
-            if name.contains(',') || name.contains('*') || name.contains('?') {
-                let out: Map<String, Value> = store
-                    .search_pipelines
-                    .iter()
-                    .filter(|(k, _)| name.split(',').any(|part| glob_match(part, k)))
-                    .map(|(k, v)| (k.clone(), Value::Object(v.clone())))
-                    .collect();
-                return json_response(200, Value::Object(out));
-            }
-            match store.search_pipelines.get(name) {
-                Some(p) => json_response(200, json!({name: Value::Object(p.clone())})),
-                None => json_response(404, json!({})),
-            }
-        }
-        "PUT" | "POST" if segs.len() == 1 => {
-            let body = match req.json_body() {
-                Ok(b) => b,
-                Err(e) => return err_response(e),
-            };
-            if let Err(e) = validate_search_pipeline(&body) {
-                return err_response(e);
-            }
-            store.search_pipelines.insert(segs[0].clone(), body);
-            json_response(200, json!({"acknowledged": true}))
-        }
-        "DELETE" if segs.len() == 1 => {
-            let name = &segs[0];
-            if store.search_pipelines.remove(name).is_some() {
-                json_response(200, json!({"acknowledged": true}))
-            } else {
-                err_response(ApiError::new(
-                    "resource_not_found_exception",
-                    &format!("pipeline [{}] is missing", name),
-                    404,
-                ))
-            }
-        }
-        _ => json_response(404, json!({})),
-    }
 }

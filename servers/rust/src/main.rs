@@ -18,6 +18,7 @@ mod model;
 mod mustache;
 mod painless;
 mod resp;
+mod scripting;
 mod search;
 mod settings;
 mod snowball;

@@ -8,10 +8,8 @@ use crate::model::routing_shard_of;
 use crate::aggs::eval_aggs_root;
 use crate::http::docs::{bm25_explanation, parse_q_param, search_alias_filter};
 use crate::errors::{err_response, json_response};
-use crate::search::eval::{
-    mapping_field_def,
-    wildcard_regex, QueryCtx,
-};
+use crate::search::eval::{wildcard_regex, QueryCtx};
+use crate::mapping::mapping_field_def;
 use crate::http::shared;
 use crate::errors::ApiError;
 use crate::jsonv::{field_value, to_f64};
@@ -2590,7 +2588,13 @@ pub fn handle_search(store: &mut Store, req: &Req, name: &str) -> Response {
         .cloned()
         .unwrap_or_else(|| name.to_string());
     let sp_state =
-        match crate::ingest::prepare_search_pipeline(store, &default_index, &mut body, req) {
+        match crate::ingest::prepare_search_pipeline(
+            store,
+            &default_index,
+            &mut body,
+            req.bool_param("verbose_pipeline"),
+            req.param("search_pipeline"),
+        ) {
             Ok(s) => s,
             Err(e) => return err_response(e),
         };

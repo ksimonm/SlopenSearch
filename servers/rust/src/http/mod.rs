@@ -12,6 +12,7 @@ pub(crate) mod compression;
 pub(crate) mod datastreams;
 pub(crate) mod docs;
 pub(crate) mod human;
+pub(crate) mod ingest_api;
 pub(crate) mod knn_api;
 pub(crate) mod maintenance;
 pub(crate) mod meta;
@@ -475,7 +476,7 @@ pub fn dispatch(store: &mut Store, req: &Req) -> axum::response::Response {
         "_analyze" => return analyze_api::handle_analyze(store, req, ""),
         "_search" => {
             if segs.len() >= 2 && segs[1] == "pipeline" {
-                return crate::ingest::handle_search_pipeline(store, req, &segs[2..]);
+                return ingest_api::handle_search_pipeline(store, req, &segs[2..]);
             }
             if segs.len() >= 2 && segs[1] == "scroll" {
                 return search::handle_scroll(store, req, &segs[2..]);

@@ -1672,7 +1672,7 @@ impl IndexCtx {
             | "ip_range" => self.parseRangeValue(path, typ, def, v),
             "geo_point" => self.parseGeoPoint(path, def, v),
             "geo_shape" => self.parseGeoShape(path, v),
-            "completion" => crate::suggest::completion::parse_completion(path, def, v, &self.doc),
+            "completion" => crate::mapping::completion::parse_completion(path, def, v, &self.doc),
             "rank_feature" => self.parseRankFeature(path, v),
             "rank_features" => self.parseRankFeatures(path, v),
             "constant_keyword_default" => Ok(Value::Null),
@@ -2183,7 +2183,7 @@ pub fn flat_object_root(idx: &Index, field: &str) -> Option<String> {
     let parts: Vec<&str> = field.split('.').collect();
     for i in (1..parts.len()).rev() {
         let prefix = parts[..i].join(".");
-        if let Some(def) = crate::search::eval::mapping_field_def(idx, &prefix) {
+        if let Some(def) = crate::mapping::mapping_field_def(idx, &prefix) {
             if def.get("type").and_then(|t| t.as_str()) == Some("flat_object") {
                 return Some(prefix);
             }
@@ -2463,7 +2463,7 @@ pub fn apply_normalizer_idx(idx: &Index, name: &str, s: &str) -> String {
     if name == "lowercase" {
         return simple_lower(s);
     }
-    if let Some(n) = crate::analysis::normalize_keyword(idx, name, s) {
+    if let Some(n) = crate::analysis::normalize_keyword(&idx.settings, name, s) {
         return n;
     }
     let key = format!("index.analysis.normalizer.{}.filter", name);
@@ -2507,7 +2507,7 @@ pub fn apply_normalizer_idx(idx: &Index, name: &str, s: &str) -> String {
 }
 
 pub fn normalize_query_value(idx: &Index, field: &str, v: &Value) -> Value {
-    let def = match crate::search::eval::mapping_field_def(idx, field) {
+    let def = match crate::mapping::mapping_field_def(idx, field) {
         Some(d) => d,
         None => return v.clone(),
     };
@@ -2786,7 +2786,7 @@ impl IndexCtx {
                     "GEOMETRYCOLLECTION",
                 ];
                 if known.iter().any(|k| up.starts_with(k)) {
-                    if crate::search::eval_extra::parse_wkt_shape(s).is_some() {
+                    if crate::mapping::geo::parse_wkt_shape(s).is_some() {
                         Ok(v.clone())
                     } else {
                         Err(err("parse_exception", "Invalid WKT format"))
@@ -3240,7 +3240,7 @@ impl IndexCtx {
         let props_clone = props.clone();
         let targets: Vec<String> = self.copy_targets.iter().cloned().collect();
         for t in targets {
-            let def = crate::search::eval::mapping_field_def(idx, &t).cloned().unwrap_or_default();
+            let def = crate::mapping::mapping_field_def(idx, &t).cloned().unwrap_or_default();
             let typ = def
                 .get("type")
                 .and_then(|v| v.as_str())

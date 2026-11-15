@@ -259,7 +259,7 @@ fn validate_percolator_fields(idx: &Index, q: &Map<String, Value>) -> Result<(),
     let mut fields = Vec::new();
     percolator_query_fields(q, &mut fields);
     for f in fields {
-        if crate::search::eval::mapping_field_def(idx, &f).is_none() {
+        if crate::mapping::mapping_field_def(idx, &f).is_none() {
             return Err(ApiError::new(
                 "mapper_parsing_exception",
                 "failed to parse",
@@ -927,7 +927,7 @@ fn stored_fields_json(idx: &Index, doc: &Value, spec: &str) -> Map<String, Value
     let mut out = Map::new();
     for name in paths {
         if let Some(v) = crate::jsonv::field_value(doc, &name) {
-            let fdef = crate::search::eval::mapping_field_def(idx, &name);
+            let fdef = crate::mapping::mapping_field_def(idx, &name);
             let ftype = fdef
                 .as_ref()
                 .and_then(|d| d.get("type"))
@@ -2123,7 +2123,13 @@ fn handle_count_visible(store: &mut Store, req: &Req, name: &str) -> Response {
         .cloned()
         .unwrap_or_else(|| name.to_string());
     if let Err(e) =
-        crate::ingest::prepare_search_pipeline(store, &default_index, &mut body, req)
+        crate::ingest::prepare_search_pipeline(
+            store,
+            &default_index,
+            &mut body,
+            req.bool_param("verbose_pipeline"),
+            req.param("search_pipeline"),
+        )
     {
         return err_response(e);
     }
@@ -3179,7 +3185,7 @@ struct TvToken {
 /// when it can build the analyzer.
 fn tv_tokens_idx(idx: &Index, analyzer: &str, text: &str) -> Vec<TvToken> {
     if !analyzer.to_ascii_lowercase().contains("keyword") {
-        let ctx = crate::analysis::Ctx::for_index(idx);
+        let ctx = crate::analysis::Ctx::for_settings(&idx.settings);
         if let Ok(Some(a)) = ctx.analyzer(analyzer) {
             return a
                 .run(text)
