@@ -300,7 +300,9 @@ async fn handle_plain(store: Shared, request: axum::extract::Request) -> axum::r
             let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
             // Runtime threads have a large stack (main.rs): scripts and nested
             // queries recurse.
+            crate::model::visibility::scheduled_refresh(&mut guard);
             let resp = dispatch(&mut guard, &req);
+            crate::model::visibility::scheduled_refresh(&mut guard);
             storage::after_request(&mut guard, &req.method, &req.path);
             resp
         };

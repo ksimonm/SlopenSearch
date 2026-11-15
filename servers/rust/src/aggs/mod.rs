@@ -169,6 +169,19 @@ fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<
                 }
             }
         }
+        if ftype == "float" || ftype == "half_float" {
+            // doc values hold the indexed precision: float32 / float16
+            vals = vals
+                .into_iter()
+                .map(|v| match to_f64(&v) {
+                    Some(f) if ftype == "float" => serde_json::json!(f as f32 as f64),
+                    Some(f) => serde_json::json!(crate::mapping::fields::float32_from_half(
+                        crate::mapping::fields::float32_half(f)
+                    ) as f64),
+                    None => v,
+                })
+                .collect();
+        }
         if ftype == "text"
             && def.get("fielddata").and_then(|v| v.as_bool()) == Some(true)
         {

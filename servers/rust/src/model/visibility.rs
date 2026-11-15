@@ -38,6 +38,59 @@ const CACHE_MAX: usize = 256;
 pub struct SearcherState {
     stale: HashMap<String, Stale>,
     cache: HashMap<String, (u64, Value)>,
+    /// When the oldest unrefreshed write was first seen (see [`scheduled_refresh`]).
+    pending_since: Option<std::time::Instant>,
+}
+
+/// `index.refresh_interval` in milliseconds; `None` when periodic refreshes are off.
+fn refresh_interval_ms(idx: &Index) -> Option<u64> {
+    let Some(v) = find_setting(&idx.settings, "refresh_interval") else { return Some(1000) };
+    let s = crate::settings::settings_value_string(v);
+    let s = s.trim();
+    if s.starts_with('-') {
+        return None;
+    }
+    let split = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    let n: u64 = s[..split].parse().ok()?;
+    let mult = match &s[split..] {
+        "nanos" => return Some(n / 1_000_000),
+        "micros" => return Some(n / 1000),
+        "ms" | "" => 1,
+        "s" => 1000,
+        "m" => 60_000,
+        "h" => 3_600_000,
+        "d" => 86_400_000,
+        _ => return Some(1000),
+    };
+    Some(n.saturating_mul(mult))
+}
+
+/// OpenSearch refreshes every shard each `index.refresh_interval` (1s by
+/// default; a search-idle shard refreshes before it is searched), so a write
+/// is searchable at the latest one interval after it happened. Called before
+/// and after every request: the first call that sees unrefreshed writes starts
+/// their clock, a later one past the interval refreshes the index.
+pub fn scheduled_refresh(store: &mut Store) {
+    let now = std::time::Instant::now();
+    for idx in store.indices.values_mut() {
+        if idx.pending.is_empty() {
+            idx.searcher.pending_since = None;
+            continue;
+        }
+        let Some(since) = idx.searcher.pending_since else {
+            idx.searcher.pending_since = Some(now);
+            continue;
+        };
+        if idx.closed {
+            continue;
+        }
+        if let Some(ms) = refresh_interval_ms(idx) {
+            if now.duration_since(since).as_millis() as u64 >= ms {
+                idx.pending.clear();
+                idx.searcher.pending_since = None;
+            }
+        }
+    }
 }
 
 /// Call before a write replaces the document `id` (before its doc values are
