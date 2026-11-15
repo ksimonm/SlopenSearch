@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"net"
 	"reflect"
+	"slopensearch/internal/javafmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -236,11 +237,7 @@ func rangeAggSpec(name, field string, spec map[string]any, docs []map[string]any
 }
 
 func rangeKeyNumber(f float64) string {
-	s := strconv.FormatFloat(f, 'f', -1, 64)
-	if !strings.Contains(s, ".") {
-		s += ".0"
-	}
-	return s
+	return javafmt.Double(f)
 }
 
 func parseRangeDateValue(v any, def map[string]any, format, tz string, now time.Time) (int64, bool) {
