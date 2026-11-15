@@ -704,7 +704,7 @@ fn start(shared: &Shared, req: &Req, segs: &[String], kind: Kind) -> Response {
     let shared = shared.clone();
     let spawned = std::thread::Builder::new()
         .name(format!("task-{}", id))
-        .stack_size(256 << 20)
+        .stack_size(crate::painless::api::DEEP_STACK_SIZE)
         .spawn(move || run(shared, id, job, q_param, max_docs_param));
     if spawned.is_err() {
         finish_error(id, &ApiError::new("exception", "failed to start task", 500));

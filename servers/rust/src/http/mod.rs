@@ -294,15 +294,9 @@ async fn handle_plain(store: Shared, request: axum::extract::Request) -> axum::r
         }
         let resp = {
             let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
-            // Requests that may compile or run scripts get a large stack: the
-            // Painless parser, checker and interpreter recurse.
-            let scripted = req.body.windows(6).any(|w| w == b"script") || !guard.pipelines.is_empty();
-            let resp = if scripted {
-                let store: &mut Store = &mut guard;
-                crate::painless::api::run_with_stack(|| dispatch(store, &req))
-            } else {
-                dispatch(&mut guard, &req)
-            };
+            // Runtime threads have a large stack (main.rs): scripts and nested
+            // queries recurse.
+            let resp = dispatch(&mut guard, &req);
             storage::after_request(&guard, &req.method, &req.path);
             resp
         };
