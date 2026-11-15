@@ -143,7 +143,7 @@ class OsbRun:
             now = time.time()
             if starts and now - starts[-1][1] > task_timeout:
                 killed = starts[-1][0]
-            elif not starts and now - t0 > task_timeout + 300:
+            elif not starts and now - t0 > self.a.startup_timeout:
                 killed = "(startup)"
             if killed:
                 print(f"    task {killed} exceeded {task_timeout:.0f}s: killing OSB", flush=True)
@@ -378,6 +378,8 @@ def main():
     ap.add_argument("--task-timeout", type=float, default=600, help="kill OSB when one query task runs longer (s)")
     ap.add_argument("--index-timeout", type=float, default=3600, help="limit for one setup task (s)")
     ap.add_argument("--request-timeout", type=float, default=120, help="OSB client timeout per request (s)")
+    ap.add_argument("--startup-timeout", type=float, default=3600,
+                    help="limit until OSB starts the first task (includes downloading and decompressing the corpus)")
     ap.add_argument("--drain-timeout", type=float, default=120,
                     help="after a killed task, wait this long for the server, then restart its container (s)")
     ap.add_argument("--chunk", type=int, default=6,
