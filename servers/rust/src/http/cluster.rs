@@ -906,7 +906,7 @@ pub fn handle_cluster_settings(store: &mut Store, req: &Req) -> Response {
             if flat {
                 body.insert(
                     "persistent".into(),
-                    Value::Object(store.cluster_persistent.clone()),
+                    Value::Object((*store.cluster_persistent).clone()),
                 );
                 body.insert(
                     "transient".into(),
@@ -1015,7 +1015,7 @@ fn handle_cluster_settings_put(store: &mut Store, req: &Req) -> Response {
     if flat {
         resp.insert(
             "persistent".into(),
-            Value::Object(store.cluster_persistent.clone()),
+            Value::Object((*store.cluster_persistent).clone()),
         );
         resp.insert(
             "transient".into(),

@@ -302,13 +302,13 @@ pub fn create_index_internal(
         name: name.to_string(),
         uuid: random_uuid(),
         creation_date: now_millis(),
-        mappings: Value::Object(merged_mappings),
-        settings: canonical,
+        mappings: Value::Object(merged_mappings).into(),
+        settings: canonical.into(),
         docs: std::collections::HashMap::new(),
         order: Vec::new(),
-        field_types: std::collections::HashMap::new(),
+        field_types: std::collections::HashMap::new().into(),
         closed: false,
-        aliases,
+        aliases: aliases.into(),
         mapping_version: 0,
         pending: std::collections::HashMap::new(),
         routing: std::collections::HashMap::new(),
@@ -322,7 +322,7 @@ pub fn create_index_internal(
         doc_values: std::collections::HashMap::new(),
         doc_ignored: std::collections::HashMap::new(),
         versions: std::collections::HashMap::new(),
-        seq_nos: std::collections::HashMap::new(),
+        seq_nos: Default::default(),
         raw_sources: std::collections::HashMap::new(),
         searcher: Default::default(),
     };
@@ -369,7 +369,7 @@ pub fn get_index_meta(store: &mut Store, req: &Req, spec: &str) -> Response {
         };
         let mut entry = Map::new();
         entry.insert("aliases".to_string(), Value::Object(alias_defs));
-        entry.insert("mappings".to_string(), idx.mappings.clone());
+        entry.insert("mappings".to_string(), (*idx.mappings).clone());
         entry.insert("settings".to_string(), settings);
         if !idx.data_stream.is_empty() {
             entry.insert("data_stream".to_string(), json!(idx.data_stream));

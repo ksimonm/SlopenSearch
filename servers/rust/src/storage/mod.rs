@@ -22,12 +22,16 @@
 //! cluster settings, scroll contexts and PITs. Documents that were not yet refreshed are
 //! searchable after a restart (recovery refreshes the shard).
 //!
-//! Changes are detected after each request by comparing the store with what was last
-//! persisted: global metadata and per-index metadata by their serialized form, and
-//! documents by their seq_no (every write assigns `seq_no = index_total` and bumps it).
-//! When the number of documents with a new seq_no does not account for the growth of
-//! `index_total` (writes that did not record a seq_no, or one id written twice in one
-//! request) the whole index is written out again, which is always correct.
+//! Changes are found after each request without comparing the whole store: the
+//! persisted containers of the store are `model::Tracked` and note every mutable
+//! access, scalars are compared with the copy taken when they were last persisted, and
+//! a marked container is compared with that copy (global metadata by its serialized
+//! form, index metadata by value) before anything is written. Documents are found
+//! through the write log of `model::SeqNos`: every write assigns
+//! `seq_no = index_total` and bumps it, and the log names the ids that got one. When
+//! the logged assignments do not account for the growth of `index_total` (a write that
+//! did not record a seq_no), or seq_nos were changed other than by a write, the whole
+//! index is written out again, which is always correct.
 
 use crate::model::{DataStreamInfo, Index, Store};
 use serde_json::{json, Map, Value};
@@ -43,10 +47,54 @@ const LOCK: &str = "rust.lock";
 /// Compact the journal into a new snapshot once it grows past this size.
 const COMPACT_BYTES: u64 = 64 << 20;
 
-struct Tracked {
+/// What was last persisted of one index.
+struct Persisted {
     uuid: String,
-    meta: String,
+    scalars: MetaScalars,
+    mappings: Value,
+    settings: Map<String, Value>,
+    aliases: Map<String, Value>,
+    field_types: HashMap<String, String>,
     counters: [i64; 4],
+}
+
+#[derive(PartialEq)]
+struct MetaScalars {
+    creation_date: i64,
+    closed: bool,
+    mapping_version: i64,
+    data_stream: String,
+    verified: bool,
+    force_merged: bool,
+}
+
+fn meta_scalars(idx: &Index) -> MetaScalars {
+    MetaScalars {
+        creation_date: idx.creation_date,
+        closed: idx.closed,
+        mapping_version: idx.mapping_version,
+        data_stream: idx.data_stream.clone(),
+        verified: idx.verified,
+        force_merged: idx.force_merged,
+    }
+}
+
+/// Takes the persisted copy of an index and resets its change marks.
+fn persisted(idx: &mut Index) -> Persisted {
+    idx.mappings.take_dirty();
+    idx.settings.take_dirty();
+    idx.aliases.take_dirty();
+    idx.field_types.take_dirty();
+    idx.seq_nos.take_log();
+    Persisted {
+        uuid: idx.uuid.clone(),
+        scalars: meta_scalars(idx),
+        mappings: (*idx.mappings).clone(),
+        settings: (*idx.settings).clone(),
+        aliases: (*idx.aliases).clone(),
+        field_types: (*idx.field_types).clone(),
+        counters: counters(idx),
+    }
 }
 
 struct Persister {
@@ -54,8 +102,10 @@ struct Persister {
     gen: u64,
     journal: File,
     journal_bytes: u64,
-    global: String,
-    indices: HashMap<String, Tracked>,
+    /// The scalar counters of the global metadata and the serialized rest.
+    global_scalars: [i64; 4],
+    global_rest: String,
+    indices: HashMap<String, Persisted>,
     /// Held (locked) for the lifetime of the process.
     _lock: File,
 }
@@ -172,11 +222,13 @@ fn recover(dir: &Path) -> Result<Store, String> {
         gen: gen + 1,
         journal,
         journal_bytes: 0,
-        global: String::new(),
+        global_scalars: [0; 4],
+        global_rest: String::new(),
         indices: HashMap::new(),
         _lock: lock,
     };
-    p.write_snapshot(&store)?;
+    p.write_snapshot(&mut store)?;
+    crate::model::tracked::enable_write_log();
     remove_stale_journals(dir, p.gen);
     let _ = PERSISTER.set(Mutex::new(p));
     Ok(store)
@@ -218,7 +270,7 @@ fn sync_dir(dir: &Path) {
 
 /// Records what the request changed. Called with the store lock held, before the
 /// response is sent.
-pub fn after_request(store: &Store, method: &str, path: &str) {
+pub fn after_request(store: &mut Store, method: &str, path: &str) {
     if method == "GET" || method == "HEAD" || read_only_post(path) {
         return;
     }
@@ -231,8 +283,15 @@ pub fn after_request(store: &Store, method: &str, path: &str) {
     if recs.is_empty() {
         return;
     }
-    let mut line = serde_json::to_vec(&json!({ "recs": recs })).unwrap_or_default();
-    line.push(b'\n');
+    let mut line = Vec::with_capacity(recs.iter().map(|r| r.len() + 1).sum::<usize>() + 12);
+    line.extend_from_slice(b"{\"recs\":[");
+    for (i, r) in recs.iter().enumerate() {
+        if i > 0 {
+            line.push(b',');
+        }
+        line.extend_from_slice(r.as_bytes());
+    }
+    line.extend_from_slice(b"]}\n");
     let res = p.journal.write_all(&line).and_then(|_| p.journal.sync_data());
     if let Err(e) = res {
         eprintln!("slopensearch (rust): journal write failed: {}", e);
@@ -261,13 +320,22 @@ fn read_only_post(path: &str) -> bool {
 }
 
 impl Persister {
-    fn diff(&mut self, store: &Store) -> Vec<Value> {
+    /// The journal records (serialized) of everything that changed since the last call.
+    fn diff(&mut self, store: &mut Store) -> Vec<String> {
         let mut recs = Vec::new();
-        let global = global_json(store);
-        let gs = global.to_string();
-        if gs != self.global {
-            recs.push(json!({"t": "global", "v": global}));
-            self.global = gs;
+        let scalars = global_scalars(store);
+        let maps_dirty = take_global_dirty(store);
+        let mut global_changed = scalars != self.global_scalars;
+        if maps_dirty {
+            let rest = global_rest(store);
+            if rest != self.global_rest {
+                self.global_rest = rest;
+                global_changed = true;
+            }
+        }
+        if global_changed {
+            self.global_scalars = scalars;
+            recs.push(format!("{{\"t\":\"global\",\"v\":{}}}", global_string(scalars, &self.global_rest)));
         }
         let gone: Vec<String> = self
             .indices
@@ -277,86 +345,105 @@ impl Persister {
             .collect();
         for name in gone {
             self.indices.remove(&name);
-            recs.push(json!({"t": "drop", "name": name}));
+            recs.push(json!({"t": "drop", "name": name}).to_string());
         }
-        let mut names: Vec<&String> = store.indices.keys().collect();
+        let mut names: Vec<String> = store.indices.keys().cloned().collect();
         names.sort();
         for name in names {
-            let idx = &store.indices[name];
-            let meta = index_meta(idx);
-            let ms = meta.to_string();
-            let counters = counters(idx);
-            let full = match self.indices.get(name) {
-                None => true,
-                Some(t) if t.uuid != idx.uuid => true,
-                Some(t) => {
-                    if t.meta != ms {
-                        recs.push(json!({"t": "meta", "name": name, "meta": meta}));
-                    }
-                    if t.counters[0] != idx.index_total {
-                        let wm = t.counters[0];
-                        let mut changed: Vec<(&String, i64)> = idx
-                            .seq_nos
-                            .iter()
-                            .filter(|(_, s)| **s >= wm)
-                            .map(|(id, s)| (id, *s))
-                            .collect();
-                        changed.sort_by_key(|(_, s)| *s);
-                        if (changed.len() as i64) < idx.index_total - wm {
-                            true
-                        } else {
-                            for (id, _) in changed {
-                                recs.push(doc_record(idx, id, true));
-                            }
-                            false
-                        }
-                    } else {
-                        false
-                    }
+            let idx = store.indices.get_mut(&name).unwrap();
+            let t = match self.indices.get_mut(&name) {
+                Some(t) if t.uuid == idx.uuid => t,
+                _ => {
+                    recs.push(full_index(idx, true).to_string());
+                    self.indices.insert(name, persisted(idx));
+                    continue;
                 }
             };
-            if full {
-                recs.push(full_index(idx, true));
-            } else if self.indices[name].counters != counters {
-                recs.push(json!({"t": "counters", "name": name, "v": counters.to_vec()}));
+            let mut meta_changed = false;
+            let scalars = meta_scalars(idx);
+            if scalars != t.scalars {
+                t.scalars = scalars;
+                meta_changed = true;
             }
-            self.indices.insert(
-                name.clone(),
-                Tracked { uuid: idx.uuid.clone(), meta: ms, counters },
-            );
+            if idx.mappings.take_dirty() && *idx.mappings != t.mappings {
+                t.mappings = (*idx.mappings).clone();
+                meta_changed = true;
+            }
+            if idx.settings.take_dirty() && *idx.settings != t.settings {
+                t.settings = (*idx.settings).clone();
+                meta_changed = true;
+            }
+            if idx.aliases.take_dirty() && *idx.aliases != t.aliases {
+                t.aliases = (*idx.aliases).clone();
+                meta_changed = true;
+            }
+            if idx.field_types.take_dirty() && *idx.field_types != t.field_types {
+                t.field_types = (*idx.field_types).clone();
+                meta_changed = true;
+            }
+            if meta_changed {
+                recs.push(json!({"t": "meta", "name": name, "meta": index_meta(idx)}).to_string());
+            }
+            let (log, untracked) = idx.seq_nos.take_log();
+            let wm = t.counters[0];
+            let mut full = untracked;
+            if !full && wm != idx.index_total {
+                let fresh = log.iter().filter(|(_, s)| *s >= wm).count() as i64;
+                if fresh < idx.index_total - wm {
+                    full = true;
+                } else {
+                    let mut seen = HashSet::new();
+                    let mut changed: Vec<(&String, i64)> = log
+                        .iter()
+                        .filter(|(id, s)| *s >= wm && seen.insert(id))
+                        .map(|(id, _)| (id, idx.seq_nos.get(id).copied().unwrap_or(-1)))
+                        .collect();
+                    changed.sort_by_key(|(_, s)| *s);
+                    for (id, _) in changed {
+                        recs.push(doc_record(idx, id, true).to_string());
+                    }
+                }
+            }
+            let counters = counters(idx);
+            if full {
+                recs.push(full_index(idx, true).to_string());
+                self.indices.insert(name, persisted(idx));
+            } else if t.counters != counters {
+                recs.push(json!({"t": "counters", "name": name, "v": counters.to_vec()}).to_string());
+                t.counters = counters;
+            }
         }
         recs
     }
 
-    fn write_snapshot(&mut self, store: &Store) -> Result<(), String> {
+    fn write_snapshot(&mut self, store: &mut Store) -> Result<(), String> {
         let mut names: Vec<&String> = store.indices.keys().collect();
         names.sort();
         let indices: Vec<Value> = names.iter().map(|n| full_index(&store.indices[*n], false)).collect();
-        let snap = json!({"gen": self.gen, "global": global_json(store), "indices": indices});
+        let scalars = global_scalars(store);
+        let rest = global_rest(store);
+        let snap = format!(
+            "{{\"gen\":{},\"global\":{},\"indices\":{}}}",
+            self.gen,
+            global_string(scalars, &rest),
+            Value::Array(indices)
+        );
         let tmp = self.dir.join(format!("{}.tmp", SNAPSHOT));
         {
             let mut f = File::create(&tmp).map_err(|e| e.to_string())?;
-            f.write_all(&serde_json::to_vec(&snap).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?;
+            f.write_all(snap.as_bytes()).map_err(|e| e.to_string())?;
             f.sync_all().map_err(|e| e.to_string())?;
         }
         fs::rename(&tmp, self.dir.join(SNAPSHOT)).map_err(|e| e.to_string())?;
         sync_dir(&self.dir);
-        self.global = global_json(store).to_string();
-        self.indices = store
-            .indices
-            .iter()
-            .map(|(n, idx)| {
-                (
-                    n.clone(),
-                    Tracked { uuid: idx.uuid.clone(), meta: index_meta(idx).to_string(), counters: counters(idx) },
-                )
-            })
-            .collect();
+        take_global_dirty(store);
+        self.global_scalars = scalars;
+        self.global_rest = rest;
+        self.indices = store.indices.iter_mut().map(|(n, idx)| (n.clone(), persisted(idx))).collect();
         Ok(())
     }
 
-    fn compact(&mut self, store: &Store) -> Result<(), String> {
+    fn compact(&mut self, store: &mut Store) -> Result<(), String> {
         let next = self.gen + 1;
         let journal = create_journal(&self.dir, next)?;
         let prev = self.gen;
@@ -385,15 +472,40 @@ fn sorted_obj<T, F: Fn(&T) -> Value>(m: &HashMap<String, T>, f: F) -> Value {
     Value::Object(out)
 }
 
-fn global_json(store: &Store) -> Value {
+/// Whether any global metadata container was mutably accessed; resets the marks.
+fn take_global_dirty(store: &mut Store) -> bool {
+    [
+        store.cluster_persistent.take_dirty(),
+        store.legacy_templates.take_dirty(),
+        store.composable_templates.take_dirty(),
+        store.component_templates.take_dirty(),
+        store.data_streams.take_dirty(),
+        store.pipelines.take_dirty(),
+        store.search_pipelines.take_dirty(),
+        store.scripts.take_dirty(),
+    ]
+    .contains(&true)
+}
+
+fn global_scalars(store: &Store) -> [i64; 4] {
+    [store.counter, store.scroll_counter as i64, store.pit_counter as i64, store.state_version]
+}
+
+/// The global metadata record: `{"counter":..,"scroll_counter":..,"pit_counter":..,
+/// "state_version":..,` followed by `rest` (see `global_rest`).
+fn global_string(scalars: [i64; 4], rest: &str) -> String {
+    format!(
+        "{{\"counter\":{},\"scroll_counter\":{},\"pit_counter\":{},\"state_version\":{},{}",
+        scalars[0], scalars[1] as u64, scalars[2] as u64, scalars[3], rest
+    )
+}
+
+/// The global metadata after its scalar counters, serialized, without the opening brace.
+fn global_rest(store: &Store) -> String {
     let obj = |m: &Map<String, Value>| Value::Object(m.clone());
     let mut streams: Vec<&DataStreamInfo> = store.data_streams.values().collect();
     streams.sort_by(|a, b| a.name.cmp(&b.name));
-    json!({
-        "counter": store.counter,
-        "scroll_counter": store.scroll_counter,
-        "pit_counter": store.pit_counter,
-        "state_version": store.state_version,
+    let v = json!({
         "cluster_persistent": store.cluster_persistent,
         "legacy_templates": sorted_obj(&store.legacy_templates, obj),
         "composable_templates": sorted_obj(&store.composable_templates, obj),
@@ -408,7 +520,10 @@ fn global_json(store: &Store) -> Value {
         "pipelines": sorted_obj(&store.pipelines, obj),
         "search_pipelines": sorted_obj(&store.search_pipelines, obj),
         "scripts": sorted_obj(&store.scripts, obj),
-    })
+    });
+    let mut s = v.to_string();
+    s.remove(0);
+    s
 }
 
 fn index_meta(idx: &Index) -> Value {
@@ -545,13 +660,13 @@ fn apply_global(store: &mut Store, g: &Value) {
     store.scroll_counter = g.get("scroll_counter").and_then(|v| v.as_u64()).unwrap_or(0);
     store.pit_counter = g.get("pit_counter").and_then(|v| v.as_u64()).unwrap_or(0);
     store.state_version = g.get("state_version").and_then(|v| v.as_i64()).unwrap_or(1);
-    store.cluster_persistent = map_of(g, "cluster_persistent");
-    store.legacy_templates = obj_hash(g, "legacy_templates");
-    store.composable_templates = obj_hash(g, "composable_templates");
-    store.component_templates = obj_hash(g, "component_templates");
-    store.pipelines = obj_hash(g, "pipelines");
-    store.search_pipelines = obj_hash(g, "search_pipelines");
-    store.scripts = obj_hash(g, "scripts");
+    *store.cluster_persistent = map_of(g, "cluster_persistent");
+    *store.legacy_templates = obj_hash(g, "legacy_templates");
+    *store.composable_templates = obj_hash(g, "composable_templates");
+    *store.component_templates = obj_hash(g, "component_templates");
+    *store.pipelines = obj_hash(g, "pipelines");
+    *store.search_pipelines = obj_hash(g, "search_pipelines");
+    *store.scripts = obj_hash(g, "scripts");
     store.data_streams.clear();
     for d in g.get("data_streams").and_then(|v| v.as_array()).into_iter().flatten() {
         let info = DataStreamInfo {
@@ -572,14 +687,14 @@ fn apply_global(store: &mut Store, g: &Value) {
 fn apply_meta(idx: &mut Index, m: &Value) {
     idx.uuid = str_of(m, "uuid");
     idx.creation_date = m.get("creation_date").and_then(|v| v.as_i64()).unwrap_or(0);
-    idx.mappings = m.get("mappings").cloned().unwrap_or_else(|| Value::Object(Map::new()));
-    idx.settings = map_of(m, "settings");
-    idx.field_types = map_of(m, "field_types")
+    *idx.mappings = m.get("mappings").cloned().unwrap_or_else(|| Value::Object(Map::new()));
+    *idx.settings = map_of(m, "settings");
+    *idx.field_types = map_of(m, "field_types")
         .into_iter()
         .map(|(k, v)| (k, v.as_str().unwrap_or("").to_string()))
         .collect();
     idx.closed = m.get("closed").and_then(|v| v.as_bool()).unwrap_or(false);
-    idx.aliases = map_of(m, "aliases");
+    *idx.aliases = map_of(m, "aliases");
     idx.mapping_version = m.get("mapping_version").and_then(|v| v.as_i64()).unwrap_or(1);
     idx.data_stream = str_of(m, "data_stream");
     idx.verified = m.get("verified").and_then(|v| v.as_bool()).unwrap_or(false);

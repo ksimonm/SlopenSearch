@@ -245,9 +245,9 @@ pub fn handle_rollover(store: &mut Store, req: &Req, target: &str, new_index_nam
         let mut body = Map::new();
         body.insert(
             "settings".to_string(),
-            Value::Object(old_idx.settings.clone()),
+            Value::Object((*old_idx.settings).clone()),
         );
-        body.insert("mappings".to_string(), old_idx.mappings.clone());
+        body.insert("mappings".to_string(), (*old_idx.mappings).clone());
         if let Err(e) = crate::http::admin::create_index_internal(store, &new_name, &body, false) {
             return err_response(e);
         }

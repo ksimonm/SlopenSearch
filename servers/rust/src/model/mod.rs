@@ -4,9 +4,11 @@ use std::collections::HashMap;
 use crate::settings::{find_setting, setting_int, settings_value_string};
 
 pub(crate) mod contexts;
+pub(crate) mod tracked;
 pub(crate) mod visibility;
 
 pub(crate) use contexts::{PitState, ScrollState};
+pub(crate) use tracked::{SeqNos, Tracked};
 
 pub const VERSION_CREATED: &str = "137307827";
 pub const CLUSTER_NAME: &str = "opensearch";
@@ -21,13 +23,13 @@ pub struct Index {
     pub name: String,
     pub uuid: String,
     pub creation_date: i64,
-    pub mappings: Value,
-    pub settings: Map<String, Value>,
+    pub mappings: Tracked<Value>,
+    pub settings: Tracked<Map<String, Value>>,
     pub docs: HashMap<String, Value>,
     pub order: Vec<String>,
-    pub field_types: HashMap<String, String>,
+    pub field_types: Tracked<HashMap<String, String>>,
     pub closed: bool,
-    pub aliases: Map<String, Value>,
+    pub aliases: Tracked<Map<String, Value>>,
     pub mapping_version: i64,
     pub pending: HashMap<String, Value>,
     pub routing: HashMap<String, String>,
@@ -41,7 +43,7 @@ pub struct Index {
     pub doc_values: HashMap<String, Map<String, Value>>,
     pub doc_ignored: HashMap<String, Vec<String>>,
     pub versions: HashMap<String, i64>,
-    pub seq_nos: HashMap<String, i64>,
+    pub seq_nos: SeqNos,
     pub raw_sources: HashMap<String, Vec<u8>>,
     /// Last refreshed versions of updated documents, request cache.
     pub searcher: visibility::SearcherState,
@@ -55,13 +57,13 @@ impl Index {
             name: name.to_string(),
             uuid: String::new(),
             creation_date: 0,
-            mappings: Value::Object(Map::new()),
-            settings: Map::new(),
+            mappings: Value::Object(Map::new()).into(),
+            settings: Map::new().into(),
             docs: HashMap::new(),
             order: Vec::new(),
-            field_types: HashMap::new(),
+            field_types: HashMap::new().into(),
             closed: false,
-            aliases: Map::new(),
+            aliases: Map::new().into(),
             mapping_version: 0,
             pending: HashMap::new(),
             routing: HashMap::new(),
@@ -75,7 +77,7 @@ impl Index {
             doc_values: HashMap::new(),
             doc_ignored: HashMap::new(),
             versions: HashMap::new(),
-            seq_nos: HashMap::new(),
+            seq_nos: SeqNos::default(),
             raw_sources: HashMap::new(),
             searcher: Default::default(),
         }
@@ -120,7 +122,7 @@ impl Index {
     pub fn ensure_field_types(&mut self) {
         let mut fresh = HashMap::new();
         build_field_types(&self.mappings, "", &mut fresh);
-        self.field_types = fresh;
+        *self.field_types = fresh;
     }
 }
 
@@ -137,15 +139,15 @@ pub struct Store {
     pub indices: HashMap<String, Index>,
     pub counter: i64,
     pub state_version: i64,
-    pub cluster_persistent: Map<String, Value>,
+    pub cluster_persistent: Tracked<Map<String, Value>>,
     pub cluster_transient: Map<String, Value>,
-    pub legacy_templates: HashMap<String, Map<String, Value>>,
-    pub composable_templates: HashMap<String, Map<String, Value>>,
-    pub component_templates: HashMap<String, Map<String, Value>>,
-    pub data_streams: HashMap<String, DataStreamInfo>,
-    pub pipelines: HashMap<String, Map<String, Value>>,
-    pub search_pipelines: HashMap<String, Map<String, Value>>,
-    pub scripts: HashMap<String, Map<String, Value>>,
+    pub legacy_templates: Tracked<HashMap<String, Map<String, Value>>>,
+    pub composable_templates: Tracked<HashMap<String, Map<String, Value>>>,
+    pub component_templates: Tracked<HashMap<String, Map<String, Value>>>,
+    pub data_streams: Tracked<HashMap<String, DataStreamInfo>>,
+    pub pipelines: Tracked<HashMap<String, Map<String, Value>>>,
+    pub search_pipelines: Tracked<HashMap<String, Map<String, Value>>>,
+    pub scripts: Tracked<HashMap<String, Map<String, Value>>>,
     pub scrolls: HashMap<String, ScrollState>,
     pub scroll_counter: u64,
     pub pits: HashMap<String, PitState>,
@@ -158,15 +160,15 @@ impl Store {
             indices: HashMap::new(),
             counter: 0,
             state_version: 1,
-            cluster_persistent: Map::new(),
+            cluster_persistent: Map::new().into(),
             cluster_transient: Map::new(),
-            legacy_templates: HashMap::new(),
-            composable_templates: HashMap::new(),
-            component_templates: HashMap::new(),
-            data_streams: HashMap::new(),
-            pipelines: HashMap::new(),
-            search_pipelines: HashMap::new(),
-            scripts: HashMap::new(),
+            legacy_templates: HashMap::new().into(),
+            composable_templates: HashMap::new().into(),
+            component_templates: HashMap::new().into(),
+            data_streams: HashMap::new().into(),
+            pipelines: HashMap::new().into(),
+            search_pipelines: HashMap::new().into(),
+            scripts: HashMap::new().into(),
             scrolls: HashMap::new(),
             scroll_counter: 0,
             pits: HashMap::new(),

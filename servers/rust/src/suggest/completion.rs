@@ -356,16 +356,16 @@ fn parse_query_contexts(maps: &[CtxMapping], q: &Map<String, Value>, index: &str
                     };
                     let Some((lat, lon)) = point else { continue };
                     let min_p = cm.precision.min(precision);
-                    let gh = geohash_encode(lat, lon, min_p);
+                    let gh = crate::geohash::encode(lat, lon, min_p);
                     let mut locs = vec![gh.clone()];
                     if neighbours.is_empty() && gh.len() == cm.precision {
-                        locs.extend(geohash_neighbors(&gh));
+                        locs.extend(crate::geohash::neighbors(&gh));
                     } else {
                         for n in neighbours {
                             if n < gh.len() {
                                 let t: String = gh.chars().take(n).collect();
                                 locs.push(t.clone());
-                                locs.extend(geohash_neighbors(&t));
+                                locs.extend(crate::geohash::neighbors(&t));
                             }
                         }
                     }

@@ -645,6 +645,7 @@ dependencies = [
  "jiff",
  "md-5",
  "regex",
+ "serde",
  "serde_json",
  "sha1",
  "sha2",

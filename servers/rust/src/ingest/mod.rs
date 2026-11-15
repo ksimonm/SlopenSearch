@@ -300,6 +300,7 @@ fn validate_processor(p: &Value, _top: bool) -> Result<(), ApiError> {
             return Err(e);
         }
     }
+    check_templates(typ, c)?;
     if typ == "remove_by_pattern" {
         let has_fp = c.contains_key("field_pattern");
         let has_ex = c.contains_key("exclude_field_pattern");
@@ -918,7 +919,14 @@ fn set_failure_meta(
         .entry("_ingest".to_string())
         .or_insert_with(|| Value::Object(Map::new()));
     if let Value::Object(m) = ing {
-        let message = if e.typ == "script_exception" {
+        let message = if e.typ == "mustache_exception" {
+            // the message of the innermost cause (a failed template lookup)
+            let mut inner = e;
+            while let Some(c) = inner.caused_by.as_deref() {
+                inner = c;
+            }
+            inner.reason.clone()
+        } else if e.typ == "script_exception" {
             e.caused_by
                 .as_ref()
                 .map(|c| c.reason.clone())
@@ -993,33 +1001,56 @@ fn run_processor(
     }
 }
 
-fn resolve_template(s: &str, meta: &Map<String, Value>, source: &Map<String, Value>) -> String {
-    let re = Regex::new(r"\{\{\{?\s*([^}]+?)\s*\}?\}\}").unwrap();
-    re.replace_all(s, |caps: &regex::Captures| {
-        let path = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
-        match lookup_path(meta, source, path) {
-            Some(v) => format_value(&v),
-            None => String::new(),
+/// The mustache model of an ingest document, as `IngestDocument#createTemplateModel`
+/// builds it: the source and metadata fields, `_source` (the same fields) and `_ingest`.
+fn template_model(meta: &Map<String, Value>, source: &Map<String, Value>) -> Value {
+    let mut m = source.clone();
+    let mut ingest = None;
+    for (k, v) in meta {
+        if k == "_ingest" {
+            ingest = Some(v.clone());
+        } else {
+            m.insert(k.clone(), v.clone());
         }
-    })
-    .to_string()
+    }
+    let all = Value::Object(m.clone());
+    m.insert("_source".to_string(), all);
+    if let Some(i) = ingest {
+        m.insert("_ingest".to_string(), i);
+    }
+    Value::Object(m)
 }
 
-fn resolve_value(
-    v: &Value,
-    meta: &Map<String, Value>,
-    source: &Map<String, Value>,
-) -> Value {
-    match v {
-        Value::String(s) => Value::String(resolve_template(s, meta, source)),
-        Value::Array(a) => Value::Array(a.iter().map(|x| resolve_value(x, meta, source)).collect()),
-        Value::Object(o) => Value::Object(
-            o.iter()
-                .map(|(k, x)| (k.clone(), resolve_value(x, meta, source)))
-                .collect(),
-        ),
-        other => other.clone(),
+/// Renders a template property: strings containing `{{` are mustache templates
+/// (`ConfigurationUtils#compileTemplate`), anything else is taken literally.
+fn render_template(s: &str, meta: &Map<String, Value>, source: &Map<String, Value>) -> Result<String, ApiError> {
+    if !s.contains("{{") {
+        return Ok(s.to_string());
     }
+    crate::mustache::render_mustache(s, &template_model(meta, source))
+        .map_err(|e| crate::scripting::mustache_error(s, &e, &[]))
+}
+
+/// `render_template` for properties OpenSearch does not template-check; a template
+/// that fails to render is taken literally.
+fn resolve_template(s: &str, meta: &Map<String, Value>, source: &Map<String, Value>) -> String {
+    render_template(s, meta, source).unwrap_or_else(|_| s.to_string())
+}
+
+/// A templated value (`ValueSource`): strings, list elements, map keys and values.
+fn render_value(v: &Value, meta: &Map<String, Value>, source: &Map<String, Value>) -> Result<Value, ApiError> {
+    Ok(match v {
+        Value::String(s) => Value::String(render_template(s, meta, source)?),
+        Value::Array(a) => Value::Array(a.iter().map(|x| render_value(x, meta, source)).collect::<Result<_, _>>()?),
+        Value::Object(o) => {
+            let mut out = Map::new();
+            for (k, x) in o {
+                out.insert(render_template(k, meta, source)?, render_value(x, meta, source)?);
+            }
+            Value::Object(out)
+        }
+        other => other.clone(),
+    })
 }
 
 fn resolve_field_name(
@@ -1031,28 +1062,55 @@ fn resolve_field_name(
     resolve_template(f, meta, source)
 }
 
-fn lookup_path(
+fn render_field_name(
+    cfg: &Map<String, Value>,
     meta: &Map<String, Value>,
     source: &Map<String, Value>,
-    path: &str,
-) -> Option<Value> {
-    if path.is_empty() {
-        return None;
-    }
-    let segs: Vec<&str> = path.split('.').collect();
-    let mut cur: Value = if segs[0].starts_with('_') {
-        Value::Object(meta.clone())
-    } else {
-        Value::Object(source.clone())
+) -> Result<String, ApiError> {
+    render_template(cfg_str(cfg, "field").unwrap_or(""), meta, source)
+}
+
+/// Compile errors of the template properties of a processor, reported when the
+/// pipeline is created (`property` is the name OpenSearch reports, if any).
+fn check_templates(typ: &str, c: &Map<String, Value>) -> Result<(), ApiError> {
+    let props: &[(&str, bool)] = match typ {
+        "set" | "append" => &[("field", true), ("value", false)],
+        "fail" => &[("message", true)],
+        "rename" => &[("field", true), ("target_field", true)],
+        _ => &[],
     };
-    for s in segs {
-        cur = match cur {
-            Value::Object(m) => m.get(s).cloned()?,
-            Value::Array(a) => a.get(s.parse::<usize>().ok()?)?.clone(),
-            _ => return None,
-        };
+    fn strings<'a>(v: &'a Value, out: &mut Vec<&'a str>) {
+        match v {
+            Value::String(s) => out.push(s),
+            Value::Array(a) => a.iter().for_each(|x| strings(x, out)),
+            Value::Object(o) => o.iter().for_each(|(k, x)| {
+                out.push(k);
+                strings(x, out)
+            }),
+            _ => {}
+        }
     }
-    Some(cur)
+    for (prop, named) in props {
+        let Some(v) = c.get(*prop) else { continue };
+        let mut texts = Vec::new();
+        strings(v, &mut texts);
+        for t in texts.into_iter().filter(|t| t.contains("{{")) {
+            if let Err(e) = crate::mustache::render_mustache(t, &Value::Object(Map::new())) {
+                if e.lookup_cause("query-template").is_some() {
+                    continue;
+                }
+                let mut fields = vec![("processor_type", json!(typ))];
+                if let Some(tag) = cfg_str(c, "tag") {
+                    fields.push(("processor_tag", json!(tag)));
+                }
+                if *named {
+                    fields.push(("property_name", json!(prop)));
+                }
+                return Err(crate::scripting::mustache_error(t, &e, &fields));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn source_get(source: &Map<String, Value>, path: &str) -> Option<Value> {
@@ -1217,13 +1275,13 @@ fn proc_set(
     meta: &mut Map<String, Value>,
     source: &mut Map<String, Value>,
 ) -> Result<bool, ApiError> {
-    let field = resolve_field_name(cfg, meta, source);
+    let field = render_field_name(cfg, meta, source)?;
     let raw = cfg.get("value").cloned().unwrap_or(Value::Null);
     let is_template = raw
         .as_str()
         .map(|t| t.contains("{{"))
         .unwrap_or(false);
-    let val = resolve_value(&raw, meta, source);
+    let val = render_value(&raw, meta, source)?;
     if cfg_bool(cfg, "ignore_empty_value", false) && is_template && is_empty_value(&val) {
         return Ok(false);
     }
@@ -1290,8 +1348,8 @@ fn proc_rename(
     meta: &mut Map<String, Value>,
     source: &mut Map<String, Value>,
 ) -> Result<bool, ApiError> {
-    let field = resolve_field_name(cfg, meta, source);
-    let target = resolve_template(cfg_str(cfg, "target_field").unwrap_or(""), meta, source);
+    let field = render_field_name(cfg, meta, source)?;
+    let target = render_template(cfg_str(cfg, "target_field").unwrap_or(""), meta, source)?;
     let val = match get_any(meta, source, &field) {
         Some(v) => v,
         None => {
@@ -1394,8 +1452,8 @@ fn proc_append(
     meta: &mut Map<String, Value>,
     source: &mut Map<String, Value>,
 ) -> Result<bool, ApiError> {
-    let field = resolve_field_name(cfg, meta, source);
-    let value = resolve_value(&cfg.get("value").cloned().unwrap_or(Value::Null), meta, source);
+    let field = render_field_name(cfg, meta, source)?;
+    let value = render_value(&cfg.get("value").cloned().unwrap_or(Value::Null), meta, source)?;
     let new_vals: Vec<Value> = match value {
         Value::Array(a) => a,
         v => vec![v],
@@ -3799,7 +3857,7 @@ fn proc_fail(
     meta: &Map<String, Value>,
     source: &Map<String, Value>,
 ) -> Result<bool, ApiError> {
-    let msg = resolve_template(cfg_str(cfg, "message").unwrap_or(""), meta, source);
+    let msg = render_template(cfg_str(cfg, "message").unwrap_or(""), meta, source)?;
     Err(ApiError::new("fail_processor_exception", &msg, 500))
 }
 

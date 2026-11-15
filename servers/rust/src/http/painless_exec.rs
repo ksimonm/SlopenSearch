@@ -16,7 +16,7 @@ pub fn handle_execute(store: &mut Store, req: &Req, _lang: &str) -> Response {
     if req.method != "POST" && req.method != "GET" {
         return crate::http::method_not_allowed(req, &["POST"]);
     }
-    crate::painless::api::run_with_stack(|| execute(store, req))
+    execute(store, req)
 }
 
 fn bad(reason: &str) -> Response {
