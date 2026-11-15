@@ -20,7 +20,7 @@ SlopenSearch aims to speak the OpenSearch 3.9 REST API closely enough that an ex
 client does not notice the difference. There are two independent implementations, one in
 **Go** and one in **Rust**, and both are measured against the same black-box test suite.
 
-The suite *is* the specification: about 6,700 tests, each verified against a real
+The suite *is* the specification: about 7,100 tests, each verified against a real
 OpenSearch 3.9.0, pinning down status codes, error types, response shapes and quirks.
 
 ## Status
@@ -43,10 +43,11 @@ Share of the suite passing (2026-11-15, `make go-score` / `make rust-score`):
 | Concurrency and load | 100% | 100% |
 | HTTP layer, async tasks | 100% | 100% |
 | Vector search (k-NN) | 100% | 100% |
+| Parity details (number text, routing, regex, formats, time zones, geohash) | 100% | 100% |
 | Persistence (opt-in `test_95`) | 100% | 100% |
 | **Total** | **100%** | **100%** |
 
-Both servers pass the whole suite (6,693 tests); the new `test_23_nonstandard_json` (16 tests) is in progress. The multi-node and cross-DC suites (`test_96`, `test_97`) are not implemented:
+Both servers pass the whole suite (7,089 tests). The multi-node and cross-DC suites (`test_96`, `test_97`) are not implemented:
 both servers are single-node (see [ROADMAP.md](ROADMAP.md)).
 Both servers store their state on disk by default (`SLOP_DATA_DIR`, default `./data`; in Docker a named volume per server) and survive restarts and crashes; `SLOP_IN_MEMORY=true` keeps everything in memory instead (see [servers/go/README.md](servers/go/README.md#persistence) and [servers/rust/README.md](servers/rust/README.md)).
 
@@ -100,16 +101,22 @@ Each file has a pytest marker, so an area can be run on its own (`ARGS="-m <mark
 | `documents` | `test_21_documents.py` | CRUD, versioning, routing, `_mget`, `_update`, `_bulk`, by-query APIs |
 | `documents` | `test_23_nonstandard_json.py` | `NaN`/`Infinity` tokens in `_bulk`, `_update` and ingest bodies |
 | `ingest` | `test_22_ingest.py` | ingest pipelines and processors, search pipelines |
-| `parity` | `test_34_parity_errors.py` | mustache compile errors, control-character escaping, `field_sort` parse positions, date math rounding |
 | `fulltext` | `test_31_fulltext.py` | match family, multi_match, query_string, intervals, span queries |
 | `queries` | `test_32_queries.py` | term-level, bool, function_score, nested, join, geo, percolate |
 | `search_api` | `test_33_search_api.py` | sort, paging, scroll, PIT, highlight, collapse, rescore, msearch, templates |
+| `parity` | `test_34_parity_errors.py` | mustache compile errors, control-character escaping, `field_sort` parse positions, date math rounding |
+| `parity` | `test_35_parity_numbers_routing.py` | Murmur3 shard routing; Java `Double`/`Float.toString` text in aggs, sorts, fields, scores |
+| `parity` | `test_36_parity_regex_formats.py` | `java.util.regex` in Painless and ingest, grok (Oniguruma), CBOR and YAML bodies and responses |
+| `parity` | `test_37_parity_time_hash.py` | IANA time zones and DST in aggs, range queries, ingest; fingerprint hashes; Java base64 |
+| `parity` | `test_38_parity_ingest_geo.py` | ingest mustache templates, geohash parsing and grids |
+| `parity` | `test_39_parity_*.py` | cases found by the benchmark and by the Rust port: scheduled refresh, by-query conflicts, float precision, Kahan sums |
 | `aggs` | `test_41_aggs_bucket.py`, `test_42_aggs_metric.py` | bucket, metric and pipeline aggregations |
 | `scripting` | `test_43_scripting.py` | Painless, expressions, stored scripts, mustache |
 | — | `test_50_suggester.py` | term, phrase and completion suggesters (contexts, fuzzy, collate, errors) |
 | `analysis` | `test_51_analysis.py` | analyzers, tokenizers, token and char filters |
 | `concurrency` | `test_61_concurrency.py` | parallel writes, optimistic concurrency, races with admin calls, alias swaps, scroll/PIT snapshots, load |
 | `http` | `test_62_tasks_http.py` | async tasks (`wait_for_completion=false`, `_tasks`, `_rethrottle`, cancel), compression, content types, URL encoding, query-string and header handling |
+| `documents` | `test_63_refresh_visibility.py` | what search, count, scroll, PIT and by-query APIs see before a refresh |
 | `types` | `test_71_field_types.py` | field types and mapping parameters |
 | `knn` | `test_72_knn.py` | `knn_vector` mappings, knn query (filters, radial, nested), `knn_score` and painless vector functions |
 | `i18n` | `test_80_languages.py` | ~60 scripts, language analyzers, Unicode corner cases |
