@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"math"
 	"reflect"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -604,16 +603,13 @@ func (s *Engine) procSplit(cfg map[string]any, env *ingestEnv) *apierr.Error {
 		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] of type [" + javaTypeName(v) + "] cannot be cast to [java.lang.String]"}
 	}
-	sep := cfgString(cfg, "separator")
-	re, err := regexp.Compile(sep)
-	if err != nil {
-		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
+	limit := 0
+	if cfgBool(cfg, "preserve_trailing", false) {
+		limit = -1
 	}
-	parts := re.Split(str, -1)
-	if !cfgBool(cfg, "preserve_trailing", false) && str != "" {
-		for len(parts) > 0 && parts[len(parts)-1] == "" {
-			parts = parts[:len(parts)-1]
-		}
+	parts, serr := javaStringSplit(str, cfgString(cfg, "separator"), limit)
+	if serr != nil {
+		return serr
 	}
 	out := make([]any, len(parts))
 	for i, p := range parts {
@@ -648,11 +644,6 @@ func (s *Engine) procJoin(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	return env.setField(target, strings.Join(parts, sep), true)
 }
 
-func javaRegexReplace(repl string) string {
-	re := regexp.MustCompile(`\$(\d+)`)
-	return re.ReplaceAllString(repl, `${$1}`)
-}
-
 func (s *Engine) procGsub(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
 	target := env.render(cfgString(cfg, "target_field"))
@@ -663,18 +654,18 @@ func (s *Engine) procGsub(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	if !ok {
 		return s.fieldMissing(field, cfgBool(cfg, "ignore_missing", false))
 	}
-	re, err := regexp.Compile(cfgString(cfg, "pattern"))
+	re, err := javaPattern(cfgString(cfg, "pattern"))
 	if err != nil {
-		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
+		return err
 	}
-	repl := javaRegexReplace(cfgString(cfg, "replacement"))
+	repl := cfgString(cfg, "replacement")
 	apply := func(x any) (any, *apierr.Error) {
 		str, ok := x.(string)
 		if !ok {
 			return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "field [" + field + "] of type [" + javaTypeName(x) + "] cannot be cast to [java.lang.String]"}
 		}
-		return re.ReplaceAllString(str, repl), nil
+		return javaReplaceAll(re, str, repl)
 	}
 	if list, ok := v.([]any); ok {
 		out := make([]any, 0, len(list))

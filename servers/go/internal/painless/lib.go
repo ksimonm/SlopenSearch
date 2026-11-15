@@ -1232,90 +1232,12 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 			return v, err
 		}
 	case *plPattern:
-		switch name {
-		case "matcher":
-			return t.matcher(ToString(args[0]), in), nil
-		case "pattern", "toString":
-			return t.src, nil
-		case "split":
-			parts := t.re.Split(ToString(args[0]), -1)
-			for len(parts) > 0 && parts[len(parts)-1] == "" {
-				parts = parts[:len(parts)-1]
-			}
-			arr := &Array{Elem: "String"}
-			for _, p := range parts {
-				arr.Items = append(arr.Items, p)
-			}
-			return arr, nil
-		case "asPredicate":
-			p := t
-			return plNativeFn(func(xs []any, o int) (any, *RuntimeError) {
-				return p.re.MatchString(ToString(xs[0])), nil
-			}), nil
+		if v, err, ok := t.method(in, name, args, off); ok {
+			return v, err
 		}
 	case *plMatcher:
-		switch name {
-		case "find":
-			return t.find(off)
-		case "matches":
-			return t.matches(off)
-		case "lookingAt":
-			loc := t.p.re.FindStringSubmatchIndex(t.input)
-			ok := loc != nil && loc[0] == 0
-			if ok {
-				t.loc = loc
-			}
-			return ok, nil
-		case "group":
-			if n == 0 {
-				return t.group(0, off)
-			}
-			if s, ok := args[0].(string); ok {
-				idx := t.p.re.SubexpIndex(s)
-				if idx < 0 {
-					return nil, plIAE(off, "No group with name <"+s+">")
-				}
-				return t.group(idx, off)
-			}
-			return t.group(int(I64(args[0])), off)
-		case "groupCount":
-			return int32(t.p.re.NumSubexp()), nil
-		case "start", "end":
-			if t.loc == nil {
-				return nil, &RuntimeError{Type: "illegal_state_exception", Offset: off, Reason: "No match available"}
-			}
-			g := 0
-			if n == 1 {
-				g = int(I64(args[0]))
-			}
-			i := 2 * g
-			if name == "end" {
-				i++
-			}
-			return int32(len(plUTF16(t.input[:t.loc[i]]))), nil
-		case "replaceAll", "replaceFirst":
-			repl := plJavaReplacement(ToString(args[0]))
-			if name == "replaceAll" {
-				return t.p.re.ReplaceAllString(t.input, repl), nil
-			}
-			loc := t.p.re.FindStringSubmatchIndex(t.input)
-			if loc == nil {
-				return t.input, nil
-			}
-			out := t.p.re.ExpandString(nil, repl, t.input, loc)
-			return t.input[:loc[0]] + string(out) + t.input[loc[1]:], nil
-		case "reset":
-			t.pos = 0
-			t.loc = nil
-			return t, nil
-		case "hitEnd":
-			return t.pos >= len(t.input), nil
-		case "namedGroup":
-			idx := t.p.re.SubexpIndex(ToString(args[0]))
-			if idx < 0 {
-				return nil, nil
-			}
-			return t.group(idx, off)
+		if v, err, ok := t.method(name, args, off); ok {
+			return v, err
 		}
 	case *plStream:
 		if v, err, ok := in.streamMethod(t, name, args, off); ok {
@@ -1522,44 +1444,6 @@ func (in *plInterp) callMethod(recv any, name string, args []any, off int) (any,
 	}
 	return nil, plDynMethodErr(recv, name, n, off)
 }
-
-func plJavaReplacement(r string) string {
-	var sb strings.Builder
-	for i := 0; i < len(r); i++ {
-		c := r[i]
-		if c == '\\' && i+1 < len(r) {
-			if r[i+1] == '$' {
-				sb.WriteString("$$")
-			} else {
-				sb.WriteByte(r[i+1])
-			}
-			i++
-			continue
-		}
-		if c == '$' {
-			j := i + 1
-			for j < len(r) && r[j] >= '0' && r[j] <= '9' {
-				j++
-			}
-			if j > i+1 {
-				sb.WriteString("${" + r[i+1:j] + "}")
-				i = j - 1
-				continue
-			}
-			if j < len(r) && r[j] == '{' {
-				k := strings.IndexByte(r[j:], '}')
-				if k > 0 {
-					sb.WriteString("${" + r[j+1:j+k] + "}")
-					i = j + k
-					continue
-				}
-			}
-		}
-		sb.WriteByte(c)
-	}
-	return sb.String()
-}
-
 func (in *plInterp) stringMethod(s, name string, args []any, off int) (any, *RuntimeError) {
 	n := len(args)
 	str := func(i int) string {
@@ -1761,29 +1645,7 @@ func (in *plInterp) stringMethod(s, name string, args []any, off int) (any, *Run
 		if !ok {
 			return nil, &RuntimeError{Type: "class_cast_exception", Offset: off, Reason: "Cannot cast " + plClassName(args[0]) + " to java.util.regex.Pattern"}
 		}
-		var ferr *RuntimeError
-		var sb strings.Builder
-		last := 0
-		locs := p.re.FindAllStringSubmatchIndex(s, -1)
-		for i, loc := range locs {
-			if name == "replaceFirst" && i > 0 {
-				break
-			}
-			m := &plMatcher{p: p, input: s, in: in, loc: loc}
-			r, err := in.callFn(args[1], []any{m}, off)
-			if err != nil {
-				ferr = err
-				break
-			}
-			sb.WriteString(s[last:loc[0]])
-			sb.WriteString(ToString(r))
-			last = loc[1]
-		}
-		if ferr != nil {
-			return nil, ferr
-		}
-		sb.WriteString(s[last:])
-		return sb.String(), nil
+		return p.replaceWith(in, s, args[1], name == "replaceFirst", off)
 	case "getClass/0":
 		return nil, plDynMethodErr(s, name, n, off)
 	case "regionMatches/4", "regionMatches/5":

@@ -76,6 +76,9 @@ func readDocBody(r *http.Request) (map[string]any, []byte, *apierr.Error) {
 	if len(trimmed) == 0 {
 		return nil, raw, &apierr.Error{Type: "parse_exception", Status: 400, Reason: "request body is required"}
 	}
+	if e := xcontentDocError(r, trimmed); e != nil {
+		return nil, raw, e
+	}
 	if trimmed[0] != '{' {
 		return nil, raw, &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 			Reason:   "Failed to parse request body",
