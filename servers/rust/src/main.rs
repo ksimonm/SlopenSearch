@@ -15,6 +15,7 @@ mod jsonv;
 mod lucene;
 mod mapping;
 mod model;
+mod murmur3;
 mod mustache;
 mod painless;
 mod resp;

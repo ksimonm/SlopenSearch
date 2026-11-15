@@ -4,7 +4,6 @@ use crate::search::request::*;
 use crate::search::sort::*;
 use crate::search::source::*;
 use crate::search::highlight::collect_tokens;
-use crate::model::routing_shard_of;
 use crate::aggs::eval_aggs_root;
 use crate::http::docs::{bm25_explanation, parse_q_param, search_alias_filter};
 use crate::errors::{err_response, json_response};
@@ -261,7 +260,7 @@ pub fn run_search(
         if let Some(tokens) = &routing_tokens {
             let mut used = HashSet::new();
             for t in tokens {
-                used.insert(routing_shard_of(t, nsh));
+                used.extend(idx.routing_shards(t));
             }
             shards += used.len() as i64;
         } else if let Some(ps) = pref_shard {
@@ -286,22 +285,14 @@ pub fn run_search(
             if idx.pending.contains_key(id) {
                 continue;
             }
-            let rid = idx.routing.get(id).map(|s| s.as_str()).unwrap_or("");
-            if let Some(tokens) = &routing_tokens {
-                if !rid.is_empty() {
-                    let sh = routing_shard_of(rid, nsh);
-                    if !tokens.iter().any(|t| routing_shard_of(t, nsh) == sh) {
+            if routing_tokens.is_some() || pref_shard.is_some() {
+                let shard = idx.doc_shard(id);
+                if let Some(tokens) = &routing_tokens {
+                    if !tokens.iter().any(|t| idx.routing_shards(t).contains(&shard)) {
                         continue;
                     }
                 }
-            }
-            if let Some(ps) = pref_shard {
-                let shard = if rid.is_empty() {
-                    idx.order.iter().position(|x| x == id).unwrap_or(0) as i64 % nsh
-                } else {
-                    routing_shard_of(rid, nsh)
-                };
-                if shard != ps {
+                if pref_shard.is_some_and(|ps| ps != shard) {
                     continue;
                 }
             }
@@ -1532,11 +1523,7 @@ fn apply_search_extras(
                             let mut group_df: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
                             let mut doc_group: std::collections::HashMap<String, String> = std::collections::HashMap::new();
                             for id in &docs {
-                                let g = idx
-                                    .routing
-                                    .get(*id)
-                                    .cloned()
-                                    .unwrap_or_else(|| format!("s{}", id.bytes().map(|b| b as u64).sum::<u64>() % (idx.num_shards() as u64)));
+                                let g = idx.doc_shard(id).to_string();
                                 *group_n.entry(g.clone()).or_insert(0) += 1;
                                 let has = idx
                                     .docs
@@ -1624,7 +1611,8 @@ fn apply_search_extras(
                         None => json!({"value": score, "description": "match", "details": []}),
                     };
                     o.insert("_explanation".to_string(), expl);
-                    o.insert("_shard".to_string(), json!(format!("[{}][0]", idx_name)));
+                    let shard = store.indices.get(&idx_name).map(|i| i.doc_shard(&id)).unwrap_or(0);
+                    o.insert("_shard".to_string(), json!(format!("[{}][{}]", idx_name, shard)));
                     o.insert("_node".to_string(), json!("node-1"));
                 }
             }
@@ -2233,9 +2221,10 @@ pub fn handle_search_shards(store: &mut Store, req: &Req, name: &str) -> Respons
         let mut wanted: Vec<i64> = Vec::new();
         if let Some(tokens) = &routing {
             for t in tokens {
-                let sh = routing_shard_of(t, nsh);
-                if !wanted.contains(&sh) {
-                    wanted.push(sh);
+                for sh in idx.routing_shards(t) {
+                    if !wanted.contains(&sh) {
+                        wanted.push(sh);
+                    }
                 }
             }
         } else {

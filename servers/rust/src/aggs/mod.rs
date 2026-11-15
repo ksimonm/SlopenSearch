@@ -1390,74 +1390,6 @@ fn mix64_stafford(z: i64) -> i64 {
     (z ^ (z >> 32)) as i64
 }
 
-fn murmur3_h1(data: &[u8]) -> u64 {
-    const MASK: u64 = u64::MAX;
-    const C1: u64 = 0x87c37b91114253d5;
-    const C2: u64 = 0x4cf5ad432745937f;
-    let mut h1: u64 = 0;
-    let mut h2: u64 = 0;
-    let length = data.len();
-    let nblocks = length / 16;
-    for i in 0..nblocks {
-        let mut k1 = u64::from_le_bytes(data[i * 16..i * 16 + 8].try_into().unwrap());
-        let mut k2 = u64::from_le_bytes(data[i * 16 + 8..i * 16 + 16].try_into().unwrap());
-        k1 = k1.wrapping_mul(C1);
-        k1 = k1.rotate_left(31);
-        k1 = k1.wrapping_mul(C2);
-        h1 ^= k1;
-        h1 = h1.rotate_left(27);
-        h1 = h1.wrapping_add(h2);
-        h1 = h1.wrapping_mul(5).wrapping_add(0x52dce729);
-        k2 = k2.wrapping_mul(C2);
-        k2 = k2.rotate_left(33);
-        k2 = k2.wrapping_mul(C1);
-        h2 ^= k2;
-        h2 = h2.rotate_left(31);
-        h2 = h2.wrapping_add(h1);
-        h2 = h2.wrapping_mul(5).wrapping_add(0x38495ab5);
-    }
-    let tail = &data[nblocks * 16..];
-    let mut k1: u64 = 0;
-    let mut k2: u64 = 0;
-    let tl = tail.len();
-    for i in 0..tl.min(8) {
-        k1 ^= (tail[i] as u64) << (i * 8);
-    }
-    for i in 8..tl {
-        k2 ^= (tail[i] as u64) << ((i - 8) * 8);
-    }
-    if tl > 8 {
-        k2 = k2.wrapping_mul(C2);
-        k2 = k2.rotate_left(33);
-        k2 = k2.wrapping_mul(C1);
-        h2 ^= k2;
-    }
-    if tl > 0 {
-        k1 = k1.wrapping_mul(C1);
-        k1 = k1.rotate_left(31);
-        k1 = k1.wrapping_mul(C2);
-        h1 ^= k1;
-    }
-    h1 ^= length as u64;
-    h2 ^= length as u64;
-    h1 = h1.wrapping_add(h2);
-    h2 = h2.wrapping_add(h1);
-    fn fmix(mut k: u64) -> u64 {
-        k ^= k >> 33;
-        k = k.wrapping_mul(0xff51afd7ed558ccd);
-        k ^= k >> 33;
-        k = k.wrapping_mul(0xc4ceb9fe1a85ec53);
-        k ^= k >> 33;
-        k
-    }
-    h1 = fmix(h1);
-    h2 = fmix(h2);
-    h1 = h1.wrapping_add(h2);
-    h2 = h2.wrapping_add(h1);
-    let _ = MASK;
-    h1
-}
-
 pub fn contains_sampler(v: &Value) -> bool {
     match v {
         Value::Object(m) => {
@@ -1505,7 +1437,7 @@ fn value_matches_include_exclude(
                         let m = ((h % ni) + ni) % ni;
                         return m as f64 == part;
                     }
-                    let h = murmur3_h1(s.as_bytes());
+                    let h = crate::murmur3::x64_128_h1(s.as_bytes());
                     return (h % n) as f64 == part;
                 }
                 true
