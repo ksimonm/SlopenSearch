@@ -213,7 +213,10 @@ fn parse_geo_point(s: &str) -> Result<(f64, f64), String> {
         return Ok((lat, lon));
     }
     // GeoPoint#resetFromGeoHash: the bottom-left corner of the cell
-    crate::geohash::decode(t).ok_or_else(|| format!("unsupported symbol in geohash [{}]", t))
+    crate::geohash::decode(t).ok_or_else(|| match t.chars().find(|c| crate::geohash::bounds(&c.to_string()).is_none()) {
+        Some(c) => format!("unsupported symbol [{}] in geohash [{}]", c, t),
+        None => "empty geohash".to_string(),
+    })
 }
 
 /// The origin of a date decay function: "strict_date_optional_time||epoch_millis"

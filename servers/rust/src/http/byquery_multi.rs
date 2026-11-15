@@ -29,7 +29,7 @@ fn run(store: &mut Store, req: &Req, name: &str, delete: bool) -> Response {
         }
     };
     let finish = |r: Result<(u16, Value), Response>| match r {
-        Ok((status, v)) => json_response(status, v),
+        Ok((status, v)) => json_response(status, ordered(v)),
         Err(resp) => resp,
     };
     if name != "_all" && !name.contains([',', '*', '?']) {
@@ -60,7 +60,29 @@ fn run(store: &mut Store, req: &Req, name: &str, delete: bool) -> Response {
         Some(m) => Value::Object(m),
         None => empty_report(delete),
     };
-    json_response(status, out)
+    json_response(status, ordered(out))
+}
+
+/// The report with "updated" (update by query) right after "total", where
+/// OpenSearch writes it.
+fn ordered(v: Value) -> Value {
+    let Value::Object(m) = v else { return v };
+    if !m.contains_key("updated") {
+        return Value::Object(m);
+    }
+    let updated = m.get("updated").cloned().unwrap_or(json!(0));
+    let mut out = Map::new();
+    for (k, val) in m {
+        if k == "updated" {
+            continue;
+        }
+        let total = k == "total";
+        out.insert(k, val);
+        if total {
+            out.insert("updated".to_string(), updated.clone());
+        }
+    }
+    Value::Object(out)
 }
 
 /// Adds the counters of report `b` to `a`.

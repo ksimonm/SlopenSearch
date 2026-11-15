@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 )
@@ -116,7 +117,8 @@ func nodeOSStats() ojson.Object {
 	return ojson.Object{
 		{"timestamp", nowMillis()},
 		{"cpu", ojson.Object{{"percent", 0},
-			{"load_average", ojson.Object{{"1m", load[0]}, {"5m", load[1]}, {"15m", load[2]}}}}},
+			{"load_average", ojson.Object{{"1m", jsonv.Float(load[0])}, {"5m", jsonv.Float(load[1])},
+				{"15m", jsonv.Float(load[2])}}}}},
 		{"mem", ojson.Object{{"total_in_bytes", total}, {"free_in_bytes", free}, {"used_in_bytes", total - free},
 			{"free_percent", pct(free, total)}, {"used_percent", pct(total-free, total)}}},
 		{"swap", ojson.Object{{"total_in_bytes", swapTotal}, {"free_in_bytes", swapFree},
@@ -303,7 +305,7 @@ func nodeBreakerStats() ojson.Object {
 	b := func(limit int64, overhead float64, used int64) ojson.Object {
 		return ojson.Object{{"limit_size_in_bytes", limit}, {"limit_size", byteSize(limit)},
 			{"estimated_size_in_bytes", used}, {"estimated_size", byteSize(used)},
-			{"overhead", overhead}, {"tripped", 0}}
+			{"overhead", jsonv.Float(overhead)}, {"tripped", 0}}
 	}
 	return ojson.Object{
 		{"request", b(max*6/10, 1.0, 0)},
@@ -481,7 +483,7 @@ func (s *Server) buildNodeStats(r *http.Request, metrics []string, indexMetric, 
 
 // nodeIndicesStats is the indices section: the index stats of the node's
 // open indices added up, with search request phases and status counters.
-func (s *Server) nodeIndicesStats(indexMetric, level string) map[string]any {
+func (s *Server) nodeIndicesStats(indexMetric, level string) ojson.Object {
 	var requested map[string]bool
 	if indexMetric != "" && !strings.Contains(indexMetric, "_all") {
 		requested = map[string]bool{}
@@ -515,10 +517,16 @@ func (s *Server) nodeIndicesStats(indexMetric, level string) map[string]any {
 		search["request"] = ojson.Object{{"took", phase()}, {"dfs_pre_query", phase()}, {"query", phase()},
 			{"fetch", phase()}, {"dfs_query", phase()}, {"expand", phase()}, {"can_match", phase()}}
 	}
-	status := func() ojson.Object { return ojson.Object{{"success", 0}, {"user_error", 0}, {"system_failure", 0}} }
-	total["status_counter"] = ojson.Object{{"doc_status", status()}, {"search_response_status", status()}}
-	if level == "indices" {
-		total["indices"] = perIndex
+	out := ojson.Object{}
+	for _, name := range statsMetricNames {
+		if v, ok := total[name]; ok {
+			out = append(out, ojson.KV{name, v})
+		}
 	}
-	return total
+	status := func() ojson.Object { return ojson.Object{{"success", 0}, {"user_error", 0}, {"system_failure", 0}} }
+	out = append(out, ojson.KV{"status_counter", ojson.Object{{"doc_status", status()}, {"search_response_status", status()}}})
+	if level == "indices" {
+		out = append(out, ojson.KV{"indices", perIndex})
+	}
+	return out
 }
