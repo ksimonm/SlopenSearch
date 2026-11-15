@@ -511,7 +511,10 @@ pub fn run_search(
     if let Some(rc) = bodym.get("rescore") {
         apply_rescore(store, &mut matched, rc)?;
     }
-    let agg_matched = matched.clone();
+    // the hits aggregations run over (before post_filter): copied only when
+    // there are aggregations
+    let has_aggs = bodym.contains_key("aggs") || bodym.contains_key("aggregations");
+    let agg_matched = if has_aggs { matched.clone() } else { Vec::new() };
     if let Some(pf) = bodym.get("post_filter") {
         let mut kept = Vec::new();
         for mut h in matched.drain(..) {
@@ -825,7 +828,7 @@ pub fn run_search(
         });
     }
     crate::search::index::trace("sorted");
-    let collapse_pool = matched.clone();
+    let collapse_pool = if collapse_cfg.is_some() { matched.clone() } else { Vec::new() };
     if let Some(c) = &collapse_cfg {
         let field = c.get("field").and_then(|v| v.as_str()).unwrap_or("");
         let mut seen = HashSet::new();

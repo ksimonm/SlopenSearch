@@ -1183,34 +1183,237 @@ fn direct_range(q: &Map<String, Value>, p: &Plan) -> Option<DirectRange> {
     Some(DirectRange { field: field.clone(), cond: cond.as_object()?.clone() })
 }
 
-/// [`DirectRange`] results of the documents `docs` (None: let the evaluator
-/// decide); large sets on several threads.
-fn range_results(idx: &Index, inv: &InvertedIndex, dr: &DirectRange, docs: &[u32]) -> Option<Vec<(bool, f64)>> {
-    // the bounds are prepared once (one `now` for the whole request)
-    let shared = QueryCtx::new(idx, "", &NULL).range_prep(&dr.field, &dr.cond);
-    if shared.ftype == "wildcard" || shared.bounds.is_err() {
-        return None;
-    }
-    let prep: &crate::search::eval::RangePrep = &shared;
-    let part = |docs: &[u32]| -> Option<Vec<(bool, f64)>> {
-        let ctx = QueryCtx::new(idx, "", &NULL);
-        let mut out = Vec::with_capacity(docs.len());
-        for &doc in docs {
-            let raw = inv.ids.get(doc as usize)?.as_ref().and_then(|id| idx.doc_values.get(id)).and_then(|dv| dv.get(&dr.field));
-            let r = match raw {
-                Some(Value::Array(a)) if !a.is_empty() => ctx.range_on_values(prep, a, 1.0).ok()?,
-                Some(Value::Array(_)) | None => (false, 0.0),
-                Some(v) => ctx.range_on_values(prep, std::slice::from_ref(v), 1.0).ok()?,
-            };
-            out.push(r);
+/// A query the index answers per document exactly as the evaluator would
+/// (`QueryCtx::eval`): a `match`, a keyword/text `term`, a numeric/date
+/// `range`, or a `bool` of these (`eval_bool`'s arithmetic replayed on the
+/// clause results).
+enum Direct {
+    Match(DirectMatch),
+    Range(DirectRange),
+    /// Matches the documents with the term (constant score `boost`).
+    Term { key: String, term: String, boost: f64 },
+    Bool(Box<DirectBool>),
+}
+
+struct DirectBool {
+    must: Vec<Direct>,
+    filter: Vec<Direct>,
+    should: Vec<Direct>,
+    must_not: Vec<Direct>,
+    msm: Option<Value>,
+    boost: f64,
+    adjust: bool,
+}
+
+impl Direct {
+    fn keys(&self, out: &mut Vec<String>) {
+        let mut add = |k: String| {
+            if !out.contains(&k) {
+                out.push(k);
+            }
+        };
+        match self {
+            Direct::Match(m) => add(m.key.clone()),
+            Direct::Range(r) => add(field_key(Kind::Numeric, &r.field)),
+            Direct::Term { key, .. } => add(key.clone()),
+            Direct::Bool(b) => {
+                for d in b.must.iter().chain(&b.filter).chain(&b.should).chain(&b.must_not) {
+                    d.keys(out);
+                }
+            }
         }
-        Some(out)
-    };
+    }
+}
+
+fn direct_query(ctx: &QueryCtx, q: &Map<String, Value>) -> Option<Direct> {
+    let p = plan(ctx, q)?;
+    let (kind, body) = single(q)?;
+    match kind.as_str() {
+        "match" => direct_match(ctx, q, &p).map(Direct::Match),
+        "range" => direct_range(q, &p).map(Direct::Range),
+        "term" => {
+            let (key, mut terms) = match p {
+                Plan::Any(k, t) if t.len() == 1 => (k, t),
+                _ => return None,
+            };
+            let (_, raw) = single(body.as_object()?)?;
+            let boost = raw.as_object().and_then(|m| m.get("boost")).and_then(to_f64).unwrap_or(1.0);
+            Some(Direct::Term { key, term: terms.pop()?, boost })
+        }
+        "bool" => {
+            let bm = body.as_object()?;
+            let list = |k: &str| -> Option<Vec<Direct>> {
+                as_query_list(bm.get(k)).iter().map(|c| c.as_object().and_then(|m| direct_query(ctx, m))).collect()
+            };
+            Some(Direct::Bool(Box::new(DirectBool {
+                must: list("must")?,
+                filter: list("filter")?,
+                should: list("should")?,
+                must_not: list("must_not")?,
+                msm: bm.get("minimum_should_match").cloned(),
+                boost: bm.get("boost").and_then(to_f64).unwrap_or(1.0),
+                adjust: bm.get("adjust_pure_negative").and_then(|v| v.as_bool()).unwrap_or(true),
+            })))
+        }
+        _ => None,
+    }
+}
+
+/// [`Direct`] with what it reads from the index resolved (shared by threads).
+enum Prepared<'a> {
+    Match { dm: &'a DirectMatch, lists: Vec<Option<&'a Vec<(u32, u32)>>>, dfs: Vec<usize>, f: &'a FieldIndex },
+    /// Index into the range preparations.
+    Range { field: &'a str, prep: usize },
+    Term { list: Option<&'a Vec<(u32, u32)>>, boost: f64 },
+    Bool { b: &'a DirectBool, must: Vec<Prepared<'a>>, filter: Vec<Prepared<'a>>, should: Vec<Prepared<'a>>, must_not: Vec<Prepared<'a>> },
+}
+
+fn prepare<'a>(ctx: &QueryCtx, inv: &'a InvertedIndex, d: &'a Direct, preps: &mut Vec<std::rc::Rc<crate::search::eval::RangePrep>>) -> Option<Prepared<'a>> {
+    Some(match d {
+        Direct::Match(dm) => {
+            let f = &inv.fields[&dm.key];
+            let lists: Vec<Option<&Vec<(u32, u32)>>> = dm.qtokens.iter().map(|t| f.postings.get(t)).collect();
+            let dfs = dm
+                .qtokens
+                .iter()
+                .zip(&lists)
+                .map(|(t, p)| match p {
+                    Some(p) => cached_df(inv, &dm.key, t, p),
+                    None => 0,
+                })
+                .collect();
+            Prepared::Match { dm, lists, dfs, f }
+        }
+        Direct::Range(dr) => {
+            let prep = ctx.range_prep(&dr.field, &dr.cond);
+            if prep.ftype == "wildcard" || prep.bounds.is_err() {
+                return None;
+            }
+            preps.push(prep);
+            Prepared::Range { field: &dr.field, prep: preps.len() - 1 }
+        }
+        Direct::Term { key, term, boost } => Prepared::Term { list: inv.fields[key].postings.get(term), boost: *boost },
+        Direct::Bool(b) => {
+            let mut all = |v: &'a [Direct]| -> Option<Vec<Prepared<'a>>> { v.iter().map(|d| prepare(ctx, inv, d, preps)).collect() };
+            let must = all(&b.must)?;
+            let filter = all(&b.filter)?;
+            let should = all(&b.should)?;
+            let must_not = all(&b.must_not)?;
+            Prepared::Bool { b, must, filter, should, must_not }
+        }
+    })
+}
+
+fn tf_of(list: Option<&Vec<(u32, u32)>>, doc: u32) -> u32 {
+    match list {
+        Some(p) => match p.binary_search_by_key(&doc, |e| e.0) {
+            Ok(i) => p[i].1,
+            Err(_) => 0,
+        },
+        None => 0,
+    }
+}
+
+/// The evaluator's result for document `doc` (None: undecidable here).
+fn direct_result(idx: &Index, inv: &InvertedIndex, ctx: &QueryCtx, preps: &[&crate::search::eval::RangePrep], p: &Prepared, doc: u32) -> Option<(bool, f64)> {
+    Some(match p {
+        Prepared::Match { dm, lists, dfs, f } => {
+            let st = MatchStats {
+                total_docs: f.docs_with,
+                total_len: f.sum_len as usize,
+                dfs: dfs.clone(),
+                dl: f.len_of(doc) as usize,
+                tfs: lists.iter().map(|l| tf_of(*l, doc) as usize).collect(),
+            };
+            crate::search::eval::score_match(&dm.def, "text", &dm.qtokens, dm.required, dm.boost, &st)
+        }
+        Prepared::Range { field, prep } => {
+            let raw = inv.ids.get(doc as usize)?.as_ref().and_then(|id| idx.doc_values.get(id)).and_then(|dv| dv.get(*field));
+            match raw {
+                Some(Value::Array(a)) if !a.is_empty() => ctx.range_on_values(preps[*prep], a, 1.0).ok()?,
+                Some(Value::Array(_)) | None => (false, 0.0),
+                Some(v) => ctx.range_on_values(preps[*prep], std::slice::from_ref(v), 1.0).ok()?,
+            }
+        }
+        Prepared::Term { list, boost } => {
+            if tf_of(*list, doc) > 0 {
+                (true, *boost)
+            } else {
+                (false, 0.0)
+            }
+        }
+        Prepared::Bool { b, must, filter, should, must_not } => {
+            // `eval_bool`, clause by clause and in the same order
+            let mut score = 0.0;
+            for c in must.iter().chain(filter.iter()) {
+                let (m, sc) = direct_result(idx, inv, ctx, preps, c, doc)?;
+                if !m {
+                    return Some((false, 0.0));
+                }
+                score += sc;
+            }
+            if !filter.is_empty() {
+                let mut fscore = 0.0;
+                for c in filter {
+                    fscore += direct_result(idx, inv, ctx, preps, c, doc)?.1;
+                }
+                score -= fscore;
+            }
+            let mut should_matched = 0usize;
+            for c in should {
+                let (m, sc) = direct_result(idx, inv, ctx, preps, c, doc)?;
+                if m {
+                    should_matched += 1;
+                    score += sc;
+                }
+            }
+            let has_positives = !must.is_empty() || !filter.is_empty();
+            let msm = match &b.msm {
+                Some(spec) => minimum_should_match(spec, should.len(), should_matched),
+                None if !has_positives => 1,
+                None => 0,
+            };
+            if !should.is_empty() && should_matched < msm {
+                return Some((false, 0.0));
+            }
+            if must.is_empty() && filter.is_empty() && should.is_empty() && !must_not.is_empty() && !b.adjust {
+                return Some((false, 0.0));
+            }
+            for c in must_not {
+                if direct_result(idx, inv, ctx, preps, c, doc)?.0 {
+                    return Some((false, 0.0));
+                }
+            }
+            if must.is_empty() && filter.is_empty() && should.is_empty() {
+                if !must_not.is_empty() {
+                    return Some((true, 0.0));
+                }
+                return Some((true, b.boost));
+            }
+            (true, b.boost * score)
+        }
+    })
+}
+
+/// [`Direct`] results of the documents `docs`, on several threads for large sets.
+fn direct_results(idx: &Index, inv: &InvertedIndex, d: &Direct, docs: &[u32]) -> Option<Vec<(bool, f64)>> {
+    let ctx = QueryCtx::new(idx, "", &NULL);
+    // range bounds (and `now`) prepared once per request
+    let mut owned = Vec::new();
+    let p = prepare(&ctx, inv, d, &mut owned)?;
+    let preps: Vec<&crate::search::eval::RangePrep> = owned.iter().map(|r| &**r).collect();
     if docs.len() < 8192 {
-        return part(docs);
+        return docs.iter().map(|&doc| direct_result(idx, inv, &ctx, &preps, &p, doc)).collect();
     }
     use rayon::prelude::*;
-    let parts: Option<Vec<Vec<(bool, f64)>>> = docs.par_chunks(4096).map(part).collect();
+    let (p, preps) = (&p, &preps);
+    let parts: Option<Vec<Vec<(bool, f64)>>> = docs
+        .par_chunks(4096)
+        .map(|chunk| {
+            let ctx = QueryCtx::new(idx, "", &NULL);
+            chunk.iter().map(|&doc| direct_result(idx, inv, &ctx, preps, p, doc)).collect()
+        })
+        .collect();
     Some(parts?.into_iter().flatten().collect())
 }
 
@@ -1223,9 +1426,12 @@ pub fn candidates(idx: &Index, query: &Map<String, Value>, extra_values: bool) -
     let ctx = QueryCtx::new(idx, "", &NULL);
     let p = plan(&ctx, query)?;
     let direct = direct_match(&ctx, query, &p);
-    let direct_r = if direct.is_none() { direct_range(query, &p) } else { None };
+    let general = if direct.is_none() { direct_query(&ctx, query) } else { None };
     let mut keys = Vec::new();
     p.keys(&mut keys);
+    if let Some(g) = &general {
+        g.keys(&mut keys);
+    }
     with_index(idx, &keys, |inv| {
         if keys.iter().any(|k| inv.fields[k].non_numeric) {
             return None;
@@ -1243,9 +1449,9 @@ pub fn candidates(idx: &Index, query: &Map<String, Value>, extra_values: bool) -
             .map(|(i, _)| i)
             .collect();
         let mut results = direct.as_ref().map(|dm| match_results(inv, dm, positions.iter().map(|i| order[*i])));
-        if let Some(dr) = &direct_r {
+        if let Some(g) = &general {
             let docs: Vec<u32> = positions.iter().map(|i| order[*i]).collect();
-            results = range_results(idx, inv, dr, &docs);
+            results = direct_results(idx, inv, g, &docs);
         }
         Some(Candidates { positions, results, dup_ids })
     })
