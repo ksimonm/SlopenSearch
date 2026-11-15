@@ -23,7 +23,7 @@ use crate::mapping::{mapping_field_def, resolve_alias_field};
 use crate::model::inverted::{FieldIndex, InvertedIndex};
 use crate::model::Index;
 use crate::search::analyzed::{FieldAnalyzer, Side};
-use crate::search::eval::{as_query_list, minimum_should_match, minimum_should_match_checked, QueryCtx};
+use crate::search::eval::{minimum_should_match, minimum_should_match_checked, QueryCtx};
 
 static NULL: Value = Value::Null;
 
@@ -456,6 +456,7 @@ pub fn all_docs_have_values(idx: &Index) -> Option<bool> {
 // ------------------------------------------------------------------ plans
 
 /// A superset of the documents a query can match.
+#[derive(Clone)]
 enum Plan {
     Empty,
     /// Documents with any of the terms.
@@ -556,6 +557,27 @@ fn plan_match(ctx: &QueryCtx, field: &str, raw: &Value) -> Option<Plan> {
     Some(Plan::Any(key, qtokens))
 }
 
+/// The plan of a `match` on a keyword field: `eval_match` compares the
+/// normalized query text with each value (no analysis, one term).
+fn plan_match_keyword(ctx: &QueryCtx, field: &str, raw: &Value) -> Option<Plan> {
+    let idx = ctx.idx;
+    if !plain_field(idx, field) {
+        return None;
+    }
+    let def = mapping_field_def(idx, field)?;
+    if def.get("split_queries_on_whitespace").and_then(|v| v.as_bool()) == Some(true) {
+        return None;
+    }
+    let (text, opts) = crate::search::eval::query_text(raw);
+    if let Some(m) = opts {
+        if !keys_subset(m, &["query", "operator", "boost", "_name"]) {
+            return None;
+        }
+    }
+    let norm = crate::mapping::fields::normalize_query_value(idx, field, &Value::String(text));
+    Some(Plan::Any(field_key(Kind::Exact, field), vec![value_scalar_string(&norm).unwrap_or_default()]))
+}
+
 /// The plan of a `range` on a numeric or date field: the bounds parsed as the
 /// evaluator parses them, widened so that rounding can only add candidates.
 fn plan_range(ctx: &QueryCtx, field: &str, cond: &Map<String, Value>) -> Option<Plan> {
@@ -638,7 +660,27 @@ fn single(m: &Map<String, Value>) -> Option<(&String, &Value)> {
     m.iter().next()
 }
 
+thread_local! {
+    /// Plans of the query nodes during one `candidates` call (the direct
+    /// forms plan the clauses again), by node address.
+    static PLANS: std::cell::RefCell<Option<Vec<(usize, Option<Plan>)>>> = const { std::cell::RefCell::new(None) };
+}
+
 fn plan(ctx: &QueryCtx, q: &Map<String, Value>) -> Option<Plan> {
+    let addr = q as *const Map<String, Value> as usize;
+    if let Some(hit) = PLANS.with(|m| m.borrow().as_ref().and_then(|v| v.iter().find(|e| e.0 == addr).map(|e| e.1.clone()))) {
+        return hit;
+    }
+    let p = plan_node(ctx, q);
+    PLANS.with(|m| {
+        if let Some(v) = m.borrow_mut().as_mut() {
+            v.push((addr, p.clone()));
+        }
+    });
+    p
+}
+
+fn plan_node(ctx: &QueryCtx, q: &Map<String, Value>) -> Option<Plan> {
     let idx = ctx.idx;
     if q.len() != 1 {
         return None;
@@ -654,6 +696,9 @@ fn plan(ctx: &QueryCtx, q: &Map<String, Value>) -> Option<Plan> {
             }
             let (field, val) = single(bm)?;
             crate::search::eval::validate_match_query(idx, field, val).ok()?;
+            if ftype_of(idx, field) == "keyword" {
+                return plan_match_keyword(ctx, field, val);
+            }
             plan_match(ctx, field, val)
         }
         "match_phrase" => {
@@ -772,13 +817,21 @@ fn plan(ctx: &QueryCtx, q: &Map<String, Value>) -> Option<Plan> {
                 return None;
             }
             let list = bm.get(field)?.as_array()?;
-            let mut terms = Vec::new();
+            let normalized = mapping_field_def(idx, field)
+                .and_then(|d| d.get("normalizer"))
+                .and_then(|n| n.as_str())
+                .is_some_and(|n| !n.is_empty());
+            let mut terms = Vec::with_capacity(list.len());
             for item in list {
                 if item.is_object() {
                     return None;
                 }
-                let n = crate::mapping::fields::normalize_query_value(idx, field, item);
-                terms.push(value_scalar_string(&n).unwrap_or_default());
+                let t = if normalized {
+                    value_scalar_string(&crate::mapping::fields::normalize_query_value(idx, field, item))
+                } else {
+                    value_scalar_string(item)
+                };
+                terms.push(t.unwrap_or_default());
             }
             Some(Plan::Any(field_key(Kind::Exact, field), terms))
         }
@@ -846,15 +899,15 @@ fn plan(ctx: &QueryCtx, q: &Map<String, Value>) -> Option<Plan> {
             }
             let mut and = Vec::new();
             for k in ["must", "filter"] {
-                for c in as_query_list(bm.get(k)) {
+                for c in query_list(bm.get(k)) {
                     if let Some(p) = c.as_object().and_then(|m| plan(ctx, m)) {
                         and.push(p);
                     }
                 }
             }
-            let should = as_query_list(bm.get("should"));
-            let has_positives = bm.get("must").is_some_and(|v| !as_query_list(Some(v)).is_empty())
-                || bm.get("filter").is_some_and(|v| !as_query_list(Some(v)).is_empty());
+            let should = query_list(bm.get("should"));
+            let has_positives = bm.get("must").is_some_and(|v| !query_list(Some(v)).is_empty())
+                || bm.get("filter").is_some_and(|v| !query_list(Some(v)).is_empty());
             let msm = match bm.get("minimum_should_match") {
                 Some(spec) => minimum_should_match(spec, should.len(), 0),
                 None if !has_positives => 1,
@@ -863,7 +916,7 @@ fn plan(ctx: &QueryCtx, q: &Map<String, Value>) -> Option<Plan> {
             if !should.is_empty() && msm >= 1 {
                 let mut or = Vec::new();
                 let mut all = true;
-                for c in &should {
+                for c in should {
                     match c.as_object().and_then(|m| plan(ctx, m)) {
                         Some(p) => or.push(p),
                         None => {
@@ -948,6 +1001,19 @@ fn run(inv: &InvertedIndex, p: &Plan) -> Vec<u32> {
         Plan::Empty => Vec::new(),
         Plan::Any(k, terms) => {
             let f = &inv.fields[k];
+            if terms.len() > 2 {
+                // many terms (a large `terms` query): one sort instead of a
+                // merge per term
+                let mut out: Vec<u32> = Vec::new();
+                for t in terms {
+                    if let Some(ps) = f.postings.get(t) {
+                        out.extend(ps.iter().map(|e| e.0).filter(|d| inv.live(*d)));
+                    }
+                }
+                out.sort_unstable();
+                out.dedup();
+                return out;
+            }
             let mut out = Vec::new();
             for t in terms {
                 if let Some(ps) = f.postings.get(t) {
@@ -975,12 +1041,14 @@ fn run(inv: &InvertedIndex, p: &Plan) -> Vec<u32> {
         }
         Plan::Prefix(k, prefix) => {
             let f = &inv.fields[k];
-            let mut out = Vec::new();
+            let mut out: Vec<u32> = Vec::new();
             for (t, ps) in &f.postings {
                 if t.starts_with(prefix.as_str()) {
-                    out = union(out, &live_docs(inv, ps));
+                    out.extend(ps.iter().map(|e| e.0).filter(|d| inv.live(*d)));
                 }
             }
+            out.sort_unstable();
+            out.dedup();
             out
         }
         Plan::Exists(k) => {
@@ -1096,7 +1164,8 @@ fn direct_match(ctx: &QueryCtx, q: &Map<String, Value>, p: &Plan) -> Option<Dire
         return None;
     }
     let (key, qtokens) = match p {
-        Plan::Any(k, t) | Plan::All(k, t) => (k.clone(), t.clone()),
+        // text postings only (a keyword `match` is a term lookup)
+        Plan::Any(k, t) | Plan::All(k, t) if parse_key(k).0 == Kind::Text => (k.clone(), t.clone()),
         _ => return None,
     };
     let (field, raw) = single(body.as_object()?)?;
@@ -1192,6 +1261,8 @@ enum Direct {
     Range(DirectRange),
     /// Matches the documents with the term (constant score `boost`).
     Term { key: String, term: String, boost: f64 },
+    /// Matches the documents with any of the terms (constant score `boost`).
+    Terms { key: String, terms: Vec<String>, boost: f64 },
     Bool(Box<DirectBool>),
 }
 
@@ -1215,7 +1286,7 @@ impl Direct {
         match self {
             Direct::Match(m) => add(m.key.clone()),
             Direct::Range(r) => add(field_key(Kind::Numeric, &r.field)),
-            Direct::Term { key, .. } => add(key.clone()),
+            Direct::Term { key, .. } | Direct::Terms { key, .. } => add(key.clone()),
             Direct::Bool(b) => {
                 for d in b.must.iter().chain(&b.filter).chain(&b.should).chain(&b.must_not) {
                     d.keys(out);
@@ -1229,7 +1300,28 @@ fn direct_query(ctx: &QueryCtx, q: &Map<String, Value>) -> Option<Direct> {
     let p = plan(ctx, q)?;
     let (kind, body) = single(q)?;
     match kind.as_str() {
-        "match" => direct_match(ctx, q, &p).map(Direct::Match),
+        "match" => match direct_match(ctx, q, &p) {
+            Some(dm) => Some(Direct::Match(dm)),
+            None => {
+                // a keyword field: membership of the one normalized term
+                let (key, mut terms) = match p {
+                    Plan::Any(k, t) if t.len() == 1 && k.starts_with('k') => (k, t),
+                    _ => return None,
+                };
+                let (_, raw) = single(body.as_object()?)?;
+                let (_, opts) = crate::search::eval::query_text(raw);
+                let boost = opts.and_then(|m| m.get("boost")).and_then(to_f64).unwrap_or(1.0);
+                Some(Direct::Term { key, term: terms.pop()?, boost })
+            }
+        },
+        "terms" => {
+            let (key, terms) = match p {
+                Plan::Any(k, t) => (k, t),
+                _ => return None,
+            };
+            let boost = body.as_object()?.get("boost").and_then(to_f64).unwrap_or(1.0);
+            Some(Direct::Terms { key, terms, boost })
+        }
         "range" => direct_range(q, &p).map(Direct::Range),
         "term" => {
             let (key, mut terms) = match p {
@@ -1243,7 +1335,7 @@ fn direct_query(ctx: &QueryCtx, q: &Map<String, Value>) -> Option<Direct> {
         "bool" => {
             let bm = body.as_object()?;
             let list = |k: &str| -> Option<Vec<Direct>> {
-                as_query_list(bm.get(k)).iter().map(|c| c.as_object().and_then(|m| direct_query(ctx, m))).collect()
+                query_list(bm.get(k)).iter().map(|c| c.as_object().and_then(|m| direct_query(ctx, m))).collect()
             };
             Some(Direct::Bool(Box::new(DirectBool {
                 must: list("must")?,
@@ -1265,6 +1357,8 @@ enum Prepared<'a> {
     /// Index into the range preparations.
     Range { field: &'a str, prep: usize },
     Term { list: Option<&'a Vec<(u32, u32)>>, boost: f64 },
+    /// Bit per doc number: has one of the terms.
+    Terms { bits: Vec<u64>, boost: f64 },
     Bool { b: &'a DirectBool, must: Vec<Prepared<'a>>, filter: Vec<Prepared<'a>>, should: Vec<Prepared<'a>>, must_not: Vec<Prepared<'a>> },
 }
 
@@ -1293,6 +1387,18 @@ fn prepare<'a>(ctx: &QueryCtx, inv: &'a InvertedIndex, d: &'a Direct, preps: &mu
             Prepared::Range { field: &dr.field, prep: preps.len() - 1 }
         }
         Direct::Term { key, term, boost } => Prepared::Term { list: inv.fields[key].postings.get(term), boost: *boost },
+        Direct::Terms { key, terms, boost } => {
+            let f = &inv.fields[key];
+            let mut bits = vec![0u64; inv.ids.len().div_ceil(64)];
+            for t in terms {
+                if let Some(ps) = f.postings.get(t) {
+                    for &(d, _) in ps {
+                        bits[d as usize / 64] |= 1 << (d % 64);
+                    }
+                }
+            }
+            Prepared::Terms { bits, boost: *boost }
+        }
         Direct::Bool(b) => {
             let mut all = |v: &'a [Direct]| -> Option<Vec<Prepared<'a>>> { v.iter().map(|d| prepare(ctx, inv, d, preps)).collect() };
             let must = all(&b.must)?;
@@ -1337,6 +1443,13 @@ fn direct_result(idx: &Index, inv: &InvertedIndex, ctx: &QueryCtx, preps: &[&cra
         }
         Prepared::Term { list, boost } => {
             if tf_of(*list, doc) > 0 {
+                (true, *boost)
+            } else {
+                (false, 0.0)
+            }
+        }
+        Prepared::Terms { bits, boost } => {
+            if bits.get(doc as usize / 64).is_some_and(|w| w & (1 << (doc % 64)) != 0) {
                 (true, *boost)
             } else {
                 (false, 0.0)
@@ -1424,9 +1537,15 @@ pub fn candidates(idx: &Index, query: &Map<String, Value>, extra_values: bool) -
         return None;
     }
     let ctx = QueryCtx::new(idx, "", &NULL);
-    let p = plan(&ctx, query)?;
-    let direct = direct_match(&ctx, query, &p);
-    let general = if direct.is_none() { direct_query(&ctx, query) } else { None };
+    // the query is borrowed for the whole call: node addresses are stable
+    PLANS.with(|m| *m.borrow_mut() = Some(Vec::new()));
+    let planned = plan(&ctx, query).map(|p| {
+        let direct = direct_match(&ctx, query, &p);
+        let general = if direct.is_none() { direct_query(&ctx, query) } else { None };
+        (p, direct, general)
+    });
+    PLANS.with(|m| *m.borrow_mut() = None);
+    let (p, direct, general) = planned?;
     let mut keys = Vec::new();
     p.keys(&mut keys);
     if let Some(g) = &general {
@@ -1566,4 +1685,14 @@ pub fn trace(label: &str) {
             eprintln!("[trace] {:>8.2} ms {}", (now - t).as_secs_f64() * 1000.0, label);
         }
     });
+}
+
+/// The clauses of a bool occurrence (one query or a list), borrowed: plans
+/// are memoized by node address (see `PLANS`).
+fn query_list(v: Option<&Value>) -> &[Value] {
+    match v {
+        Some(Value::Array(a)) => a,
+        Some(obj @ Value::Object(_)) => std::slice::from_ref(obj),
+        _ => &[],
+    }
 }

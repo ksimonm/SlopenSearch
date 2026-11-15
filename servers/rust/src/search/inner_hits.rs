@@ -448,9 +448,9 @@ pub(crate) fn build_query_inner_hits(
                             }
                         }
                     } else if matches!(k2.as_str(), "must" | "should" | "filter") {
-                        let arr = match v2 {
-                            Value::Array(a) => a.clone(),
-                            other => vec![other.clone()],
+                        let arr: &[Value] = match v2 {
+                            Value::Array(a) => a,
+                            other => std::slice::from_ref(other),
                         };
                         for item in arr {
                             if let Some(sub) = item.as_object() {

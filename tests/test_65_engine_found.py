@@ -124,3 +124,49 @@ def test_scroll_hit_key_order(client, numbered):
     pages = _scroll_all(client, numbered, {"size": "4", "sort": "_doc"}, {"query": {"match_all": {}}})
     for p in pages[:2]:
         assert list(p["hits"]["hits"][0]) == ["_index", "_id", "_score", "_source", "sort"]
+
+
+@pytest.fixture
+def places(client, index_factory):
+    name = index_factory(settings={"number_of_shards": 1, "number_of_replicas": 0, "analysis": {
+        "normalizer": {"low": {"type": "custom", "filter": ["lowercase"]}}}},
+        mappings={"properties": {"name": {"type": "text", "fields": {"raw": {"type": "keyword"}}},
+                                 "fc": {"type": "keyword"}, "cc": {"type": "keyword", "normalizer": "low"},
+                                 "pop": {"type": "long"}}})
+    rows = [("Sankt Georgen", "P", "AT", 900), ("Wien", "P", "AT", 1800000), ("Graz", "P", "AT", 280000),
+            ("Gross Glockner", "T", "AT", 0), ("Zugspitze", "T", "DE", 0), ("Berlin", "P", "DE", 3600000),
+            ("Bayern", "A", "DE", 13000000), ("Tirol", "A", "AT", 750000), ("Kota", "T", "IN", 5),
+            ("Wien", "A", "AT", 1800000), ("Andorra", "A", "AD", 77000), ("Rhein", "H", "DE", 0)]
+    _bulk(client, name, [(i, {"name": n, "fc": f, "cc": c, "pop": p}) for i, (n, f, c, p) in enumerate(rows)])
+    return name
+
+
+TERMS = ["Wien", "Graz", "Zugspitze", "Tirol", "Kota", "nope", "17"] + [f"x{i}" for i in range(3000)]
+
+
+@pytest.mark.parametrize("query,ids,score", [
+    ({"terms": {"name.raw": TERMS}}, ["1", "2", "4", "7", "8", "9"], 1.0),
+    ({"terms": {"name.raw": TERMS, "boost": 2.5}}, ["1", "2", "4", "7", "8", "9"], 2.5),
+    ({"terms": {"cc": ["at", "IN"]}}, ["0", "1", "2", "3", "7", "8", "9"], 1.0),
+    ({"bool": {"must": [{"match": {"fc": "T"}}], "filter": [{"terms": {"name.raw": TERMS}}]}}, ["4", "8"], 1.0),
+    ({"bool": {"must": [{"match": {"fc": "A"}}], "must_not": [{"terms": {"name.raw": TERMS}}]}}, ["6", "10"], 1.0),
+    ({"bool": {"must": [{"match": {"cc": {"query": "At", "boost": 3}}}], "must_not": [{"terms": {"fc": ["T", "H"]}}]}},
+     ["0", "1", "2", "7", "9"], 3.0),
+    ({"match": {"cc": "de"}}, ["4", "5", "6", "11"], 1.0),
+    ({"bool": {"should": [{"match": {"fc": "P"}}, {"match": {"name": "wien"}}], "must_not": [{"match": {"cc": "de"}}]}},
+     ["0", "1", "2", "9"], None),
+], ids=["terms", "terms_boost", "terms_normalized", "filtered", "prohibited", "match_kw_normalized", "match_kw",
+        "should_kw_text"])
+def test_large_terms_and_keyword_match(client, places, query, ids, score):
+    r = client.post(f"/{places}/_search", json={"query": query, "size": 20})
+    assert r.status_code == 200, r.text
+    hits = r.json()["hits"]
+    assert hits["total"] == {"value": len(ids), "relation": "eq"}
+    if score is None:
+        assert sorted(h["_id"] for h in hits["hits"]) == sorted(ids)
+        assert hits["hits"][0]["_id"] == "1"
+        assert hits["max_score"] == hits["hits"][0]["_score"]
+    else:
+        assert [h["_id"] for h in hits["hits"]] == ids
+        assert {h["_score"] for h in hits["hits"]} == {score}
+        assert hits["max_score"] == score
