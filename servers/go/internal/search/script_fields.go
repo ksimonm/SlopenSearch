@@ -18,13 +18,13 @@ func EvalScriptFields(hit MultiHit, specs map[string]any) (map[string]any, *apie
 			src[k] = v
 		}
 	}
-	source := painless.FromJSON(DeepCopySource(src), painless.Linked).(*painless.Map)
+	source := painless.FromJSON(jsonv.DeepCopy(src), painless.Linked).(*painless.Map)
 	for _, name := range jsonv.SortedKeys(specs) {
 		spec, _ := specs[name].(map[string]any)
 		ignore, _ := spec["ignore_failure"].(bool)
 		cs, se, ae := PrepareScript(spec["script"], "field")
 		if se != nil || ae != nil {
-			return nil, ScriptErrForShard(hit.Idx, se, ae, false)
+			return nil, ScriptFailure(hit.Idx, se, ae, false)
 		}
 		v, rerr := cs.Run(qc, RunOpts{Source: source})
 		if rerr != nil {

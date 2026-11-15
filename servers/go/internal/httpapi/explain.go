@@ -64,7 +64,7 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request, name, id 
 	out := map[string]any{"_index": idx.Name, "_id": id, "matched": matched, "explanation": explanation}
 	if sourceRequested(r, body) {
 		out["get"] = map[string]any{"_seq_no": idx.SeqNos[id], "_primary_term": int64(1), "found": true,
-			"_source": search.FilterSourceDoc(doc, nil, nil)}
+			"_source": search.FilterSource(doc, nil, nil)}
 	}
 	writeJSON(w, 200, out)
 }

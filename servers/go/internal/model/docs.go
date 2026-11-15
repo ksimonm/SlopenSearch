@@ -79,7 +79,7 @@ func (idx *Index) RoutingMatches(id, routing string) bool {
 // it never makes an existing document disappear.
 func (idx *Index) MarkPending(id string, doc map[string]any, existed bool) {
 	if _, pending := idx.Pending[id]; existed && !pending {
-		idx.NoteStaleOverwrite(id)
+		idx.noteStaleOverwrite(id)
 		return
 	}
 	idx.Pending[id] = doc

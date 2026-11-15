@@ -7,6 +7,7 @@ pub(crate) mod fields;
 pub(crate) mod geo;
 pub(crate) mod knn;
 pub(crate) mod knn_index;
+pub(crate) mod nonstd_json;
 
 use crate::dates::parse_date_string;
 use crate::model::Index;

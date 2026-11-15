@@ -472,7 +472,7 @@ func DynamicDefFor(idx *model.Index, path, name string, raw any) (map[string]any
 	if t, _ := def["type"].(string); t == "text" && tmpl != nil && containsDynamicTypePlaceholder(tmpl) {
 		delete(def, "doc_values")
 	}
-	if a, ok := def["analyzer"].(string); ok && a != "" && !MatchAnalyzerExists(idx, a) {
+	if a, ok := def["analyzer"].(string); ok && a != "" && !AnalyzerExists(idx, a) {
 		return nil, matched, &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 			Reason:   "failed to parse",
 			CausedBy: &apierr.Error{Type: "illegal_argument_exception", Reason: "analyzer [" + a + "] has not been configured in mappings"}}

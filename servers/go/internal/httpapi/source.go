@@ -24,13 +24,13 @@ func mappingSourceSpec(idx *model.Index) (includes, excludes []string, enabled b
 		if b, ok := t["enabled"].(bool); ok {
 			enabled = b
 		}
-		includes = search.AnyStringList(t["includes"])
+		includes = search.StringList(t["includes"])
 		if len(includes) == 0 {
-			includes = search.AnyStringList(t["include"])
+			includes = search.StringList(t["include"])
 		}
-		excludes = search.AnyStringList(t["excludes"])
+		excludes = search.StringList(t["excludes"])
 		if len(excludes) == 0 {
-			excludes = search.AnyStringList(t["exclude"])
+			excludes = search.StringList(t["exclude"])
 		}
 		return includes, excludes, enabled
 	}

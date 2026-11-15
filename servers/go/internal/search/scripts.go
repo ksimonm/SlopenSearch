@@ -179,8 +179,8 @@ func scriptQueryCompileError(idx *model.Index, se *ScriptError) *apierr.Error {
 	return &apierr.Error{Type: "script_exception", Status: 400, Reason: "script error", Shard: f}
 }
 
-// PlainShardError reports a non-script exception raised on the shard.
-func PlainShardError(idx *model.Index, e *apierr.Error) *apierr.Error {
+// ShardError reports a non-script exception raised on the shard.
+func ShardError(idx *model.Index, e *apierr.Error) *apierr.Error {
 	if e.Shard != nil {
 		return e
 	}
@@ -197,9 +197,9 @@ func PlainShardError(idx *model.Index, e *apierr.Error) *apierr.Error {
 	return &apierr.Error{Type: e.Type, Status: status, Reason: e.Reason, Shard: f}
 }
 
-// ScriptErrForShard turns any script setup or execution error into a shard
+// ScriptFailure turns any script setup or execution error into a shard
 // failure.
-func ScriptErrForShard(idx *model.Index, se *ScriptError, ae *apierr.Error, query bool) *apierr.Error {
+func ScriptFailure(idx *model.Index, se *ScriptError, ae *apierr.Error, query bool) *apierr.Error {
 	if se != nil {
 		if query {
 			return scriptQueryCompileError(idx, se)
@@ -212,7 +212,7 @@ func ScriptErrForShard(idx *model.Index, se *ScriptError, ae *apierr.Error, quer
 	if ae.Type == "x_content_parse_exception" || (ae.Type == "illegal_argument_exception" && ae.Reason == "illegally specified <lang> for a stored script") {
 		return ae
 	}
-	return PlainShardError(idx, ae)
+	return ShardError(idx, ae)
 }
 
 // CompiledScript is a script prepared for one context, in either language.

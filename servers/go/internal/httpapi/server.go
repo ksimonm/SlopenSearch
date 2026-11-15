@@ -8,6 +8,7 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -141,13 +142,12 @@ func errorMetadata(fields map[string]any) ojson.Object {
 	return out
 }
 
-func causedByObject(e *apierr.Error) map[string]any {
-	m := map[string]any{"type": e.Type, "reason": e.Reason}
-	for k, v := range e.Fields {
-		m[k] = v
-	}
+// causedByObject renders a cause the way OpenSearch orders it: type, reason,
+// metadata, then its own cause.
+func causedByObject(e *apierr.Error) ojson.Object {
+	m := append(ojson.Object{{"type", e.Type}, {"reason", e.Reason}}, errorMetadata(e.Fields)...)
 	if e.CausedBy != nil {
-		m["caused_by"] = causedByObject(e.CausedBy)
+		m = append(m, ojson.KV{"caused_by", causedByObject(e.CausedBy)})
 	}
 	return m
 }
@@ -192,11 +192,14 @@ func readJSONRaw(r *http.Request) (map[string]any, []byte, *apierr.Error) {
 func checkDuplicateJSONKeys(body []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.UseNumber()
+	// A syntax error is left to the caller's parse; it must end the walk:
+	// dec.More() keeps reporting true in front of an invalid token.
+	errSyntax := errors.New("syntax")
 	var walk func() error
 	walk = func() error {
 		tok, err := dec.Token()
 		if err != nil {
-			return nil
+			return errSyntax
 		}
 		delim, ok := tok.(json.Delim)
 		if !ok {
@@ -208,7 +211,7 @@ func checkDuplicateJSONKeys(body []byte) error {
 			for dec.More() {
 				kt, err := dec.Token()
 				if err != nil {
-					return nil
+					return errSyntax
 				}
 				k, _ := kt.(string)
 				if seen[k] {
@@ -230,7 +233,10 @@ func checkDuplicateJSONKeys(body []byte) error {
 		}
 		return nil
 	}
-	return walk()
+	if err := walk(); err != errSyntax {
+		return err
+	}
+	return nil
 }
 
 func (s *Server) getIndex(name string) (*model.Index, *apierr.Error) {
@@ -349,7 +355,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if segs[0] == "_bulk" {
-		s.handleBulkV2(w, r, "")
+		s.handleBulk(w, r, "")
 		return
 	}
 	if segs[0] == "_msearch" {
@@ -618,7 +624,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		case "_analyze":
 			s.handleAnalyze(w, r, index)
 		case "_bulk":
-			s.handleBulkV2(w, r, index)
+			s.handleBulk(w, r, index)
 		case "_msearch":
 			s.handleMsearch(w, r, index)
 		case "_mget":
@@ -694,7 +700,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 			}
 		case "_doc":
 			if r.Method == http.MethodPost {
-				s.handleIndexDocV2(w, r, index, "", "index")
+				s.handleIndexDoc(w, r, index, "", "index")
 			} else {
 				methodNotAllowed(w, r, "POST")
 			}
@@ -728,11 +734,11 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		case "_doc":
 			switch r.Method {
 			case http.MethodPut, http.MethodPost:
-				s.handleIndexDocV2(w, r, index, segs[2], "index")
+				s.handleIndexDoc(w, r, index, segs[2], "index")
 			case http.MethodGet, http.MethodHead:
-				s.handleGetDocV2(w, r, index, segs[2])
+				s.handleGetDoc(w, r, index, segs[2])
 			case http.MethodDelete:
-				s.handleDeleteDocV2(w, r, index, segs[2])
+				s.handleDeleteDoc(w, r, index, segs[2])
 			case http.MethodOptions:
 				w.Header().Set("Allow", "PUT,POST,GET,HEAD,DELETE")
 				w.Header().Set("Content-Type", "text/plain; charset=UTF-8")
@@ -745,11 +751,11 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 				methodNotAllowed(w, r, "GET", "HEAD")
 				return
 			}
-			s.handleGetSourceV2(w, r, index, segs[2])
+			s.handleGetSource(w, r, index, segs[2])
 		case "_termvectors":
 			s.handleTermVectors(w, r, index, segs[2])
 		case "_update":
-			s.handleUpdateDocV2(w, r, index, segs[2])
+			s.handleUpdateDoc(w, r, index, segs[2])
 		case "_explain":
 			s.handleExplain(w, r, index, segs[2])
 		case "_rollover":
@@ -757,7 +763,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		case "_clone", "_shrink", "_split":
 			s.handleResize(w, r, index, strings.TrimPrefix(segs[1], "_"), segs[2])
 		case "_create":
-			s.handleIndexDocV2(w, r, index, segs[2], "create")
+			s.handleIndexDoc(w, r, index, segs[2], "create")
 		case "_alias", "_aliases":
 			switch r.Method {
 			case http.MethodGet, http.MethodHead:
@@ -1041,8 +1047,8 @@ func (s *Server) handleCount(w http.ResponseWriter, r *http.Request, name string
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	o := s.parseResolveParams(r, resolveOpts2{closedError: true})
-	indices, apiErr := s.resolveSpec2(name, o)
+	o := s.parseResolveParams(r, specOpts{closedError: true})
+	indices, apiErr := s.resolveSpec(name, o)
 	if apiErr != nil {
 		writeError(w, apiErr)
 		return

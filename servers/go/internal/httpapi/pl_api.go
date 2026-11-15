@@ -3,9 +3,11 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
@@ -41,7 +43,7 @@ func (s *Server) handlePainlessExecute(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		col := strings.Index(string(raw), `"script"`) + len(`"script"`) + 2
 		writeError(w, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
-			Reason: "[1:" + search.Itoa(col) + "] [painless_execute_request] script doesn't support values of type: VALUE_STRING"})
+			Reason: "[1:" + strconv.Itoa(col) + "] [painless_execute_request] script doesn't support values of type: VALUE_STRING"})
 		return
 	}
 	ctxName := "painless_test"
@@ -63,7 +65,7 @@ func (s *Server) handlePainlessExecute(w http.ResponseWriter, r *http.Request) {
 	}
 	src, _ := sm["source"].(string)
 	if len(src) > 65535 {
-		writeError(w, apierr.BadRequest("exceeded max allowed inline script size in bytes [65535] with size ["+search.Itoa(len(src))+"] for script ["+src+"]"))
+		writeError(w, apierr.BadRequest("exceeded max allowed inline script size in bytes [65535] with size ["+strconv.Itoa(len(src))+"] for script ["+src+"]"))
 		return
 	}
 	lang, _ := sm["lang"].(string)
@@ -140,7 +142,7 @@ func (s *Server) handlePainlessExecute(w http.ResponseWriter, r *http.Request) {
 // index the execute API builds for context_setup.
 func plTempIndex(idx *model.Index, doc map[string]any) *model.Index {
 	tmp := &model.Index{Name: idx.Name, UUID: idx.UUID, Settings: idx.Settings,
-		Mappings:   search.DeepCopySource(idx.Mappings).(map[string]any),
+		Mappings:   jsonv.DeepCopy(idx.Mappings).(map[string]any),
 		Docs:       map[string]map[string]any{"_execute": doc},
 		Order:      []string{"_execute"},
 		DocValues:  map[string]map[string][]any{},

@@ -4613,3 +4613,12 @@ pub fn apply_search_response(
     }
     Ok(())
 }
+
+/// Whether indexing into `index` goes through an ingest pipeline: the
+/// requested one (unless "_none"), else the index default pipeline, or the
+/// index final pipeline.
+pub(crate) fn runs_pipeline(store: &Store, index: &str, requested: &str) -> bool {
+    let real = |p: &str| !p.is_empty() && p != "_none";
+    matches!(effective_ingest_pipeline(store, index, requested), Ok(Some(p)) if real(&p))
+        || final_ingest_pipeline(store, index).map_or(false, |p| real(&p))
+}

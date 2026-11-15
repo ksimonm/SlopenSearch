@@ -1,7 +1,11 @@
 // Package settings reads index settings maps.
 package settings
 
-import "slopensearch/internal/jsonv"
+import (
+	"slopensearch/internal/jsonv"
+	"slopensearch/internal/wildcard"
+	"strings"
+)
 
 // Int returns an integer setting (see Find).
 func Int(settings map[string]any, key string) (int, bool) {
@@ -31,4 +35,21 @@ func Find(settings map[string]any, key string) (any, bool) {
 		}
 	}
 	return nil, false
+}
+
+// MatchAny reports whether a setting key matches one of the patterns ("*"
+// wildcards; a trailing "*" also matches as a prefix). No patterns match all keys.
+func MatchAny(patterns []string, key string) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+	for _, p := range patterns {
+		if p == "" {
+			continue
+		}
+		if wildcard.Match(p, key) || strings.HasPrefix(key, strings.TrimSuffix(p, "*")) && strings.HasSuffix(p, "*") {
+			return true
+		}
+	}
+	return false
 }

@@ -35,8 +35,8 @@ func indexAliasesView(indices []*model.Index, nameSpec string, includeAll bool) 
 func (s *Server) getAliasesIndexed(w http.ResponseWriter, r *http.Request, indexSpec, aliasSpec string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	o := s.parseResolveParams(r, resolveOpts2{})
-	indices, apiErr2 := s.resolveSpec2(indexSpec, o)
+	o := s.parseResolveParams(r, specOpts{})
+	indices, apiErr2 := s.resolveSpec(indexSpec, o)
 	if apiErr2 != nil {
 		writeError(w, apiErr2)
 		return
@@ -210,8 +210,8 @@ func (s *Server) putAliasAPI(w http.ResponseWriter, r *http.Request, indexSpec, 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	o := s.parseResolveParams(r, resolveOpts2{})
-	indices, apiErr3 := s.resolveSpec2(indexSpec, o)
+	o := s.parseResolveParams(r, specOpts{})
+	indices, apiErr3 := s.resolveSpec(indexSpec, o)
 	if apiErr3 != nil {
 		writeError(w, apiErr3)
 		return
@@ -272,8 +272,8 @@ func (s *Server) putAliasAPI(w http.ResponseWriter, r *http.Request, indexSpec, 
 func (s *Server) deleteAliasAPI(w http.ResponseWriter, r *http.Request, indexSpec, aliasSpec string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	o := s.parseResolveParams(r, resolveOpts2{})
-	indices, apiErr2 := s.resolveSpec2(indexSpec, o)
+	o := s.parseResolveParams(r, specOpts{})
+	indices, apiErr2 := s.resolveSpec(indexSpec, o)
 	if apiErr2 != nil {
 		writeError(w, apiErr2)
 		return

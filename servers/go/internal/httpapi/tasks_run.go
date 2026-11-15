@@ -309,7 +309,7 @@ func (s *Server) bbsMatches(action string, segs []string, q url.Values, body map
 			return nil, false
 		}
 		allowNo := false
-		indices, e := s.resolveSpec2(spec, resolveOpts2{allowNoIndices: &allowNo})
+		indices, e := s.resolveSpec(spec, specOpts{allowNoIndices: &allowNo})
 		if e != nil {
 			return nil, false
 		}

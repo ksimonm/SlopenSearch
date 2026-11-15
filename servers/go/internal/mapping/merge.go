@@ -23,7 +23,7 @@ func FieldMappings(idx *model.Index, spec string, includeDefaults bool) map[stri
 	patterns := strings.Split(spec, ",")
 	result := map[string]any{}
 	for _, leaf := range leaves {
-		if !MatchAnySettingPattern(patterns, leaf.path) {
+		if !settings.MatchAny(patterns, leaf.path) {
 			continue
 		}
 		def := map[string]any{}

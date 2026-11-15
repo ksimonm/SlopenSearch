@@ -6,14 +6,15 @@ import (
 	"strconv"
 
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/jsonv"
 	"slopensearch/internal/mapping"
 )
 
 func (s *Server) getMappingAPI(w http.ResponseWriter, r *http.Request, spec, fields string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	o := s.parseResolveParams(r, resolveOpts2{})
-	indices, apiErr2 := s.resolveSpec2(spec, o)
+	o := s.parseResolveParams(r, specOpts{})
+	indices, apiErr2 := s.resolveSpec(spec, o)
 	if apiErr2 != nil {
 		writeError(w, apiErr2)
 		return
@@ -46,8 +47,8 @@ func (s *Server) putMappingAPI(w http.ResponseWriter, r *http.Request, spec stri
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	o := s.parseResolveParams(r, resolveOpts2{})
-	indices, apiErr3 := s.resolveSpec2(spec, o)
+	o := s.parseResolveParams(r, specOpts{})
+	indices, apiErr3 := s.resolveSpec(spec, o)
 	if apiErr3 != nil {
 		writeError(w, apiErr3)
 		return
@@ -86,7 +87,7 @@ func (s *Server) putMappingAPI(w http.ResponseWriter, r *http.Request, spec stri
 		}
 	}
 	if src, ok := body["_source"].(map[string]any); ok {
-		for _, k := range mapping.SortedAnyKeys(src) {
+		for _, k := range jsonv.SortedKeys(src) {
 			switch k {
 			case "enabled", "includes", "excludes", "include", "exclude":
 			default:
@@ -119,7 +120,7 @@ func (s *Server) putMappingAPI(w http.ResponseWriter, r *http.Request, spec stri
 		}
 		existingProps := mapping.EnsureProperties(idx.Mappings)
 		if props, ok := body["properties"].(map[string]any); ok {
-			if err := mapping.KnnPutMappingCheck(idx, existingProps, props); err != nil {
+			if err := mapping.CheckKnnMappingUpdate(idx, existingProps, props); err != nil {
 				writeError(w, err)
 				return
 			}

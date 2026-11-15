@@ -22,6 +22,11 @@ make go-dev                                       # serves :9291
 OS_PORT=9291 .venv/bin/pytest -m aggs
 ```
 
+Unit tests of the `internal/` packages (painless, expressions, mustache, jregex,
+analysis, dates, mapping, respfmt, jsonv, ojson and pure search/aggs helpers) run
+natively in a few seconds: `make go-unit` (or `cd servers/go && go test ./...`). Their
+expected values come from `tests/reference` answers; the black-box suite stays the spec.
+
 To see what OpenSearch really answers in a test, without running OpenSearch:
 `make ref-show T=<part of the test name>` (or add `TB=short` to a test run: a failing
 test then prints the reference exchange). For requests no test makes, start the
@@ -48,7 +53,7 @@ Domain and engine packages:
 | `internal/model` | the domain state: `State` (indices, cluster settings, templates, data streams, pipelines, stored scripts), `Index` (metadata, settings, mappings, documents, versions, seq_nos, routing, pending/stale writes) with its accessors, `DataStream`, node identity constants | settings |
 | `internal/dates` | date parsing and formatting as OpenSearch does it: Java format names and patterns, epoch values, ISO detection, range date math | jsonv |
 | `internal/mapping` | mappings and field types: validation, merging, dotted names, dynamic mappings and templates, alias resolution (`FieldDef`), index-time parsing of documents into doc values (`ParseContext`, `ComputeDocValues`), knn_vector/completion/geo field values | analysis, apierr, dates, jsonv, model, ojson, settings, wildcard |
-| `internal/search` | query evaluation (`QueryCtx`, `EvalQuery`), scoring, query_string, inner hits, percolate, function_score, k-NN queries, highlighting, source filtering, sort specs and hit sorting, `search_after`, collapse, rescore, shard-level query validation, profile; the painless/expressions glue for script queries, scores, fields and sorts. Other indices and stored scripts are reached through `search.Cluster` (`ClusterLookup`, set by the server) | analysis, apierr, dates, expressions, jsonv, mapping, model, mustache, ojson, painless, settings |
+| `internal/search` | query evaluation (`QueryCtx`, `EvalQuery`), scoring, query_string, inner hits, percolate, function_score, k-NN queries, highlighting, source filtering, sort specs and hit sorting (`SortHits`), `search_after`, collapse, rescore, shard-level query validation, profile; the painless/expressions glue for script queries, scores, fields and sorts. Other indices and stored scripts are reached through `search.Cluster` (`ClusterLookup`, set by the server) | analysis, apierr, dates, expressions, jsonv, mapping, model, mustache, ojson, painless, settings |
 | `internal/aggs` | bucket, metric and pipeline aggregations, scripted aggregations (`aggs.Evaluate` over `aggs.Hit`) | search, mapping, model, ... |
 | `internal/suggest` | term, phrase (with collate) and completion suggesters (`suggest.Evaluate`) | search, mapping, model, ... |
 | `internal/ingest` | ingest pipelines: validation, processors, `on_failure`, `_simulate`, default/final pipelines (`ingest.Engine`); script processors compile through the `ingest.Scripts` interface | apierr, jsonv, model, painless, settings, wildcard |
@@ -60,9 +65,9 @@ Leaf libraries (no server state):
 | Package | Contents | Depends on |
 |---|---|---|
 | `internal/ojson` | ordered JSON objects (`Object`, `KV`), `Verbatim`, `Marshal` | - |
-| `internal/jsonv` | decoded JSON value helpers: `ToFloat`, `ToString`, `ScalarString`, `Float` (Java-style doubles), `FormatNumber`, `EncodeString`, `DeepCopy`, `SortedKeys`, `Unmarshal` | - |
+| `internal/jsonv` | decoded JSON value helpers: `ToFloat`, `ToInt64`, `Int`, `ToString`, `ScalarString`, `Float` (Java-style doubles), `NormalizeNumbers`, `FormatNumber`, `EncodeString`, `DeepCopy`, `SortedKeys`, `Unmarshal` | - |
 | `internal/wildcard` | `*` pattern matching | - |
-| `internal/settings` | index settings lookup (`Find`, `Int`, `ValueString`, `ValueInt`) | jsonv |
+| `internal/settings` | index settings lookup (`Find`, `Int`, `ValueString`, `ValueInt`), setting key patterns (`MatchAny`) | jsonv, wildcard |
 | `internal/apierr` | the API error type (`Error`, `Response` for pre-rendered bodies), common errors (`BadRequest`, `Parsing`, `IndexNotFound`) | - |
 | `internal/jregex` | backtracking `java.util.regex` subset (lookaround, possessive, `\p{..}`) | - |
 | `internal/painless` | Painless: lexer, parser, type checks, interpreter, values with Java semantics, class library, `java.time`, script contexts and compile cache | - |
@@ -79,11 +84,12 @@ Files of `internal/httpapi`:
 |---|---|
 | `server.go`, `httpconn.go`, `httplayer.go`, `utf8check.go` | HTTP entry point, routing, error rendering, wire-level quirks |
 | `state.go` | `Server`, `NewServer`, the `search.Cluster` adapter |
-| `meta.go` | index pattern resolution, cluster/meta routes |
+| `meta.go`, `cluster.go` | index pattern resolution, request helpers, server routes; cluster health, state, stats, settings, allocation explain |
 | `admin.go`, `maps_api.go` | index create/delete/get, settings, `_mapping` |
 | `alias.go`, `templates.go`, `datastreams.go`, `rollover.go` | aliases, index templates, data streams, rollover |
 | `resize.go`, `reindex.go`, `resolve_index.go`, `maintenance.go` | clone/shrink/split, `_reindex`, `_resolve/index`, refresh/flush/forcemerge |
-| `documents.go`, `bulk.go`, `byquery.go`, `termvectors.go` | document CRUD, `_bulk`, by-query APIs, term vectors |
+| `documents.go`, `doc_checks.go`, `update.go`, `mget.go` | document index/get/delete, percolator and join document checks, `_update`, `_mget` |
+| `bulk.go`, `byquery.go`, `termvectors.go` | `_bulk`, by-query APIs, term vectors |
 | `search.go`, `explain.go`, `validate.go`, `field_caps.go`, `source.go` | `_search` request handling and response assembly, `_explain`, `_validate`, `_field_caps` |
 | `scroll.go`, `pit.go`, `msearch.go`, `search_templates.go`, `rank_eval.go` | scroll, point in time, `_msearch`, search templates, `_rank_eval` |
 | `search_pipelines.go`, `search_shards.go`, `shard_routing.go`, `requestcache.go` | search pipelines, `_search_shards`, shard routing, request cache |

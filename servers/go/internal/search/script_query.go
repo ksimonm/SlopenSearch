@@ -9,7 +9,7 @@ import (
 	"slopensearch/internal/painless"
 )
 
-func (c *QueryCtx) EvalScriptQuery(body any) (bool, float64, *apierr.Error) {
+func (c *QueryCtx) evalScriptQuery(body any) (bool, float64, *apierr.Error) {
 	bm, ok := body.(map[string]any)
 	if !ok {
 		return false, 0, apierr.Parsing("[script] query malformed")
@@ -20,7 +20,7 @@ func (c *QueryCtx) EvalScriptQuery(body any) (bool, float64, *apierr.Error) {
 	}
 	cs, se, ae := PrepareScript(bm["script"], "filter")
 	if se != nil || ae != nil {
-		return false, 0, ScriptErrForShard(c.Idx, se, ae, true)
+		return false, 0, ScriptFailure(c.Idx, se, ae, true)
 	}
 	v, rerr := cs.Run(c, RunOpts{})
 	if rerr != nil {
@@ -68,7 +68,7 @@ func (c *QueryCtx) evalScriptScore(body any) (bool, float64, *apierr.Error) {
 	}
 	cs, se, ae := PrepareScript(bm["script"], "score")
 	if se != nil || ae != nil {
-		return false, 0, ScriptErrForShard(c.Idx, se, ae, true)
+		return false, 0, ScriptFailure(c.Idx, se, ae, true)
 	}
 	v, rerr := cs.Run(c, RunOpts{Score: float64(float32(base))})
 	if rerr != nil {
@@ -76,8 +76,8 @@ func (c *QueryCtx) evalScriptScore(body any) (bool, float64, *apierr.Error) {
 	}
 	score := painless.F64(v)
 	if score < 0 || math.IsNaN(score) {
-		return false, 0, PlainShardError(c.Idx, apierr.BadRequest("script_score script returned an invalid score ["+
-			painless.FormatDouble(score)+"] for doc ["+Itoa(luceneDocNum(c.Idx, c.ID))+"]. Must be a non-negative score!"))
+		return false, 0, ShardError(c.Idx, apierr.BadRequest("script_score script returned an invalid score ["+
+			painless.FormatDouble(score)+"] for doc ["+itoa(luceneDocNum(c.Idx, c.ID))+"]. Must be a non-negative score!"))
 	}
 	score = float64(float32(score))
 	if b, ok := jsonv.ToFloat(bm["boost"]); ok {

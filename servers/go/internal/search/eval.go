@@ -352,18 +352,18 @@ func numericEqual(a, b any) bool {
 		if ub, ok := b.(uint64); ok {
 			return ua == ub
 		}
-		if ib, ok := IntegerOf(b); ok && ib >= 0 {
+		if ib, ok := jsonv.ToInt64(b); ok && ib >= 0 {
 			return ua == uint64(ib)
 		}
 		return false
 	}
 	if ub, ok := b.(uint64); ok {
-		if ia, ok := IntegerOf(a); ok && ia >= 0 {
+		if ia, ok := jsonv.ToInt64(a); ok && ia >= 0 {
 			return ub == uint64(ia)
 		}
 	}
-	if ia, ok := IntegerOf(a); ok {
-		if ib, ok := IntegerOf(b); ok {
+	if ia, ok := jsonv.ToInt64(a); ok {
+		if ib, ok := jsonv.ToInt64(b); ok {
 			return ia == ib
 		}
 	}
@@ -372,31 +372,12 @@ func numericEqual(a, b any) bool {
 	return aok && bok && af == bf
 }
 
-func IntegerOf(v any) (int64, bool) {
-	switch t := v.(type) {
-	case int64:
-		return t, true
-	case int:
-		return int64(t), true
-	case uint64:
-		if t <= 1<<63-1 {
-			return int64(t), true
-		}
-		return 0, false
-	case json.Number:
-		if n, err := t.Int64(); err == nil {
-			return n, true
-		}
-	}
-	return 0, false
-}
-
 func numericLess(a, b any) int {
 	if ua, ok := a.(uint64); ok {
 		var ub uint64
 		if v, ok := b.(uint64); ok {
 			ub = v
-		} else if ib, ok := IntegerOf(b); ok && ib >= 0 {
+		} else if ib, ok := jsonv.ToInt64(b); ok && ib >= 0 {
 			ub = uint64(ib)
 		} else {
 			bf, _ := jsonv.ToFloat(b)
@@ -416,7 +397,7 @@ func numericLess(a, b any) int {
 		return 0
 	}
 	if ub, ok := b.(uint64); ok {
-		if ia, ok := IntegerOf(a); ok {
+		if ia, ok := jsonv.ToInt64(a); ok {
 			if ia < 0 {
 				return -1
 			}
@@ -429,8 +410,8 @@ func numericLess(a, b any) int {
 			return 0
 		}
 	}
-	if ia, ok := IntegerOf(a); ok {
-		if ib, ok := IntegerOf(b); ok {
+	if ia, ok := jsonv.ToInt64(a); ok {
+		if ib, ok := jsonv.ToInt64(b); ok {
 			switch {
 			case ia < ib:
 				return -1
@@ -456,11 +437,9 @@ func numericLess(a, b any) int {
 	return strings.Compare(as, bs)
 }
 
-// parseTermValue converts a term query value into the indexed representation
-// for the field type.
 // termDateParseError reshapes a date parse failure from a term-level query
 // into the parse_exception wrapper OpenSearch reports for it.
-func TermDateParseError(err *apierr.Error) *apierr.Error {
+func termDateParseError(err *apierr.Error) *apierr.Error {
 	inner := err.Reason
 	if err.CausedBy != nil && err.CausedBy.Reason != "" {
 		inner = err.CausedBy.Reason
@@ -472,7 +451,9 @@ func TermDateParseError(err *apierr.Error) *apierr.Error {
 				Reason: "Failed to parse with all enclosed parsers"}}}
 }
 
-func ParseTermValue(ftype string, def map[string]any, v any) ([]any, *apierr.Error) {
+// parseTermValue converts a term query value into the indexed representation
+// for the field type.
+func parseTermValue(ftype string, def map[string]any, v any) ([]any, *apierr.Error) {
 	switch ftype {
 	case "integer", "long", "short", "byte", "unsigned_long":
 		ctx := &mapping.ParseContext{Idx: nil, IndexCoerce: true}
@@ -527,7 +508,7 @@ func ParseTermValue(ftype string, def map[string]any, v any) ([]any, *apierr.Err
 				return nil, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 					Reason: fmt.Sprintf("'%s' is not an IP string literal.", s)}
 			}
-			return []any{CanonicalIP(ipnet.String())}, nil
+			return []any{canonicalIP(ipnet.String())}, nil
 		}
 		ctx := &mapping.ParseContext{Idx: nil, IndexCoerce: true}
 		parsed, err := ctx.ParseIPValue("_value", v)
@@ -584,10 +565,10 @@ func ipContains(host, needle string) bool {
 		ip := net.ParseIP(host)
 		return ip != nil && network.Contains(ip)
 	}
-	return host == CanonicalIP(needle)
+	return host == canonicalIP(needle)
 }
 
-func CanonicalIP(s string) string {
+func canonicalIP(s string) string {
 	ip := net.ParseIP(s)
 	if ip == nil {
 		return s
@@ -773,13 +754,13 @@ func (c *QueryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 	if def, ok := mapping.FieldDef(c.Idx, field); ok {
 		t, _ := def["type"].(string)
 		if t == "rank_feature" || t == "rank_features" {
-			return false, 0, MatchSearchError("query_shard_exception", "failed to create query: Queries on [rank_feature] fields are not supported")
+			return false, 0, AllShardsFailed("query_shard_exception", "failed to create query: Queries on [rank_feature] fields are not supported")
 		}
 		if t == "completion" {
 			return false, 0, nil
 		}
 		if t == "binary" {
-			return false, 0, MatchSearchError("query_shard_exception", "Binary fields do not support searching")
+			return false, 0, AllShardsFailed("query_shard_exception", "Binary fields do not support searching")
 		}
 		notIndexed := false
 		if iv, ok := def["index"].(bool); ok && !iv {
@@ -795,10 +776,10 @@ func (c *QueryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 			if textField {
 				reason = "failed to create query: Cannot search on field [" + field + "] since it is not indexed."
 			}
-			return false, 0, MatchSearchError("query_shard_exception", reason)
+			return false, 0, AllShardsFailed("query_shard_exception", reason)
 		}
 		if notIndexed && (t == "text" || t == "match_only_text" || t == "search_as_you_type") {
-			return false, 0, MatchSearchError("query_shard_exception",
+			return false, 0, AllShardsFailed("query_shard_exception",
 				"failed to create query: Cannot search on field ["+field+"] since it is not indexed.")
 		}
 	}
@@ -922,7 +903,7 @@ func (c *QueryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 			RootCause: &apierr.Error{Type: "illegal_argument_exception",
 				Reason: "Field [completion] of type [completion] is not supported for term queries"}}
 	case "token_count", "rank_feature", "rank_features":
-		parsed, err := ParseTermValue(ftype, def, val)
+		parsed, err := parseTermValue(ftype, def, val)
 		if err != nil {
 			return false, 0, err
 		}
@@ -958,7 +939,7 @@ func (c *QueryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 		}
 		fallthrough
 	case "integer_range", "float_range", "long_range", "double_range", "date_range":
-		parsed, err := ParseTermValue(ftype, def, val)
+		parsed, err := parseTermValue(ftype, def, val)
 		if err != nil {
 			return false, 0, err
 		}
@@ -1005,7 +986,7 @@ func (c *QueryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 					CausedBy: &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: reason}}
 			}
 		}
-		parsed, err := ParseTermValue(ftype, def, val)
+		parsed, err := parseTermValue(ftype, def, val)
 		if err != nil {
 			return false, 0, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: fmt.Sprintf("failed to parse value [%s] as a boolean", mapping.PreviewValue(val))}
@@ -1017,9 +998,9 @@ func (c *QueryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 		}
 		return false, 0, nil
 	case "date", "date_nanos":
-		parsed, err := ParseTermValue(ftype, def, val)
+		parsed, err := parseTermValue(ftype, def, val)
 		if err != nil {
-			return false, 0, TermDateParseError(err)
+			return false, 0, termDateParseError(err)
 		}
 		dayOnly := false
 		if s, ok := jsonv.ScalarString(val); ok && len(s) == 10 && s[4] == '-' && s[7] == '-' {
@@ -1044,7 +1025,7 @@ func (c *QueryCtx) evalTerm(field string, raw any, boost float64) (bool, float64
 		if mapping.IsIntegerKind(ftype) && hasFractionalNumericValue(val) {
 			return false, 0, nil
 		}
-		parsed, err := ParseTermValue(ftype, def, val)
+		parsed, err := parseTermValue(ftype, def, val)
 		if err != nil {
 			return false, 0, err
 		}
@@ -1075,7 +1056,7 @@ func fuzzinessValue(v any, term string) (int, bool) {
 	case string:
 		if strings.HasPrefix(t, "AUTO") {
 			if t == "AUTO" {
-				return AutoFuzziness(term), true
+				return autoFuzziness(term), true
 			}
 			if strings.HasPrefix(t, "AUTO:") {
 				parts := strings.Split(strings.TrimPrefix(t, "AUTO:"), ",")
@@ -1174,7 +1155,7 @@ func (c *QueryCtx) evalTerms(field string, raw map[string]any, boost float64) (b
 			if mapping.IsIntegerKind(ftype) && hasFractionalNumericValue(item) {
 				continue
 			}
-			parsed, err := ParseTermValue(ftype, def, item)
+			parsed, err := parseTermValue(ftype, def, item)
 			if err != nil {
 				return false, 0, err
 			}
@@ -1293,35 +1274,35 @@ func (c *QueryCtx) evalIds(raw map[string]any, boost float64) (bool, float64, *a
 // range query
 // ---------------------------------------------------------------------------
 
-type RangeBoundSpec struct {
+type rangeBound struct {
 	Value   any
 	Present bool
 	Incl    bool
 }
 
-func RangeQueryBounds(cond map[string]any) (RangeBoundSpec, RangeBoundSpec) {
-	var lower, upper RangeBoundSpec
+func rangeQueryBounds(cond map[string]any) (rangeBound, rangeBound) {
+	var lower, upper rangeBound
 	if v, ok := cond["gte"]; ok && v != nil {
-		lower = RangeBoundSpec{Value: v, Present: true, Incl: true}
+		lower = rangeBound{Value: v, Present: true, Incl: true}
 	} else if v, ok := cond["gt"]; ok && v != nil {
-		lower = RangeBoundSpec{Value: v, Present: true, Incl: false}
+		lower = rangeBound{Value: v, Present: true, Incl: false}
 	} else if v, ok := cond["from"]; ok && v != nil {
 		incl := true
 		if b, ok := cond["include_lower"].(bool); ok {
 			incl = b
 		}
-		lower = RangeBoundSpec{Value: v, Present: true, Incl: incl}
+		lower = rangeBound{Value: v, Present: true, Incl: incl}
 	}
 	if v, ok := cond["lte"]; ok && v != nil {
-		upper = RangeBoundSpec{Value: v, Present: true, Incl: true}
+		upper = rangeBound{Value: v, Present: true, Incl: true}
 	} else if v, ok := cond["lt"]; ok && v != nil {
-		upper = RangeBoundSpec{Value: v, Present: true, Incl: false}
+		upper = rangeBound{Value: v, Present: true, Incl: false}
 	} else if v, ok := cond["to"]; ok && v != nil {
 		incl := true
 		if b, ok := cond["include_upper"].(bool); ok {
 			incl = b
 		}
-		upper = RangeBoundSpec{Value: v, Present: true, Incl: incl}
+		upper = rangeBound{Value: v, Present: true, Incl: incl}
 	}
 	return lower, upper
 }
@@ -1342,7 +1323,7 @@ func isTextRangeType(ftype string) bool {
 	return false
 }
 
-func IsFractionalNumber(v any) bool {
+func isFractionalNumber(v any) bool {
 	switch t := v.(type) {
 	case json.Number:
 		return strings.ContainsAny(t.String(), ".eE")
@@ -1384,7 +1365,7 @@ func hasFractionalNumericValue(v any) bool {
 func rangeBoundValue(def map[string]any, ftype, field string, v any, tz, format string, roundUp bool) (any, *apierr.Error) {
 	switch ftype {
 	case "date", "date_nanos", "date_range":
-		return ParseRangeDateBound(def, v, tz, format, roundUp)
+		return parseRangeDateBound(def, v, tz, format, roundUp)
 	case "ip", "ip_range":
 		ctx := &mapping.ParseContext{IndexCoerce: true}
 		if _, isRange := v.(map[string]any); isRange {
@@ -1396,7 +1377,7 @@ func rangeBoundValue(def map[string]any, ftype, field string, v any, tz, format 
 		base := strings.TrimSuffix(ftype, "_range")
 		ctx := &mapping.ParseContext{IndexCoerce: true}
 		if mapping.IsIntegerKind(base) {
-			if IsFractionalNumber(v) {
+			if isFractionalNumber(v) {
 				return ctx.ParseFloatValue(field, base, def, v)
 			}
 			return ctx.ParseIntValue(field, base, def, v)
@@ -1447,7 +1428,7 @@ func (c *QueryCtx) evalRange(field string, cond map[string]any, boost float64) (
 	if b, ok := jsonv.ToFloat(cond["boost"]); ok {
 		boost *= b
 	}
-	lower, upper := RangeQueryBounds(cond)
+	lower, upper := rangeQueryBounds(cond)
 	var qLower, qUpper any
 	if lower.Present {
 		v, err := rangeBoundValue(def, ftype, field, lower.Value, timeZone, format, !lower.Incl)
@@ -2030,7 +2011,7 @@ func (c *QueryCtx) evalFuzzy(field string, raw any, boost float64) (bool, float6
 		boost *= b
 	}
 	term, _ := jsonv.ScalarString(val)
-	fuzz := AutoFuzziness(term)
+	fuzz := autoFuzziness(term)
 	if f, ok := m["fuzziness"]; ok {
 		if n, ok2 := fuzzinessValue(f, term); ok2 {
 			fuzz = n
@@ -2053,7 +2034,7 @@ func (c *QueryCtx) evalFuzzy(field string, raw any, boost float64) (bool, float6
 	if !multitermFieldSupported(ftype) || ftype == "wildcard" {
 		reason := fmt.Sprintf("Can only use fuzzy queries on keyword and text fields - not on [%s] which is of type [%s]",
 			field, ftype)
-		return false, 0, MatchSearchError("query_shard_exception", "failed to create query: "+reason)
+		return false, 0, AllShardsFailed("query_shard_exception", "failed to create query: "+reason)
 	}
 	vals, present := c.Values(field)
 	if !present {
@@ -2248,11 +2229,11 @@ func (c *QueryCtx) analyzeField(field string, opts any, text string) []string {
 	return analysis.Terms(mapping.AnalysisIndex(c.Idx), a, text)
 }
 
-func MatchShardError(reason string) *apierr.Error {
+func matchShardError(reason string) *apierr.Error {
 	return &apierr.Error{Type: "query_shard_exception", Status: 400, Reason: reason}
 }
 
-func MatchSearchError(rootType, reason string) *apierr.Error {
+func AllShardsFailed(rootType, reason string) *apierr.Error {
 	return &apierr.Error{Type: "search_phase_execution_exception", Status: 400, Reason: "all shards failed",
 		RootCause: &apierr.Error{Type: rootType, Status: 400, Reason: reason},
 		CausedBy:  &apierr.Error{Type: rootType, Status: 400, Reason: reason}}
@@ -2263,7 +2244,7 @@ func parseFuzzinessValue(v any, term string) (int, bool) {
 	case string:
 		u := strings.ToUpper(strings.TrimSpace(t))
 		if u == "AUTO" {
-			return AutoFuzziness(term), true
+			return autoFuzziness(term), true
 		}
 		if strings.HasPrefix(u, "AUTO:") {
 			parts := strings.Split(strings.TrimPrefix(u, "AUTO:"), ",")
@@ -2376,7 +2357,7 @@ func msmRequired(spec any, n int, defaultAll bool) (int, *apierr.Error) {
 		if strings.HasSuffix(text, "%") {
 			p, err := strconv.Atoi(strings.TrimSuffix(text, "%"))
 			if err != nil {
-				return 0, MatchSearchError("query_shard_exception", "failed to create query: For input string: \""+text+"\"")
+				return 0, AllShardsFailed("query_shard_exception", "failed to create query: For input string: \""+text+"\"")
 			}
 			if p >= 0 {
 				req := int(math.Floor(float64(n) * float64(p) / 100.0))
@@ -2400,7 +2381,7 @@ func msmRequired(spec any, n int, defaultAll bool) (int, *apierr.Error) {
 			}
 			return k, nil
 		}
-		return 0, MatchSearchError("query_shard_exception", "failed to create query: For input string: \""+text+"\"")
+		return 0, AllShardsFailed("query_shard_exception", "failed to create query: For input string: \""+text+"\"")
 	}
 	if f, ok := jsonv.ToFloat(spec); ok {
 		k := int(f)
@@ -2412,7 +2393,7 @@ func msmRequired(spec any, n int, defaultAll bool) (int, *apierr.Error) {
 		}
 		return k, nil
 	}
-	return 0, MatchSearchError("query_shard_exception", "failed to create query: For input string: \""+fmt.Sprint(spec)+"\"")
+	return 0, AllShardsFailed("query_shard_exception", "failed to create query: For input string: \""+fmt.Sprint(spec)+"\"")
 }
 
 func (c *QueryCtx) fieldHasAnalyzedTerm(field, term string) bool {
@@ -2505,8 +2486,8 @@ func (c *QueryCtx) evalMatch(field string, raw any, boost float64) (bool, float6
 			}
 			operator = strings.ToLower(u)
 		}
-		if a, ok := m["analyzer"].(string); ok && a != "" && !mapping.MatchAnalyzerExists(c.Idx, a) {
-			return false, 0, MatchSearchError("query_shard_exception", "[match] analyzer ["+a+"] not found")
+		if a, ok := m["analyzer"].(string); ok && a != "" && !mapping.AnalyzerExists(c.Idx, a) {
+			return false, 0, AllShardsFailed("query_shard_exception", "[match] analyzer ["+a+"] not found")
 		}
 		if z, ok := m["zero_terms_query"].(string); ok {
 			u := strings.ToUpper(z)
@@ -2522,7 +2503,7 @@ func (c *QueryCtx) evalMatch(field string, raw any, boost float64) (bool, float6
 	ftype, _ := def["type"].(string)
 	if iv, ok := def["index"].(bool); ok && !iv {
 		if ftype == "text" || ftype == "match_only_text" || ftype == "search_as_you_type" {
-			return false, 0, MatchSearchError("query_shard_exception",
+			return false, 0, AllShardsFailed("query_shard_exception",
 				"failed to create query: Cannot search on field ["+field+"] since it is not indexed.")
 		}
 	}
@@ -2542,28 +2523,28 @@ func (c *QueryCtx) evalMatch(field string, raw any, boost float64) (bool, float6
 			return false, 0, nil
 		}
 		if hasFuzziness {
-			return false, 0, MatchSearchError("query_shard_exception",
+			return false, 0, AllShardsFailed("query_shard_exception",
 				"Can only use fuzzy queries on keyword and text fields - not on ["+field+"] which is of type ["+ftype+"]")
 		}
-		parsed, err := ParseTermValue(ftype, def, text)
+		parsed, err := parseTermValue(ftype, def, text)
 		if err != nil {
 			if lenient {
 				return false, 0, nil
 			}
 			switch {
 			case ftype == "date" || ftype == "date_nanos":
-				return false, 0, MatchSearchError("parse_exception",
+				return false, 0, AllShardsFailed("parse_exception",
 					"failed to parse date field ["+text+"] with format ["+dates.FormatOf(def)+"]")
 			case mapping.IsNumericType(ftype):
-				me := MatchSearchError("query_shard_exception",
+				me := AllShardsFailed("query_shard_exception",
 					"failed to create query: For input string: \""+text+"\"")
 				me.CausedBy.CausedBy = &apierr.Error{Type: "number_format_exception", Status: 400,
 					Reason: "For input string: \"" + text + "\""}
 				return false, 0, me
 			case ftype == "boolean":
-				return false, 0, MatchSearchError("query_shard_exception", "Can't parse boolean value ["+text+"]")
+				return false, 0, AllShardsFailed("query_shard_exception", "Can't parse boolean value ["+text+"]")
 			default:
-				return false, 0, MatchSearchError("query_shard_exception", err.Reason)
+				return false, 0, AllShardsFailed("query_shard_exception", err.Reason)
 			}
 		}
 		for _, v := range vals {
@@ -3217,7 +3198,7 @@ func (c *QueryCtx) Eval(raw map[string]any) (bool, float64, *apierr.Error) {
 		case "match_none":
 			return false, 0, nil
 		case "term":
-			field, val, ok := SingleEntry(asMap(body))
+			field, val, ok := singleEntry(asMap(body))
 			if !ok {
 				return false, 0, apierr.Parsing("[term] query malformed")
 			}
@@ -3249,7 +3230,7 @@ func (c *QueryCtx) Eval(raw map[string]any) (bool, float64, *apierr.Error) {
 			if !ok {
 				return false, 0, apierr.Parsing("[range] query malformed")
 			}
-			field, condRaw, ok := SingleEntry(bm)
+			field, condRaw, ok := singleEntry(bm)
 			if !ok {
 				return false, 0, apierr.Parsing("[range] query malformed")
 			}
@@ -3269,7 +3250,7 @@ func (c *QueryCtx) Eval(raw map[string]any) (bool, float64, *apierr.Error) {
 			if !ok {
 				return false, 0, apierr.Parsing("[prefix] query malformed")
 			}
-			field, val, ok := SingleEntry(bm)
+			field, val, ok := singleEntry(bm)
 			if !ok {
 				return false, 0, apierr.Parsing("[prefix] query malformed")
 			}
@@ -3283,7 +3264,7 @@ func (c *QueryCtx) Eval(raw map[string]any) (bool, float64, *apierr.Error) {
 				field, _ := bm["field"].(string)
 				return c.evalWildcard(field, bm, 1.0)
 			}
-			field, val, ok := SingleEntry(bm)
+			field, val, ok := singleEntry(bm)
 			if !ok {
 				return false, 0, apierr.Parsing("[wildcard] query malformed")
 			}
@@ -3296,7 +3277,7 @@ func (c *QueryCtx) Eval(raw map[string]any) (bool, float64, *apierr.Error) {
 			if !ok {
 				return false, 0, apierr.Parsing("[regexp] query malformed")
 			}
-			field, val, ok := SingleEntry(bm)
+			field, val, ok := singleEntry(bm)
 			if !ok {
 				return false, 0, apierr.Parsing("[regexp] query malformed")
 			}
@@ -3306,7 +3287,7 @@ func (c *QueryCtx) Eval(raw map[string]any) (bool, float64, *apierr.Error) {
 			if !ok {
 				return false, 0, apierr.Parsing("[fuzzy] query malformed")
 			}
-			field, val, ok := SingleEntry(bm)
+			field, val, ok := singleEntry(bm)
 			if !ok {
 				return false, 0, apierr.Parsing("[fuzzy] query malformed")
 			}
@@ -3331,7 +3312,7 @@ func (c *QueryCtx) Eval(raw map[string]any) (bool, float64, *apierr.Error) {
 				}
 				return false, 0, apierr.Parsing(reason)
 			}
-			field, val, ok := SingleEntry(bm)
+			field, val, ok := singleEntry(bm)
 			if !ok {
 				return false, 0, apierr.Parsing("[match] query malformed")
 			}
@@ -3341,7 +3322,7 @@ func (c *QueryCtx) Eval(raw map[string]any) (bool, float64, *apierr.Error) {
 			if !ok {
 				return false, 0, apierr.Parsing("[match_phrase] query malformed")
 			}
-			field, val, ok := SingleEntry(bm)
+			field, val, ok := singleEntry(bm)
 			if !ok {
 				return false, 0, apierr.Parsing("[match_phrase] query malformed")
 			}
@@ -3351,7 +3332,7 @@ func (c *QueryCtx) Eval(raw map[string]any) (bool, float64, *apierr.Error) {
 			if !ok {
 				return false, 0, apierr.Parsing("[match_phrase_prefix] query malformed")
 			}
-			field, val, ok := SingleEntry(bm)
+			field, val, ok := singleEntry(bm)
 			if !ok {
 				return false, 0, apierr.Parsing("[match_phrase_prefix] query malformed")
 			}
@@ -3480,7 +3461,7 @@ func (c *QueryCtx) Eval(raw map[string]any) (bool, float64, *apierr.Error) {
 			if !ok {
 				return false, 0, apierr.Parsing("[match_bool_prefix] query malformed")
 			}
-			field, val, ok := SingleEntry(bm)
+			field, val, ok := singleEntry(bm)
 			if !ok {
 				return false, 0, apierr.Parsing("[match_bool_prefix] query malformed")
 			}
@@ -3556,7 +3537,7 @@ func (c *QueryCtx) Eval(raw map[string]any) (bool, float64, *apierr.Error) {
 		case "geo_shape":
 			return c.evalGeoShape(body)
 		case "script":
-			return c.EvalScriptQuery(body)
+			return c.evalScriptQuery(body)
 		case "script_score":
 			return c.evalScriptScore(body)
 		case "function_score":

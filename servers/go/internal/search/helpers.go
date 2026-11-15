@@ -114,7 +114,7 @@ func ParseSortSpecs(bodySort any, uriSort string) ([]SortSpec, *apierr.Error) {
 							sp.GeoIgnore = b
 						}
 						if sp.GeoUnit != "" {
-							if _, ok := GeoUnitMeters(sp.GeoUnit); !ok {
+							if _, ok := geoUnitMeters(sp.GeoUnit); !ok {
 								return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 									Reason: "No distance unit match [" + sp.GeoUnit + "]"}
 							}
@@ -209,7 +209,7 @@ func validSortOrder(s string) bool {
 	return s == "asc" || s == "desc" || s == "ASC" || s == "DESC"
 }
 
-func SingleEntry(m map[string]any) (string, any, bool) {
+func singleEntry(m map[string]any) (string, any, bool) {
 	for k, v := range m {
 		return k, v, true
 	}
@@ -287,7 +287,7 @@ func ScoreJSON(v float64) any {
 	return v
 }
 
-func GeoUnitMeters(unit string) (float64, bool) {
+func geoUnitMeters(unit string) (float64, bool) {
 	switch unit {
 	case "m", "meters":
 		return 1, true

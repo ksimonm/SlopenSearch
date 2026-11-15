@@ -37,14 +37,14 @@ func ValidateQuery(idx *model.Index, query map[string]any) *apierr.Error {
 		}
 		switch clause {
 		case "term":
-			if err := KnnTermCheck(idx, raw); err != nil {
+			if err := knnTermCheck(idx, raw); err != nil {
 				return err
 			}
 			if err := validateTermQuery(idx, raw); err != nil {
 				return err
 			}
 		case "knn":
-			if err := ValidateKnnQuery(idx, raw); err != nil {
+			if err := validateKnnQuery(idx, raw); err != nil {
 				return err
 			}
 		case "terms":
@@ -117,7 +117,7 @@ func ValidateQuery(idx *model.Index, query map[string]any) *apierr.Error {
 			}
 		case "percolate":
 			if bm, ok := raw.(map[string]any); ok {
-				field := PercolateFieldName(bm)
+				field := percolateFieldName(bm)
 				def, mapped := mapping.FieldDef(idx, field)
 				ftype := ""
 				if mapped {
@@ -127,7 +127,7 @@ func ValidateQuery(idx *model.Index, query map[string]any) *apierr.Error {
 					if ftype == "" {
 						ftype = "object"
 					}
-					return MatchShardError(
+					return matchShardError(
 						fmt.Sprintf("expected field [%s] to be of type [percolator], but is of type [%s]", field, ftype))
 				}
 			}
@@ -201,7 +201,7 @@ func validateFunctionScore(idx *model.Index, raw any) *apierr.Error {
 	if len(functions) == 0 {
 		if f, ok := bm["function"].(map[string]any); ok {
 			functions = []any{f}
-		} else if HasScoreFunctionKey(bm) {
+		} else if hasScoreFunctionKey(bm) {
 			functions = []any{bm}
 		}
 	}
@@ -220,7 +220,7 @@ func validateFunctionScore(idx *model.Index, raw any) *apierr.Error {
 			field, _ := fvf["field"].(string)
 			if _, mapped := mapping.FieldDef(idx, field); !mapped {
 				if _, hasMissing := fvf["missing"]; !hasMissing {
-					return NewFunctionScoreFailure("fvf_unmapped",
+					return functionScoreFailure("fvf_unmapped",
 						"Unable to find a field mapper for field ["+field+"]. No 'missing' value defined.")
 				}
 			}
@@ -271,7 +271,7 @@ func validateTermQuery(idx *model.Index, raw any) *apierr.Error {
 	if !ok {
 		return nil
 	}
-	field, val, ok := SingleEntry(m)
+	field, val, ok := singleEntry(m)
 	if !ok {
 		return nil
 	}
@@ -322,9 +322,9 @@ func validateTermQuery(idx *model.Index, raw any) *apierr.Error {
 			}
 		}
 	}
-	_, err := ParseTermValue(ftype, def, val)
+	_, err := parseTermValue(ftype, def, val)
 	if err != nil && (ftype == "date" || ftype == "date_nanos") {
-		return TermDateParseError(err)
+		return termDateParseError(err)
 	}
 	return err
 }
@@ -334,7 +334,7 @@ func validateRangeQuery(idx *model.Index, raw any) *apierr.Error {
 	if !ok {
 		return nil
 	}
-	field, condRaw, ok := SingleEntry(m)
+	field, condRaw, ok := singleEntry(m)
 	if !ok {
 		return nil
 	}
@@ -349,9 +349,9 @@ func validateRangeQuery(idx *model.Index, raw any) *apierr.Error {
 	}
 	tz, _ := cond["time_zone"].(string)
 	format, _ := cond["format"].(string)
-	lower, upper := RangeQueryBounds(cond)
+	lower, upper := rangeQueryBounds(cond)
 	bounds := []struct {
-		spec    RangeBoundSpec
+		spec    rangeBound
 		roundUp bool
 	}{
 		{lower, !lower.Incl},
@@ -365,7 +365,7 @@ func validateRangeQuery(idx *model.Index, raw any) *apierr.Error {
 		var err *apierr.Error
 		switch ftype {
 		case "date", "date_nanos", "date_range":
-			_, err = ParseRangeDateBound(def, bound, tz, format, b.roundUp)
+			_, err = parseRangeDateBound(def, bound, tz, format, b.roundUp)
 			if err != nil && err.RootCause != nil {
 				err = err.RootCause
 			}
@@ -374,7 +374,7 @@ func validateRangeQuery(idx *model.Index, raw any) *apierr.Error {
 			_, err = ctx.ParseIPValue(field, bound)
 		case "integer", "long", "short", "byte", "unsigned_long":
 			ctx := &mapping.ParseContext{IndexCoerce: true}
-			if IsFractionalNumber(bound) {
+			if isFractionalNumber(bound) {
 				_, err = ctx.ParseFloatValue(field, ftype, def, bound)
 			} else {
 				_, err = ctx.ParseIntValue(field, ftype, def, bound)
@@ -384,7 +384,7 @@ func validateRangeQuery(idx *model.Index, raw any) *apierr.Error {
 			_, err = ctx.ParseFloatValue(field, ftype, def, bound)
 		case "integer_range", "long_range":
 			ctx := &mapping.ParseContext{IndexCoerce: true}
-			if IsFractionalNumber(bound) {
+			if isFractionalNumber(bound) {
 				_, err = ctx.ParseFloatValue(field, strings.TrimSuffix(ftype, "_range"), def, bound)
 			} else {
 				_, err = ctx.ParseIntValue(field, strings.TrimSuffix(ftype, "_range"), def, bound)

@@ -27,9 +27,13 @@ type bulkAction struct {
 	sourceErr  *apierr.Error
 	updateBody map[string]any
 	updateErr  *apierr.Error
+
+	// nonStdSource: the source line when it fails on a Jackson non-standard
+	// token; the item error depends on the target index and pipeline.
+	nonStdSource []byte
 }
 
-func (s *Server) handleBulkV2(w http.ResponseWriter, r *http.Request, pathIndex string) {
+func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request, pathIndex string) {
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeError(w, apierr.BadRequest("failed to read bulk body"))
@@ -73,6 +77,10 @@ func (s *Server) handleBulkV2(w http.ResponseWriter, r *http.Request, pathIndex 
 		}
 		op, meta, perr := parseBulkActionLine(trimmed)
 		if perr != nil {
+			if t := mapping.FindNonStandardToken([]byte(line)); t != nil {
+				writeError(w, t.Cause())
+				return
+			}
 			perr.Reason = fmt.Sprintf("Malformed action/metadata line [%d], %s", lineNo, perr.Reason)
 			writeError(w, perr)
 			return
@@ -140,6 +148,16 @@ func (s *Server) handleBulkV2(w http.ResponseWriter, r *http.Request, pathIndex 
 				a.sourceErr = &apierr.Error{Type: "mapper_parsing_exception", Status: 400,
 					Reason:   "Failed to parse request body",
 					CausedBy: &apierr.Error{Type: "json_parse_exception", Reason: err.Error()}}
+				// Jackson's non-standard tokens: an update body is parsed with
+				// the request and fails it; an index source fails its item.
+				srcRaw := []byte(strings.TrimSuffix(lines[i], "\r"))
+				if t := mapping.FindNonStandardToken(srcRaw); t != nil {
+					if op == "update" {
+						writeError(w, t.ObjectParserError("UpdateRequest"))
+						return
+					}
+					a.nonStdSource = srcRaw
+				}
 			} else {
 				src, ok := srcAny.(map[string]any)
 				if !ok {
@@ -244,7 +262,7 @@ func (s *Server) bulkResolve(name string, requireAlias bool) (*model.Index, *api
 		}
 		return idx, nil
 	}
-	return s.resolveWriteTargetV2(name)
+	return s.resolveOrCreateWriteTarget(name)
 }
 
 func metaString(meta map[string]any, key string) string {
@@ -265,7 +283,7 @@ func metaInt(meta map[string]any, key string) (int64, bool) {
 	if !ok {
 		return 0, false
 	}
-	if n, ok := search.IntegerOf(v); ok {
+	if n, ok := jsonv.ToInt64(v); ok {
 		return n, true
 	}
 	if f, ok := jsonv.ToFloat(v); ok {
@@ -368,7 +386,7 @@ func bulkOKItem(op string, body ojson.Object) ojson.Object {
 }
 
 func (s *Server) runBulkAction(a bulkAction, rv string, requireAliasURL bool, urlRouting, urlPipeline, urlSource string) (any, bool) {
-	if a.sourceErr != nil {
+	if a.sourceErr != nil && a.nonStdSource == nil {
 		return bulkErrItem(a.op, a.indexName, a.id, a.sourceErr), true
 	}
 	if a.updateErr != nil {
@@ -463,6 +481,9 @@ func (s *Server) runBulkIndex(idx *model.Index, a bulkAction, id, routing, rv, u
 			return bulkErrItem(a.op, idx.Name, id, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "pipeline with id [" + pipeline + "] does not exist"}), true
 		}
+	}
+	if a.nonStdSource != nil {
+		return bulkErrItem(a.op, idx.Name, id, nonStdDocError(idx, id, pipeline, a.nonStdSource)), true
 	}
 	params := map[string]any{}
 	if pipeline != "" {
@@ -681,7 +702,7 @@ func bulkGetObject(idx *model.Index, id string, src map[string]any, seq int64, m
 	}
 	out := ojson.Object{{"_seq_no", seq}, {"_primary_term", int64(1)}, {"found", true}}
 	if idx.SourceEnabled() {
-		out = append(out, ojson.KV{"_source", search.FilterSourceDoc(src, includes, excludes)})
+		out = append(out, ojson.KV{"_source", search.FilterSource(src, includes, excludes)})
 	}
 	return out, true
 }

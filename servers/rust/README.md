@@ -71,8 +71,7 @@ relative to the repository root here, adjust it to your build.)
 
 ## Status
 
-99.99% of the suite passes (see the table in the [main README](../../README.md#status)).
-The open work is one `test_72_knn` test (a literal `NaN` in a vector). HTTP compression
+The whole suite passes (see the table in the [main README](../../README.md#status)). HTTP compression
 (gzip/deflate/snappy) uses the `flate2` and `snap` crates. The build has a few warnings left (unused values and methods); cleaning them up is welcome.
 
 ## Rules
@@ -108,7 +107,7 @@ Domain and engine modules:
 | Module | Contents | Depends on (crate) |
 |---|---|---|
 | `model/` | the domain state: `Store` (indices, cluster settings, templates, data streams, pipelines, stored scripts, scroll/PIT contexts), `Index` with its accessors, node identity constants, uuids, shard routing; `visibility.rs`: what searches see between refreshes and the request cache | settings |
-| `mapping/` | mappings and field types (`mod.rs`: validation, merging, dynamic type inference, `mapping_field_def`, alias resolution); `fields.rs`: index-time parsing of documents into doc values; `knn.rs`/`knn_index.rs`: knn_vector mappings and values; `geo.rs`: geo points and shapes; `completion.rs`: completion field mappings and inputs | analysis, dates, errors, jsonv, model, resp, settings |
+| `mapping/` | mappings and field types (`nonstd_json.rs`: Jackson NaN/Infinity token detection and the document-parse errors it causes; `mod.rs`: validation, merging, dynamic type inference, `mapping_field_def`, alias resolution); `fields.rs`: index-time parsing of documents into doc values; `knn.rs`/`knn_index.rs`: knn_vector mappings and values; `geo.rs`: geo points and shapes; `completion.rs`: completion field mappings and inputs | analysis, dates, errors, jsonv, model, resp, settings |
 | `scripting.rs` | the script service: stored-script registry, script specs, size and language checks | errors |
 | `search/` | `eval.rs`/`eval_extra.rs`: query evaluation and scoring (`QueryCtx`); `analyzed.rs`: query-time analysis; `highlight.rs`/`hl_analyzed.rs`; `knn_query.rs`; `fetch.rs` (doc values, `fields`, script fields), `sort.rs` (sort specs, `search_after`), `source.rs` (`_source` filtering), `inner_hits.rs` (inner hits, collapse), `request.rs` (named queries, rescore, terms lookup), `validate.rs` (shard-level query validation); script glue: `script_ctx.rs` (prepared scripts, shard failures), `script_env.rs`, `painless_doc.rs` (the `doc` variable, score functions), `expressions.rs` (Lucene expressions, bound to `QueryCtx`) | analysis, dates, errors, jsonv, mapping, model, painless, resp, scripting, settings |
 | `aggs/` | bucket, metric and pipeline aggregations; `hdr.rs`: HDR histogram for percentiles | search, mapping, model, ... |

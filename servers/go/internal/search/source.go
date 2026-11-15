@@ -17,7 +17,7 @@ func SplitSourceList(raw string) []string {
 	return out
 }
 
-func AnyStringList(v any) []string {
+func StringList(v any) []string {
 	out := []string{}
 	switch t := v.(type) {
 	case string:
@@ -32,7 +32,7 @@ func AnyStringList(v any) []string {
 	return out
 }
 
-func SourceFilterFromBody(body map[string]any) (includes, excludes []string, omit bool, ok bool) {
+func ParseSourceFilter(body map[string]any) (includes, excludes []string, omit bool, ok bool) {
 	raw, exists := body["_source"]
 	if !exists {
 		return nil, nil, false, false
@@ -49,15 +49,15 @@ func SourceFilterFromBody(body map[string]any) (includes, excludes []string, omi
 		}
 		return SplitSourceList(t), nil, false, true
 	case []any:
-		return AnyStringList(t), nil, false, true
+		return StringList(t), nil, false, true
 	case map[string]any:
-		inc := AnyStringList(t["includes"])
+		inc := StringList(t["includes"])
 		if len(inc) == 0 {
-			inc = AnyStringList(t["include"])
+			inc = StringList(t["include"])
 		}
-		exc := AnyStringList(t["excludes"])
+		exc := StringList(t["excludes"])
 		if len(exc) == 0 {
-			exc = AnyStringList(t["exclude"])
+			exc = StringList(t["exclude"])
 		}
 		return inc, exc, false, true
 	}
@@ -89,25 +89,6 @@ func WildcardMatch(pattern, s string) bool {
 	return pi == len(pattern)
 }
 
-func DeepCopySource(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(t))
-		for k, e := range t {
-			out[k] = DeepCopySource(e)
-		}
-		return out
-	case []any:
-		out := make([]any, len(t))
-		for i, e := range t {
-			out[i] = DeepCopySource(e)
-		}
-		return out
-	default:
-		return v
-	}
-}
-
 func includeSourcePath(dst, src map[string]any, segs []string) {
 	if len(segs) == 0 {
 		return
@@ -119,7 +100,7 @@ func includeSourcePath(dst, src map[string]any, segs []string) {
 			continue
 		}
 		if last {
-			dst[key] = DeepCopySource(val)
+			dst[key] = jsonv.DeepCopy(val)
 			continue
 		}
 		switch t := val.(type) {
@@ -175,14 +156,14 @@ func excludeSourcePath(dst map[string]any, segs []string) {
 	}
 }
 
-func FilterSourceDoc(doc map[string]any, includes, excludes []string) map[string]any {
+func FilterSource(doc map[string]any, includes, excludes []string) map[string]any {
 	if len(includes) == 0 && len(excludes) == 0 {
 		return doc
 	}
 	out := map[string]any{}
 	if len(includes) == 0 {
 		for k, v := range doc {
-			out[k] = DeepCopySource(v)
+			out[k] = jsonv.DeepCopy(v)
 		}
 	} else {
 		for _, inc := range includes {

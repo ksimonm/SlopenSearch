@@ -378,7 +378,7 @@ func (c *QueryCtx) evalCombinedFields(bm map[string]any) (bool, float64, *apierr
 		name, fb := stripFieldBoost(f)
 		if fb < 1 {
 			reason := "weight must be greater or equal to 1"
-			return false, 0, MatchSearchError("query_shard_exception", reason)
+			return false, 0, AllShardsFailed("query_shard_exception", reason)
 		}
 		if strings.ContainsAny(name, "*?") {
 			re := WildcardRegex(name)
@@ -417,7 +417,7 @@ func (c *QueryCtx) evalCombinedFields(bm map[string]any) (bool, float64, *apierr
 		}
 		ft, _ := def["type"].(string)
 		if ft != "" && ft != "text" && ft != "match_only_text" && ft != "search_as_you_type" {
-			return false, 0, MatchSearchError("query_shard_exception",
+			return false, 0, AllShardsFailed("query_shard_exception",
 				"Field ["+name+"] of type ["+ft+"] does not support [combined_fields] queries")
 		}
 	}
@@ -492,11 +492,11 @@ func (c *QueryCtx) evalNested(body any) (bool, float64, *apierr.Error) {
 		if ignoreUnmapped {
 			return false, 0, nil
 		}
-		return false, 0, MatchSearchError("query_shard_exception",
+		return false, 0, AllShardsFailed("query_shard_exception",
 			"failed to create query: [nested] failed to find nested object under path ["+path+"]")
 	}
 	if t, _ := def["type"].(string); t != "nested" {
-		return false, 0, MatchSearchError("query_shard_exception",
+		return false, 0, AllShardsFailed("query_shard_exception",
 			"failed to create query: [nested] nested object under path ["+path+"] is not of nested type")
 	}
 	objects, ok := nestedObjectsForCtx(c, path)
@@ -897,7 +897,7 @@ func JoinParentRelation(relations map[string]any, child string) string {
 }
 
 func joinError(clause, reason string) *apierr.Error {
-	return MatchSearchError("query_shard_exception", "["+clause+"] "+reason)
+	return AllShardsFailed("query_shard_exception", "["+clause+"] "+reason)
 }
 
 func (c *QueryCtx) joinChildContexts(childType string, inner map[string]any) ([]*QueryCtx, []float64, *apierr.Error) {
@@ -1109,14 +1109,14 @@ func (c *QueryCtx) evalParentId(body any) (bool, float64, *apierr.Error) {
 
 func joinInnerSource(doc map[string]any, spec any) map[string]any {
 	body := map[string]any{"_source": spec}
-	inc, exc, omit, ok := SourceFilterFromBody(body)
+	inc, exc, omit, ok := ParseSourceFilter(body)
 	if !ok || omit {
 		if omit {
 			return nil
 		}
 		return doc
 	}
-	return FilterSourceDoc(doc, inc, exc)
+	return FilterSource(doc, inc, exc)
 }
 
 func joinSortOutput(ctx *QueryCtx, sp SortSpec) any {
@@ -1478,7 +1478,7 @@ func geoFieldTypeOf(idx *model.Index, field string) (string, bool) {
 }
 
 func geoQueryShardError(reason string) *apierr.Error {
-	return MatchSearchError("query_shard_exception", reason)
+	return AllShardsFailed("query_shard_exception", reason)
 }
 
 func geoFloatString(f float64) string {
@@ -2390,7 +2390,7 @@ func (c *QueryCtx) evalPinned(body any) (bool, float64, *apierr.Error) {
 	return false, 0, nil
 }
 
-func PercolateFieldName(bm map[string]any) string {
+func percolateFieldName(bm map[string]any) string {
 	field, _ := bm["field"].(string)
 	if field == "" {
 		field = "query"
@@ -2448,7 +2448,7 @@ func (c *QueryCtx) evalPercolate(body any) (bool, float64, *apierr.Error) {
 	if !ok {
 		return false, 0, apierr.Parsing("[percolate] query malformed")
 	}
-	field := PercolateFieldName(bm)
+	field := percolateFieldName(bm)
 	def, mapped := mapping.FieldDef(c.Idx, field)
 	ftype := ""
 	if mapped {
@@ -2458,7 +2458,7 @@ func (c *QueryCtx) evalPercolate(body any) (bool, float64, *apierr.Error) {
 		if ftype == "" {
 			ftype = "object"
 		}
-		return false, 0, MatchShardError(
+		return false, 0, matchShardError(
 			fmt.Sprintf("expected field [%s] to be of type [percolator], but is of type [%s]", field, ftype))
 	}
 	docs, derr := percolateInputDocs(c.Idx, bm)
@@ -2531,7 +2531,7 @@ func collectPercolateClauses(q map[string]any, out *[]map[string]any) {
 	}
 }
 
-func PercolateSlotsForHit(c *QueryCtx, query map[string]any) []any {
+func PercolateSlots(c *QueryCtx, query map[string]any) []any {
 	var clauses []map[string]any
 	collectPercolateClauses(query, &clauses)
 	if len(clauses) == 0 {
@@ -2539,7 +2539,7 @@ func PercolateSlotsForHit(c *QueryCtx, query map[string]any) []any {
 	}
 	slotSet := map[int]bool{}
 	for _, bm := range clauses {
-		field := PercolateFieldName(bm)
+		field := percolateFieldName(bm)
 		docs, err := percolateInputDocs(c.Idx, bm)
 		if err != nil {
 			continue
@@ -2578,7 +2578,7 @@ func PercolateHighlights(c *QueryCtx, query map[string]any, cfg *highlightConfig
 		return nil
 	}
 	bm := clauses[0]
-	field := PercolateFieldName(bm)
+	field := percolateFieldName(bm)
 	stored, ok := c.Doc[field].(map[string]any)
 	if !ok {
 		return nil
@@ -2669,7 +2669,7 @@ func (c *QueryCtx) evalTermsSet(body any) (bool, float64, *apierr.Error) {
 }
 
 func numericInt(v any) (int, bool) {
-	if n, ok := IntegerOf(v); ok {
+	if n, ok := jsonv.ToInt64(v); ok {
 		return int(n), true
 	}
 	if f, ok := jsonv.ToFloat(v); ok {
@@ -2782,14 +2782,14 @@ func (c *QueryCtx) spanTermSpans(bm map[string]any) ([]intervalSpan, string, *ap
 	ftype, _ := def["type"].(string)
 	if ftype == "match_only_text" {
 		reason := "field \"" + field + "\" was indexed without position data; cannot run SpanTermQuery (term=" + term + ")"
-		e := MatchSearchError("illegal_state_exception", reason)
+		e := AllShardsFailed("illegal_state_exception", reason)
 		e.Status = 500
 		return nil, field, e
 	}
 	if ftype == "integer" || ftype == "long" || ftype == "short" || ftype == "byte" || ftype == "double" ||
 		ftype == "float" || ftype == "half_float" || ftype == "scaled_float" || ftype == "unsigned_long" ||
 		ftype == "date" || ftype == "date_nanos" || ftype == "boolean" || ftype == "ip" {
-		return nil, field, MatchSearchError("query_shard_exception",
+		return nil, field, AllShardsFailed("query_shard_exception",
 			"Cannot extract a term from a query of type ["+ftype+"]")
 	}
 	spans := []intervalSpan{}
@@ -2837,7 +2837,7 @@ func (c *QueryCtx) spanQuery(body any) ([]intervalSpan, string, *apierr.Error) {
 				if ck == "span_term" {
 					_, term, _ = spanTermValue(cinner)
 				}
-				return nil, "", MatchSearchError("query_shard_exception",
+				return nil, "", AllShardsFailed("query_shard_exception",
 					"Cannot add clause "+f+":"+term+" to SpanNearQuery for field "+field)
 			}
 			lists = append(lists, spans)
@@ -2867,7 +2867,7 @@ func (c *QueryCtx) spanQuery(body any) ([]intervalSpan, string, *apierr.Error) {
 			if field == "" {
 				field = f
 			} else if f != field {
-				return nil, "", MatchSearchError("query_shard_exception", "Clauses must have same field.")
+				return nil, "", AllShardsFailed("query_shard_exception", "Clauses must have same field.")
 			}
 			spans = append(spans, sp...)
 		}
@@ -3033,7 +3033,7 @@ func (c *QueryCtx) spanQuery(body any) ([]intervalSpan, string, *apierr.Error) {
 			}
 		case "fuzzy":
 			for _, p := range positions {
-				if fuzzyDistance(p.Term, val, true) <= AutoFuzziness(val) {
+				if fuzzyDistance(p.Term, val, true) <= autoFuzziness(val) {
 					spans = append(spans, intervalSpan{p.Pos, p.Pos})
 				}
 			}
@@ -3164,11 +3164,11 @@ func (c *QueryCtx) evalIntervals(body any) (bool, float64, *apierr.Error) {
 	}
 	ftype, _ := def["type"].(string)
 	if ftype == "match_only_text" {
-		return false, 0, MatchSearchError("query_shard_exception",
+		return false, 0, AllShardsFailed("query_shard_exception",
 			"failed to create query: Cannot create intervals over field ["+field+"] with no positions indexed")
 	}
 	if ftype != "" && ftype != "text" && ftype != "match_only_text" && ftype != "search_as_you_type" {
-		return false, 0, MatchSearchError("query_shard_exception",
+		return false, 0, AllShardsFailed("query_shard_exception",
 			"Can only use interval queries on text fields - not on ["+field+"] which is of type ["+ftype+"]")
 	}
 	ruleKeys := []string{}
@@ -3379,7 +3379,7 @@ func (c *QueryCtx) intervalRule(rule map[string]any, positions []analysis.Token,
 		}
 	case "fuzzy":
 		term, _ := bm["term"].(string)
-		fuzz := AutoFuzziness(term)
+		fuzz := autoFuzziness(term)
 		if v, ok := bm["fuzziness"]; ok {
 			if n, ok2 := fuzzinessValue(v, term); ok2 {
 				fuzz = n
@@ -3857,7 +3857,7 @@ func (c *QueryCtx) valuesMap() map[string][]any {
 // function_score
 // ---------------------------------------------------------------------------
 
-func HasScoreFunctionKey(bm map[string]any) bool {
+func hasScoreFunctionKey(bm map[string]any) bool {
 	for _, k := range []string{"weight", "field_value_factor", "random_score", "script_score",
 		"gauss", "exp", "linear"} {
 		if _, ok := bm[k]; ok {
@@ -3884,7 +3884,7 @@ func javaDoubleString(f float64) string {
 	return s
 }
 
-func NewFunctionScoreFailure(marker, reason string) *apierr.Error {
+func functionScoreFailure(marker, reason string) *apierr.Error {
 	return &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 		Reason: reason, SearchFailure: marker}
 }
@@ -3928,7 +3928,7 @@ func decayDateMillis(def map[string]any, v any) (int64, bool) {
 	if s, ok := v.(string); ok {
 		return dates.ParseAny(def, s)
 	}
-	return IntegerOf(v)
+	return jsonv.ToInt64(v)
 }
 
 func (c *QueryCtx) evalFunctionScore(body any) (bool, float64, *apierr.Error) {
@@ -3954,7 +3954,7 @@ func (c *QueryCtx) evalFunctionScore(body any) (bool, float64, *apierr.Error) {
 	if len(functions) == 0 {
 		if f, ok := bm["function"].(map[string]any); ok {
 			functions = []any{f}
-		} else if HasScoreFunctionKey(bm) {
+		} else if hasScoreFunctionKey(bm) {
 			functions = []any{bm}
 		}
 	}
@@ -4072,22 +4072,22 @@ func (c *QueryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 		if present && len(vals) > 0 {
 			n, ok := jsonv.ToFloat(vals[0])
 			if !ok {
-				return 0, NewFunctionScoreFailure("fvf_unmapped",
+				return 0, functionScoreFailure("fvf_unmapped",
 					"Unable to find a field mapper for field ["+field+"]. No 'missing' value defined.")
 			}
 			value = n
 		} else if hasMissing {
 			n, ok := jsonv.ToFloat(missingRaw)
 			if !ok {
-				return 0, NewFunctionScoreFailure("fvf_missing",
+				return 0, functionScoreFailure("fvf_missing",
 					"Missing value for field ["+field+"]")
 			}
 			value = n
 		} else if _, mapped := mapping.FieldDef(c.Idx, field); !mapped {
-			return 0, NewFunctionScoreFailure("fvf_unmapped",
+			return 0, functionScoreFailure("fvf_unmapped",
 				"Unable to find a field mapper for field ["+field+"]. No 'missing' value defined.")
 		} else {
-			return 0, NewFunctionScoreFailure("fvf_missing",
+			return 0, functionScoreFailure("fvf_missing",
 				"Missing value for field ["+field+"]")
 		}
 		result := value * factor
@@ -4115,14 +4115,14 @@ func (c *QueryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 			reason := "field value function must not produce negative scores, but got: [" +
 				javaDoubleString(result) + "] for field value: [" + javaDoubleString(value) +
 				"]; consider using log1p or log2p instead of log to avoid negative scores"
-			return 0, NewFunctionScoreFailure("fvf_log", reason)
+			return 0, functionScoreFailure("fvf_log", reason)
 		}
 		return result, nil
 	}
 	if rs, ok := fn["random_score"].(map[string]any); ok {
 		seed := int64(0)
 		if s, ok := rs["seed"]; ok {
-			seed, _ = IntegerOf(s)
+			seed, _ = jsonv.ToInt64(s)
 		}
 		if seed == 0 {
 			seed = 42
@@ -4132,7 +4132,7 @@ func (c *QueryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 	if ss, ok := fn["script_score"].(map[string]any); ok {
 		cs, se, ae := PrepareScript(ss["script"], "score")
 		if se != nil || ae != nil {
-			return 0, ScriptErrForShard(c.Idx, se, ae, true)
+			return 0, ScriptFailure(c.Idx, se, ae, true)
 		}
 		v, rerr := cs.Run(c, RunOpts{Score: float64(float32(baseScore))})
 		if rerr != nil {
@@ -4140,7 +4140,7 @@ func (c *QueryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 		}
 		score := painless.F64(v)
 		if score < 0 {
-			return 0, PlainShardError(c.Idx, apierr.BadRequest("script score function must not produce negative scores, but got: ["+painless.FormatDouble(score)+"]"))
+			return 0, ShardError(c.Idx, apierr.BadRequest("script score function must not produce negative scores, but got: ["+painless.FormatDouble(score)+"]"))
 		}
 		return float64(float32(score)), nil
 	}
@@ -4850,7 +4850,7 @@ func (p *QueryStringParser) valueQuery(field, value string) (map[string]any, *ap
 	if strings.HasSuffix(value, "^") {
 		return nil, apierr.Parsing("invalid boost")
 	}
-	if FieldUnderNested(p.C.Idx, field) {
+	if fieldUnderNested(p.C.Idx, field) {
 		return map[string]any{"match_none": map[string]any{}}, nil
 	}
 	if value == "*" {
@@ -5324,7 +5324,7 @@ func expandMultifield(q map[string]any, c *QueryCtx) map[string]any {
 	return q
 }
 
-func FieldUnderNested(idx *model.Index, field string) bool {
+func fieldUnderNested(idx *model.Index, field string) bool {
 	parts := strings.Split(field, ".")
 	props := mapping.EnsureProperties(idx.Mappings)
 	for i := 0; i < len(parts)-1; i++ {

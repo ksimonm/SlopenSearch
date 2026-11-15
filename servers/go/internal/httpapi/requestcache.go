@@ -116,7 +116,7 @@ func (s *Server) requestCacheKey(r *http.Request, raw []byte) string {
 		}
 	}
 	s.mu.RLock()
-	indices, e := s.resolveSpec2(target, resolveOpts2{})
+	indices, e := s.resolveSpec(target, specOpts{})
 	s.mu.RUnlock()
 	if e != nil || len(indices) == 0 {
 		return ""
