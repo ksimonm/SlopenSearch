@@ -6,6 +6,7 @@
 pub(crate) mod admin;
 pub(crate) mod alias;
 pub(crate) mod analyze_api;
+pub(crate) mod byquery_multi;
 pub(crate) mod cat;
 pub(crate) mod cluster;
 pub(crate) mod compression;
@@ -642,8 +643,8 @@ pub fn dispatch(store: &mut Store, req: &Req) -> axum::response::Response {
             "_mget" => docs::handle_mget(store, req, index),
             "_termvectors" => docs::handle_termvectors(store, req, index, None),
             "_mtermvectors" => docs::handle_mtermvectors(store, req, index),
-            "_update_by_query" => docs::handle_update_by_query(store, req, index),
-            "_delete_by_query" => docs::handle_delete_by_query(store, req, index),
+            "_update_by_query" => byquery_multi::handle_update_by_query(store, req, index),
+            "_delete_by_query" => byquery_multi::handle_delete_by_query(store, req, index),
             "_search" => search::handle_search(store, req, index),
             "_search_shards" => search::handle_search_shards(store, req, index),
             "_rank_eval" => search::handle_rank_eval(store, req, index),

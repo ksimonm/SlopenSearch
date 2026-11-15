@@ -68,13 +68,9 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 		writeError(w, rerr)
 		return
 	}
-	idx, apiErr := s.resolveReadTarget(name)
+	targets, apiErr := s.byQueryTargets(name)
 	if apiErr != nil {
 		writeError(w, apiErr)
-		return
-	}
-	if idx.Closed {
-		writeError(w, errIndexClosed(idx))
 		return
 	}
 	body, apiErr := readJSON(r)
@@ -136,133 +132,146 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 	versionConflicts := int64(0)
 	var failures []any
 	start := time.Now()
-	hits, qerr := byQueryHits(idx, qmap, maxDocs)
-	if qerr != nil {
-		writeError(w, qerr)
-		return
-	}
-	for _, hit := range hits {
-		id := hit.id
-		total++
-		doc, live := idx.Docs[id]
-		if !live || idx.SeqNos[id] != hit.seq {
-			// the search hit carries the refreshed version: if_seq_no fails
-			versionConflicts++
-			if conflicts != "proceed" {
-				failures = append(failures, byQueryConflict(idx, id, hit.seq, live))
+	for _, idx := range targets {
+		written := int64(0)
+		left := maxDocs
+		if maxDocs >= 0 {
+			left = maxDocs - total
+			if left <= 0 {
+				break
 			}
-			continue
 		}
-		si := -1
-		if sliceCount > 0 {
-			si = int((total - 1) % int64(sliceCount))
-			slices[si].total++
+		hits, qerr := byQueryHits(idx, qmap, left)
+		if qerr != nil {
+			writeError(w, qerr)
+			return
 		}
-		if isDelete {
-			idx.NoteWrite(id)
-			base := idx.CurrentVersion(id)
-			seq := idx.AllocSeqNo()
-			delete(idx.Docs, id)
-			delete(idx.Pending, id)
-			mapping.RemoveDocValues(idx, id)
-			idx.DeleteTotal++
-			idx.Versions[id] = base + 1
-			idx.SeqNos[id] = seq
-			deleted++
-			if si >= 0 {
-				slices[si].deleted++
-			}
-			continue
-		}
-		newDoc := deepCopyMap(doc)
-		op := "index"
-		if hasScript {
-			res, serr := runUpdateScriptCtx(script, newDoc, idx.Name, id, -1, "index", idx.Routing[id])
-			if serr != nil {
-				if se, ok := serr.Extra.(*search.ScriptError); ok {
-					writeJSON(w, 400, se.ErrorBody())
-					return
+		for _, hit := range hits {
+			id := hit.id
+			total++
+			doc, live := idx.Docs[id]
+			if !live || idx.SeqNos[id] != hit.seq {
+				// the search hit carries the refreshed version: if_seq_no fails
+				versionConflicts++
+				if conflicts != "proceed" {
+					failures = append(failures, byQueryConflict(idx, id, hit.seq, live))
 				}
-				if serr.CausedBy != nil {
-					writeError(w, &apierr.Error{Type: serr.CausedBy.Type, Status: 400, Reason: serr.CausedBy.Reason})
-					return
-				}
-				failures = append(failures, byQueryFailure(idx.Name, id, serr))
 				continue
 			}
-			if verr := checkByQueryCtx(res, idx.Name, id); verr != nil {
-				writeError(w, verr)
-				return
+			si := -1
+			if sliceCount > 0 {
+				si = int((total - 1) % int64(sliceCount))
+				slices[si].total++
 			}
-			op = res.op
-			newDoc = res.source
-		}
-		if op == "delete" {
-			idx.NoteWrite(id)
-			base := idx.CurrentVersion(id)
+			if isDelete {
+				idx.NoteWrite(id)
+				base := idx.CurrentVersion(id)
+				seq := idx.AllocSeqNo()
+				delete(idx.Docs, id)
+				delete(idx.Pending, id)
+				mapping.RemoveDocValues(idx, id)
+				idx.DeleteTotal++
+				idx.Versions[id] = base + 1
+				idx.SeqNos[id] = seq
+				deleted++
+				written++
+				if si >= 0 {
+					slices[si].deleted++
+				}
+				continue
+			}
+			newDoc := deepCopyMap(doc)
+			op := "index"
+			if hasScript {
+				res, serr := runUpdateScriptCtx(script, newDoc, idx.Name, id, -1, "index", idx.Routing[id])
+				if serr != nil {
+					if se, ok := serr.Extra.(*search.ScriptError); ok {
+						writeJSON(w, 400, se.ErrorBody())
+						return
+					}
+					if serr.CausedBy != nil {
+						writeError(w, &apierr.Error{Type: serr.CausedBy.Type, Status: 400, Reason: serr.CausedBy.Reason})
+						return
+					}
+					failures = append(failures, byQueryFailure(idx.Name, id, serr))
+					continue
+				}
+				if verr := checkByQueryCtx(res, idx.Name, id); verr != nil {
+					writeError(w, verr)
+					return
+				}
+				op = res.op
+				newDoc = res.source
+			}
+			if op == "delete" {
+				idx.NoteWrite(id)
+				base := idx.CurrentVersion(id)
+				seq := idx.AllocSeqNo()
+				delete(idx.Docs, id)
+				delete(idx.Pending, id)
+				mapping.RemoveDocValues(idx, id)
+				idx.DeleteTotal++
+				idx.Versions[id] = base + 1
+				idx.SeqNos[id] = seq
+				deleted++
+				written++
+				if si >= 0 {
+					slices[si].deleted++
+				}
+				continue
+			}
+			pparams := map[string]any{}
+			if pn := r.URL.Query().Get("pipeline"); pn != "" {
+				pparams["pipeline"] = pn
+			} else if pn, ok := body["pipeline"].(string); ok && pn != "" {
+				pparams["pipeline"] = pn
+			}
+			newDoc, apiErr = s.ingest.Apply(idx, newDoc, pparams)
+			if apiErr != nil {
+				failures = append(failures, byQueryFailure(idx.Name, id, apiErr))
+				continue
+			}
+			if op == "none" || op == "noop" {
+				noops++
+				if si >= 0 {
+					slices[si].noops++
+				}
+				continue
+			}
+			props := mapping.EnsureProperties(idx.Mappings)
+			if derr := mappingShapeConflict(props, newDoc); derr != nil {
+				failures = append(failures, byQueryFailure(idx.Name, id, derr))
+				continue
+			}
+			if derr := mergeMappingForIndex(idx, props, newDoc); derr != nil {
+				failures = append(failures, byQueryFailure(idx.Name, id, derr))
+				continue
+			}
+			mapping.EnsureFieldTypes(idx)
+			if derr := mapping.ComputeDocValues(idx, id, newDoc); derr != nil {
+				failures = append(failures, byQueryFailure(idx.Name, id, derr))
+				continue
+			}
 			seq := idx.AllocSeqNo()
-			delete(idx.Docs, id)
-			delete(idx.Pending, id)
-			mapping.RemoveDocValues(idx, id)
-			idx.DeleteTotal++
-			idx.Versions[id] = base + 1
+			idx.Docs[id] = newDoc
+			idx.Versions[id] = idx.CurrentVersion(id) + 1
 			idx.SeqNos[id] = seq
-			deleted++
-			if si >= 0 {
-				slices[si].deleted++
+			idx.PrimaryTerms[id] = 1
+			idx.IndexTotal++
+			if rv == "true" || rv == "wait_for" || !idx.RefreshDisabled() {
+				delete(idx.Pending, id)
+			} else {
+				idx.MarkPending(id, newDoc, true)
 			}
-			continue
-		}
-		pparams := map[string]any{}
-		if pn := r.URL.Query().Get("pipeline"); pn != "" {
-			pparams["pipeline"] = pn
-		} else if pn, ok := body["pipeline"].(string); ok && pn != "" {
-			pparams["pipeline"] = pn
-		}
-		newDoc, apiErr = s.ingest.Apply(idx, newDoc, pparams)
-		if apiErr != nil {
-			failures = append(failures, byQueryFailure(idx.Name, id, apiErr))
-			continue
-		}
-		if op == "none" || op == "noop" {
-			noops++
+			updated++
+			written++
 			if si >= 0 {
-				slices[si].noops++
+				slices[si].updated++
 			}
-			continue
 		}
-		props := mapping.EnsureProperties(idx.Mappings)
-		if derr := mappingShapeConflict(props, newDoc); derr != nil {
-			failures = append(failures, byQueryFailure(idx.Name, id, derr))
-			continue
+		if rv == "true" && written > 0 {
+			idx.Refresh()
 		}
-		if derr := mergeMappingForIndex(idx, props, newDoc); derr != nil {
-			failures = append(failures, byQueryFailure(idx.Name, id, derr))
-			continue
-		}
-		mapping.EnsureFieldTypes(idx)
-		if derr := mapping.ComputeDocValues(idx, id, newDoc); derr != nil {
-			failures = append(failures, byQueryFailure(idx.Name, id, derr))
-			continue
-		}
-		seq := idx.AllocSeqNo()
-		idx.Docs[id] = newDoc
-		idx.Versions[id] = idx.CurrentVersion(id) + 1
-		idx.SeqNos[id] = seq
-		idx.PrimaryTerms[id] = 1
-		idx.IndexTotal++
-		if rv == "true" || rv == "wait_for" || !idx.RefreshDisabled() {
-			delete(idx.Pending, id)
-		} else {
-			idx.MarkPending(id, newDoc, true)
-		}
-		updated++
-		if si >= 0 {
-			slices[si].updated++
-		}
-	}
-	if rv == "true" && deleted+updated > 0 {
-		idx.Refresh()
 	}
 	if total > 0 {
 		report[3].V = deleted
@@ -279,7 +288,8 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 	}
 	report[11].V = failures
 	if !isDelete {
-		report = append(report, ojson.KV{"updated", updated})
+		// "updated" follows "total"
+		report = append(report[:3], append(ojson.Object{{"updated", updated}}, report[3:]...)...)
 	}
 	report[0].V = time.Since(start).Milliseconds()
 	if sliceCount > 0 {
@@ -396,4 +406,31 @@ func byQueryConflict(idx *model.Index, id string, seq int64, live bool) ojson.Ob
 		{"cause", ojson.Object{{"type", "version_conflict_engine_exception"}, {"reason", reason},
 			{"index", idx.Name}, {"shard", "0"}, {"index_uuid", idx.UUID}}},
 		{"status", 409}}
+}
+
+// byQueryTargets resolves the indices of a by-query request: one index, alias
+// or data stream, or an expression over several (`_all`, wildcards, lists).
+func (s *Server) byQueryTargets(name string) ([]*model.Index, *apierr.Error) {
+	if name != "_all" && !strings.ContainsAny(name, ",*?") {
+		idx, err := s.resolveReadTarget(name)
+		if err != nil {
+			return nil, err
+		}
+		if idx.Closed {
+			return nil, errIndexClosed(idx)
+		}
+		return []*model.Index{idx}, nil
+	}
+	indices, err := s.resolveIndices(name, resolveOpts{})
+	if err != nil {
+		return nil, err
+	}
+	out := indices[:0:0]
+	for _, idx := range indices {
+		if idx.Closed {
+			continue
+		}
+		out = append(out, idx)
+	}
+	return out, nil
 }

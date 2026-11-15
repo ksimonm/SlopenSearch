@@ -166,17 +166,18 @@ fn merge_metrics(dst: &mut Map<String, Value>, src: &Map<String, Value>) {
 
 pub fn handle_stats_api(store: &mut Store, req: &Req, spec: &str, metrics: &str) -> Response {
     let mut requested: Option<Vec<String>> = None;
-    if !metrics.is_empty() {
+    if !metrics.is_empty() && metrics.trim() != "_all" {
+        if metrics.split(',').any(|m| m.trim() == "_all") {
+            return err_response(ApiError::bad(&format!(
+                "request [{}] contains _all and individual metrics [{}]",
+                req.path, metrics
+            )));
+        }
         let mut req_list: Vec<String> = vec![];
         for m in metrics.split(',') {
             let m = m.trim();
             if m.is_empty() {
                 continue;
-            }
-            if m == "_all" || m == "*" {
-                req_list.clear();
-                requested = None;
-                break;
             }
             if !STATS_METRIC_NAMES.contains(&m) {
                 return err_response(ApiError::bad(&format!(

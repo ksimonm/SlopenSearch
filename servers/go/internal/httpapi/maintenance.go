@@ -140,16 +140,19 @@ func (s *Server) handleStatsAPI(w http.ResponseWriter, r *http.Request, spec, me
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var requested map[string]bool
-	if metrics != "" {
+	if metrics != "" && strings.TrimSpace(metrics) != "_all" {
 		requested = map[string]bool{}
+		for _, m := range strings.Split(metrics, ",") {
+			if strings.TrimSpace(m) == "_all" {
+				writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400,
+					Reason: "request [" + r.URL.Path + "] contains _all and individual metrics [" + metrics + "]"})
+				return
+			}
+		}
 		for _, m := range strings.Split(metrics, ",") {
 			m = strings.TrimSpace(m)
 			if m == "" {
 				continue
-			}
-			if m == "_all" || m == "*" {
-				requested = nil
-				break
 			}
 			known := false
 			for _, k := range statsMetricNames {
