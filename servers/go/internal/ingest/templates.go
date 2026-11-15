@@ -186,5 +186,5 @@ func templateError(src string, e *mustache.Error, fields ojson.Object) *apierr.E
 // rawError is a pre-rendered error response (exact key order).
 type rawError struct{ body ojson.Object }
 
-func (r rawError) StatusCode() int    { return 400 }
+func (r rawError) StatusCode() int   { return 400 }
 func (r rawError) ResponseBody() any { return r.body }
