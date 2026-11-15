@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import loadgen  # noqa: E402
 from proxy import Proxy  # noqa: E402
-from targets import Sampler, make_box, all_targets, build_images, git_rev, sh  # noqa: E402
+from targets import Sampler, make_box, all_targets, build_images, git_rev, servers_rev, sh  # noqa: E402
 
 BENCH = Path(__file__).resolve().parent
 OSB_BIN = Path(os.environ.get("OSB_BIN", BENCH / ".venv-osb" / "bin" / "opensearch-benchmark"))
@@ -358,7 +358,7 @@ def _r(x):
 def run_meta(a, names, targets, extra=None) -> dict:
     from run import _cpu_model, _mem_gb
     m = {"kind": "osb", "date": dt.datetime.now().isoformat(timespec="seconds"), "targets": names,
-         "cpus": a.cpus, "memory": a.memory, "heap": a.heap, "git_rev": git_rev(),
+         "cpus": a.cpus, "memory": a.memory, "heap": a.heap, "git_rev": git_rev(), "servers_rev": servers_rev(),
          "host": os.uname().nodename, "kernel": os.uname().release, "cpu_model": _cpu_model(),
          "host_cpus": os.cpu_count(), "host_mem_gb": _mem_gb(), "loadavg_start": os.getloadavg(),
          "images": {n: sh("docker", "image", "inspect", "-f", "{{.Id}}", targets[n].image, check=False)[:19]

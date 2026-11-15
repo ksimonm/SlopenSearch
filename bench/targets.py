@@ -88,6 +88,17 @@ def git_rev() -> str:
         return "?"
 
 
+def servers_rev() -> str:
+    """Last commit that touched servers/ (what the Go/Rust numbers belong to), + "-dirty"
+    when servers/ has uncommitted changes."""
+    try:
+        rev = sh("git", "-C", str(REPO), "log", "-1", "--format=%h", "--", "servers")
+        dirty = sh("git", "-C", str(REPO), "status", "--porcelain", "--", "servers")
+        return rev + ("-dirty" if dirty else "")
+    except Exception:
+        return "?"
+
+
 class Container:
     def __init__(self, t: Target, cpus: str, memory: str):
         self.t, self.cpus, self.memory = t, cpus, memory

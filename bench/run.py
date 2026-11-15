@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import datagen  # noqa: E402
 import loadgen  # noqa: E402
 import workloads as W  # noqa: E402
-from targets import Sampler, make_box, all_targets, build_images, git_rev, sh  # noqa: E402
+from targets import Sampler, make_box, all_targets, build_images, git_rev, servers_rev, sh  # noqa: E402
 
 ALL_WORKLOADS = ["index", "sweep", "verify", "search", "knn", "mixed", "update", "restart"]
 PRESETS = {
@@ -472,7 +472,7 @@ def main():
         "mixed_clients": a.mixed_clients, "workloads": a.workloads,
         "slow_limit_s": a.slow_limit, "request_timeout_s": a.request_timeout,
         "search_duration_s": a.search_duration or PRESETS[a.size][0],
-        "level": a.level, "git_rev": git_rev(), "host": platform.node(), "kernel": platform.release(),
+        "level": a.level, "git_rev": git_rev(), "servers_rev": servers_rev(), "host": platform.node(), "kernel": platform.release(),
         "cpu_model": _cpu_model(), "host_cpus": os.cpu_count(), "host_mem_gb": _mem_gb(),
         "loadavg_start": os.getloadavg(),
         "images": {n: sh("docker", "image", "inspect", "-f", "{{.Id}}", targets[n].image, check=False)[:19]

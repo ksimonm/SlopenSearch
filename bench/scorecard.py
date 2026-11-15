@@ -60,7 +60,8 @@ def _limits(meta) -> dict:
 
 def _common(meta: dict, run: str) -> dict:
     la0, la1 = meta.get("loadavg_start"), meta.get("loadavg_end")
-    return {"schema": SCHEMA, "run": run, "commit": meta.get("git_rev"), "date": meta.get("date"),
+    return {"schema": SCHEMA, "run": run, "commit": meta.get("git_rev"), "servers_commit": meta.get("servers_rev"),
+            "date": meta.get("date"),
             "host": {"name": meta.get("host"), "cpu": meta.get("cpu_model"), "cpus": meta.get("host_cpus"),
                      "mem_gb": meta.get("host_mem_gb"), "kernel": meta.get("kernel")},
             "loadavg": [round(la0[0], 2) if la0 else None, round(la1[0], 2) if la1 else None],
@@ -282,7 +283,7 @@ def report(recs: list[dict], hist: list[dict]) -> str:
         g0 = group[0]
         out.append(f"### {g0['kind']} {g0['workload']} ({g0['preset']}) — `{cfg}`")
         out.append("")
-        out.append(f"commit `{g0.get('commit')}`, {g0.get('date')}, limits {g0['limits']['cpus']} CPUs / "
+        out.append(f"commit `{g0.get('commit')}` (servers `{g0.get('servers_commit')}`), {g0.get('date')}, limits {g0['limits']['cpus']} CPUs / "
                    f"{g0['limits']['memory']}, load average {g0['loadavg'][0]} → {g0['loadavg'][1]}"
                    + (", through the recording proxy" if g0.get("proxy") else ""))
         out.append("")
@@ -354,10 +355,10 @@ def history_view(hist: list[dict], target=None, config=None, last=30) -> str:
         s = ratios(r, b)["summary"]
         rows.append((r, b, s))
     rows = rows[-last:]
-    out = ["| date | commit | level | config | target | thr× | p50× | p99× | mem× | ok/ref ok | load | ref run |",
+    out = ["| date | servers commit | level | config | target | thr× | p50× | p99× | mem× | ok/ref ok | load | ref run |",
            "|---|---|---|---|---|---:|---:|---:|---:|---|---:|---|"]
     for r, b, s in rows:
-        out.append(f"| {(r.get('date') or '')[:16]} | {r.get('commit')} | {r.get('level')} | {r['config']} | {r['target']} | "
+        out.append(f"| {(r.get('date') or '')[:16]} | {r.get('servers_commit') or r.get('commit')} | {r.get('level')} | {r['config']} | {r['target']} | "
                    f"{fr(s['thr'])} | {fr(s['p50'])} | {fr(s['p99'])} | {fr(s['mem_peak'])} | "
                    f"{s['tasks_ok']}/{s['tasks_ref_ok']} | {r['loadavg'][0]} | {b['run'] if b['run'] != r['run'] else 'same'} |")
     return "\n".join(out)
