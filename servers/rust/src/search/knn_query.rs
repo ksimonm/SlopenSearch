@@ -1,6 +1,7 @@
 // The knn query (request parsing, shard checks, exact k-NN / radial search)
 // and the knn_score script (lang "knn").
 
+use base64::Engine as _;
 use crate::errors::ApiError;
 use crate::search::eval::QueryCtx;
 use crate::mapping::knn::{f32r, field_def, raw, score, source_vector};
@@ -684,7 +685,7 @@ pub fn docvalue_output(
     for x in vals {
         bytes.extend_from_slice(&(x as f32).to_le_bytes());
     }
-    Some(Some(vec![json!(base64::encode(bytes))]))
+    Some(Some(vec![json!(base64::prelude::BASE64_STANDARD.encode(bytes))]))
 }
 
 // ---------------------------------------------------------------- unsupported operations

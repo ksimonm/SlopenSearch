@@ -5,9 +5,9 @@
 
 mod aggs;
 mod analysis;
+mod calendar;
 mod dates;
 mod errors;
-mod hashes;
 mod http;
 mod ingest;
 mod jregex;

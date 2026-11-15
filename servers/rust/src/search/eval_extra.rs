@@ -2,6 +2,7 @@
 // query_string parser, function_score, more_like_this, knn.
 // Port of servers/go/eval_extra.go.
 
+use base64::Engine as _;
 use crate::mapping::mapping_field_def;
 use crate::mapping::geo::*;
 use crate::search::eval::*;
@@ -1265,7 +1266,7 @@ impl<'a> QueryCtx<'a> {
         };
         match raw {
             Value::String(t) => {
-                let decoded: Vec<u8> = match base64::decode(t) {
+                let decoded: Vec<u8> = match base64::prelude::BASE64_STANDARD.decode(t) {
                     Ok(d) => d,
                     Err(_) => match t.parse::<Map<String, Value>>() {
                         Ok(_) => t.as_bytes().to_vec(),

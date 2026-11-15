@@ -1,5 +1,6 @@
 // Painless engine: the class library (whitelisted methods and fields).
 
+use base64::prelude::{Engine as _, BASE64_STANDARD};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -7,6 +8,16 @@ use crate::painless::interp::{exception_type, native, Interp, PFn};
 use crate::painless::regex::{compile_pattern, java_replacement, PMatcher};
 use crate::painless::time::{call_static_time, static_time_enum, time_method};
 use crate::painless::value::*;
+
+/// `java.util.Base64.getDecoder()`: the standard alphabet, padding optional
+/// (but, when present, canonical) and the unused bits of a final partial group
+/// ignored.
+pub(crate) const JAVA_BASE64: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
+    &base64::alphabet::STANDARD,
+    base64::engine::GeneralPurposeConfig::new()
+        .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent)
+        .with_decode_allow_trailing_bits(true),
+);
 
 fn str_arg(v: &PV) -> String {
     match v {
@@ -1176,7 +1187,7 @@ pub fn call_method(inp: &Interp<'_>, recv: &PV, name: &str, args: Vec<PV>, off: 
             "Base64.getEncoder" if name == "encodeToString" && n == 1 => {
                 if let PV::Array(arr) = &args[0] {
                     let b: Vec<u8> = arr.a.borrow().iter().map(|x| i64_of(x) as u8).collect();
-                    return Ok(PV::str(&base64::encode(b)));
+                    return Ok(PV::str(&BASE64_STANDARD.encode(b)));
                 }
             }
             "Random" => match name {
@@ -1481,8 +1492,8 @@ fn string_method(inp: &Interp<'_>, s: &str, name: &str, args: Vec<PV>, off: usiz
         ("chars", 0) => Ok(PV::stream("int", u.iter().map(|c| PV::Int(*c as i32)).collect())),
         ("codePoints", 0) => Ok(PV::stream("int", s.chars().map(|c| PV::Int(c as i32)).collect())),
         ("toCharArray", 0) => Ok(PV::array("char", u.iter().map(|c| PV::Char(*c)).collect())),
-        ("encodeBase64", 0) => Ok(PV::str(&base64::encode(s.as_bytes()))),
-        ("decodeBase64", 0) => match base64::decode(s) {
+        ("encodeBase64", 0) => Ok(PV::str(&BASE64_STANDARD.encode(s.as_bytes()))),
+        ("decodeBase64", 0) => match JAVA_BASE64.decode(s) {
             Ok(b) => Ok(PV::str(&String::from_utf8_lossy(&b))),
             Err(_) => Err(iae(off, "Illegal base64 character")),
         },

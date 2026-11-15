@@ -8,6 +8,11 @@ axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 serde_json = { version = "1", features = ["arbitrary_precision", "preserve_order"] }
 regex = "1"
-base64 = "0.13"
+base64 = "0.22"
 flate2 = "1.1.11"
 snap = "1.1.2"
+jiff = { version = "0.2.44", default-features = false, features = ["std", "tzdb-bundle-always"] }
+md-5 = "0.11.0"
+sha1 = "0.11.0"
+sha2 = "0.11.1"
+sha3 = "0.12.0"

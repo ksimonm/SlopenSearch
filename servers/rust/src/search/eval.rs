@@ -11,6 +11,7 @@ use crate::settings::{find_setting, settings_value_int};
 use regex::Regex;
 use serde_json::{Map, Number, Value};
 use std::collections::BTreeMap;
+use crate::calendar::{civil_from_days, days_from_civil};
 
 thread_local! {
     /// Match-query corpus statistics (docs with the field, total tokens, document
@@ -433,6 +434,13 @@ pub fn validate_query(idx: &Index, q: &Map<String, Value>) -> Result<(), ApiErro
                         if field == "boost" || field == "_name" || field == "relation" {
                             continue;
                         }
+                        if let Some(tz) = spec.get("time_zone").and_then(|v| v.as_str()) {
+                            if let Err(e) = crate::calendar::Zone::cached(tz) {
+                                let reason = format!("{}: {}", e.java_class(), e.message);
+                                return Err(ApiError::new("illegal_argument_exception", &reason, 400)
+                                    .caused_by(ApiError::new(e.kind, &e.message, 400)));
+                            }
+                        }
                         let def = mapping_field_def(idx, field).cloned().unwrap_or_default();
                         let ftype = def.get("type").and_then(|t| t.as_str()).unwrap_or("");
                         let numeric = matches!(
@@ -727,25 +735,6 @@ fn compare_ip_literal(a: &str, b: &str) -> i32 {
     }
 }
 
-fn parse_tz_offset(tz: &str) -> Result<i64, ()> {
-    let tz = tz.trim();
-    if tz == "UTC" || tz == "utc" || tz == "Z" || tz.is_empty() {
-        return Ok(0);
-    }
-    if tz.starts_with('+') || tz.starts_with('-') {
-        let sign: i64 = if tz.starts_with('-') { -1 } else { 1 };
-        let body = &tz[1..];
-        let parts: Vec<&str> = body.split(':').collect();
-        let hours: i64 = parts[0].parse().map_err(|_| ())?;
-        let mut mins: i64 = 0;
-        if parts.len() > 1 {
-            mins = parts[1].parse().unwrap_or(0);
-        }
-        return Ok(sign * (hours * 3600 + mins * 60) * 1000);
-    }
-    Err(())
-}
-
 pub fn parse_query_date(
     def: &Map<String, Value>,
     v: &Value,
@@ -787,38 +776,15 @@ pub fn parse_query_date(
     }
 }
 
-fn days_from_civil_pub(y: i64, m: i64, d: i64) -> i64 {
-    let y = y - if m <= 2 { 1 } else { 0 };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = m + if m > 2 { -3 } else { 9 };
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = mp + if mp < 10 { 3 } else { -9 };
-    (y + if m <= 2 { 1 } else { 0 }, m, d)
-}
-
 fn date_floor(ms: i64, unit: char) -> i64 {
     match unit {
         'y' => {
             let (y, _, _) = civil_from_days(ms.div_euclid(86_400_000));
-            days_from_civil_pub(y, 1, 1) * 86_400_000
+            days_from_civil(y, 1, 1) * 86_400_000
         }
         'M' => {
             let (y, m, _) = civil_from_days(ms.div_euclid(86_400_000));
-            days_from_civil_pub(y, m, 1) * 86_400_000
+            days_from_civil(y, m, 1) * 86_400_000
         }
         'w' => {
             let day = ms.div_euclid(86_400_000);
@@ -864,7 +830,7 @@ fn add_date_math(ms: i64, n: i64, unit: char) -> i64 {
                     y -= 1;
                 }
             }
-            days_from_civil_pub(y, mo, d) * 86_400_000 + rem
+            days_from_civil(y, mo, d) * 86_400_000 + rem
         }
         _ => {
             let mult = date_unit_ms(unit).unwrap_or(0);
@@ -885,13 +851,24 @@ fn parse_date_math(def: &Map<String, Value>, raw: &str, tz: &str, round_up: bool
         && !math.map(|m| m.contains('/')).unwrap_or(false);
     let explicit_offset = base.ends_with('Z')
         || base.rfind(['+', '-']).map(|i| i > 10).unwrap_or(false);
+    // the math and the rounding happen in `time_zone`; a date without an offset
+    // of its own is local to it as well
+    let zone = match tz {
+        "" => None,
+        z => crate::calendar::Zone::cached(z).ok(),
+    };
     let mut ms = if base == "now" {
-        std::time::SystemTime::now()
+        let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()?
-            .as_millis() as i64
+            .as_millis() as i64;
+        now + zone.as_ref().map_or(0, |z| z.offset_ms(now))
     } else {
-        crate::mapping::fields::parse_date_any(def, base)?
+        let parsed = crate::mapping::fields::parse_date_any(def, base)?;
+        match &zone {
+            Some(z) if explicit_offset => parsed + z.offset_ms(parsed),
+            _ => parsed,
+        }
     };
     if let Some(math) = math {
         let mut rest = math;
@@ -908,11 +885,11 @@ fn parse_date_math(def: &Map<String, Value>, raw: &str, tz: &str, round_up: bool
                             if matches!(unit, 'y' | 'M') {
                                 let (y, mo, _) = civil_from_days(ms.div_euclid(86_400_000));
                                 let next = if unit == 'y' {
-                                    days_from_civil_pub(y + 1, 1, 1)
+                                    days_from_civil(y + 1, 1, 1)
                                 } else if mo == 12 {
-                                    days_from_civil_pub(y + 1, 1, 1)
+                                    days_from_civil(y + 1, 1, 1)
                                 } else {
-                                    days_from_civil_pub(y, mo + 1, 1)
+                                    days_from_civil(y, mo + 1, 1)
                                 };
                                 ms = next * 86_400_000 - 1;
                             } else {
@@ -945,10 +922,8 @@ fn parse_date_math(def: &Map<String, Value>, raw: &str, tz: &str, round_up: bool
     if date_only && round_up {
         ms += 86_400_000 - 1;
     }
-    if !tz.is_empty() && !explicit_offset {
-        if let Ok(offset) = parse_tz_offset(tz) {
-            ms -= offset;
-        }
+    if let Some(z) = zone {
+        ms = z.local_to_epoch_ms(ms);
     }
     Some(ms)
 }

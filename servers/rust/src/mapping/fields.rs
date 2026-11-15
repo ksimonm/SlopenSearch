@@ -6,6 +6,7 @@ use crate::model::Index;
 use crate::settings::{find_setting, settings_value_string};
 use serde_json::{json, Map, Number, Value};
 use std::collections::{BTreeMap, HashSet};
+use crate::calendar::days_from_civil;
 
 // ---------------------------------------------------------------------------
 // Index-time field value extraction (port of servers/go/fields.go).
@@ -871,15 +872,6 @@ pub fn number_string(n: &Number) -> String {
     } else {
         n.to_string()
     }
-}
-
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146097 + doe - 719468
 }
 
 /// Parses the default ISO layouts, returning epoch millis (UTC).

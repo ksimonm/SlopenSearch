@@ -31,6 +31,7 @@
 
 use crate::model::{DataStreamInfo, Index, Store};
 use serde_json::{json, Map, Value};
+use base64::Engine as _;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -450,7 +451,7 @@ fn doc_record(idx: &Index, id: &str, tagged: bool) -> Value {
             if let Some(raw) = idx.raw_sources.get(id) {
                 match std::str::from_utf8(raw) {
                     Ok(s) => r.insert("raw".into(), json!(s)),
-                    Err(_) => r.insert("raw64".into(), json!(base64::encode(raw))),
+                    Err(_) => r.insert("raw64".into(), json!(base64::prelude::BASE64_STANDARD.encode(raw))),
                 };
             }
             if let Some(rt) = idx.routing.get(id) {
@@ -642,7 +643,7 @@ fn apply_doc(store: &mut Store, index: &str, d: &Value, track_order: bool) {
     idx.docs.insert(id.clone(), d.get("src").cloned().unwrap_or_else(|| Value::Object(Map::new())));
     if let Some(raw) = d.get("raw").and_then(|v| v.as_str()) {
         idx.raw_sources.insert(id.clone(), raw.as_bytes().to_vec());
-    } else if let Some(raw) = d.get("raw64").and_then(|v| v.as_str()).and_then(|s| base64::decode(s).ok()) {
+    } else if let Some(raw) = d.get("raw64").and_then(|v| v.as_str()).and_then(|s| base64::prelude::BASE64_STANDARD.decode(s).ok()) {
         idx.raw_sources.insert(id.clone(), raw);
     } else {
         idx.raw_sources.remove(&id);
