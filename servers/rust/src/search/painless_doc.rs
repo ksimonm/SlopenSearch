@@ -205,6 +205,7 @@ pub fn score_bindings(id: String) -> HashMap<String, NativeFn> {
             Ok(PV::Double((0.5 * dist(&a).powi(2) / scaling).exp()))
         }),
     );
+    crate::painless::decay::add_decay_bindings(&mut m);
     for name in ["l2Squared", "l1Norm", "lInfNorm", "innerProduct", "cosineSimilarity", "hamming"] {
         m.insert(name.into(), Rc::new(move |_, a, off| vector_function(name, &a, off)));
     }
