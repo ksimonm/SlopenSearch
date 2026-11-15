@@ -88,28 +88,31 @@ func truncateDateMathUnit(t time.Time, unit byte) time.Time {
 	return t
 }
 
-// ApplyMath applies a date math expression ("+1d/d") to t.
-func ApplyMath(t time.Time, expr string) (time.Time, Resolution, bool) {
-	res := resMillis
+// ApplyMath applies a date math expression ("+1d/d") to t, the way
+// JavaDateMathParser.parseMath does: only a rounding ("/d") rounds, and with
+// roundUp (the upper bound of an inclusive range, ...) it moves to the last
+// millisecond of that unit at once. Additions never round.
+func ApplyMath(t time.Time, expr string, roundUp bool) (time.Time, bool) {
 	i := 0
 	for i < len(expr) {
 		c := expr[i]
 		if c == '/' {
 			if i+1 >= len(expr) {
-				return t, res, false
+				return t, false
 			}
 			unit := expr[i+1]
-			ures, ok := dateMathUnitResolution(unit)
-			if !ok {
-				return t, res, false
+			if _, ok := dateMathUnitResolution(unit); !ok {
+				return t, false
 			}
 			t = truncateDateMathUnit(t, unit)
-			res = ures
+			if roundUp {
+				t = addDateMathUnit(t, unit, 1).Add(-time.Millisecond)
+			}
 			i += 2
 			continue
 		}
 		if c != '+' && c != '-' {
-			return t, res, false
+			return t, false
 		}
 		sign := 1
 		if c == '-' {
@@ -121,24 +124,20 @@ func ApplyMath(t time.Time, expr string) (time.Time, Resolution, bool) {
 			i++
 		}
 		if start == i || i >= len(expr) {
-			return t, res, false
+			return t, false
 		}
 		n, err := strconv.Atoi(expr[start:i])
 		if err != nil {
-			return t, res, false
+			return t, false
 		}
 		unit := expr[i]
-		ures, ok := dateMathUnitResolution(unit)
-		if !ok {
-			return t, res, false
+		if _, ok := dateMathUnitResolution(unit); !ok {
+			return t, false
 		}
 		i++
 		t = addDateMathUnit(t, unit, sign*n)
-		if ures > res {
-			res = ures
-		}
 	}
-	return t, res, true
+	return t, true
 }
 
 // RoundUp moves t to the last millisecond of its unit of resolution res.
