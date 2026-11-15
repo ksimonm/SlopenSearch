@@ -31,18 +31,21 @@ static NULL: Value = Value::Null;
 pub enum Kind {
     Text,
     Exact,
+    Numeric,
 }
 
 fn field_key(kind: Kind, field: &str) -> String {
     match kind {
         Kind::Text => format!("t\u{1}{}", field),
         Kind::Exact => format!("k\u{1}{}", field),
+        Kind::Numeric => format!("n\u{1}{}", field),
     }
 }
 
 fn parse_key(key: &str) -> (Kind, &str) {
     match key.split_once('\u{1}') {
         Some(("t", f)) => (Kind::Text, f),
+        Some(("n", f)) => (Kind::Numeric, f),
         Some((_, f)) => (Kind::Exact, f),
         None => (Kind::Exact, key),
     }
@@ -80,9 +83,19 @@ impl<'a> Indexer<'a> {
         let ctx = QueryCtx::new(idx, "", &NULL);
         let analyzer = match kind {
             Kind::Text => Some(ctx.field_analyzer(field, None, Side::Index)),
-            Kind::Exact => None,
+            Kind::Exact | Kind::Numeric => None,
         };
         Indexer { kind, path: resolve_alias_field(idx, field), analyzer, ctx }
+    }
+
+    fn add(&self, f: &mut FieldIndex, doc: u32, dv: &Map<String, Value>) {
+        if self.kind == Kind::Numeric {
+            if let Some(raw) = dv.get(&self.path) {
+                f.add_numbers(doc, &array_values(raw));
+            }
+            return;
+        }
+        f.add(doc, self.terms(dv));
     }
 
     fn terms(&self, dv: &Map<String, Value>) -> Vec<String> {
@@ -90,6 +103,7 @@ impl<'a> Indexer<'a> {
         let Some(raw) = dv.get(&self.path) else { return out };
         for v in array_values(raw) {
             match self.kind {
+                Kind::Numeric => {}
                 Kind::Text => {
                     let s = value_scalar_string(&v).unwrap_or_default();
                     out.extend(self.ctx.terms_ref(self.analyzer.as_ref().unwrap(), &s));
@@ -110,7 +124,7 @@ fn index_doc(idx: &Index, inv: &mut InvertedIndex, indexers: &[(String, Indexer)
     let n = inv.alloc(id);
     for (key, ix) in indexers {
         if let Some(f) = inv.fields.get_mut(key) {
-            f.add(n, ix.terms(dv));
+            ix.add(f, n, dv);
         }
     }
 }
@@ -135,6 +149,19 @@ fn sync_locked(idx: &Index, inv: &mut InvertedIndex) {
         inv.schema = sch;
     }
     let dirty = idx.doc_values.take_dirty();
+    let docs_dirty = idx.docs.take_dirty();
+    if dirty.all || docs_dirty.all || !inv.missing_known {
+        inv.missing = idx.docs.keys().filter(|id| !idx.doc_values.contains_key(*id)).cloned().collect();
+        inv.missing_known = true;
+    } else {
+        for id in dirty.ids.iter().chain(docs_dirty.ids.iter()) {
+            if idx.docs.contains_key(id) && !idx.doc_values.contains_key(id) {
+                inv.missing.insert(id.clone());
+            } else {
+                inv.missing.remove(id);
+            }
+        }
+    }
     if dirty.all || !inv.numbered {
         renumber(idx, inv);
         return;
@@ -158,7 +185,8 @@ fn up_to_date(idx: &Index, inv: &InvertedIndex, keys: &[String]) -> bool {
     inv.numbered
         && inv.schema == schema(idx)
         && !idx.doc_values.is_dirty()
-        && keys.iter().all(|k| inv.fields.contains_key(k))
+        && !idx.docs.is_dirty()
+        && keys.iter().all(|k| inv.fields.get(k).is_some_and(|f| f.nums_ready()))
 }
 
 /// Brings the index up to date and builds the fields `keys` when missing.
@@ -180,10 +208,15 @@ fn ensure(idx: &Index, keys: &[String]) {
         for n in 0..inv.ids.len() {
             let Some(id) = inv.ids[n].as_deref() else { continue };
             if let Some(dv) = idx.doc_values.get(id) {
-                f.add(n as u32, ix.terms(dv));
+                ix.add(&mut f, n as u32, dv);
             }
         }
         inv.fields.insert(key.clone(), f);
+    }
+    for key in keys {
+        if let Some(f) = inv.fields.get_mut(key) {
+            f.sort_nums();
+        }
     }
     inv.touch();
 }
@@ -197,6 +230,14 @@ fn with_index<R>(idx: &Index, keys: &[String], f: impl FnOnce(&InvertedIndex) ->
             return f(&inv);
         }
     }
+}
+
+/// Whether every document has doc values (None: index-backed execution is off).
+pub fn all_docs_have_values(idx: &Index) -> Option<bool> {
+    if disabled() {
+        return None;
+    }
+    Some(with_index(idx, &[], |inv| inv.missing.is_empty()))
 }
 
 // ------------------------------------------------------------------ plans
@@ -213,6 +254,8 @@ enum Plan {
     /// Documents with a value in the field.
     Exists(String),
     Ids(Vec<String>),
+    /// Documents with a numeric value in [lo, hi].
+    Range(String, f64, f64),
     And(Vec<Plan>),
     Or(Vec<Plan>),
 }
@@ -220,7 +263,7 @@ enum Plan {
 impl Plan {
     fn keys(&self, out: &mut Vec<String>) {
         match self {
-            Plan::Any(k, _) | Plan::All(k, _) | Plan::Prefix(k, _) | Plan::Exists(k) => {
+            Plan::Any(k, _) | Plan::All(k, _) | Plan::Prefix(k, _) | Plan::Exists(k) | Plan::Range(k, _, _) => {
                 if !out.contains(k) {
                     out.push(k.clone());
                 }
@@ -298,6 +341,57 @@ fn plan_match(ctx: &QueryCtx, field: &str, raw: &Value) -> Option<Plan> {
         }
     }
     Some(Plan::Any(key, qtokens))
+}
+
+/// The plan of a `range` on a numeric or date field: the bounds parsed as the
+/// evaluator parses them, widened so that rounding can only add candidates.
+fn plan_range(ctx: &QueryCtx, field: &str, cond: &Map<String, Value>) -> Option<Plan> {
+    let idx = ctx.idx;
+    if !plain_field(idx, field) {
+        return None;
+    }
+    if !keys_subset(cond, &["gte", "gt", "lte", "lt", "from", "to", "include_lower", "include_upper", "boost", "_name", "format", "time_zone", "relation"]) {
+        return None;
+    }
+    let mut def = mapping_field_def(idx, field)?.clone();
+    if let Some(f) = cond.get("format").and_then(|v| v.as_str()) {
+        def.insert("format".to_string(), Value::String(f.to_string()));
+    }
+    let ftype = def.get("type").and_then(|t| t.as_str()).unwrap_or("").to_string();
+    let is_date = ftype == "date";
+    if !is_date && !matches!(ftype.as_str(), "integer" | "long" | "short" | "byte" | "float" | "double" | "half_float") {
+        return None;
+    }
+    let tz = cond.get("time_zone").and_then(|r| r.as_str()).unwrap_or("").to_string();
+    let bound = |v: &Value| -> Option<(f64, f64)> {
+        if is_date {
+            let a = to_f64(&crate::search::eval::parse_query_date(&def, v, &tz, false).ok()?)?;
+            let b = to_f64(&crate::search::eval::parse_query_date(&def, v, &tz, true).ok()?)?;
+            let slack = 2.0 * 86_400_000.0;
+            Some((a.min(b) - slack, a.max(b) + slack))
+        } else {
+            let f = match v {
+                Value::Number(n) => n.as_f64()?,
+                Value::String(s) => s.trim().parse::<f64>().ok()?,
+                _ => return None,
+            };
+            if !f.is_finite() {
+                return None;
+            }
+            let slack = (f.abs() * 0.01).max(1.0);
+            Some((f - slack, f + slack))
+        }
+    };
+    let pick = |a: &str, b: &str, c: &str| cond.get(a).filter(|v| !v.is_null()).or_else(|| cond.get(b).filter(|v| !v.is_null())).or_else(|| cond.get(c).filter(|v| !v.is_null()));
+    let lo = match pick("gte", "gt", "from") {
+        Some(v) => bound(v)?.0,
+        None => f64::NEG_INFINITY,
+    };
+    let hi = match pick("lte", "lt", "to") {
+        Some(v) => bound(v)?.1,
+        None => f64::INFINITY,
+    };
+    Some(Plan::Range(field_key(Kind::Numeric, field), lo, hi))
 }
 
 fn single(m: &Map<String, Value>) -> Option<(&String, &Value)> {
@@ -488,6 +582,14 @@ fn plan(ctx: &QueryCtx, q: &Map<String, Value>) -> Option<Plan> {
             }
             Some(Plan::Exists(field_key(Kind::Exact, &field)))
         }
+        "range" => {
+            let bm = bm?;
+            if bm.len() != 1 {
+                return None;
+            }
+            let (field, cond) = single(bm)?;
+            plan_range(ctx, field, cond.as_object()?)
+        }
         "ids" => {
             let bm = bm?;
             let list: Vec<String> = match bm.get("values")? {
@@ -644,6 +746,19 @@ fn run(inv: &InvertedIndex, p: &Plan) -> Vec<u32> {
             let f = &inv.fields[k];
             (0..f.lens.len() as u32).filter(|d| f.lens[*d as usize] > 0 && inv.live(*d)).collect()
         }
+        Plan::Range(k, lo, hi) => {
+            let f = &inv.fields[k];
+            let start = f.nums.partition_point(|e| e.0 < *lo);
+            let mut out: Vec<u32> = f.nums[start..]
+                .iter()
+                .take_while(|e| e.0 <= *hi)
+                .map(|e| e.1)
+                .filter(|d| inv.live(*d))
+                .collect();
+            out.sort_unstable();
+            out.dedup();
+            out
+        }
         Plan::Ids(ids) => {
             let mut out: Vec<u32> = ids.iter().filter_map(|id| inv.doc_of(id)).collect();
             out.sort_unstable();
@@ -681,6 +796,9 @@ pub fn candidates(idx: &Index, query: &Map<String, Value>, extra_values: bool) -
     let mut keys = Vec::new();
     p.keys(&mut keys);
     with_index(idx, &keys, |inv| {
+        if keys.iter().any(|k| inv.fields[k].non_numeric) {
+            return None;
+        }
         let docs = run(inv, &p);
         Some(docs.into_iter().filter_map(|d| inv.id_of(d).map(|s| s.to_string())).collect())
     })
@@ -746,4 +864,24 @@ fn cached_df(inv: &InvertedIndex, key: &str, term: &str, p: &[(u32, u32)]) -> us
         c.insert(ck, df);
     });
     df
+}
+
+thread_local! {
+    static TRACE_START: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// `SLOP_TRACE=true`: prints the time since the last `trace("start")` of this thread.
+pub fn trace(label: &str) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var("SLOP_TRACE").map(|v| v == "true" || v == "1").unwrap_or(false)) {
+        return;
+    }
+    let now = std::time::Instant::now();
+    TRACE_START.with(|s| {
+        if label == "start" {
+            s.set(Some(now));
+        } else if let Some(t) = s.get() {
+            eprintln!("[trace] {:>8.2} ms {}", (now - t).as_secs_f64() * 1000.0, label);
+        }
+    });
 }

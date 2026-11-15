@@ -51,10 +51,10 @@ pub(crate) fn compare_sort_values(a: &Value, b: &Value) -> Ordering {
 }
 
 #[derive(Clone)]
-pub(crate) struct MultiHit {
+pub(crate) struct MultiHit<'a> {
     pub(crate) idx_name: String,
     pub(crate) id: String,
-    pub(crate) doc: Value,
+    pub(crate) doc: &'a Value,
     pub(crate) score: f64,
     pub(crate) pos: i64,
     pub(crate) named: Vec<(String, f64)>,

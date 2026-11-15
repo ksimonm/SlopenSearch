@@ -276,10 +276,14 @@ pub fn run_search(
                 json!({"must": [Value::Object(query.clone()), f]}),
             );
         }
+        crate::search::index::trace("query prepared");
         let extra = precompute_doc_values(idx);
+        crate::search::index::trace("extra values");
         let cands = crate::search::index::candidates(idx, &qm, !extra.is_empty());
+        crate::search::index::trace("candidates");
         let verify = cands.is_some() && crate::search::index::verify();
         let mut seen: HashSet<&str> = HashSet::new();
+        let qv = Value::Object(qm.clone());
         for (i, id) in idx.order.iter().enumerate() {
             let candidate = cands.as_ref().is_none_or(|c| c.contains(id.as_str()));
             if !candidate && !verify {
@@ -315,11 +319,11 @@ pub fn run_search(
                     idx.order.iter().position(|x| x == id).unwrap_or(0) as i64
                 };
                 let mut named = Vec::new();
-                walk_named_queries(&mut named, idx, id, doc, &extra, &Value::Object(qm.clone()))?;
+                walk_named_queries(&mut named, idx, id, doc, &extra, &qv)?;
                 matched.push(MultiHit {
                     idx_name: n.clone(),
                     id: id.clone(),
-                    doc: doc.clone(),
+                    doc,
                     score: crate::mapping::knn::f32r(score),
                     pos,
                     named,
@@ -327,6 +331,7 @@ pub fn run_search(
             }
         }
     }
+    crate::search::index::trace("matched");
     if let Some(ib) = bodym.get("indices_boost") {
         let mut entries: Vec<(String, f64)> = Vec::new();
         match ib {
@@ -659,6 +664,7 @@ pub fn run_search(
                 .unwrap_or(Ordering::Equal)
         });
     }
+    crate::search::index::trace("sorted");
     let collapse_pool = matched.clone();
     if let Some(c) = &collapse_cfg {
         let field = c.get("field").and_then(|v| v.as_str()).unwrap_or("");
@@ -2630,9 +2636,11 @@ pub fn handle_search(store: &mut Store, req: &Req, name: &str) -> Response {
     let result = match cache_key.as_ref().and_then(|k| crate::model::visibility::cache_get(store, &names, k)) {
         Some(v) => Ok(v),
         None => {
+            crate::search::index::trace("before enter");
             let view = crate::model::visibility::enter(store, &names);
             let r = run_search(store, name, &names, &body, req);
             crate::model::visibility::leave(store, view);
+            crate::search::index::trace("run_search done");
             if let (Some(k), Ok(v)) = (cache_key, &r) {
                 crate::model::visibility::cache_put(store, &names, k, v);
             }
@@ -3252,7 +3260,7 @@ pub fn handle_rank_eval(store: &mut Store, req: &Req, name: &str) -> Response {
                     hits.push(MultiHit {
                         idx_name: n.clone(),
                         id: doc_id.clone(),
-                        doc: doc.clone(),
+                        doc,
                         score,
                         pos,
                         named: vec![],

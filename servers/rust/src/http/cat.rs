@@ -934,7 +934,7 @@ fn cat_count(store: &Store, spec: &str) -> (Vec<CatCol>, Vec<CatRow>, Option<Api
             for (alias_name, def) in &idx.aliases {
                 if alias_name == spec {
                     let mut filtered = 0;
-                    for (_, doc) in &idx.docs {
+                    for doc in idx.docs.values() {
                         if matches_alias_filter(doc, def) {
                             filtered += 1;
                         }

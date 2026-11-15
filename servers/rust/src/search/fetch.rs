@@ -34,6 +34,9 @@ pub(crate) fn is_numeric_type(t: &str) -> bool {
 /// this lazily and mutates the index; we keep a per-request side table).
 pub fn precompute_doc_values(idx: &Index) -> HashMap<String, Map<String, Value>> {
     let mut extra = HashMap::new();
+    if crate::search::index::all_docs_have_values(idx) == Some(true) {
+        return extra;
+    }
     for id in &idx.order {
         if idx.doc_values.contains_key(id) || idx.pending.contains_key(id) {
             continue;

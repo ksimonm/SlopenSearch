@@ -28,23 +28,29 @@ pub struct Dirty {
     pub all: bool,
 }
 
-/// Doc values per document id, with change tracking for the inverted index.
-/// Reads go through `Deref`; every mutation goes through the methods below.
-pub struct DocValues {
-    map: DvMap,
+/// A map keyed by document id that notes which ids changed (for the
+/// inverted index). Reads go through `Deref`; every mutation goes through the
+/// methods below.
+pub struct TrackedMap<V> {
+    map: HashMap<String, V>,
     dirty: Mutex<Dirty>,
     flag: AtomicBool,
 }
 
-impl Default for DocValues {
+/// Doc values per document id.
+pub type DocValues = TrackedMap<Map<String, Value>>;
+/// `_source` per document id.
+pub type Docs = TrackedMap<Value>;
+
+impl<V> Default for TrackedMap<V> {
     fn default() -> Self {
-        DocValues { map: HashMap::new(), dirty: Mutex::new(Dirty::default()), flag: AtomicBool::new(false) }
+        TrackedMap { map: HashMap::new(), dirty: Mutex::new(Dirty::default()), flag: AtomicBool::new(false) }
     }
 }
 
-impl Clone for DocValues {
+impl<V: Clone> Clone for TrackedMap<V> {
     fn clone(&self) -> Self {
-        DocValues {
+        TrackedMap {
             map: self.map.clone(),
             dirty: Mutex::new(Dirty { ids: HashSet::new(), all: true }),
             flag: AtomicBool::new(true),
@@ -52,14 +58,14 @@ impl Clone for DocValues {
     }
 }
 
-impl Deref for DocValues {
-    type Target = DvMap;
-    fn deref(&self) -> &DvMap {
+impl<V> Deref for TrackedMap<V> {
+    type Target = HashMap<String, V>;
+    fn deref(&self) -> &HashMap<String, V> {
         &self.map
     }
 }
 
-impl DocValues {
+impl<V> TrackedMap<V> {
     fn mark(&mut self, id: &str) {
         let d = self.dirty.get_mut().unwrap_or_else(|e| e.into_inner());
         if !d.all {
@@ -68,12 +74,12 @@ impl DocValues {
         *self.flag.get_mut() = true;
     }
 
-    pub fn insert(&mut self, id: String, values: Map<String, Value>) -> Option<Map<String, Value>> {
+    pub fn insert(&mut self, id: String, value: V) -> Option<V> {
         self.mark(&id);
-        self.map.insert(id, values)
+        self.map.insert(id, value)
     }
 
-    pub fn remove(&mut self, id: &str) -> Option<Map<String, Value>> {
+    pub fn remove(&mut self, id: &str) -> Option<V> {
         let old = self.map.remove(id);
         if old.is_some() {
             self.mark(id);
@@ -89,12 +95,12 @@ impl DocValues {
         *self.flag.get_mut() = true;
     }
 
-    /// Whether some document changed since the last [`DocValues::take_dirty`].
+    /// Whether some id changed since the last [`TrackedMap::take_dirty`].
     pub fn is_dirty(&self) -> bool {
         self.flag.load(Ordering::Acquire)
     }
 
-    /// The changed documents; resets the tracking.
+    /// The changed ids; resets the tracking.
     pub fn take_dirty(&self) -> Dirty {
         let mut d = self.dirty.lock().unwrap_or_else(|e| e.into_inner());
         self.flag.store(false, Ordering::Release);
@@ -112,6 +118,11 @@ pub struct FieldIndex {
     /// Live documents with at least one token, and their total token count.
     pub docs_with: usize,
     pub sum_len: u64,
+    /// Numeric fields: (value, doc number), sorted by value when `nums_sorted`.
+    pub nums: Vec<(f64, u32)>,
+    pub nums_sorted: bool,
+    /// A numeric field had a value that is not a number (the column is incomplete).
+    pub non_numeric: bool,
 }
 
 impl FieldIndex {
@@ -135,6 +146,46 @@ impl FieldIndex {
         self.sum_len += len as u64;
         for (t, n) in tf {
             self.postings.entry(t).or_default().push((doc, n));
+        }
+    }
+
+    /// Adds the numeric values of document `doc`.
+    pub fn add_numbers(&mut self, doc: u32, values: &[Value]) {
+        let d = doc as usize;
+        if self.lens.len() <= d {
+            self.lens.resize(d + 1, 0);
+        }
+        let mut n = 0u32;
+        for v in values {
+            match v {
+                Value::Number(x) => match x.as_f64() {
+                    Some(f) if f.is_finite() => {
+                        self.nums.push((f, doc));
+                        n += 1;
+                    }
+                    _ => self.non_numeric = true,
+                },
+                Value::Null => {}
+                _ => self.non_numeric = true,
+            }
+        }
+        if n > 0 {
+            self.nums_sorted = false;
+            self.lens[d] = n;
+            self.docs_with += 1;
+            self.sum_len += n as u64;
+        }
+    }
+
+    /// Whether the numeric column is ready for range lookups.
+    pub fn nums_ready(&self) -> bool {
+        self.nums_sorted || self.nums.is_empty()
+    }
+
+    pub fn sort_nums(&mut self) {
+        if !self.nums_ready() {
+            self.nums.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            self.nums_sorted = true;
         }
     }
 
@@ -178,6 +229,9 @@ pub struct InvertedIndex {
     pub schema: (u64, u64),
     /// Whether the numbering covers every document of the doc values.
     pub numbered: bool,
+    /// Ids of documents (in `docs`) without doc values, when `missing_known`.
+    pub missing: HashSet<String>,
+    pub missing_known: bool,
     /// Process-wide unique stamp of the current content (see [`InvertedIndex::touch`]).
     pub version: u64,
 }

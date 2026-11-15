@@ -305,13 +305,18 @@ async fn handle_plain(store: Shared, request: axum::extract::Request) -> axum::r
             return (resp, req);
         }
         let resp = {
+            crate::search::index::trace("start");
             let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
+            crate::search::index::trace("locked");
             // Runtime threads have a large stack (main.rs): scripts and nested
             // queries recurse.
             crate::model::visibility::scheduled_refresh(&mut guard);
+            crate::search::index::trace("refreshed");
             let resp = dispatch(&mut guard, &req);
+            crate::search::index::trace("dispatched");
             crate::model::visibility::scheduled_refresh(&mut guard);
             storage::after_request(&mut guard, &req.method, &req.path);
+            crate::search::index::trace("after request");
             resp
         };
         (resp, req)

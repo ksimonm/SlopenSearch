@@ -304,7 +304,7 @@ pub fn create_index_internal(
         creation_date: now_millis(),
         mappings: Value::Object(merged_mappings).into(),
         settings: canonical.into(),
-        docs: std::collections::HashMap::new(),
+        docs: Default::default(),
         order: Vec::new(),
         field_types: std::collections::HashMap::new().into(),
         closed: false,
