@@ -373,19 +373,19 @@ pub fn validate_query(idx: &Index, q: &Map<String, Value>) -> Result<(), ApiErro
                                 _ => true,
                             };
                             if bad {
-                                return Err(typed_value_error(ftype, &val));
+                                return Err(typed_value_error(idx, ftype, &val));
                             }
                         }
                         "date" | "date_nanos" => {
                             if let Ok(()) = parse_query_date(&def, &val, "", false).map(|_| ()) {
                             } else {
-                                return Err(typed_value_error(ftype, &val));
+                                return Err(typed_value_error(idx, ftype, &val));
                             }
                         }
                         "boolean" => {
                             let ctx = IndexCtx::query_ctx();
                             if ctx.parse_boolean_value("_value", &val).is_err() {
-                                return Err(typed_value_error(ftype, &val));
+                                return Err(typed_value_error(idx, ftype, &val));
                             }
                         }
                         "ip" => {
@@ -396,7 +396,7 @@ pub fn validate_query(idx: &Index, q: &Map<String, Value>) -> Result<(), ApiErro
                                     s.parse::<std::net::IpAddr>().is_err()
                                 };
                                 if bad {
-                                    return Err(typed_value_error(ftype, &val));
+                                    return Err(typed_value_error(idx, ftype, &val));
                                 }
                             }
                         }
@@ -452,7 +452,7 @@ pub fn validate_query(idx: &Index, q: &Map<String, Value>) -> Result<(), ApiErro
                                             _ => true,
                                         };
                                         if bad {
-                                            return Err(typed_value_error(ftype, v));
+                                            return Err(typed_value_error(idx, ftype, v));
                                         }
                                     }
                                 }
@@ -509,7 +509,7 @@ pub fn validate_query(idx: &Index, q: &Map<String, Value>) -> Result<(), ApiErro
     Ok(())
 }
 
-fn typed_value_error(ftype: &str, v: &Value) -> ApiError {
+fn typed_value_error(idx: &Index, ftype: &str, v: &Value) -> ApiError {
     let text = value_to_string(v).unwrap_or_else(|| preview_value(v));
     match ftype {
         "date" | "date_nanos" | "date_range" => shard_query_error(
@@ -540,9 +540,10 @@ fn typed_value_error(ftype: &str, v: &Value) -> ApiError {
             };
             shard_query_error("query_shard_exception", &reason)
         }
-        _ => shard_query_error(
-            "query_shard_exception",
+        _ => crate::search::knn_query::shard_err(
+            idx,
             &format!("For input string: \"{}\"", text),
+            "number_format_exception",
         ),
     }
 }
@@ -1328,7 +1329,7 @@ impl<'a> QueryCtx<'a> {
             }
             "token_count" => {
                 let parsed = parse_term_value(&ftype, &def, &val)
-                    .map_err(|_| typed_value_error(&ftype, &val))?;
+                    .map_err(|_| typed_value_error(self.idx, &ftype, &val))?;
                 for v in &vals {
                     if numeric_equal(v, &parsed[0]) {
                         return Ok((true, boost));
@@ -1419,7 +1420,7 @@ impl<'a> QueryCtx<'a> {
                     }
                 }
                 let parsed = parse_term_value(&ftype, &def, &val)
-                    .map_err(|_| typed_value_error(&ftype, &val))?;
+                    .map_err(|_| typed_value_error(self.idx, &ftype, &val))?;
                 for v in &vals {
                     for p in &parsed {
                         if numeric_equal(v, p) {
@@ -1431,11 +1432,11 @@ impl<'a> QueryCtx<'a> {
             }
             "boolean" => {
                 if matches!(&val, Value::String(s) if s.is_empty()) {
-                    return Err(typed_value_error(&ftype, &val));
+                    return Err(typed_value_error(self.idx, &ftype, &val));
                 }
                 let parsed = match parse_term_value(&ftype, &def, &val) {
                     Ok(p) => p,
-                    Err(_) => return Err(typed_value_error(&ftype, &val)),
+                    Err(_) => return Err(typed_value_error(self.idx, &ftype, &val)),
                 };
                 let want = parsed[0].as_bool().unwrap_or(false);
                 for v in &vals {
@@ -1449,7 +1450,7 @@ impl<'a> QueryCtx<'a> {
             }
             _ => {
                 let parsed = parse_term_value(&ftype, &def, &val)
-                    .map_err(|_| typed_value_error(&ftype, &val))?;
+                    .map_err(|_| typed_value_error(self.idx, &ftype, &val))?;
                 for v in &vals {
                     for p in &parsed {
                         if numeric_equal(v, p) {
@@ -1730,7 +1731,7 @@ impl<'a> QueryCtx<'a> {
                             Some(f) => Ok(Value::Number(
                                 Number::from_f64(f).unwrap_or_else(|| Number::from(0)),
                             )),
-                            None => Err(typed_value_error(&ftype, v)),
+                            None => Err(typed_value_error(self.idx, &ftype, v)),
                         }
                     } else {
                         ctx.parse_float_value(field, base, &def, v)
@@ -1739,7 +1740,7 @@ impl<'a> QueryCtx<'a> {
                 "keyword" => Ok(crate::mapping::fields::normalize_query_value(self.idx, field, v)),
                 _ => Ok(v.clone()),
             };
-            res.map_err(|_| typed_value_error(&ftype, v))
+            res.map_err(|_| typed_value_error(self.idx, &ftype, v))
         };
         let lower = cond
             .get("gte")

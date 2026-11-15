@@ -101,13 +101,126 @@ pub(crate) fn sort_shard_error(typ: &str, reason: &str) -> ApiError {
 }
 
 pub(crate) fn parse_sort_specs(raw: Option<&Value>) -> Result<Vec<SortSpec>, ApiError> {
-    let items: Vec<Value> = match raw {
+    parse_sort_specs_at(raw, None)
+}
+
+/// Where the `sort` value sits in the request body: the body text and the path
+/// of the `sort` member, for Jackson's `[line:column]` error positions.
+pub(crate) struct SortLocation<'a> {
+    pub(crate) body: &'a str,
+    pub(crate) path: Vec<String>,
+}
+
+/// The x_content position prefix of the value (or, with `key`, of the member
+/// name) at `tail` below the sort spec; `[1:1]` when it cannot be located.
+fn sort_pos(loc: Option<&SortLocation>, tail: &[String], key: bool) -> String {
+    let found = loc.and_then(|l| {
+        let path: Vec<&str> = l.path.iter().chain(tail).map(|s| s.as_str()).collect();
+        if key {
+            crate::jsonv::locate_key(l.body, &path)
+        } else {
+            crate::jsonv::locate(l.body, &path)
+        }
+    });
+    let (line, col) = found.unwrap_or((1, 1));
+    format!("[{}:{}]", line, col)
+}
+
+/// The XContentParser token name of a JSON value.
+fn token_name(v: &Value) -> &'static str {
+    match v {
+        Value::String(_) => "VALUE_STRING",
+        Value::Number(_) => "VALUE_NUMBER",
+        Value::Bool(_) => "VALUE_BOOLEAN",
+        Value::Null => "VALUE_NULL",
+        Value::Object(_) => "START_OBJECT",
+        Value::Array(_) => "START_ARRAY",
+    }
+}
+
+/// Validates the options object of a field (or `_score`) sort the way the
+/// FieldSortBuilder / ScoreSortBuilder object parsers do, member by member.
+fn check_sort_options(field: &str, opts: &Map<String, Value>, loc: Option<&SortLocation>, base: &[String]) -> Result<(), ApiError> {
+    let parser = if field == "_score" { "_score" } else { "field_sort" };
+    let at = |tail: &[&str], key: bool| {
+        let mut t = base.to_vec();
+        t.extend(tail.iter().map(|s| s.to_string()));
+        sort_pos(loc, &t, key)
+    };
+    let xerr = |reason: String| ApiError::new("x_content_parse_exception", &reason, 400);
+    let failed = |k: &str, pos: String, cause: String| {
+        xerr(format!("{} [{}] failed to parse field [{}]", pos, parser, k))
+            .caused_by(ApiError::new("illegal_argument_exception", &cause, 400))
+    };
+    for (k, v) in opts {
+        let known = match parser {
+            "_score" => k == "order",
+            _ => matches!(
+                k.as_str(),
+                "order" | "mode" | "missing" | "unmapped_type" | "numeric_type" | "nested" | "nested_path" | "nested_filter"
+            ),
+        };
+        if !known {
+            return Err(xerr(format!("{} [{}] unknown field [{}]", at(&[k], true), parser, k)));
+        }
+        let wrong_type = match k.as_str() {
+            "missing" => v.is_object() || v.is_array(),
+            "nested" | "nested_filter" => !v.is_object(),
+            _ => !v.is_string(),
+        };
+        if wrong_type {
+            return Err(xerr(format!(
+                "{} [{}] {} doesn't support values of type: {}",
+                at(&[k], false),
+                parser,
+                k,
+                token_name(v)
+            )));
+        }
+        let text = v.as_str().unwrap_or("");
+        match k.as_str() {
+            "order" if !text.eq_ignore_ascii_case("asc") && !text.eq_ignore_ascii_case("desc") => {
+                return Err(failed(
+                    k,
+                    at(&[k], false),
+                    format!("No enum constant org.opensearch.search.sort.SortOrder.{}", text.to_uppercase()),
+                ));
+            }
+            "mode" if !matches!(text.to_lowercase().as_str(), "min" | "max" | "sum" | "avg" | "median") => {
+                return Err(failed(k, at(&[k], false), format!("Unknown SortMode [{}]", text)));
+            }
+            "numeric_type" if !matches!(text.to_lowercase().as_str(), "long" | "double" | "date" | "date_nanos") => {
+                return Err(failed(
+                    k,
+                    at(&[k], false),
+                    format!("invalid value for [numeric_type], must be [long, double, date, date_nanos], got {}", text),
+                ));
+            }
+            "nested" => {
+                let nm = v.as_object().cloned().unwrap_or_default();
+                if let Some(bad) = nm.keys().find(|n| !matches!(n.as_str(), "path" | "filter" | "max_children" | "nested")) {
+                    return Err(failed(
+                        k,
+                        at(&[k, bad], false),
+                        format!("malformed nested sort format, unknown field name [{}]", bad),
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn parse_sort_specs_at(raw: Option<&Value>, loc: Option<&SortLocation>) -> Result<Vec<SortSpec>, ApiError> {
+    let (items, in_array): (Vec<Value>, bool) = match raw {
         None | Some(Value::Null) => return Ok(vec![]),
-        Some(Value::Array(a)) => a.clone(),
-        Some(other) => vec![other.clone()],
+        Some(Value::Array(a)) => (a.clone(), true),
+        Some(other) => (vec![other.clone()], false),
     };
     let mut out = Vec::new();
-    for item in items {
+    for (item_no, item) in items.into_iter().enumerate() {
+        let item_path: Vec<String> = if in_array { vec![item_no.to_string()] } else { vec![] };
         let mut sp = SortSpec::default();
         match &item {
             Value::String(f) => {
@@ -174,11 +287,9 @@ pub(crate) fn parse_sort_specs(raw: Option<&Value>) -> Result<Vec<SortSpec>, Api
                 sp.field = f.clone();
                 sp.kind = if f == "_score" { 1 } else if f == "_id" { 2 } else if f == "_index" { 3 } else if f == "_doc" { 4 } else { 0 };
                 if let Some(op) = opts.as_object() {
-                    if op.contains_key("format") {
-                        return Err(sort_parse_error(
-                            "[1:1] [field_sort] unknown field [format]",
-                        ));
-                    }
+                    let mut base = item_path.clone();
+                    base.push(f.clone());
+                    check_sort_options(f, op, loc, &base)?;
                     for (k, v) in op {
                         match k.as_str() {
                             "order" => {
@@ -197,7 +308,7 @@ pub(crate) fn parse_sort_specs(raw: Option<&Value>) -> Result<Vec<SortSpec>, Api
                             }
                             "mode" => {
                                 let mo = value_to_string(v).unwrap_or_default();
-                                if !matches!(mo.as_str(), "min" | "max" | "sum" | "avg" | "median") {
+                                if !matches!(mo.to_lowercase().as_str(), "min" | "max" | "sum" | "avg" | "median") {
                                     let mut e = ApiError::new(
                                         "x_content_parse_exception",
                                         "[1:1] failed to parse field [mode]",
@@ -210,7 +321,7 @@ pub(crate) fn parse_sort_specs(raw: Option<&Value>) -> Result<Vec<SortSpec>, Api
                                     )));
                                     return Err(e);
                                 }
-                                sp.mode = Some(mo);
+                                sp.mode = Some(mo.to_lowercase());
                             }
                             "missing" => sp.missing = Some(v.clone()),
                             "nested" => {
@@ -228,7 +339,7 @@ pub(crate) fn parse_sort_specs(raw: Option<&Value>) -> Result<Vec<SortSpec>, Api
                                 sp.unmapped_type = v.as_str().map(|x| x.to_string())
                             }
                             "numeric_type" => {
-                                sp.numeric_type = v.as_str().map(|x| x.to_string())
+                                sp.numeric_type = v.as_str().map(|x| x.to_lowercase())
                             }
                             _ => {}
                         }

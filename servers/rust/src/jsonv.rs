@@ -232,3 +232,149 @@ pub fn duplicate_object_key(s: &str) -> Option<String> {
     }
     None
 }
+
+// ------------------------------------------------------- body positions
+
+/// Finds the line and column (1-based) of the value at `path` in a JSON
+/// document, the way Jackson reports token locations.
+pub fn locate(raw: &str, path: &[&str]) -> Option<(usize, usize)> {
+    let chars: Vec<char> = raw.chars().collect();
+    let mut sc = Scan { s: &chars, i: 0, line: 1, col: 1, key_mode: false };
+    sc.value(path)
+}
+
+/// Like `locate`, but reports the position of the last member's name.
+pub fn locate_key(raw: &str, path: &[&str]) -> Option<(usize, usize)> {
+    let chars: Vec<char> = raw.chars().collect();
+    let mut sc = Scan { s: &chars, i: 0, line: 1, col: 1, key_mode: true };
+    sc.value(path)
+}
+
+struct Scan<'a> {
+    s: &'a [char],
+    i: usize,
+    line: usize,
+    col: usize,
+    key_mode: bool,
+}
+
+impl<'a> Scan<'a> {
+    fn peek(&self) -> Option<char> {
+        self.s.get(self.i).copied()
+    }
+    fn bump(&mut self) {
+        if let Some(c) = self.peek() {
+            self.i += 1;
+            if c == '\n' {
+                self.line += 1;
+                self.col = 1;
+            } else {
+                self.col += 1;
+            }
+        }
+    }
+    fn ws(&mut self) {
+        while matches!(self.peek(), Some(c) if c.is_whitespace()) {
+            self.bump();
+        }
+    }
+    fn string(&mut self) -> String {
+        let mut out = String::new();
+        self.bump();
+        while let Some(c) = self.peek() {
+            self.bump();
+            if c == '\\' {
+                if let Some(n) = self.peek() {
+                    out.push(n);
+                    self.bump();
+                }
+            } else if c == '"' {
+                break;
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+    /// Skips a value; when `path` is non-empty and the value is an object,
+    /// descends into the member named `path[0]`.
+    fn value(&mut self, path: &[&str]) -> Option<(usize, usize)> {
+        self.ws();
+        match self.peek()? {
+            '{' => {
+                self.bump();
+                loop {
+                    self.ws();
+                    match self.peek()? {
+                        '}' => {
+                            self.bump();
+                            return None;
+                        }
+                        ',' => {
+                            self.bump();
+                            continue;
+                        }
+                        '"' => {}
+                        _ => return None,
+                    }
+                    let key_pos = (self.line, self.col);
+                    let key = self.string();
+                    self.ws();
+                    if self.peek()? == ':' {
+                        self.bump();
+                    }
+                    self.ws();
+                    if !path.is_empty() && key == path[0] {
+                        if path.len() == 1 {
+                            return Some(if self.key_mode { key_pos } else { (self.line, self.col) });
+                        }
+                        if let Some(p) = self.value(&path[1..]) {
+                            return Some(p);
+                        }
+                    } else {
+                        self.value(&[]);
+                    }
+                }
+            }
+            '[' => {
+                self.bump();
+                let mut n = 0usize;
+                loop {
+                    self.ws();
+                    match self.peek()? {
+                        ']' => {
+                            self.bump();
+                            return None;
+                        }
+                        ',' => {
+                            self.bump();
+                            n += 1;
+                        }
+                        _ => {
+                            if !path.is_empty() && path[0] == n.to_string() {
+                                if path.len() == 1 {
+                                    return Some((self.line, self.col));
+                                }
+                                if let Some(p) = self.value(&path[1..]) {
+                                    return Some(p);
+                                }
+                            } else {
+                                self.value(&[]);
+                            }
+                        }
+                    }
+                }
+            }
+            '"' => {
+                self.string();
+                None
+            }
+            _ => {
+                while matches!(self.peek(), Some(c) if !matches!(c, ',' | '}' | ']') && !c.is_whitespace()) {
+                    self.bump();
+                }
+                None
+            }
+        }
+    }
+}

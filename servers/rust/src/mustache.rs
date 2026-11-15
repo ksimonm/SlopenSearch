@@ -3,9 +3,46 @@
 
 use serde_json::Value;
 
+/// A mustache.java compile error; `line` is the 1-based template line it names
+/// (newlines inside tags are not counted, as in mustache.java).
 #[derive(Debug, Clone)]
 pub struct MustacheError {
-    pub tag: String,
+    pub kind: MustacheErrorKind,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone)]
+pub enum MustacheErrorKind {
+    /// `{{` without its closing delimiter
+    UnclosedVariable,
+    /// `{{{name}}` without the third brace; `col` is the position in the line
+    UnclosedTripleVariable { name: String, col: usize },
+    /// a section opened with `{{#name}}` / `{{^name}}` and never closed
+    UnclosedSection(String),
+    /// `{{/close}}` that does not close the innermost open section
+    Mismatched { open: Option<String>, close: String },
+    /// the template ends right after `{{`
+    Empty,
+}
+
+impl MustacheError {
+    /// The mustache.java message for a template named `file`.
+    pub fn describe(&self, file: &str) -> String {
+        let line = self.line;
+        let msg = match &self.kind {
+            MustacheErrorKind::UnclosedVariable => "Improperly closed variable".to_string(),
+            MustacheErrorKind::UnclosedTripleVariable { name, col } => {
+                format!("Improperly closed variable: {name} in {file}:{line}@{col}")
+            }
+            MustacheErrorKind::UnclosedSection(tag) => format!("Failed to close '{tag}' tag"),
+            MustacheErrorKind::Mismatched { open, close } => format!(
+                "Mismatched start/end tags: {} != {close} in {file}:{line}",
+                open.as_deref().unwrap_or("null")
+            ),
+            MustacheErrorKind::Empty => "Empty mustache".to_string(),
+        };
+        format!("{msg} @[{file}:{line}]")
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -26,7 +63,10 @@ fn first_word(s: &str) -> &str {
 
 fn parse_template(src: &str) -> Result<Vec<Node>, MustacheError> {
     let mut root: Vec<Node> = Vec::new();
-    let mut stack: Vec<(String, String, bool, Vec<Node>)> = Vec::new();
+    // open sections: name, parameters, inverted, children, line of the opening tag
+    let mut stack: Vec<(String, String, bool, Vec<Node>, usize)> = Vec::new();
+    let mut line = 1usize;
+    let err = |kind, line| Err(MustacheError { kind, line });
     let mut open = "{{".to_string();
     let mut close = "}}".to_string();
     let mut pos = 0usize;
@@ -40,6 +80,7 @@ fn parse_template(src: &str) -> Result<Vec<Node>, MustacheError> {
             break;
         };
         let start = pos + rel;
+        line += src[pos..start].matches('\n').count();
         if start > pos {
             push_node(
                 &mut root,
@@ -57,17 +98,23 @@ fn parse_template(src: &str) -> Result<Vec<Node>, MustacheError> {
                     continue;
                 }
                 None => {
-                    return Err(MustacheError {
-                        tag: String::new(),
-                    })
+                    let line_start = src[..start].rfind('\n').map_or(0, |i| i + 1);
+                    let (name, end) = match src[body_start..].find("}}") {
+                        Some(e) => (&src[body_start..body_start + e], body_start + e + 2),
+                        None => (&src[body_start..], src.len()),
+                    };
+                    let col = src[line_start..end].chars().count();
+                    let name = name.trim().to_string();
+                    return err(MustacheErrorKind::UnclosedTripleVariable { name, col }, line);
                 }
             }
         }
         let body_start = start + open.len();
+        if body_start >= src.len() {
+            return err(MustacheErrorKind::Empty, line);
+        }
         let Some(end_rel) = src[body_start..].find(close.as_str()) else {
-            let text = &src[start..];
-            push_node(&mut root, &mut stack, Node::Text(text.to_string()));
-            break;
+            return err(MustacheErrorKind::UnclosedVariable, line);
         };
         let tag = src[body_start..body_start + end_rel].trim().to_string();
         let _ = (&open, &close);
@@ -87,29 +134,32 @@ fn parse_template(src: &str) -> Result<Vec<Node>, MustacheError> {
         if let Some(rest) = tag.strip_prefix('#') {
             let name = first_word(rest).to_string();
             let params = rest[name.len()..].trim().to_string();
-            stack.push((name, params, false, Vec::new()));
+            stack.push((name, params, false, Vec::new(), line));
             continue;
         }
         if let Some(rest) = tag.strip_prefix('^') {
             let name = first_word(rest).to_string();
             let params = rest[name.len()..].trim().to_string();
-            stack.push((name, params, true, Vec::new()));
+            stack.push((name, params, true, Vec::new(), line));
             continue;
         }
         if let Some(rest) = tag.strip_prefix('/') {
             let name = first_word(rest);
-            if let Some((n, params, inverted, children)) = stack.pop() {
-                if n != name {
-                    return Err(MustacheError { tag: n });
-                }
-                let node = Node::Section {
-                    name: n,
-                    params,
-                    inverted,
-                    children,
-                };
-                push_node(&mut root, &mut stack, node);
+            let Some((n, params, inverted, children, _)) = stack.pop() else {
+                let close = name.to_string();
+                return err(MustacheErrorKind::Mismatched { open: None, close }, line);
+            };
+            if n != name {
+                let close = name.to_string();
+                return err(MustacheErrorKind::Mismatched { open: Some(n), close }, line);
             }
+            let node = Node::Section {
+                name: n,
+                params,
+                inverted,
+                children,
+            };
+            push_node(&mut root, &mut stack, node);
             continue;
         }
         if let Some(rest) = tag.strip_prefix('&') {
@@ -135,13 +185,13 @@ fn parse_template(src: &str) -> Result<Vec<Node>, MustacheError> {
             },
         );
     }
-    if let Some((name, _, _, _)) = stack.last() {
-        return Err(MustacheError { tag: name.clone() });
+    if let Some((name, _, _, _, open_line)) = stack.last() {
+        return err(MustacheErrorKind::UnclosedSection(name.clone()), *open_line);
     }
     Ok(root)
 }
 
-fn push_node(root: &mut Vec<Node>, stack: &mut [(String, String, bool, Vec<Node>)], node: Node) {
+fn push_node(root: &mut Vec<Node>, stack: &mut [(String, String, bool, Vec<Node>, usize)], node: Node) {
     if let Some(top) = stack.last_mut() {
         top.3.push(node);
     } else {
