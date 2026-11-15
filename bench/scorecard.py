@@ -133,6 +133,11 @@ def harness_records(d: Path, meta: dict) -> list[dict]:
     return out
 
 
+def _max(*xs):
+    xs = [x for x in xs if isinstance(x, (int, float))]
+    return max(xs) if xs else None
+
+
 def _avg(xs):
     xs = [x for x in xs if isinstance(x, (int, float))]
     return sum(xs) / len(xs) if xs else None
@@ -151,7 +156,7 @@ def osb_records(d: Path, meta: dict) -> list[dict]:
         tasks = {}
         for tn, t in (r.get("tasks") or {}).items():
             o = t.get("osb") or {}
-            thr, lat = o.get("throughput") or {}, o.get("latency") or {}
+            thr, lat = o.get("throughput") or {}, o.get("service_time") or o.get("latency") or {}
             res = _res(t.get("resources"))
             if t["status"] == "no_metrics":
                 continue          # admin tasks without samples
@@ -169,10 +174,10 @@ def osb_records(d: Path, meta: dict) -> list[dict]:
                "level": meta.get("level", "adhoc"), "target": name, "image": meta.get("images", {}).get(name),
                "version": r.get("version"), "params": cfg_obj, "proxy": bool(meta.get("proxy")), "tasks": tasks,
                "resources": _clean({"cpu_avg": tot.get("cpu_avg"), "cpu_peak": tot.get("cpu_peak"),
-                                    "mem_avg": tot.get("mem_avg"), "mem_peak": r.get("memory_peak_total"),
+                                    "mem_avg": tot.get("mem_avg"), "mem_peak": _max(r.get("memory_peak_total"), tot.get("mem_peak")),
                                     "disk_bytes": r.get("disk_after_index")}),
                "scalars": _clean({"startup_s": r.get("startup_empty_s"), "disk_bytes": r.get("disk_after_index"),
-                                  "mem_peak": r.get("memory_peak_total")}),
+                                  "mem_peak": _max(r.get("memory_peak_total"), tot.get("mem_peak"))}),
                "oom": bool(r.get("oom_kills")) or bool((r.get("died") or {}).get("oom_killed"))}
         rejected = [f"{c['endpoint']} {e}" for c in r.get("calls", []) for e in c.get("errors", {})]
         if rejected:
@@ -272,7 +277,7 @@ def fr(x, nd=2):
 
 def report(recs: list[dict], hist: list[dict]) -> str:
     out = ["Ratios vs the reference OpenSearch: **> 1.0 = SlopenSearch better**. thr = throughput "
-           "ours/ref; p50/p90/p99 = latency ref/ours; cpu/op = CPU seconds per operation ref/ours; "
+           "ours/ref; p50/p90/p99 = latency ref/ours (OSB: service time); cpu/op = CPU seconds per operation ref/ours; "
            "mem = peak memory ref/ours. `geomean` over the tasks both completed.", ""]
     configs = []
     for r in recs:

@@ -59,7 +59,8 @@ same for harness and OSB runs:
   `target`, `image`, `version`, `params`, `proxy` (OSB calls went through the proxy)
 - `tasks.<name>`: `status` (`ok`, `error` = every request failed, `timeout`, `too_slow`,
   `failed`, `not_run`), `thr` + `unit` (OSB: median throughput; harness: ops/s or docs/s),
-  `p50` / `p90` / `p99` latency in ms (harness: p95 instead of p90), `err` (error rate
+  `p50` / `p90` / `p99` latency in ms (OSB: service time, i.e. without OSB's schedule
+  wait; p99 needs ≥ 100 samples; harness: client latency, p95 instead of p90), `err` (error rate
   0-1), `cpu` (average cores of the cgroup during the task), `mem` (peak bytes during the
   task), `cpu_s_op` (CPU seconds per operation)
 - `resources`: `cpu_avg`, `cpu_peak`, `mem_avg`, `mem_peak` (cgroup `memory.peak` over the
@@ -86,7 +87,7 @@ nyc_taxis 4.5 / 74 GB.
 | preset | what |
 |---|---|
 | `test` | OSB `--test-mode`: 1 k documents, 1 warm-up + 1 measured iteration per task. Smoke test and API coverage; the numbers are single requests. |
-| `sample` | `ingest_percentage=1` (geonames: 114 k docs), 2 warm-up + 10 iterations per task, `target_throughput=100000` (i.e. closed loop, as fast as one client can go). Feasible for the scanning servers. |
+| `sample` | `ingest_percentage=1` (geonames: 114 k docs), `warmup_time_period=0` (else all bulk samples of the small slice are warm-up), 2 warm-up + 10 iterations per task, `target_throughput=100000` (OSB's schema rejects `null`; effectively a closed loop, as fast as one client goes). Use `--task-timeout` / `--target-budget` to bound slow servers. |
 | `full` | the workload's defaults (geonames: 11.4 M docs, up to 1000 iterations, throttled to the workload's target throughputs). |
 
 `--params k=v` adds or overrides workload parameters (JSON values), `--include-tasks` /
@@ -124,13 +125,22 @@ results and console log per invocation (`osb-<target>-<label>.md/.log`).
 
 ### OSB calls the SlopenSearch servers reject
 
-From geonames and http_logs in test mode through the proxy (2026-11-15, main `3f75a11`);
+From geonames (test mode through the proxy, and the `sample` run; 2026-11-15, servers at `53539b0`);
 everything else OSB calls (`GET /`, `_cluster/health` with `wait_for_status` /
 `wait_for_no_relocating_shards`, `_nodes/_all`, `_nodes/stats/_all`, `PUT` index with the
 workload's settings and mappings, `_bulk`, `_forcemerge`, `_cat/indices`, search with
 `scroll` / `sort` / `request_cache`, `_search/scroll`, `DELETE _search/scroll`) is accepted.
 
-GAPS_PLACEHOLDER
+| # | call | Go | Rust | effect in OSB |
+|---|---|---|---|---|
+| 1 | `GET /_nodes/stats/_all`: `jvm.gc.collectors.{young,old}.collection_time_in_millis` and `jvm.mem.pools.*.peak_used_in_bytes` missing (only `collection_count` is there, `pools` is absent) | missing | missing | **OSB aborts the whole run** at benchmark start (`KeyError: 'collection_time_in_millis'`, then `'pools'`); worked around client-side by `bench/slop_osb_compat.py` |
+| 2 | `POST /_all/_refresh` | 400 `invalid_index_name_exception: Invalid index name [_all], must not start with '_'` | ok | tasks `refresh-after-index`, `refresh-after-force-merge` 100 % errors (Go's scheduled refresh still makes the docs visible) |
+| 3 | `GET /_all/_stats/_all` (also with `?level=shards`) | 400, same error | ok | `index-stats` 100 % errors, `wait-until-merges-finish` fails, OSB's end-of-run index stats (store size, segment counts, …) are missing |
+| 4 | `script_score` with the Painless function `decayGeoGauss(params.origin, params.scale, params.offset, params.decay, doc['location'].value)` | 400 `search_phase_execution_exception: runtime error` | same | `decay_geo_gauss_script_score` 100 % errors |
+
+Not a server gap: the http_logs workload does not start in `--test-mode` with OSB 2.5.0 for
+any target, the reference included ("Cannot download data because no base URL is
+provided"); run it with `--preset sample`/`full` (1.2 GB download) instead.
 
 ## Profiling
 
