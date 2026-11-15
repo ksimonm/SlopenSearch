@@ -3,7 +3,7 @@
 #![allow(unused_labels, unused_imports, unused_mut, unused_variables, unused_assignments, unused_parens,
     non_snake_case, non_upper_case_globals, unreachable_code, dead_code, clippy::all)]
 
-pub mod arabic {
+pub(crate) mod arabic {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<ArabicStemmer>; 144] = [
@@ -1220,7 +1220,7 @@ pub mod arabic {
     }
 }
 
-pub mod armenian {
+pub(crate) mod armenian {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<ArmenianStemmer>; 23] = [
@@ -1572,7 +1572,7 @@ pub mod armenian {
     }
 }
 
-pub mod basque {
+pub(crate) mod basque {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<BasqueStemmer>; 109] = [
@@ -2323,7 +2323,7 @@ pub mod basque {
     }
 }
 
-pub mod catalan {
+pub(crate) mod catalan {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<CatalanStemmer>; 13] = [
@@ -3164,7 +3164,7 @@ pub mod catalan {
     }
 }
 
-pub mod danish {
+pub(crate) mod danish {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<DanishStemmer>; 32] = [
@@ -3423,7 +3423,7 @@ pub mod danish {
     }
 }
 
-pub mod dutch {
+pub(crate) mod dutch {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<DutchStemmer>; 11] = [
@@ -3951,7 +3951,7 @@ pub mod dutch {
     }
 }
 
-pub mod english {
+pub(crate) mod english {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<EnglishStemmer>; 3] = [
@@ -4807,7 +4807,7 @@ pub mod english {
     }
 }
 
-pub mod estonian {
+pub(crate) mod estonian {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<EstonianStemmer>; 2] = [
@@ -5737,7 +5737,7 @@ pub mod estonian {
     }
 }
 
-pub mod finnish {
+pub(crate) mod finnish {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<FinnishStemmer>; 10] = [
@@ -6380,7 +6380,7 @@ pub mod finnish {
     }
 }
 
-pub mod french {
+pub(crate) mod french {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<FrenchStemmer>; 3] = [
@@ -7403,7 +7403,7 @@ pub mod french {
     }
 }
 
-pub mod german {
+pub(crate) mod german {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<GermanStemmer>; 6] = [
@@ -7884,7 +7884,7 @@ pub mod german {
     }
 }
 
-pub mod greek {
+pub(crate) mod greek {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<GreekStemmer>; 46] = [
@@ -10155,7 +10155,7 @@ pub mod greek {
     }
 }
 
-pub mod hindi {
+pub(crate) mod hindi {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<HindiStemmer>; 132] = [
@@ -10330,7 +10330,7 @@ pub mod hindi {
     }
 }
 
-pub mod hungarian {
+pub(crate) mod hungarian {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<HungarianStemmer>; 8] = [
@@ -10914,7 +10914,7 @@ pub mod hungarian {
     }
 }
 
-pub mod indonesian {
+pub(crate) mod indonesian {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<IndonesianStemmer>; 3] = [
@@ -11248,7 +11248,7 @@ pub mod indonesian {
     }
 }
 
-pub mod irish {
+pub(crate) mod irish {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<IrishStemmer>; 24] = [
@@ -11579,7 +11579,7 @@ pub mod irish {
     }
 }
 
-pub mod italian {
+pub(crate) mod italian {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<ItalianStemmer>; 7] = [
@@ -12397,7 +12397,7 @@ pub mod italian {
     }
 }
 
-pub mod lithuanian {
+pub(crate) mod lithuanian {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<LithuanianStemmer>; 204] = [
@@ -12892,7 +12892,7 @@ pub mod lithuanian {
     }
 }
 
-pub mod nepali {
+pub(crate) mod nepali {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<NepaliStemmer>; 17] = [
@@ -13177,7 +13177,7 @@ pub mod nepali {
     }
 }
 
-pub mod norwegian {
+pub(crate) mod norwegian {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<NorwegianStemmer>; 29] = [
@@ -13401,7 +13401,7 @@ pub mod norwegian {
     }
 }
 
-pub mod porter {
+pub(crate) mod porter {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<PorterStemmer>; 4] = [
@@ -13984,7 +13984,7 @@ pub mod porter {
     }
 }
 
-pub mod portuguese {
+pub(crate) mod portuguese {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<PortugueseStemmer>; 3] = [
@@ -14725,7 +14725,7 @@ pub mod portuguese {
     }
 }
 
-pub mod romanian {
+pub(crate) mod romanian {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<RomanianStemmer>; 2] = [
@@ -15496,7 +15496,7 @@ pub mod romanian {
     }
 }
 
-pub mod russian {
+pub(crate) mod russian {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<RussianStemmer>; 9] = [
@@ -16015,7 +16015,7 @@ pub mod russian {
     }
 }
 
-pub mod serbian {
+pub(crate) mod serbian {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<SerbianStemmer>; 30] = [
@@ -19598,7 +19598,7 @@ pub mod serbian {
     }
 }
 
-pub mod spanish {
+pub(crate) mod spanish {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<SpanishStemmer>; 6] = [
@@ -20390,7 +20390,7 @@ pub mod spanish {
     }
 }
 
-pub mod swedish {
+pub(crate) mod swedish {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<SwedishStemmer>; 37] = [
@@ -20622,7 +20622,7 @@ pub mod swedish {
     }
 }
 
-pub mod tamil {
+pub(crate) mod tamil {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<TamilStemmer>; 4] = [
@@ -21595,7 +21595,7 @@ pub mod tamil {
     }
 }
 
-pub mod turkish {
+pub(crate) mod turkish {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<TurkishStemmer>; 10] = [
@@ -23503,7 +23503,7 @@ pub mod turkish {
     }
 }
 
-pub mod yiddish {
+pub(crate) mod yiddish {
     use super::super::{find_among, find_among_b, Among, Env, Stemmer};
 
     static a_0: [Among<YiddishStemmer>; 8] = [

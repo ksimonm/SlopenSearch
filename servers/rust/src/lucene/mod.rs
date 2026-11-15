@@ -3,30 +3,30 @@
 //! stop sets, elision, CJK bigrams) and the standard tokenizer they build on.
 #![allow(dead_code)]
 
-pub mod arabic_family;
-pub mod brazilian;
+pub(crate) mod arabic_family;
+pub(crate) mod brazilian;
 mod brazilian_data;
-pub mod case_width;
-pub mod chains;
+pub(crate) mod case_width;
+pub(crate) mod chains;
 mod char_data;
-pub mod english_misc;
-pub mod germanic_stem;
-pub mod greek;
-pub mod indic;
+pub(crate) mod english_misc;
+pub(crate) mod germanic_stem;
+pub(crate) mod greek;
+pub(crate) mod indic;
 mod java_char_data;
-pub mod kstem;
+pub(crate) mod kstem;
 mod kstem_data;
-pub mod other_light_stem;
-pub mod porter;
-pub mod romance_stem;
-pub mod rslp;
+pub(crate) mod other_light_stem;
+pub(crate) mod porter;
+pub(crate) mod romance_stem;
+pub(crate) mod rslp;
 mod rslp_data;
-pub mod slavic_baltic;
-pub mod stem_util;
-pub mod std_tok;
+pub(crate) mod slavic_baltic;
+pub(crate) mod stem_util;
+pub(crate) mod std_tok;
 mod std_tok_data;
 mod stopwords_data;
-pub mod thai;
+pub(crate) mod thai;
 mod thai_data;
 
 /// One token of an analysis chain. Offsets are UTF-16 code units.

@@ -15,16 +15,16 @@
 //! Built-in analyzers are created in [`builtin_analyzer`]; language analyzers
 //! (english, french, ...) hook in there.
 
-pub mod basic;
-pub mod charfilters;
-pub mod filters;
+pub(crate) mod basic;
+pub(crate) mod charfilters;
+pub(crate) mod filters;
 mod fold_table;
 use crate::jregex;
-pub mod script;
-pub mod settings;
-pub mod stem;
-pub mod stopwords;
-pub mod tokenizers;
+pub(crate) mod script;
+pub(crate) mod settings;
+pub(crate) mod stem;
+pub(crate) mod stopwords;
+pub(crate) mod tokenizers;
 
 use serde_json::{Map, Value};
 
