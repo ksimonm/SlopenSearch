@@ -1,19 +1,12 @@
 use serde_json::{Map, Value};
 
+/// A number as text: integers below 1e15 without a fraction, everything
+/// else as Java's Double.toString writes it (1.5, 1.5E20, 1.0E-5, NaN).
 pub fn format_number(f: f64) -> String {
-    if f == (f.trunc()) && f < 1e15 && f > -1e15 {
+    if f == f.trunc() && f < 1e15 && f > -1e15 {
         format!("{}", f as i64)
-    } else if f.is_nan() {
-        "NaN".to_string()
-    } else if f.is_infinite() {
-        if f > 0.0 {
-            "Infinity".to_string()
-        } else {
-            "-Infinity".to_string()
-        }
     } else {
-        let s = format!("{}", f);
-        s
+        crate::javafmt::double(f)
     }
 }
 

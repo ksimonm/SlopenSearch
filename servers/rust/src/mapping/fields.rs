@@ -869,10 +869,13 @@ pub fn number_string(n: &Number) -> String {
         i.to_string()
     } else if let Some(u) = n.as_u64() {
         u.to_string()
-    } else if let Some(f) = n.as_f64() {
-        format_number(f)
     } else {
-        n.to_string()
+        // an integer literal beyond the 64-bit range keeps its digits
+        let t = n.to_string();
+        if t.strip_prefix('-').unwrap_or(&t).bytes().all(|b| b.is_ascii_digit()) {
+            return t;
+        }
+        n.as_f64().map(format_number).unwrap_or(t)
     }
 }
 

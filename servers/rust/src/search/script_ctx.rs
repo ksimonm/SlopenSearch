@@ -398,20 +398,6 @@ pub fn score_value(v: &Value) -> f64 {
     }
 }
 
-/// Java's Double.toString for score messages.
-fn java_double(f: f64) -> String {
-    if f.is_nan() {
-        return "NaN".into();
-    }
-    if f.is_infinite() {
-        return if f > 0.0 { "Infinity".into() } else { "-Infinity".into() };
-    }
-    if f == f.trunc() && f.abs() < 1e7 {
-        return format!("{:.1}", f);
-    }
-    format!("{}", f)
-}
-
 /// The `script` query: a filter script per document.
 pub fn script_query(qc: &QueryCtx, body: &Value) -> Result<(bool, f64), ApiError> {
     let bm = body
@@ -453,7 +439,7 @@ pub fn run_score_script(qc: &QueryCtx, raw: &Value, score: f64, fs: bool) -> Res
                 qc.idx,
                 &ApiError::bad(&format!(
                     "script score function must not produce negative scores, but got: [{}]",
-                    java_double(s)
+                    crate::javafmt::double(s)
                 )),
             ));
         }
@@ -462,7 +448,7 @@ pub fn run_score_script(qc: &QueryCtx, raw: &Value, score: f64, fs: bool) -> Res
             qc.idx,
             &ApiError::bad(&format!(
                 "script_score script returned an invalid score [{}] for doc [{}]. Must be a non-negative score!",
-                java_double(s),
+                crate::javafmt::double(s),
                 doc_position(qc.idx, &qc.id)
             )),
         ));
