@@ -1068,6 +1068,9 @@ func termsAgg(name string, spec map[string]any, docs []map[string]any, idx *mode
 		if showErr {
 			b["doc_count_error_upper_bound"] = 0
 		}
+		if f, ok := b["key"].(float64); ok && !math.IsInf(f, 0) && !math.IsNaN(f) {
+			b["key"] = jsonv.Float(f) // a double term is written as a Java double
+		}
 		buckets = append(buckets, b)
 	}
 	return map[string]any{"doc_count_error_upper_bound": 0, "sum_other_doc_count": sumOther, "buckets": buckets}, nil

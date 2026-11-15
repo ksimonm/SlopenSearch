@@ -325,7 +325,12 @@ func topHitsAgg(spec map[string]any, docs []map[string]any, idx *model.Index) (a
 			sv := []any{}
 			for _, s := range sorts {
 				v, _ := sortValue(d, s.field, idx)
-				sv = append(sv, jsonv.NormalizeNumbers(v))
+				v = jsonv.NormalizeNumbers(v)
+				if def, ok := mapping.FieldDef(idx, s.field); ok {
+					t, _ := def["type"].(string)
+					v = search.JavaFieldNumber(t, v, false)
+				}
+				sv = append(sv, v)
 			}
 			h = append(h, ojson.KV{"sort", sv})
 		}

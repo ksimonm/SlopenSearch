@@ -149,6 +149,9 @@ func docValuesOutput(idx *model.Index, id, field string, spec fieldSpec, fallbac
 		return nil, false, nil
 	}
 	res := formatted(vals)
+	if spec.format == "" || spec.format == "use_field_mapping" {
+		res = search.JavaFieldValues(idx.Docs[id], field, ftype, res, fallbackSource)
+	}
 	if ftype == "geo_point" && spec.format == "" {
 		for i, v := range res {
 			if m, ok := v.(map[string]any); ok {
