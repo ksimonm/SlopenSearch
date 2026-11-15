@@ -1,12 +1,12 @@
 use crate::errors::{err_response, json_response, text_response, ApiError};
 use crate::model::Store;
 use crate::http::Req;
-use crate::mustache::render_source;
+use crate::mustache::{render_source, MustacheError};
 use axum::response::Response;
 use serde_json::{json, Value};
 
-fn mustache_script_error(src: &str, tag: &str) -> ApiError {
-    let reason = format!("Failed to close '{}' tag @[query-template:1]", tag);
+fn mustache_script_error(src: &str, e: &MustacheError) -> ApiError {
+    let reason = e.describe("query-template");
     ApiError::new("script_exception", &reason, 400)
         .field("lang", json!("mustache"))
         .field("script", json!(src))
@@ -78,7 +78,7 @@ pub fn handle_render(store: &mut Store, req: &Req, path_id: Option<&str>) -> Res
             "application/json; charset=UTF-8",
             format!("{{\"template_output\":{}}}", rendered),
         ),
-        Err(e) => err_response(mustache_script_error(&src_text, &e.tag)),
+        Err(e) => err_response(mustache_script_error(&src_text, &e)),
     }
 }
 
@@ -207,17 +207,9 @@ pub fn handle_search_template(store: &mut Store, req: &Req, name: &str) -> Respo
         Value::String(s) => s.clone(),
         other => serde_json::to_string(other).unwrap_or_default(),
     };
-    if let Some(pos) = src_text.rfind("{{") {
-        if !src_text[pos + 2..].contains("}}") {
-            let tag: String = src_text[pos + 2..]
-                .trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
-                .to_string();
-            return err_response(mustache_script_error(&src_text, &tag));
-        }
-    }
     let rendered = match render_source(&source, &params) {
         Ok(r) => r,
-        Err(e) => return err_response(mustache_script_error(&src_text, &e.tag)),
+        Err(e) => return err_response(mustache_script_error(&src_text, &e)),
     };
     let mut rendered_body: Value = match serde_json::from_str(&rendered) {
         Ok(v) => v,
@@ -443,7 +435,7 @@ pub fn handle_msearch(store: &mut Store, req: &Req, path: &str, template: bool) 
                         Value::String(s) => s.clone(),
                         other => serde_json::to_string(other).unwrap_or_default(),
                     };
-                    responses.push(error_item(&mustache_script_error(&src_text, &e.tag)));
+                    responses.push(error_item(&mustache_script_error(&src_text, &e)));
                     continue;
                 }
             };

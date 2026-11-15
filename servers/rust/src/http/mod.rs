@@ -382,6 +382,9 @@ async fn handle_plain(store: Shared, request: axum::extract::Request) -> axum::r
                 body = serde_json::to_vec(&v).unwrap_or_default();
             }
         }
+        if status >= 400 {
+            body = resp::upper_case_unicode_escapes(&body);
+        }
         let acc = req
             .headers
             .get("accept")

@@ -6,6 +6,9 @@ use crate::model::Store;
 use axum::response::Response;
 use regex::Regex;
 use serde_json::{json, Map, Value};
+use crate::calendar::{civil_from_days, days_from_civil, Zone};
+use base64::prelude::{Engine as _, BASE64_STANDARD};
+use sha2::Digest;
 
 pub const PROCESSOR_TYPES: &[&str] = &[
     "append",
@@ -711,29 +714,6 @@ fn now_millis() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
-}
-
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m as i64, d as i64)
-}
-
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = (y - era * 400) as i64;
-    let mp = if m > 2 { m - 3 } else { m + 9 };
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146097 + doe - 719468
 }
 
 pub fn now_iso() -> String {
@@ -2551,61 +2531,6 @@ fn parse_iso_ms(s: &str) -> Option<(i64, Option<i64>)> {
     Some((ms, offset))
 }
 
-fn tz_offset(name: &str, ms: i64) -> Result<i64, ApiError> {
-    match name {
-        "UTC" | "GMT" | "Etc/UTC" | "Z" => Ok(0),
-        "Europe/Kyiv" | "Europe/Kiev" => {
-            let days = ms.div_euclid(86_400_000);
-            let (_, m, d) = civil_from_days(days);
-            if (4..=9).contains(&m) || (m == 3 && d >= 29) || (m == 10 && d < 25) {
-                Ok(180)
-            } else {
-                Ok(120)
-            }
-        }
-        "America/New_York" => {
-            let days = ms.div_euclid(86_400_000);
-            let (_, m, d) = civil_from_days(days);
-            if (4..=10).contains(&m) || (m == 3 && d >= 8) || (m == 11 && d < 3) {
-                Ok(-240)
-            } else {
-                Ok(-300)
-            }
-        }
-        other => {
-            if let Some(off) = parse_tz_expr(other) {
-                Ok(off)
-            } else {
-                Err(ApiError::bad(&format!("Unknown time-zone ID: {}", other))
-                    .caused_by(ApiError::new(
-                        "zone_rules_exception",
-                        &format!("Unknown time-zone ID: {}", other),
-                        400,
-                    )))
-            }
-        }
-    }
-}
-
-fn parse_tz_expr(s: &str) -> Option<i64> {
-    if let Some(rest) = s.strip_prefix('+').or_else(|| s.strip_prefix('-')) {
-        let neg = s.starts_with('-');
-        let (h, m) = if let Some(idx) = rest.find(':') {
-            (rest[..idx].parse::<i64>().ok()?, rest[idx + 1..].parse::<i64>().ok()?)
-        } else if rest.len() == 4 {
-            (rest[..2].parse::<i64>().ok()?, rest[2..].parse::<i64>().ok()?)
-        } else if rest.len() == 2 {
-            (rest.parse::<i64>().ok()?, 0)
-        } else {
-            return None;
-        };
-        let v = h * 60 + m;
-        Some(if neg { -v } else { v })
-    } else {
-        None
-    }
-}
-
 fn parse_month_name(s: &str) -> Option<i64> {
     let low = s.to_lowercase();
     let names = [
@@ -2799,9 +2724,7 @@ fn proc_date(
     let field = resolve_field_name(cfg, meta, source);
     let formats = cfg_strings(cfg, "formats");
     let tz_name = cfg_str(cfg, "timezone");
-    if let Some(t) = tz_name {
-        tz_offset(t, now_millis())?;
-    }
+    let zone = tz_name.map(Zone::cached).transpose();
     let value = match get_any(meta, source, &field) {
         Some(v) => v,
         None => {
@@ -2814,15 +2737,17 @@ fn proc_date(
             )));
         }
     };
+    let zone = zone.map_err(|e| {
+        let shown = crate::jsonv::value_to_string(&value).unwrap_or_default();
+        ApiError::bad(&format!("unable to parse date [{}]", shown)).caused_by(e.to_api())
+    })?;
     let ms_naive = parse_date_value(&value, &formats, None)?;
-    let tz = match tz_name {
-        Some(t) => Some(tz_offset(t, ms_naive)?),
-        None => None,
-    };
-    let ms = match tz {
-        Some(off) if date_value_is_naive(&value, &formats) => ms_naive - off * 60_000,
+    let ms = match &zone {
+        Some(z) if date_value_is_naive(&value, &formats) => z.local_to_epoch_ms(ms_naive),
         _ => ms_naive,
     };
+    // the output offset, in minutes, of the zone at the parsed instant
+    let tz = zone.as_ref().map(|z| z.offset_ms(ms) / 60_000);
     let target = cfg
         .get("target_field")
         .and_then(|v| v.as_str())
@@ -3525,7 +3450,8 @@ fn proc_fingerprint(
         };
         canonical.push('|');
         canonical.push_str(f);
-        canonical.push_str("|1:");
+        // the value is prefixed with its length in UTF-16 units
+        canonical.push_str(&format!("|{}:", text.encode_utf16().count()));
         canonical.push_str(&text);
     }
     canonical.push('|');
@@ -3533,16 +3459,17 @@ fn proc_fingerprint(
         return Ok(false);
     }
     let method = cfg_str(cfg, "hash_method").unwrap_or("SHA-1@2.16.0");
+    let data = canonical.as_bytes();
     let digest: Vec<u8> = if method.starts_with("MD5") {
-        crate::hashes::md5(canonical.as_bytes()).to_vec()
+        md5::Md5::digest(data).to_vec()
     } else if method.starts_with("SHA-1") {
-        crate::hashes::sha1(canonical.as_bytes()).to_vec()
+        sha1::Sha1::digest(data).to_vec()
     } else if method.starts_with("SHA-256") {
-        crate::hashes::sha256(canonical.as_bytes()).to_vec()
+        sha2::Sha256::digest(data).to_vec()
     } else {
-        crate::hashes::sha3_256(canonical.as_bytes()).to_vec()
+        sha3::Sha3_256::digest(data).to_vec()
     };
-    let hash = base64::encode(&digest);
+    let hash = BASE64_STANDARD.encode(&digest);
     let target = cfg_str(cfg, "target_field").unwrap_or("fingerprint");
     set_source_path(source, target, json!(format!("{}:{}", method, hash)))?;
     let _ = meta;
@@ -3649,12 +3576,12 @@ fn proc_community_id(
     buf.push(0);
     buf.extend_from_slice(&a_port.to_be_bytes());
     buf.extend_from_slice(&b_port.to_be_bytes());
-    let digest = crate::hashes::sha1(&buf);
+    let digest = sha1::Sha1::digest(&buf);
     let target = cfg_str(cfg, "target_field").unwrap_or("community_id");
     set_source_path(
         source,
         target,
-        json!(format!("1:{}", base64::encode(&digest))),
+        json!(format!("1:{}", BASE64_STANDARD.encode(digest))),
     )?;
     Ok(false)
 }

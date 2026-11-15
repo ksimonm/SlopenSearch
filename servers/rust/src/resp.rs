@@ -50,6 +50,27 @@ pub(crate) fn encode_string(s: &str) -> String {
     out
 }
 
+/// Rewrites the `\u00xx` escapes of a JSON text with upper-case hex digits, as
+/// Jackson writes the strings OpenSearch generates (error messages); other escapes
+/// and the rest of the text are left as they are.
+pub fn upper_case_unicode_escapes(body: &[u8]) -> Vec<u8> {
+    let mut out = body.to_vec();
+    let mut i = 0;
+    while i < out.len() {
+        if out[i] == b'\\' {
+            if out.get(i + 1) == Some(&b'u') && i + 6 <= out.len() {
+                out[i + 2..i + 6].make_ascii_uppercase();
+                i += 6;
+            } else {
+                i += 2;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 fn write_pretty(buf: &mut String, v: &Value, indent: usize) {
     match v {
         Value::Object(m) => {

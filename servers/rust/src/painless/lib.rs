@@ -1,5 +1,6 @@
 // Painless engine: the class library (whitelisted methods and fields).
 
+use base64::prelude::{Engine as _, BASE64_STANDARD};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -7,6 +8,58 @@ use crate::painless::interp::{exception_type, native, Interp, PFn};
 use crate::painless::regex::{compile_pattern, java_replacement, PMatcher};
 use crate::painless::time::{call_static_time, static_time_enum, time_method};
 use crate::painless::value::*;
+
+/// `java.util.Base64.getDecoder()`: the standard alphabet, padding optional
+/// (but, when present, canonical) and the unused bits of a final partial group
+/// ignored.
+pub(crate) const JAVA_BASE64: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
+    &base64::alphabet::STANDARD,
+    base64::engine::GeneralPurposeConfig::new()
+        .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent)
+        .with_decode_allow_trailing_bits(true),
+);
+
+/// `Base64.getDecoder().decode(s)`, failing with the `IllegalArgumentException`
+/// message Java gives for the first problem in the input.
+pub(crate) fn java_base64_decode(s: &str) -> Result<Vec<u8>, String> {
+    let b = s.as_bytes();
+    if b.len() == 1 {
+        return Err("Input byte[] should at least have 2 bytes for base64 bytes".to_string());
+    }
+    // `shift` follows Java's `shiftto`: 18 at the start of a 4-character unit
+    let (mut shift, mut sp) = (18i32, 0usize);
+    while sp < b.len() {
+        let c = b[sp];
+        sp += 1;
+        if c == b'=' {
+            if (shift == 6 && (sp == b.len() || b[sp] != b'=')) || shift == 18 {
+                return Err("Input byte array has wrong 4-byte ending unit".to_string());
+            }
+            if shift == 6 {
+                sp += 1;
+            }
+            shift = -1;
+            break;
+        }
+        if !(c.is_ascii_alphanumeric() || c == b'+' || c == b'/') {
+            // Integer.toString of the signed byte, in hex
+            let v = c as i8 as i32;
+            let hex = if v < 0 { format!("-{:x}", -v) } else { format!("{:x}", v) };
+            return Err(format!("Illegal base64 character {}", hex));
+        }
+        shift -= 6;
+        if shift < 0 {
+            shift = 18;
+        }
+    }
+    if shift == 12 {
+        return Err("Last unit does not have enough valid bits".to_string());
+    }
+    if sp < b.len() {
+        return Err(format!("Input byte array has incorrect ending byte at {}", sp));
+    }
+    JAVA_BASE64.decode(s).map_err(|e| e.to_string())
+}
 
 fn str_arg(v: &PV) -> String {
     match v {
@@ -1176,7 +1229,7 @@ pub fn call_method(inp: &Interp<'_>, recv: &PV, name: &str, args: Vec<PV>, off: 
             "Base64.getEncoder" if name == "encodeToString" && n == 1 => {
                 if let PV::Array(arr) = &args[0] {
                     let b: Vec<u8> = arr.a.borrow().iter().map(|x| i64_of(x) as u8).collect();
-                    return Ok(PV::str(&base64::encode(b)));
+                    return Ok(PV::str(&BASE64_STANDARD.encode(b)));
                 }
             }
             "Random" => match name {
@@ -1481,10 +1534,10 @@ fn string_method(inp: &Interp<'_>, s: &str, name: &str, args: Vec<PV>, off: usiz
         ("chars", 0) => Ok(PV::stream("int", u.iter().map(|c| PV::Int(*c as i32)).collect())),
         ("codePoints", 0) => Ok(PV::stream("int", s.chars().map(|c| PV::Int(c as i32)).collect())),
         ("toCharArray", 0) => Ok(PV::array("char", u.iter().map(|c| PV::Char(*c)).collect())),
-        ("encodeBase64", 0) => Ok(PV::str(&base64::encode(s.as_bytes()))),
-        ("decodeBase64", 0) => match base64::decode(s) {
+        ("encodeBase64", 0) => Ok(PV::str(&BASE64_STANDARD.encode(s.as_bytes()))),
+        ("decodeBase64", 0) => match java_base64_decode(s) {
             Ok(b) => Ok(PV::str(&String::from_utf8_lossy(&b))),
-            Err(_) => Err(iae(off, "Illegal base64 character")),
+            Err(msg) => Err(iae(off, &msg)),
         },
         ("splitOnToken", 1) | ("splitOnToken", 2) => {
             let tok = sa(0);
