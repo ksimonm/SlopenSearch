@@ -212,7 +212,7 @@ class Run:
         v = {}
         sets = dict(W.text_queries(self.queries, n=10))
         if self.a.queries:
-            sets = {k: v for k, v in sets.items() if k in self.a.queries.split(",")}
+            sets = {k: sets[k] for k in self.a.queries.split(",") if k in sets}
         for name, bodies in sets.items():
             v[name] = []
             for b in bodies:
@@ -246,6 +246,8 @@ class Run:
                     _, st, r = self.guarded(f"/{W.VEC}/_search", b)
                     if st != 200:
                         res.append({"status": st, "error": str(r)[:300]})
+                        if st == -1:
+                            break
                         continue
                     got = [h["_id"] for h in r["hits"]["hits"]]
                     want = {str(x) for x in truth[key][i][:10]}
@@ -290,10 +292,16 @@ class Run:
         self.timed_or_skip("mixed_rw", f"/{W.TEXT}/_search", sets["match"][0],
                            lambda: self.load(spec, self.a.mixed_clients, duration=self.mixed_s))
         self.must("POST", f"/{W.TEXT}/_refresh")
+        # remove the written documents again so later counts are comparable between targets
+        st, r = self.call("POST", f"/{W.TEXT}/_delete_by_query?refresh=true",
+                          {"query": {"term": {"mixed": True}}}, timeout=self.a.request_timeout)
+        self.res["counts"]["mixed_written_and_removed"] = r.get("deleted") if st == 200 else f"HTTP {st}"
 
     def w_update(self):
         n = self.indexed_docs or self.n_docs
         m = min(self.update_ops, n // 4)
+        self.must("POST", f"/{W.TEXT}/_refresh")
+        before = self.must("GET", f"/{W.TEXT}/_count")["count"]
         # ids are spread over the corpus; updates in the first quarter, deletes in the last
         upd = [("update", "POST", f"/{W.TEXT}/_update/{(i * 7919) % (n // 2)}",
                 json.dumps({"doc": {"quantity": i % 1000, "rating": 4.5}}).encode()) for i in range(m)]
@@ -312,7 +320,9 @@ class Run:
         self.measure("delete_by_query", lambda: self.load({"type": "list", "ops": dbq, "once": True}, 1,
                                                           deadline=time.time() + cap))
         self.must("POST", f"/{W.TEXT}/_refresh")
-        self.res["counts"]["text_after_updates"] = self.must("GET", f"/{W.TEXT}/_count")["count"]
+        after = self.must("GET", f"/{W.TEXT}/_count")["count"]
+        self.res["counts"]["text_after_updates"] = after
+        self.res["counts"]["removed_by_update_workload"] = before - after
         st, r = self.call("POST", f"/{W.TEXT}/_count", {"query": {"term": {"rating": 4.5}}})
         self.res["counts"]["rating_4_5_after_updates"] = r.get("count") if st == 200 else None
 

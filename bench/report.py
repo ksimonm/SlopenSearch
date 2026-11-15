@@ -191,7 +191,7 @@ def render(d: Path) -> str:
     L.append("|---|" + "---:|" * len(names))
     for key in ("knn", "knn_filter"):
         L.append(f"| recall@10 {key} | " + " | ".join(num(res[n].get("recall", {}).get(key), "{:.3f}") for n in names) + " |")
-    for key in ("text_after_index", "vec_after_index", "text_after_updates", "rating_4_5_after_updates"):
+    for key in ("text_after_index", "vec_after_index", "removed_by_update_workload", "rating_4_5_after_updates"):
         L.append(f"| count {key} | " + " | ".join(str(res[n].get("counts", {}).get(key, "-")) for n in names) + " |")
     L.append("")
 
@@ -234,6 +234,17 @@ def _probe(r):
     return f"1 query: {r['probe_ms'] / 1000:,.1f} s" + (" (timeout)" if st == -1 else "")
 
 
+def _close(a, b) -> bool:
+    """Same structure, numbers within 0.1 % (float vs double rounding)."""
+    if isinstance(a, dict):
+        return isinstance(b, dict) and a.keys() == b.keys() and all(_close(a[k], b[k]) for k in a)
+    if isinstance(a, list):
+        return isinstance(b, list) and len(a) == len(b) and all(_close(x, y) for x, y in zip(a, b))
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(a, bool):
+        return a == b or abs(a - b) <= 1e-3 * max(abs(a), abs(b))
+    return a == b
+
+
 def _pp(r, tag):
     o = r.get("ops", {}).get(tag)
     return f"{o['p50']} / {o['p99']}" if o else "-"
@@ -269,6 +280,7 @@ def _cmp(base: list, other: list) -> str:
         if bi or oi:
             ov.append(len(set(bi) & set(oi)) / max(len(bi), len(oi)))
     agg = [W.agg_hash(b["aggs"]) == W.agg_hash(o.get("aggs")) for b, o in zip(base, other) if "aggs" in b]
+    near = [_close(b["aggs"], o.get("aggs")) for b, o in zip(base, other) if "aggs" in b]
     parts = []
     if has_tot:
         parts.append(f"totals {tot}/{has_tot}")
@@ -276,9 +288,11 @@ def _cmp(base: list, other: list) -> str:
         parts.append(f"top ids {sum(ov) / len(ov):.0%}")
     if agg:
         parts.append(f"aggs {sum(agg)}/{len(agg)}")
+        if sum(near) > sum(agg):
+            parts.append(f"{sum(near)}/{len(near)} within 0.1 %")
     if errs:
         parts.append(f"**{errs} errors**")
-    bad = (has_tot and tot < has_tot) or (agg and sum(agg) < len(agg)) or errs
+    bad = (has_tot and tot < has_tot) or (near and sum(near) < len(near)) or errs
     s = ", ".join(parts)
     return f"**{s}**" if bad and not errs else s
 

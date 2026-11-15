@@ -171,7 +171,7 @@ def _worker(args):
             for i, line in enumerate(f):
                 if i >= 2000:
                     break
-                pool.append(line.rstrip(b"\n"))
+                pool.append(b'{"mixed":true,' + line.rstrip(b"\n")[1:])
         index, n = spec["index"].encode(), 0
         while time.time() < end:
             if rnd.random() < wr:
