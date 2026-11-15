@@ -126,7 +126,8 @@ def _worker(args):
                 if st.first_error is None:
                     st.first_error = f"bulk item: {err}"
             st.add("bulk", lat, status, data, ok=status == 200 and nbad == 0)
-            extra["docs"] += k
+            if status == 200:
+                extra["docs"] += k - max(nbad, 0)
     elif kind == "list":
         ops = spec["ops"]
         if spec.get("once"):

@@ -66,9 +66,10 @@ def render(d: Path) -> str:
         ("CPU during text bulk (avg / peak cores)", lambda n: _cpu(w(n, "index_text"))),
         ("memory peak during text bulk (MiB)", lambda n: mib(w(n, "index_text").get("resources", {}).get("mem_peak"))),
         ("memory idle after indexing (MiB)", lambda n: mib(w(n, "idle_after_index").get("resources", {}).get("mem_avg"))),
-        ("memory peak, whole run (MiB)", lambda n: mib(res[n].get("memory_peak_total"))),
+        ("memory peak, whole run (MiB)", lambda n: mib(_peak(res[n]))),
         ("on-disk size after indexing (MiB)", lambda n: mib(res[n].get("disk_after_index"))),
-        ("OOM kills", lambda n: str(res[n].get("oom_kills", "-"))),
+        ("OOM-killed", lambda n: "**yes**" if (res[n].get("died") or {}).get("oom_killed")
+         or res[n].get("oom_kills") else "no"),
     ]
     for label, f in rows:
         L.append(f"| {label} | " + " | ".join(f(n) for n in names) + " |")
@@ -227,6 +228,13 @@ def _ordered_keys(res, names):
             if k not in keys:
                 keys.append(k)
     return keys
+
+
+def _peak(r):
+    vals = [x.get("resources", {}).get("mem_peak") for x in r["workloads"].values()]
+    vals.append(r.get("memory_peak_total"))
+    vals = [v for v in vals if v]
+    return max(vals) if vals else None
 
 
 def _probe(r):
