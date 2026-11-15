@@ -80,6 +80,14 @@ impl<'a> QueryCtx<'a> {
         }
     }
 
+    /// Terms of `text` with an analyzer resolved once (index building).
+    pub(crate) fn terms_ref(&self, fa: &FieldAnalyzer, text: &str) -> Vec<String> {
+        match fa {
+            FieldAnalyzer::Resolved(a) => a.terms(text),
+            FieldAnalyzer::Legacy(name) => self.legacy_analyze(name, text),
+        }
+    }
+
     /// Query-time terms of `text` for `field`.
     pub fn query_tokens(&self, field: &str, opts: Option<&Map<String, Value>>, text: &str) -> Vec<String> {
         let fa = self.field_analyzer(field, opts, Side::Search);
@@ -105,7 +113,7 @@ impl<'a> QueryCtx<'a> {
     }
 
     /// The query token stream when it is a graph (multi-word synonyms).
-    fn query_graph(&self, field: &str, opts: Option<&Map<String, Value>>, text: &str, side: Side) -> Option<Vec<Token>> {
+    pub(crate) fn query_graph(&self, field: &str, opts: Option<&Map<String, Value>>, text: &str, side: Side) -> Option<Vec<Token>> {
         match self.field_analyzer(field, opts, side) {
             FieldAnalyzer::Resolved(a) => {
                 let toks = a.run(text).tokens;

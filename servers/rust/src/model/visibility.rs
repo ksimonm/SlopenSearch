@@ -35,10 +35,20 @@ struct Stale {
 
 const CACHE_MAX: usize = 256;
 
+/// The request cache, shared by concurrent searches.
+#[derive(Default)]
+pub struct RequestCache(std::sync::Mutex<HashMap<String, (u64, Value)>>);
+
+impl Clone for RequestCache {
+    fn clone(&self) -> Self {
+        RequestCache(std::sync::Mutex::new(self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()))
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct SearcherState {
     stale: HashMap<String, Stale>,
-    cache: HashMap<String, (u64, Value)>,
+    cache: RequestCache,
     /// When the oldest unrefreshed write was first seen (see [`scheduled_refresh`]).
     pending_since: Option<std::time::Instant>,
 }
@@ -94,6 +104,12 @@ pub fn scheduled_refresh(store: &mut Store) {
     }
 }
 
+/// Whether nothing about the index waits for a refresh: a search swaps
+/// nothing in and a scheduled refresh changes nothing.
+pub fn quiescent(idx: &Index) -> bool {
+    idx.pending.is_empty() && idx.searcher.stale.is_empty() && idx.searcher.pending_since.is_none()
+}
+
 /// A refresh: every write becomes searchable.
 pub fn refresh(idx: &mut Index) {
     idx.pending.clear();
@@ -142,8 +158,16 @@ fn swap_slot<V>(map: &mut HashMap<String, V>, id: &str, slot: &mut Option<V>) {
 }
 
 fn swap_doc(idx: &mut Index, id: &str, st: &mut Stale) {
-    swap_slot(&mut idx.docs, id, &mut st.doc);
-    swap_slot(&mut idx.doc_values, id, &mut st.dv);
+    let cur = idx.docs.remove(id);
+    if let Some(v) = st.doc.take() {
+        idx.docs.insert(id.to_string(), v);
+    }
+    st.doc = cur;
+    let cur = idx.doc_values.remove(id);
+    if let Some(v) = st.dv.take() {
+        idx.doc_values.insert(id.to_string(), v);
+    }
+    st.dv = cur;
     swap_slot(&mut idx.doc_ignored, id, &mut st.ignored);
     swap_slot(&mut idx.raw_sources, id, &mut st.raw);
     swap_slot(&mut idx.versions, id, &mut st.version);
@@ -328,16 +352,16 @@ pub fn cache_key(store: &Store, path: &str, query: &[(String, String)], names: &
 pub fn cache_get(store: &Store, names: &[String], key: &str) -> Option<Value> {
     let fp = indices_fingerprint(store, names)?;
     let idx = store.indices.get(names.first()?)?;
-    match idx.searcher.cache.get(key) {
+    match idx.searcher.cache.0.lock().unwrap_or_else(|e| e.into_inner()).get(key) {
         Some((f, v)) if *f == fp => Some(v.clone()),
         _ => None,
     }
 }
 
-pub fn cache_put(store: &mut Store, names: &[String], key: String, v: &Value) {
+pub fn cache_put(store: &Store, names: &[String], key: String, v: &Value) {
     let Some(fp) = indices_fingerprint(store, names) else { return };
-    let Some(idx) = names.first().and_then(|n| store.indices.get_mut(n)) else { return };
-    let cache = &mut idx.searcher.cache;
+    let Some(idx) = names.first().and_then(|n| store.indices.get(n)) else { return };
+    let mut cache = idx.searcher.cache.0.lock().unwrap_or_else(|e| e.into_inner());
     cache.retain(|_, (f, _)| *f == fp);
     if cache.len() >= CACHE_MAX {
         cache.clear();

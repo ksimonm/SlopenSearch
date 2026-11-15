@@ -2715,6 +2715,19 @@ impl<'a> QueryCtx<'a> {
             }
         }
         let doc_tokens = |s: &str| -> Vec<String> { self.doc_tokens(field, s) };
+        // From the inverted index when it has this document (exact frequencies
+        // and statistics; fuzzy matching needs the document's tokens).
+        let indexed = if matches!(fuzz, Fuzz::None) && self.vals.is_none() {
+            crate::search::index::match_stats(self.idx, field, &self.id, &qtokens)
+        } else {
+            None
+        };
+        if let Some(st) = indexed {
+            if crate::search::index::verify() {
+                self.verify_match_stats(field, &qtokens, &vals, &st);
+            }
+            return Ok(self.score_match(&def, &ftype, &qtokens, required, boost, st));
+        }
         let mut cur_tokens: Vec<String> = Vec::new();
         for v in &vals {
             let s = value_scalar_string(v).unwrap_or_default();
@@ -2820,6 +2833,90 @@ impl<'a> QueryCtx<'a> {
             return Ok((true, boost * score.max(1e-9)));
         }
         Ok((false, 0.0))
+    }
+
+    /// The BM25 score of `match` from index statistics: the same formula as
+    /// the scanning path of [`QueryCtx::eval_match`].
+    fn score_match(
+        &self,
+        def: &Map<String, Value>,
+        ftype: &str,
+        qtokens: &[String],
+        required: usize,
+        boost: f64,
+        st: crate::search::index::MatchStats,
+    ) -> (bool, f64) {
+        let avgdl = if st.total_docs > 0 {
+            st.total_len as f64 / st.total_docs as f64
+        } else {
+            1.0
+        };
+        let dl = st.dl as f64;
+        let docs_only = def.get("index_options").and_then(|v| v.as_str()) == Some("docs");
+        let norms_off = def.get("norms").and_then(|v| v.as_bool()) == Some(false);
+        let mut matched = 0usize;
+        let mut score = 0.0;
+        for qi in 0..qtokens.len() {
+            let mut tf = st.tfs[qi] as f64;
+            if docs_only && tf > 0.0 {
+                tf = 1.0;
+            }
+            if tf > 0.0 {
+                matched += 1;
+                let n = st.total_docs as f64;
+                let df = st.dfs[qi] as f64;
+                let idf = (1.0 + (n - df + 0.5) / (df + 0.5)).ln();
+                let norm = if norms_off { 1.0 } else { 1.0 - 0.75 + 0.75 * dl / avgdl };
+                let tf_part = tf / (tf + 1.2 * norm);
+                score += idf * tf_part;
+            }
+        }
+        if matched >= required {
+            if ftype == "match_only_text" {
+                return (true, boost);
+            }
+            return (true, boost * score.max(1e-9));
+        }
+        (false, 0.0)
+    }
+
+    /// `SLOP_VERIFY_INDEX`: compares index statistics with a scan.
+    fn verify_match_stats(&self, field: &str, qtokens: &[String], vals: &[Value], st: &crate::search::index::MatchStats) {
+        let mut cur: Vec<String> = Vec::new();
+        for v in vals {
+            cur.extend(self.doc_tokens(field, &value_scalar_string(v).unwrap_or_default()));
+        }
+        let tfs: Vec<usize> = qtokens.iter().map(|q| cur.iter().filter(|t| *t == q).count()).collect();
+        let (mut docs, mut len, mut dfs) = (0usize, 0usize, vec![0usize; qtokens.len()]);
+        let rfield = resolve_alias_field(self.idx, field);
+        for id in &self.idx.order {
+            let mut toks: Vec<String> = Vec::new();
+            if let Some(raw) = self.idx.doc_values.get(id).and_then(|dv| dv.get(&rfield)) {
+                for v in array_values(raw) {
+                    toks.extend(self.doc_tokens(field, &value_scalar_string(&v).unwrap_or_default()));
+                }
+            }
+            if toks.is_empty() {
+                continue;
+            }
+            docs += 1;
+            len += toks.len();
+            for (qi, qt) in qtokens.iter().enumerate() {
+                if toks.iter().any(|t| t == qt) {
+                    dfs[qi] += 1;
+                }
+            }
+        }
+        if (docs, len, &dfs, cur.len(), &tfs) != (st.total_docs, st.total_len, &st.dfs, st.dl, &st.tfs) {
+            eprintln!(
+                "[verify-index] {} / {} match stats on {}: scan {:?} index {:?}",
+                self.idx.name,
+                self.id,
+                field,
+                (docs, len, &dfs, cur.len(), &tfs),
+                (st.total_docs, st.total_len, &st.dfs, st.dl, &st.tfs)
+            );
+        }
     }
 
     pub fn eval_match_phrase(
@@ -3555,7 +3652,7 @@ pub fn single_entry(m: &Map<String, Value>) -> Option<(&String, &Value)> {
     m.iter().next()
 }
 
-fn validate_match_query(idx: &Index, field: &str, raw: &Value) -> Result<(), ApiError> {
+pub(crate) fn validate_match_query(idx: &Index, field: &str, raw: &Value) -> Result<(), ApiError> {
     let _ = field;
     if raw.is_null() {
         return Err(ApiError::parsing("No text specified for text query"));
@@ -3686,7 +3783,7 @@ fn parse_synonym_rules(v: &Value) -> Vec<Vec<Vec<String>>> {
     out
 }
 
-fn synonym_groups(idx: &Index, field: &str) -> Vec<Vec<Vec<String>>> {
+pub(crate) fn synonym_groups(idx: &Index, field: &str) -> Vec<Vec<Vec<String>>> {
     let analyzer = {
         let mut name = String::new();
         if let Some(def) = mapping_field_def(idx, field) {

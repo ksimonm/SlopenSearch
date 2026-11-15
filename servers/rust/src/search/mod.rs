@@ -10,6 +10,7 @@ pub(crate) mod expressions;
 pub(crate) mod fetch;
 pub(crate) mod highlight;
 pub(crate) mod hl_analyzed;
+pub(crate) mod index;
 pub(crate) mod inner_hits;
 pub(crate) mod javanum;
 pub(crate) mod knn_query;
