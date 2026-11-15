@@ -1210,7 +1210,7 @@ pub fn canonical_ip(s: &str) -> Result<String, i32> {
     }
 }
 
-fn float32_half(f: f64) -> u16 {
+pub(crate) fn float32_half(f: f64) -> u16 {
     let bits = (f as f32).to_bits();
     let sign = ((bits >> 31) as u16) << 15;
     let exp = ((bits >> 23) & 0xff) as i32 - 127;
@@ -1240,7 +1240,7 @@ fn float32_half(f: f64) -> u16 {
     sign | half
 }
 
-fn float32_from_half(h: u16) -> f32 {
+pub(crate) fn float32_from_half(h: u16) -> f32 {
     let sign = ((h >> 15) as u32) << 31;
     let exp = ((h >> 10) & 0x1f) as u32;
     let mut frac = (h & 0x3ff) as u32;
