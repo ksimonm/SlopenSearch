@@ -2270,6 +2270,54 @@ pub fn handle_search_shards(store: &mut Store, req: &Req, name: &str) -> Respons
 }
 
 pub fn handle_search(store: &mut Store, req: &Req, name: &str) -> Response {
+    handle_search_in(&mut StoreRef::Mut(store), req, name)
+}
+
+/// A search that changes nothing (see [`read_only_search`]) under a shared lock.
+pub fn handle_search_shared(store: &Store, req: &Req, name: &str) -> Response {
+    handle_search_in(&mut StoreRef::Shared(store), req, name)
+}
+
+/// Whether `handle_search` would change nothing in the store for this request:
+/// no scroll or point in time to create, no request-level derived fields, and
+/// no index with unrefreshed writes (whose refreshed view a search swaps in, or
+/// that a scheduled refresh would refresh).
+pub fn read_only_search(store: &Store, req: &Req) -> bool {
+    if req.param("scroll").is_some() {
+        return false;
+    }
+    let body = &req.body;
+    let has = |needle: &[u8]| body.windows(needle.len()).any(|w| w == needle);
+    if has(b"\"pit\"") || has(b"\"derived\"") {
+        return false;
+    }
+    store.indices.values().all(crate::model::visibility::quiescent)
+}
+
+/// The store of a search: exclusive, or shared when [`read_only_search`] holds
+/// (the writing branches are then never reached).
+pub enum StoreRef<'a> {
+    Mut(&'a mut Store),
+    Shared(&'a Store),
+}
+
+impl StoreRef<'_> {
+    fn get(&self) -> &Store {
+        match self {
+            StoreRef::Mut(s) => s,
+            StoreRef::Shared(s) => s,
+        }
+    }
+
+    fn get_mut(&mut self) -> &mut Store {
+        match self {
+            StoreRef::Mut(s) => s,
+            StoreRef::Shared(_) => unreachable!("a read-only search changed the store"),
+        }
+    }
+}
+
+fn handle_search_in(st: &mut StoreRef, req: &Req, name: &str) -> Response {
     let allowed_params = [
         "q", "df", "analyzer", "default_operator", "sort", "from", "size", "scroll",
         "search_type", "request_cache", "batched_reduce_size", "pre_filter_shard_size",
@@ -2378,7 +2426,7 @@ pub fn handle_search(store: &mut Store, req: &Req, name: &str) -> Response {
             ..Default::default()
         },
     );
-    let names = match shared::resolve_spec2(store, name, &o) {
+    let names = match shared::resolve_spec2(st.get(), name, &o) {
         Ok(n) => n,
         Err(e) => return err_response(e),
     };
@@ -2520,7 +2568,7 @@ pub fn handle_search(store: &mut Store, req: &Req, name: &str) -> Response {
                 "Validation Failed: 1: [indices] cannot be used with point in time;",
             ));
         }
-        return handle_pit_search(store, req, Value::Object(body));
+        return handle_pit_search(st.get_mut(), req, Value::Object(body));
     }
     if body
         .get("sort")
@@ -2598,7 +2646,7 @@ pub fn handle_search(store: &mut Store, req: &Req, name: &str) -> Response {
         .unwrap_or_else(|| name.to_string());
     let sp_state =
         match crate::ingest::prepare_search_pipeline(
-            store,
+            st.get(),
             &default_index,
             &mut body,
             req.bool_param("verbose_pipeline"),
@@ -2611,7 +2659,7 @@ pub fn handle_search(store: &mut Store, req: &Req, name: &str) -> Response {
     let derived_snap = if body.get("derived").is_some() {
         let mut snap = Vec::new();
         for n in &names {
-            if let Some(idx) = store.indices.get(n) {
+            if let Some(idx) = st.get().indices.get(n) {
                 snap.push((
                     n.clone(),
                     idx.mappings.get("derived").cloned(),
@@ -2625,31 +2673,37 @@ pub fn handle_search(store: &mut Store, req: &Req, name: &str) -> Response {
     };
     if let Some(defs) = body.get("derived") {
         for n in &names {
-            if let Some(idx) = store.indices.get_mut(n) {
+            if let Some(idx) = st.get_mut().indices.get_mut(n) {
                 if let Err(e) = crate::mapping::fields::apply_request_derived(idx, defs) {
                     return err_response(e);
                 }
             }
         }
     }
-    let cache_key = crate::model::visibility::cache_key(store, &req.path, &req.query, &names, &body);
-    let result = match cache_key.as_ref().and_then(|k| crate::model::visibility::cache_get(store, &names, k)) {
+    let cache_key = crate::model::visibility::cache_key(st.get(), &req.path, &req.query, &names, &body);
+    let result = match cache_key.as_ref().and_then(|k| crate::model::visibility::cache_get(st.get(), &names, k)) {
         Some(v) => Ok(v),
         None => {
             crate::search::index::trace("before enter");
-            let view = crate::model::visibility::enter(store, &names);
-            let r = run_search(store, name, &names, &body, req);
-            crate::model::visibility::leave(store, view);
+            let r = match st {
+                StoreRef::Mut(store) => {
+                    let view = crate::model::visibility::enter(store, &names);
+                    let r = run_search(store, name, &names, &body, req);
+                    crate::model::visibility::leave(store, view);
+                    r
+                }
+                StoreRef::Shared(store) => run_search(store, name, &names, &body, req),
+            };
             crate::search::index::trace("run_search done");
             if let (Some(k), Ok(v)) = (cache_key, &r) {
-                crate::model::visibility::cache_put(store, &names, k, v);
+                crate::model::visibility::cache_put(st.get(), &names, k, v);
             }
             r
         }
     };
     if let Some(snap) = derived_snap {
         for (n, derived, doc_values) in snap {
-            if let Some(idx) = store.indices.get_mut(&n) {
+            if let Some(idx) = st.get_mut().indices.get_mut(&n) {
                 if let Some(d) = derived {
                     if let Some(m) = idx.mappings.as_object_mut() {
                         m.insert("derived".to_string(), d);
@@ -2666,7 +2720,7 @@ pub fn handle_search(store: &mut Store, req: &Req, name: &str) -> Response {
             if let Err(e) = crate::ingest::apply_search_response(&sp_state, &mut v) {
                 return err_response(e);
             }
-            if let Err(e) = apply_search_extras(&mut v, req, store, &names, &body) {
+            if let Err(e) = apply_search_extras(&mut v, req, st.get(), &names, &body) {
                 return err_response(e);
             }
             if sp_state.verbose {
@@ -2693,6 +2747,7 @@ pub fn handle_search(store: &mut Store, req: &Req, name: &str) -> Response {
                     raw_len = hits.len();
                     filter_slice_hits(hits, slice);
                 }
+                let store = st.get_mut();
                 let id = scroll_new_id(store);
                 store.scrolls.insert(
                     id.clone(),

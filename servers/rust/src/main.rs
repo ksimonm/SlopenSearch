@@ -29,7 +29,7 @@ mod storage;
 mod suggest;
 mod uchar;
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 fn main() {
     // Requests run on the blocking pool (http::handle); its threads get a large
@@ -46,7 +46,7 @@ async fn run() {
     let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let port = std::env::var("PORT").unwrap_or_else(|_| "9200".to_string());
     let addr = format!("{}:{}", host, port);
-    let store: http::Shared = Arc::new(Mutex::new(storage::open()));
+    let store: http::Shared = Arc::new(RwLock::new(storage::open()));
     let listener = match http::listen(&addr).await {
         Ok(l) => l,
         Err(e) => {

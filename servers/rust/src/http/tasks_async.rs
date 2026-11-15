@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
+use std::sync::{Condvar, Mutex, MutexGuard, OnceLock, RwLockWriteGuard};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
@@ -714,8 +714,8 @@ fn start(shared: &Shared, req: &Req, segs: &[String], kind: Kind) -> Response {
 
 // ------------------------------------------------------------------ execution
 
-fn lock_store(shared: &Shared) -> MutexGuard<'_, Store> {
-    shared.lock().unwrap_or_else(|e| e.into_inner())
+fn lock_store(shared: &Shared) -> RwLockWriteGuard<'_, Store> {
+    shared.write().unwrap_or_else(|e| e.into_inner())
 }
 
 fn sub_req(base: &Req, path: String, body: &Map<String, Value>, drop_slices: bool) -> Req {

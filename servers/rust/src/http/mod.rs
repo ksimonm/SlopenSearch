@@ -38,7 +38,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use axum::Router;
 use serde_json::{json, Map, Value};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use crate::errors::{self, ApiError};
 use crate::model::Store;
 use crate::{resp, storage};
@@ -47,7 +47,7 @@ use crate::jsonv::fix_exponent_literals;
 use errors::{json_response, no_handler, text_response};
 use resp::{filter_path_value, pretty_json};
 
-pub type Shared = Arc<Mutex<Store>>;
+pub type Shared = Arc<RwLock<Store>>;
 
 /// Common request abstraction shared by all handlers.
 pub struct Req {
@@ -306,7 +306,18 @@ async fn handle_plain(store: Shared, request: axum::extract::Request) -> axum::r
         }
         let resp = {
             crate::search::index::trace("start");
-            let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
+            // Plain searches run in parallel under the shared lock when they
+            // would change nothing; everything else takes the store exclusively.
+            if let Some(name) = plain_search_target(&req) {
+                let guard = store.read().unwrap_or_else(|e| e.into_inner());
+                if search::read_only_search(&guard, &req) {
+                    crate::search::index::trace("read-locked");
+                    let resp = search::handle_search_shared(&guard, &req, &name);
+                    crate::search::index::trace("dispatched (shared)");
+                    return (resp, req);
+                }
+            }
+            let mut guard = store.write().unwrap_or_else(|e| e.into_inner());
             crate::search::index::trace("locked");
             // Runtime threads have a large stack (main.rs): scripts and nested
             // queries recurse.
@@ -444,6 +455,24 @@ fn has_bad_escape(path: &str) -> bool {
         b[i] == b'%'
             && !(i + 2 < b.len() && b[i + 1].is_ascii_hexdigit() && b[i + 2].is_ascii_hexdigit())
     })
+}
+
+/// The index expression of a `GET|POST [/<index>]/_search` request that
+/// `dispatch` would hand to `search::handle_search` (None for anything else).
+fn plain_search_target(req: &Req) -> Option<String> {
+    if req.method != "GET" && req.method != "POST" {
+        return None;
+    }
+    if has_bad_escape(&req.path) {
+        return None;
+    }
+    let path = req.path.trim_matches('/');
+    let segs: Vec<String> = path.split('/').map(path_decode).collect();
+    match segs.as_slice() {
+        [s] if s == "_search" => Some(String::new()),
+        [i, s] if s == "_search" && !i.is_empty() && !i.starts_with('_') => Some(i.clone()),
+        _ => None,
+    }
 }
 
 pub fn dispatch(store: &mut Store, req: &Req) -> axum::response::Response {

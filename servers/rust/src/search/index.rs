@@ -119,26 +119,56 @@ impl<'a> Indexer<'a> {
     }
 }
 
-fn index_doc(idx: &Index, inv: &mut InvertedIndex, indexers: &[(String, Indexer)], id: &str) {
-    let Some(dv) = idx.doc_values.get(id) else { return };
-    let n = inv.alloc(id);
-    for (key, ix) in indexers {
-        if let Some(f) = inv.fields.get_mut(key) {
-            ix.add(f, n, dv);
+/// Adds the documents `docs` (ascending doc numbers, all live) to the field
+/// `key`; text and keyword values are analyzed on several threads.
+fn fill(idx: &Index, key: &str, f: &mut FieldIndex, docs: &[(u32, String)]) {
+    let ix = Indexer::new(idx, key);
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(8);
+    if ix.kind == Kind::Numeric || docs.len() < 2048 || threads < 2 {
+        for (n, id) in docs {
+            if let Some(dv) = idx.doc_values.get(id) {
+                ix.add(f, *n, dv);
+            }
         }
+        return;
+    }
+    let chunk = docs.len().div_ceil(threads);
+    let parts: Vec<Vec<Vec<String>>> = std::thread::scope(|sc| {
+        let handles: Vec<_> = docs
+            .chunks(chunk)
+            .map(|part| {
+                sc.spawn(move || {
+                    let ix = Indexer::new(idx, key);
+                    part.iter()
+                        .map(|(_, id)| idx.doc_values.get(id).map(|dv| ix.terms(dv)).unwrap_or_default())
+                        .collect::<Vec<Vec<String>>>()
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap_or_default()).collect()
+    });
+    for ((n, _), terms) in docs.iter().zip(parts.into_iter().flatten()) {
+        f.add(*n, terms);
     }
 }
 
-fn indexers_for<'a>(idx: &'a Index, inv: &InvertedIndex) -> Vec<(String, Indexer<'a>)> {
-    inv.fields.keys().map(|k| (k.clone(), Indexer::new(idx, k))).collect()
+/// Numbers the documents `ids` that have doc values and adds them to every field.
+fn add_docs<'a>(idx: &Index, inv: &mut InvertedIndex, ids: impl Iterator<Item = &'a String>) {
+    let docs: Vec<(u32, String)> = ids
+        .filter(|id| idx.doc_values.contains_key(*id))
+        .map(|id| (inv.alloc(id), id.clone()))
+        .collect();
+    let keys: Vec<String> = inv.fields.keys().cloned().collect();
+    for key in keys {
+        let mut f = inv.fields.remove(&key).unwrap_or_default();
+        fill(idx, &key, &mut f, &docs);
+        inv.fields.insert(key, f);
+    }
 }
 
 fn renumber(idx: &Index, inv: &mut InvertedIndex) {
     inv.reset_docs();
-    let indexers = indexers_for(idx, inv);
-    for id in idx.doc_values.keys() {
-        index_doc(idx, inv, &indexers, id);
-    }
+    add_docs(idx, inv, idx.doc_values.keys());
     inv.numbered = true;
 }
 
@@ -169,13 +199,12 @@ fn sync_locked(idx: &Index, inv: &mut InvertedIndex) {
     if dirty.ids.is_empty() {
         return;
     }
-    let indexers = indexers_for(idx, inv);
     let mut ids: Vec<String> = dirty.ids.into_iter().collect();
     ids.sort();
     for id in &ids {
         inv.kill(id);
-        index_doc(idx, inv, &indexers, id);
     }
+    add_docs(idx, inv, ids.iter());
     if inv.dead > 1024 && inv.dead > inv.live_count() {
         renumber(idx, inv);
     }
@@ -203,14 +232,14 @@ fn ensure(idx: &Index, keys: &[String]) {
         if inv.fields.contains_key(key) {
             continue;
         }
-        let ix = Indexer::new(idx, key);
+        let docs: Vec<(u32, String)> = inv
+            .ids
+            .iter()
+            .enumerate()
+            .filter_map(|(n, id)| id.as_ref().map(|id| (n as u32, id.clone())))
+            .collect();
         let mut f = FieldIndex::default();
-        for n in 0..inv.ids.len() {
-            let Some(id) = inv.ids[n].as_deref() else { continue };
-            if let Some(dv) = idx.doc_values.get(id) {
-                ix.add(&mut f, n as u32, dv);
-            }
-        }
+        fill(idx, key, &mut f, &docs);
         inv.fields.insert(key.clone(), f);
     }
     for key in keys {
