@@ -385,7 +385,7 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *mod
 		if err != nil {
 			return nil, err
 		}
-		return metricValueObject(meanF(vals), len(vals) > 0, t, idx, field), nil
+		return metricValueObject(kahanMean(vals), len(vals) > 0, t, idx, field), nil
 	}
 	if t, ok := def["min"].(map[string]any); ok {
 		if err := validateMetricParams("min", t, commonMetricParams); err != nil {
@@ -427,7 +427,7 @@ func evalOneAgg(name string, def map[string]any, docs []map[string]any, idx *mod
 		if err != nil {
 			return nil, err
 		}
-		return metricValueObject(sumOf(vals), true, t, idx, field), nil
+		return metricValueObject(kahanSum(vals), true, t, idx, field), nil
 	}
 	if t, ok := def["value_count"].(map[string]any); ok {
 		if err := validateMetricParams("value_count", t, commonMetricParams); err != nil {

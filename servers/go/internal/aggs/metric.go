@@ -301,12 +301,13 @@ func extendedStatsAgg(spec map[string]any, docs []map[string]any, idx *model.Ind
 				{"lower_population", nil}, {"upper_sampling", nil}, {"lower_sampling", nil}}},
 		}, nil
 	}
-	sum := sumOf(vals)
+	sum := kahanSum(vals)
 	avg := sum / float64(n)
-	sumSq := 0.0
+	var sq compensatedSum
 	for _, v := range vals {
-		sumSq += v * v
+		sq.add(v * v)
 	}
+	sumSq := sq.value
 	varPop := sumSq/float64(n) - avg*avg
 	if varPop < 0 {
 		varPop = 0
@@ -370,8 +371,8 @@ func statsAgg(spec map[string]any, docs []map[string]any, idx *model.Index, path
 	}
 	minV := minOf(vals).(float64)
 	maxV := maxOf(vals).(float64)
-	avg := sumOf(vals) / float64(len(vals))
-	sum := sumOf(vals)
+	sum := kahanSum(vals)
+	avg := sum / float64(len(vals))
 	out := ojson.Object{
 		{"count", len(vals)}, {"min", jsonv.Float(minV)}, {"max", jsonv.Float(maxV)},
 		{"avg", jsonv.Float(avg)}, {"sum", jsonv.Float(sum)},
@@ -414,7 +415,7 @@ func weightedAvgAgg(spec map[string]any, docs []map[string]any, idx *model.Index
 	}
 	wf, _ := jsonv.ToString(weightSpec["field"])
 	wScript, hasWScript := weightSpec["script"]
-	total, weightSum := 0.0, 0.0
+	var total, weightSum compensatedSum
 	vMissing, hasVMissing := metricMissingValue(valueSpec)
 	wMissing, hasWMissing := metricMissingValue(weightSpec)
 	for _, doc := range docs {
@@ -462,14 +463,14 @@ func weightedAvgAgg(spec map[string]any, docs []map[string]any, idx *model.Index
 			if !ok {
 				continue
 			}
-			total += f * w
-			weightSum += w
+			total.add(f * w)
+			weightSum.add(w)
 		}
 	}
-	if weightSum == 0 {
+	if weightSum.value == 0 {
 		return ojson.Object{{"value", nil}}, nil
 	}
-	val := total / weightSum
+	val := total.value / weightSum.value
 	out := ojson.Object{{"value", jsonv.Float(val)}}
 	if format, _ := jsonv.ToString(spec["format"]); format != "" {
 		out = append(out, ojson.KV{"value_as_string", fmtMetricNumber(val, format)})
