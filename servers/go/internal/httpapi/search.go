@@ -289,6 +289,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		}
 		pitCtx = ctx
 	}
+	if search.SortParsedFirst(bodyRaw) {
+		if serr := search.CheckSortClauses(bodyRaw); serr != nil {
+			writeError(w, serr)
+			return
+		}
+	}
 	if apiErr := validateSearchBody(body); apiErr != nil {
 		writeError(w, apiErr)
 		return
@@ -647,6 +653,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	total := 0
 
 	searchSortSpecs, sortErr := search.ParseSortSpecs(body["sort"], r.URL.Query().Get("sort"))
+	if serr := search.CheckSortClauses(bodyRaw); serr != nil {
+		sortErr = serr
+	}
 	if sortErr != nil {
 		writeError(w, sortErr)
 		return

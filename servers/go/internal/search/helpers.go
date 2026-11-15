@@ -72,6 +72,7 @@ func ParseSortSpecs(bodySort any, uriSort string) ([]SortSpec, *apierr.Error) {
 						sp.HasMissing = true
 					}
 					if m, ok := ov["mode"].(string); ok {
+						m = strings.ToLower(m) // SortMode.fromString
 						switch m {
 						case "min", "max", "avg", "sum", "median":
 							sp.Mode = m
@@ -206,7 +207,7 @@ func ParseSortSpecs(bodySort any, uriSort string) ([]SortSpec, *apierr.Error) {
 }
 
 func validSortOrder(s string) bool {
-	return s == "asc" || s == "desc" || s == "ASC" || s == "DESC"
+	return strings.EqualFold(s, "asc") || strings.EqualFold(s, "desc") // SortOrder.fromString
 }
 
 func singleEntry(m map[string]any) (string, any, bool) {

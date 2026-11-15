@@ -127,14 +127,14 @@ func writeError(w http.ResponseWriter, e *apierr.Error) {
 // errorMetadata orders exception metadata the way OpenSearch prints it.
 func errorMetadata(fields map[string]any) ojson.Object {
 	out := ojson.Object{}
-	for _, k := range []string{"index", "resource.id", "resource.type", "index_uuid", "shard"} {
+	for _, k := range []string{"index", "resource.id", "resource.type", "index_uuid", "shard", "line", "col"} {
 		if v, ok := fields[k]; ok {
 			out = append(out, ojson.KV{k, v})
 		}
 	}
 	for _, k := range jsonv.SortedKeys(fields) {
 		switch k {
-		case "index", "resource.id", "resource.type", "index_uuid", "shard":
+		case "index", "resource.id", "resource.type", "index_uuid", "shard", "line", "col":
 			continue
 		}
 		out = append(out, ojson.KV{k, fields[k]})
