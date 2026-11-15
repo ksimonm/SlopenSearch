@@ -170,3 +170,48 @@ def test_large_terms_and_keyword_match(client, places, query, ids, score):
         assert [h["_id"] for h in hits["hits"]] == ids
         assert {h["_score"] for h in hits["hits"]} == {score}
         assert hits["max_score"] == score
+
+
+def _sorted(client, name, body):
+    r = client.post(f"/{name}/_search", json=body)
+    assert r.status_code == 200, r.text
+    return [(h["_id"], h["sort"]) for h in r.json()["hits"]["hits"]], r.json()["hits"]
+
+
+@pytest.mark.parametrize("body,expected", [
+    ({"sort": [{"pop": "desc"}], "size": 4}, [("6", [13000000]), ("5", [3600000]), ("1", [1800000]), ("9", [1800000])]),
+    ({"sort": [{"pop": "asc"}], "size": 5}, [("3", [0]), ("4", [0]), ("11", [0]), ("8", [5]), ("0", [900])]),
+    ({"sort": [{"pop": "asc"}], "size": 3, "from": 4}, [("0", [900]), ("10", [77000]), ("2", [280000])]),
+    ({"sort": [{"pop": "asc"}], "size": 3, "search_after": [900]}, [("10", [77000]), ("2", [280000]), ("7", [750000])]),
+    ({"sort": [{"pop": "desc"}, {"fc": "asc"}], "size": 4, "search_after": [1800000, "A"]},
+     [("1", [1800000, "P"]), ("7", [750000, "A"]), ("2", [280000, "P"]), ("10", [77000, "A"])]),
+    ({"sort": [{"fc": "desc"}, "_doc"], "size": 4}, [("3", ["T", 3]), ("4", ["T", 4]), ("8", ["T", 8]), ("0", ["P", 0])]),
+    ({"query": {"term": {"cc": "de"}}, "sort": [{"name.raw": "asc"}], "size": 3},
+     [("6", ["Bayern"]), ("5", ["Berlin"]), ("11", ["Rhein"])]),
+    ({"query": {"match_all": {}}, "sort": [{"missing_field": {"order": "asc", "unmapped_type": "long"}}, {"pop": "desc"}],
+      "size": 2}, [("6", [9223372036854775807, 13000000]), ("5", [9223372036854775807, 3600000])]),
+], ids=["desc", "asc_ties", "asc_from", "search_after", "two_fields_after", "keyword_desc_doc", "keyword_filtered",
+        "unmapped"])
+def test_field_sort_page(client, places, body, expected):
+    hits, h = _sorted(client, places, body)
+    assert hits == expected
+    assert h["total"] == {"value": 4 if "term" in body.get("query", {}) else 12, "relation": "eq"}
+    assert h["max_score"] is None
+
+
+def test_field_sort_follows_writes(client, places):
+    body = {"sort": [{"pop": "desc"}], "size": 2}
+    assert _sorted(client, places, body)[0] == [("6", [13000000]), ("5", [3600000])]
+    r = client.post(f"/{places}/_doc/5", params={"refresh": "true"},
+                    json={"name": "Berlin", "fc": "P", "cc": "DE", "pop": 99000000})
+    assert r.status_code == 200, r.text
+    assert _sorted(client, places, body)[0] == [("5", [99000000]), ("6", [13000000])]
+    r = client.delete(f"/{places}/_doc/6", params={"refresh": "true"})
+    assert r.status_code == 200, r.text
+    assert _sorted(client, places, body)[0] == [("5", [99000000]), ("1", [1800000])]
+    r = client.post(f"/{places}/_doc/99", params={"refresh": "true"}, json={"name": "Nowhere", "fc": "X"})
+    assert r.status_code == 201, r.text
+    assert _sorted(client, places, {"sort": [{"pop": "asc"}], "size": 1, "from": 11})[0] == [
+        ("99", [9223372036854775807])]
+    assert _sorted(client, places, {"sort": [{"pop": {"order": "asc", "missing": "_first"}}], "size": 1})[0] == [
+        ("99", [-9223372036854775808])]
