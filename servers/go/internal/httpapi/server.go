@@ -281,6 +281,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		finish()
 		return
 	}
+	transcodeRequestBody(r)
 	for _, p := range []string{"pretty", "human", "error_trace"} {
 		if e := strictBoolParam(r, p); e != nil {
 			writeError(cw, e)

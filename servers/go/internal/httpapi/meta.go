@@ -181,7 +181,15 @@ func readBodyJSON(w http.ResponseWriter, r *http.Request) (map[string]any, *apie
 		if apiErr != nil {
 			return nil, apiErr
 		}
-		return parseSimpleYAML(string(body)), nil
+		js, err := yamlToJSON(body)
+		if err != nil {
+			return nil, &apierr.Error{Type: "json_parse_exception", Reason: err.Error(), Status: 400}
+		}
+		var out map[string]any
+		if err := jsonv.Unmarshal(js, &out); err != nil {
+			return nil, &apierr.Error{Type: "json_parse_exception", Reason: err.Error(), Status: 400}
+		}
+		return out, nil
 	default:
 		return nil, nil
 	}
@@ -207,35 +215,6 @@ func readAllBody(r *http.Request) ([]byte, *apierr.Error) {
 		}
 	}
 	return buf, nil
-}
-
-func parseSimpleYAML(text string) map[string]any {
-	out := map[string]any{}
-	var current map[string]any = out
-	for _, line := range strings.Split(text, "\n") {
-		if strings.TrimSpace(line) == "" || strings.HasPrefix(strings.TrimSpace(line), "#") {
-			continue
-		}
-		if !strings.HasPrefix(line, " ") && strings.HasSuffix(strings.TrimSpace(line), ":") {
-			key := strings.TrimSuffix(strings.TrimSpace(line), ":")
-			child := map[string]any{}
-			out[key] = child
-			current = child
-			continue
-		}
-		trimmed := strings.TrimSpace(line)
-		if i := strings.Index(trimmed, ":"); i >= 0 {
-			key := trimmed[:i]
-			val := strings.TrimSpace(trimmed[i+1:])
-			switch val {
-			case "", "null", "~":
-				current[key] = nil
-			default:
-				current[key] = strings.Trim(val, `"'`)
-			}
-		}
-	}
-	return out
 }
 
 // -------------------------------------------------------------- close / open

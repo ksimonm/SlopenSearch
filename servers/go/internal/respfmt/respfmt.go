@@ -25,15 +25,30 @@ func Process(h http.Header, ordered bool, r *http.Request, status int, body []by
 	_, hasPretty := q["pretty"]
 	pretty := (hasPretty && q.Get("pretty") != "false") || q.Get("pretty") == "true"
 	trace := status >= 400 && q.Get("error_trace") == "true"
-	acc := r.Header.Get("Accept")
-	yaml := q.Get("format") == "yaml" || strings.Contains(acc, "yaml")
+	format := responseFormat(r)
+	yaml := format == "yaml"
+	cborOut := format == "cbor"
 	human := q.Get("human") == "true" || (q.Has("human") && q.Get("human") == "")
 	filter := fp != "" && status < 400
-	switch {
-	case strings.Contains(acc, "application/smile"):
+	if format == "smile" {
 		h.Set("Content-Type", "application/smile")
-	case strings.Contains(acc, "application/cbor"):
+	}
+	if cborOut {
+		tree, err := parseResp(body, false)
+		if err != nil {
+			return bytes.TrimRight(body, "\n")
+		}
+		if human && status < 400 {
+			tree = humanize(tree, r, version)
+		}
+		if filter {
+			tree = reorderLike(tree, FilterPath(toPlain(tree), fp))
+		}
+		if trace {
+			tree = addStackTraces(tree)
+		}
 		h.Set("Content-Type", "application/cbor")
+		return toCBOR(tree)
 	}
 	if ordered && !filter && !trace && !yaml {
 		return body // already rendered in its final form
