@@ -124,11 +124,11 @@ func notToMidnightRound(ms int64, unit string, z *zone.Zone) int64 {
 func tzNextKey(k, fixedMs int64, unit string, z *zone.Zone) int64 {
 	var next int64
 	if fixedMs > 0 {
-		next = k + fixedMs
-		if _, fixed := z.FixedOffset(); !fixed {
-			if r := tzBucketStart(next, fixedMs, unit, z); r > k {
-				next = r
-			}
+		// TimeIntervalRounding.nextRoundingValue: the local time one interval
+		// later, resolved in the zone
+		next = z.LocalToEpochMs(k + z.OffsetMs(k) + fixedMs)
+		if next <= k {
+			next = k + fixedMs
 		}
 		return next
 	}
