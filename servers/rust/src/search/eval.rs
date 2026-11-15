@@ -1637,15 +1637,9 @@ impl<'a> QueryCtx<'a> {
         cond: &Map<String, Value>,
         boost: f64,
     ) -> Result<(bool, f64), ApiError> {
-        let mut def = mapping_field_def(self.idx, field).cloned().unwrap_or_default();
-        if let Some(f) = cond.get("format").and_then(|v| v.as_str()) {
-            def.insert("format".to_string(), Value::String(f.to_string()));
-        }
-        let ftype = def
-            .get("type")
-            .and_then(|t| t.as_str())
-            .unwrap_or("")
-            .to_string();
+        let prep = self.range_prep(field, cond);
+        let ftype = &prep.ftype;
+        let def = &prep.def;
         if ftype == "wildcard" {
             return Err(shard_query_error(
                 "query_shard_exception",
@@ -1657,6 +1651,130 @@ impl<'a> QueryCtx<'a> {
             return Ok((false, 0.0));
         }
         let mut boost = boost;
+        let relation = &prep.relation;
+        if let Some(b) = prep.boost {
+            boost *= b;
+        }
+        let (lower, upper) = (&prep.lower, &prep.upper);
+        let (q_lower, q_upper) = prep.bounds.clone()?;
+        let is_range_field = matches!(
+            ftype.as_str(),
+            "integer_range" | "long_range" | "float_range" | "double_range" | "date_range"
+                | "ip_range"
+        );
+        if is_range_field {
+            for v in &vals {
+                if let Value::Object(rng) = v {
+                    let mut stored = rng.clone();
+                    if ftype == "date_range" {
+                        for key in ["gte", "gt", "lte", "lt"] {
+                            if let Some(b) = rng.get(key).cloned() {
+                                if let Ok(parsed) =
+                                    parse_query_date(&def, &b, "", false)
+                                {
+                                    stored.insert(key.to_string(), parsed);
+                                }
+                            }
+                        }
+                    }
+                    if range_relation(
+                        &relation,
+                        q_lower.as_ref().unwrap_or(&Value::Null),
+                        q_upper.as_ref().unwrap_or(&Value::Null),
+                        q_lower.is_some(),
+                        q_upper.is_some(),
+                        lower.as_ref().map(|(_, i)| *i).unwrap_or(true),
+                        upper.as_ref().map(|(_, i)| *i).unwrap_or(true),
+                        &stored,
+                    ) {
+                        return Ok((true, boost));
+                    }
+                }
+            }
+            return Ok((false, 0.0));
+        }
+        for v in &vals {
+            if let Value::Object(rng) = v {
+                if let Some(q) = &q_lower {
+                    if !in_range_field(rng, q) {
+                        continue;
+                    }
+                }
+                if let Some(q) = &q_upper {
+                    if !in_range_field(rng, q) {
+                        continue;
+                    }
+                }
+                return Ok((true, boost));
+            }
+            let candidates: Vec<Value> = if ftype == "text" || ftype == "match_only_text" {
+                analyze(&value_to_string(v).unwrap_or_default())
+                    .into_iter()
+                    .map(Value::String)
+                    .collect()
+            } else {
+                vec![v.clone()]
+            };
+            for cand in &candidates {
+                let mut ok = true;
+                if let Some((_, inclusive)) = &lower {
+                    let bv = q_lower.as_ref().unwrap();
+                    let cmp = self.range_cmp(&ftype, cand, bv);
+                    if (*inclusive && cmp < 0) || (!*inclusive && cmp <= 0) {
+                        ok = false;
+                    }
+                }
+                if ok {
+                    if let Some((_, inclusive)) = &upper {
+                        let bv = q_upper.as_ref().unwrap();
+                        let cmp = self.range_cmp(&ftype, cand, bv);
+                        if (*inclusive && cmp > 0) || (!*inclusive && cmp >= 0) {
+                            ok = false;
+                        }
+                    }
+                }
+                if ok {
+                    return Ok((true, boost));
+                }
+            }
+        }
+        Ok((false, 0.0))
+    }
+
+    /// The document-independent part of a `range` query (bounds parsed once
+    /// per request, not per document; see [`RANGE_PREPS`]).
+    fn range_prep(&self, field: &str, cond: &Map<String, Value>) -> std::rc::Rc<RangePrep> {
+        let key = (request_epoch(), self.idx.mappings.generation(), self.idx.settings.generation());
+        if key.0 == 0 {
+            // outside a request (background tasks): no memo
+            return std::rc::Rc::new(self.build_range_prep(field, cond));
+        }
+        if let Some(p) = RANGE_PREPS.with(|c| {
+            c.borrow().iter().find(|(k, f, m, _)| *k == key && f == field && m == cond).map(|e| e.3.clone())
+        }) {
+            return p;
+        }
+        let p = std::rc::Rc::new(self.build_range_prep(field, cond));
+        RANGE_PREPS.with(|c| {
+            let mut c = c.borrow_mut();
+            if c.len() >= 16 {
+                c.remove(0);
+            }
+            c.push((key, field.to_string(), cond.clone(), p.clone()));
+        });
+        p
+    }
+
+    fn build_range_prep(&self, field: &str, cond: &Map<String, Value>) -> RangePrep {
+        let mut def = mapping_field_def(self.idx, field).cloned().unwrap_or_default();
+        if let Some(f) = cond.get("format").and_then(|v| v.as_str()) {
+            def.insert("format".to_string(), Value::String(f.to_string()));
+        }
+        let ftype = def
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string();
         let relation = cond
             .get("relation")
             .and_then(|r| r.as_str())
@@ -1667,9 +1785,7 @@ impl<'a> QueryCtx<'a> {
             .and_then(|r| r.as_str())
             .unwrap_or("")
             .to_string();
-        if let Some(b) = cond.get("boost").and_then(to_f64) {
-            boost *= b;
-        }
+        let boost = cond.get("boost").and_then(to_f64);
         let parse_bound = |v: &Value, round_up: bool| -> Result<Value, ApiError> {
             let res = match ftype.as_str() {
                 "date" | "date_nanos" | "date_range" => {
@@ -1755,96 +1871,18 @@ impl<'a> QueryCtx<'a> {
                     )
                 })
             });
-        let q_lower = match &lower {
-            Some((v, inclusive)) => Some(parse_bound(v, !inclusive)?),
-            None => None,
-        };
-        let q_upper = match &upper {
-            Some((v, inclusive)) => Some(parse_bound(v, *inclusive)?),
-            None => None,
-        };
-        let is_range_field = matches!(
-            ftype.as_str(),
-            "integer_range" | "long_range" | "float_range" | "double_range" | "date_range"
-                | "ip_range"
-        );
-        if is_range_field {
-            for v in &vals {
-                if let Value::Object(rng) = v {
-                    let mut stored = rng.clone();
-                    if ftype == "date_range" {
-                        for key in ["gte", "gt", "lte", "lt"] {
-                            if let Some(b) = rng.get(key).cloned() {
-                                if let Ok(parsed) =
-                                    parse_query_date(&def, &b, "", false)
-                                {
-                                    stored.insert(key.to_string(), parsed);
-                                }
-                            }
-                        }
-                    }
-                    if range_relation(
-                        &relation,
-                        q_lower.as_ref().unwrap_or(&Value::Null),
-                        q_upper.as_ref().unwrap_or(&Value::Null),
-                        q_lower.is_some(),
-                        q_upper.is_some(),
-                        lower.as_ref().map(|(_, i)| *i).unwrap_or(true),
-                        upper.as_ref().map(|(_, i)| *i).unwrap_or(true),
-                        &stored,
-                    ) {
-                        return Ok((true, boost));
-                    }
-                }
-            }
-            return Ok((false, 0.0));
-        }
-        for v in &vals {
-            if let Value::Object(rng) = v {
-                if let Some(q) = &q_lower {
-                    if !in_range_field(rng, q) {
-                        continue;
-                    }
-                }
-                if let Some(q) = &q_upper {
-                    if !in_range_field(rng, q) {
-                        continue;
-                    }
-                }
-                return Ok((true, boost));
-            }
-            let candidates: Vec<Value> = if ftype == "text" || ftype == "match_only_text" {
-                analyze(&value_to_string(v).unwrap_or_default())
-                    .into_iter()
-                    .map(Value::String)
-                    .collect()
-            } else {
-                vec![v.clone()]
+        let bounds = (|| -> Result<(Option<Value>, Option<Value>), ApiError> {
+            let q_lower = match &lower {
+                Some((v, inclusive)) => Some(parse_bound(v, !inclusive)?),
+                None => None,
             };
-            for cand in &candidates {
-                let mut ok = true;
-                if let Some((_, inclusive)) = &lower {
-                    let bv = q_lower.as_ref().unwrap();
-                    let cmp = self.range_cmp(&ftype, cand, bv);
-                    if (*inclusive && cmp < 0) || (!*inclusive && cmp <= 0) {
-                        ok = false;
-                    }
-                }
-                if ok {
-                    if let Some((_, inclusive)) = &upper {
-                        let bv = q_upper.as_ref().unwrap();
-                        let cmp = self.range_cmp(&ftype, cand, bv);
-                        if (*inclusive && cmp > 0) || (!*inclusive && cmp >= 0) {
-                            ok = false;
-                        }
-                    }
-                }
-                if ok {
-                    return Ok((true, boost));
-                }
-            }
-        }
-        Ok((false, 0.0))
+            let q_upper = match &upper {
+                Some((v, inclusive)) => Some(parse_bound(v, *inclusive)?),
+                None => None,
+            };
+            Ok((q_lower, q_upper))
+        })();
+        RangePrep { def, ftype, relation, boost, lower, upper, bounds }
     }
 
     fn range_cmp(&self, ftype: &str, v: &Value, bv: &Value) -> i32 {
@@ -4266,4 +4304,35 @@ pub(crate) fn score_match(
         return (true, boost * score.max(1e-9));
     }
     (false, 0.0)
+}
+
+/// See [`QueryCtx::range_prep`].
+pub(crate) struct RangePrep {
+    def: Map<String, Value>,
+    ftype: String,
+    relation: String,
+    boost: Option<f64>,
+    lower: Option<(Value, bool)>,
+    upper: Option<(Value, bool)>,
+    bounds: Result<(Option<Value>, Option<Value>), ApiError>,
+}
+
+type RangePrepEntry = ((u64, u64, u64), String, Map<String, Value>, std::rc::Rc<RangePrep>);
+
+thread_local! {
+    /// Prepared `range` queries of the current request (by field and condition).
+    static RANGE_PREPS: std::cell::RefCell<Vec<RangePrepEntry>> = const { std::cell::RefCell::new(Vec::new()) };
+    static REQUEST_EPOCH: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+static EPOCHS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Starts a new request on this thread: per-request memos (such as parsed
+/// `now` date bounds) are not reused by later requests.
+pub fn new_request_epoch() {
+    REQUEST_EPOCH.with(|e| e.set(EPOCHS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+}
+
+fn request_epoch() -> u64 {
+    REQUEST_EPOCH.with(|e| e.get())
 }

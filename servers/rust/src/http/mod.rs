@@ -305,6 +305,7 @@ async fn handle_plain(store: Shared, request: axum::extract::Request) -> axum::r
             return (resp, req);
         }
         let resp = {
+            crate::search::eval::new_request_epoch();
             crate::search::index::trace("start");
             // Plain searches run in parallel under the shared lock when they
             // would change nothing; everything else takes the store exclusively.

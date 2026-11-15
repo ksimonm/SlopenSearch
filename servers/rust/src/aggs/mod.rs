@@ -87,6 +87,55 @@ fn field_reader(idx: &Index, field: &str, prefix: &str) -> std::rc::Rc<FieldRead
     r
 }
 
+/// The numbers [`doc_field_values`] yields for a float/half_float/scaled_float
+/// field, without formatting each one as a Java double and parsing it back
+/// (the text round-trips exactly). None when the values need the general path.
+fn doc_field_floats(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Option<Vec<f64>> {
+    if doc.get("__nest").is_some() {
+        return None;
+    }
+    let r = field_reader(idx, field, prefix);
+    let def = r.def.as_ref()?;
+    if !matches!(r.ftype.as_str(), "float" | "half_float" | "scaled_float") || def.contains_key("normalizer") {
+        return None;
+    }
+    let (base, rf) = (r.base.as_str(), r.rf.as_str());
+    if is_under_nested_path(rf) {
+        return None;
+    }
+    let raw = if rf != base { agg_field_value(doc, rf, "") } else { agg_field_value(doc, field, prefix) };
+    let vals: &[Value] = match raw {
+        Some(Value::Array(a)) => a,
+        Some(Value::Null) | None => return None,
+        Some(x) => std::slice::from_ref(x),
+    };
+    if let Some(ign) = doc.get("_ignored").and_then(|v| v.as_array()) {
+        if ign.iter().any(|x| x.as_str() == Some(rf)) {
+            return None;
+        }
+    }
+    let mut out = Vec::with_capacity(vals.len());
+    for v in vals {
+        if v.is_null() {
+            continue;
+        }
+        match to_f64(v) {
+            Some(f) if v.is_number() || v.is_string() => {
+                let x = crate::mapping::fields::doc_value_double(&r.ftype, def, f);
+                if !x.is_finite() {
+                    return None;
+                }
+                out.push(x);
+            }
+            _ => return None,
+        }
+    }
+    if out.is_empty() {
+        return None;
+    }
+    Some(out)
+}
+
 fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<Value> {
     if let Some(n) = doc.get("__nest").and_then(|v| v.as_object()) {
         let p0 = n.get("path").and_then(|v| v.as_str()).unwrap_or("");
@@ -126,11 +175,14 @@ fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<
             }
             &d == orig
         };
-        let by_id = doc
-            .get("_id")
-            .and_then(|v| v.as_str())
-            .filter(|id| same_doc(id))
-            .and_then(|id| idx.doc_values.get(id));
+        let by_id = match doc.get("_id") {
+            Some(v) => v.as_str().filter(|id| same_doc(id)).and_then(|id| idx.doc_values.get(id)),
+            // a stored source without the injected `_id` (see [`set_doc_ids`])
+            None => AGG_DOC_IDS
+                .with(|m| m.borrow().get(&(doc as *const Value as usize)).cloned())
+                .filter(|id| idx.docs.get(id).is_some_and(|orig| std::ptr::eq(orig, doc) || orig == doc))
+                .and_then(|id| idx.doc_values.get(&id)),
+        };
         let found = by_id.or_else(|| {
             idx.doc_values
                 .iter()
@@ -1509,13 +1561,13 @@ fn key_string(v: &Value) -> String {
     }
 }
 
-struct TermBucket {
+struct TermBucket<'a> {
     raw: Value,
     key: Value,
     key_as_string: Option<String>,
     ord: OrdKey,
     count: usize,
-    docs: Vec<Value>,
+    docs: Vec<&'a Value>,
 }
 
 fn check_global_in_sub(name: &str, def: &Map<String, Value>) -> Result<(), ApiError> {
@@ -2162,6 +2214,26 @@ fn metric_agg(
     }
     let script_params = agg_script_params(t);
     let missing = t.get("missing").cloned();
+    if script.is_none() && matches!(agg, "avg" | "min" | "max" | "sum" | "stats") {
+        let is_date = field_is_date(idx, &field, prefix);
+        let mut vals: Vec<f64> = Vec::new();
+        for d in docs {
+            if let Some(fs) = doc_field_floats(idx, d, &field, prefix) {
+                vals.extend(fs);
+                continue;
+            }
+            let dv = doc_field_values(idx, d, &field, prefix);
+            let one = |v: &Value| to_f64(v).or_else(|| if is_date { date_ms_of(v).map(|ms| ms as f64) } else { None });
+            if dv.is_empty() {
+                if let Some(f) = missing.as_ref().and_then(one) {
+                    vals.push(f);
+                }
+                continue;
+            }
+            vals.extend(dv.iter().filter_map(one));
+        }
+        return Ok(metric_result(agg, &vals, is_date, &map_str(t, "format")));
+    }
     let mut raws: Vec<Value> = vec![];
     match &script {
         Some(src) if field.is_empty() => {
@@ -2244,26 +2316,31 @@ fn metric_agg(
         })
         .collect();
     let fmt = map_str(t, "format");
+    Ok(metric_result(agg, &vals, is_date, &fmt))
+}
+
+/// The response of avg/min/max/sum/stats over `vals`.
+fn metric_result(agg: &str, vals: &[f64], is_date: bool, fmt: &str) -> Value {
     if agg == "stats" {
-        return Ok(stats_json(&vals, is_date, &fmt));
+        return stats_json(vals, is_date, fmt);
     }
     let v: Value = match agg {
-        "sum" => json_num(sum_of(&vals)),
+        "sum" => json_num(sum_of(vals)),
         _ if vals.is_empty() => Value::Null,
-        "avg" => json_num(mean(&vals)),
-        "min" => json_num(min_of(&vals)),
-        "max" => json_num(max_of(&vals)),
+        "avg" => json_num(mean(vals)),
+        "min" => json_num(min_of(vals)),
+        "max" => json_num(max_of(vals)),
         _ => Value::Null,
     };
     let mut out = Map::new();
     let as_string = v
         .as_f64()
-        .and_then(|fv| metric_as_string(fv, is_date, &fmt));
+        .and_then(|fv| metric_as_string(fv, is_date, fmt));
     out.insert("value".to_string(), v);
     if let Some(s) = as_string {
         out.insert("value_as_string".to_string(), json!(s));
     }
-    Ok(Value::Object(out))
+    Value::Object(out)
 }
 
 fn field_is_date(idx: &Index, field: &str, prefix: &str) -> bool {
@@ -5114,11 +5191,11 @@ fn significant_agg(
     }))
 }
 
-fn terms_agg(
+fn terms_agg<'a>(
     name: &str,
     t: &Map<String, Value>,
     def: &Map<String, Value>,
-    docs: &[&Value],
+    docs: &[&'a Value],
     idx: &Index,
     prefix: &str,
     typed: bool,
@@ -5243,9 +5320,9 @@ fn terms_agg(
         }
     }
 
-    let mut buckets: HashMap<String, TermBucket> = HashMap::new();
+    let mut buckets: HashMap<String, TermBucket<'a>> = HashMap::new();
     let mut order_ids: Vec<String> = vec![];
-    let make_bucket = |raw: &Value| -> TermBucket {
+    let make_bucket = |raw: &Value| -> TermBucket<'a> {
         let (key, kas) = if value_type == "long" {
             match to_f64(raw) {
                 Some(f) => (json!(f as i64), None),
@@ -5364,7 +5441,7 @@ fn terms_agg(
             }
             let e = buckets.get_mut(&id).unwrap();
             e.count += 1;
-            e.docs.push(Value::clone(d));
+            e.docs.push(*d);
         }
     }
     if min_doc_count == 0 && is_mapped_field(idx, &field, prefix) {
@@ -5385,7 +5462,7 @@ fn terms_agg(
         if path != "_key" && path != "_count" {
             for id in &order_ids {
                 let b = &buckets[id];
-                let refs: Vec<&Value> = b.docs.iter().collect();
+                let refs: Vec<&Value> = b.docs.clone();
                 let v = resolve_order_value(path, def, &refs, idx, prefix, typed)?;
                 metric_vals.insert((id.clone(), path.clone()), v);
             }
@@ -5446,7 +5523,7 @@ fn terms_agg(
             bm.insert("doc_count_error_upper_bound".to_string(), json!(0));
         }
         if let Some(sub) = sub_aggs(def) {
-            let refs: Vec<&Value> = b.docs.iter().collect();
+            let refs: Vec<&Value> = b.docs.clone();
             if let Value::Object(m) = eval_aggs_typed(&sub, &refs, idx, prefix, typed)? {
                 for (sk, sv) in m {
                     bm.insert(sk, sv);
@@ -7003,11 +7080,11 @@ fn auto_date_histogram(
     }
 }
 
-fn range_agg(
+fn range_agg<'a>(
     name: &str,
     t: &Map<String, Value>,
     def: &Map<String, Value>,
-    docs: &[&Value],
+    docs: &[&'a Value],
     idx: &Index,
     prefix: &str,
     typed: bool,
@@ -7026,11 +7103,11 @@ fn range_agg(
     let keyed = t.get("keyed").and_then(|v| v.as_bool()).unwrap_or(false);
     let missing = t.get("missing").and_then(to_f64);
     let format = map_str(t, "format");
-    struct RBucket {
+    struct RBucket<'b> {
         from: Option<f64>,
         to: Option<f64>,
         key: Option<String>,
-        docs: Vec<Value>,
+        docs: Vec<&'b Value>,
     }
     let mut parsed: Vec<RBucket> = vec![];
     for r in ranges {
@@ -7057,7 +7134,7 @@ fn range_agg(
                 let ok_from = b.from.map(|f| *n >= f).unwrap_or(true);
                 let ok_to = b.to.map(|tt| *n < tt).unwrap_or(true);
                 if ok_from && ok_to {
-                    b.docs.push(Value::clone(d));
+                    b.docs.push(*d);
                     break;
                 }
             }
@@ -7106,7 +7183,7 @@ fn range_agg(
         }
         bm.insert("doc_count".to_string(), json!(b.docs.len()));
         if let Some(sub) = sub_aggs(def) {
-            let refs: Vec<&Value> = b.docs.iter().collect();
+            let refs: Vec<&Value> = b.docs.clone();
             if let Value::Object(m) = eval_aggs_typed(&sub, &refs, idx, prefix, typed)? {
                 for (sk, sv) in m {
                     bm.insert(sk, sv);
@@ -8536,4 +8613,68 @@ fn max_of(vals: &[f64]) -> f64 {
 
 fn sum_of(vals: &[f64]) -> f64 {
     kahan::sum(vals.iter().copied())
+}
+
+thread_local! {
+    /// Ids of the stored sources an aggregation runs over when they are passed
+    /// as they are (without an injected `_id`), by address.
+    static AGG_DOC_IDS: std::cell::RefCell<HashMap<usize, String>> = std::cell::RefCell::new(HashMap::new());
+}
+
+/// Names the ids of the stored sources `docs` (see [`simple_agg_tree`]);
+/// an empty list clears the table.
+pub fn set_doc_ids(docs: &[(&Value, &str)]) {
+    AGG_DOC_IDS.with(|m| {
+        let mut m = m.borrow_mut();
+        m.clear();
+        for (d, id) in docs {
+            m.insert(*d as *const Value as usize, id.to_string());
+        }
+    });
+}
+
+/// Whether the aggregations only read mapped fields' values (no scripts, no
+/// `_id`/metadata fields, no top hits, joins or nested scopes): they then
+/// run on the stored sources directly instead of copies with an `_id`.
+pub fn simple_agg_tree(aggs: &Map<String, Value>, idx: &Index) -> bool {
+    const TYPES: &[&str] = &[
+        "terms", "histogram", "date_histogram", "range", "avg", "min", "max", "sum", "stats",
+        "extended_stats", "value_count", "cardinality",
+    ];
+    fn no_script(v: &Value) -> bool {
+        match v {
+            Value::Object(m) => m.iter().all(|(k, v)| k != "script" && no_script(v)),
+            Value::Array(a) => a.iter().all(no_script),
+            _ => true,
+        }
+    }
+    aggs.values().all(|raw| {
+        let Some(def) = raw.as_object() else { return false };
+        let mut kind = None;
+        for (k, v) in def {
+            match k.as_str() {
+                "aggs" | "aggregations" => {
+                    if !v.as_object().is_some_and(|m| simple_agg_tree(m, idx)) {
+                        return false;
+                    }
+                }
+                "meta" => {}
+                t if TYPES.contains(&t) && kind.is_none() => kind = Some(v),
+                _ => return false,
+            }
+        }
+        let Some(body) = kind.and_then(|v| v.as_object()) else { return false };
+        if !no_script(&Value::Object(body.clone())) {
+            return false;
+        }
+        let Some(field) = body.get("field").and_then(|f| f.as_str()) else { return false };
+        if field.is_empty() || field.starts_with('_') || crate::search::eval::nested_ancestor(idx, field).is_some() {
+            return false;
+        }
+        let rf = crate::mapping::resolve_alias_field(idx, field);
+        match crate::mapping::mapping_field_def(idx, &rf).and_then(|d| d.get("type")).and_then(|t| t.as_str()) {
+            Some("join") | Some("nested") | Some("object") | None => false,
+            Some(_) => true,
+        }
+    })
 }

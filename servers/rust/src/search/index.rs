@@ -32,6 +32,8 @@ pub enum Kind {
     Text,
     Exact,
     Numeric,
+    /// geo_point latitudes (in `nums`), for distance prefilters.
+    Geo,
 }
 
 fn field_key(kind: Kind, field: &str) -> String {
@@ -39,6 +41,7 @@ fn field_key(kind: Kind, field: &str) -> String {
         Kind::Text => format!("t\u{1}{}", field),
         Kind::Exact => format!("k\u{1}{}", field),
         Kind::Numeric => format!("n\u{1}{}", field),
+        Kind::Geo => format!("g\u{1}{}", field),
     }
 }
 
@@ -46,6 +49,7 @@ fn parse_key(key: &str) -> (Kind, &str) {
     match key.split_once('\u{1}') {
         Some(("t", f)) => (Kind::Text, f),
         Some(("n", f)) => (Kind::Numeric, f),
+        Some(("g", f)) => (Kind::Geo, f),
         Some((_, f)) => (Kind::Exact, f),
         None => (Kind::Exact, key),
     }
@@ -65,7 +69,7 @@ fn signature(idx: &Index, key: &str) -> String {
             let def = mapping_field_def(idx, field).map(|d| Value::Object(d.clone())).unwrap_or(Value::Null);
             format!("{}\u{1}{}\u{1}{}", idx.settings.generation(), resolve_alias_field(idx, field), def)
         }
-        Kind::Exact | Kind::Numeric => resolve_alias_field(idx, field),
+        Kind::Exact | Kind::Numeric | Kind::Geo => resolve_alias_field(idx, field),
     }
 }
 
@@ -97,7 +101,7 @@ impl<'a> Indexer<'a> {
         let ctx = QueryCtx::new(idx, "", &NULL);
         let analyzer = match kind {
             Kind::Text => Some(ctx.field_analyzer(field, None, Side::Index)),
-            Kind::Exact | Kind::Numeric => None,
+            Kind::Exact | Kind::Numeric | Kind::Geo => None,
         };
         Indexer { kind, path: resolve_alias_field(idx, field), analyzer, ctx }
     }
@@ -109,6 +113,18 @@ impl<'a> Indexer<'a> {
                     Value::Array(a) => f.add_numbers(doc, a),
                     other => f.add_numbers(doc, std::slice::from_ref(other)),
                 }
+            }
+            return;
+        }
+        if self.kind == Kind::Geo {
+            // the latitudes of the values `eval_geo_distance` reads
+            if let Some(raw) = dv.get(&self.path) {
+                let lats: Vec<Value> = crate::search::eval::array_values(raw)
+                    .iter()
+                    .filter_map(crate::mapping::geo::geo_point_of)
+                    .filter_map(|(lat, _)| serde_json::Number::from_f64(lat).map(Value::Number))
+                    .collect();
+                f.add_numbers(doc, &lats);
             }
             return;
         }
@@ -124,7 +140,7 @@ impl<'a> Indexer<'a> {
         };
         for v in vals {
             match self.kind {
-                Kind::Numeric => {}
+                Kind::Numeric | Kind::Geo => {}
                 Kind::Text => {
                     let s = match v {
                         Value::String(s) => std::borrow::Cow::Borrowed(s.as_str()),
@@ -336,6 +352,7 @@ fn eager_keys(idx: &Index) -> Vec<String> {
             "text" => Kind::Text,
             "keyword" => Kind::Exact,
             "integer" | "long" | "short" | "byte" | "float" | "double" | "half_float" | "date" => Kind::Numeric,
+            "geo_point" => Kind::Geo,
             _ => continue,
         };
         if !plain_field(idx, field) || ftype_of(idx, field) != *ftype {
@@ -558,6 +575,33 @@ fn plan_range(ctx: &QueryCtx, field: &str, cond: &Map<String, Value>) -> Option<
     Some(Plan::Range(field_key(Kind::Numeric, field), lo, hi))
 }
 
+/// The plan of a `geo_distance` on a geo_point field: the documents with a
+/// point whose latitude is within the distance (a great-circle distance is
+/// never shorter than the latitude difference), widened for rounding. Only
+/// for queries `eval_geo_distance` accepts without error.
+fn plan_geo_distance(ctx: &QueryCtx, bm: &Map<String, Value>) -> Option<Plan> {
+    let mut field = None;
+    for (k, v) in bm {
+        match k.as_str() {
+            "distance" | "distance_type" | "boost" | "_name" | "validation_method" | "ignore_unmapped" => {}
+            _ if field.is_none() => field = Some((k, v)),
+            _ => return None,
+        }
+    }
+    let (field, point) = field?;
+    if !plain_field(ctx.idx, field) || ftype_of(ctx.idx, field) != "geo_point" {
+        return None;
+    }
+    let distance = crate::mapping::geo::parse_distance_meters(bm.get("distance")?)?;
+    let (plat, plon) = crate::mapping::geo::geo_point_of(point)?;
+    if !crate::mapping::geo::valid_latlon(plat, plon) || !distance.is_finite() || distance < 0.0 {
+        return None;
+    }
+    let deg = distance / (6371008.8 * std::f64::consts::PI / 180.0);
+    let slack = deg * 0.01 + 0.001;
+    Some(Plan::Range(field_key(Kind::Geo, field), plat - deg - slack, plat + deg + slack))
+}
+
 fn single(m: &Map<String, Value>) -> Option<(&String, &Value)> {
     m.iter().next()
 }
@@ -754,6 +798,7 @@ fn plan(ctx: &QueryCtx, q: &Map<String, Value>) -> Option<Plan> {
             let (field, cond) = single(bm)?;
             plan_range(ctx, field, cond.as_object()?)
         }
+        "geo_distance" => plan_geo_distance(ctx, bm?),
         "ids" => {
             let bm = bm?;
             let list: Vec<String> = match bm.get("values")? {

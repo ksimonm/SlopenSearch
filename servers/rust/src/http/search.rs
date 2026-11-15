@@ -1288,30 +1288,50 @@ pub fn run_search(
                             .unwrap_or(std::cmp::Ordering::Equal)
                     });
                 }
-                let with_ids: Vec<Value> = order
-                    .iter()
-                    .map(|&i| {
-                        let h = &agg_matched[i];
-                        let mut d = h.doc.clone();
-                        if let Value::Object(ref mut m) = d {
-                            if !m.contains_key("_id") {
-                                m.insert("_id".to_string(), json!(h.id.clone()));
+                // simple aggregations read the stored sources (their ids in a
+                // side table); others get copies with an `_id` and the scores
+                let simple = names.len() == 1 && crate::aggs::simple_agg_tree(aggs, idx);
+                let with_ids: Vec<Value> = if simple {
+                    Vec::new()
+                } else {
+                    order
+                        .iter()
+                        .map(|&i| {
+                            let h = &agg_matched[i];
+                            let mut d = h.doc.clone();
+                            if let Value::Object(ref mut m) = d {
+                                if !m.contains_key("_id") {
+                                    m.insert("_id".to_string(), json!(h.id.clone()));
+                                }
                             }
-                        }
-                        d
-                    })
-                    .collect();
-                let docs: Vec<&Value> = with_ids.iter().collect();
+                            d
+                        })
+                        .collect()
+                };
+                let docs: Vec<&Value> = if simple {
+                    order.iter().map(|&i| agg_matched[i].doc).collect()
+                } else {
+                    with_ids.iter().collect()
+                };
                 let typed = req
                     .param("typed_keys")
                     .map(|v| v != "false")
                     .unwrap_or(false);
                 let mut agg_scores: HashMap<(String, String), f64> = HashMap::new();
-                for h in &matched {
-                    agg_scores.insert((h.idx_name.clone(), h.id.clone()), h.score);
+                if simple {
+                    let ids: Vec<(&Value, &str)> = agg_matched.iter().map(|h| (h.doc, h.id.as_str())).collect();
+                    crate::aggs::set_doc_ids(&ids);
+                } else {
+                    for h in &matched {
+                        agg_scores.insert((h.idx_name.clone(), h.id.clone()), h.score);
+                    }
                 }
                 crate::aggs::set_agg_search_context(agg_scores, tokens.clone());
-                let out = eval_aggs_root(aggs, &docs, idx, typed)?;
+                let out = eval_aggs_root(aggs, &docs, idx, typed);
+                if simple {
+                    crate::aggs::set_doc_ids(&[]);
+                }
+                let out = out?;
                 resp.insert("aggregations".to_string(), out);
             }
         }
