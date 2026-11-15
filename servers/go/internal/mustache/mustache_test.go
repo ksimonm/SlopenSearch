@@ -91,6 +91,28 @@ func TestRender(t *testing.T) {
 func TestRenderErrors(t *testing.T) {
 	tests := []struct{ tpl, reason string }{
 		{`{"x":"{{#unclosed}}"}`, "Failed to close 'unclosed' tag @[query-template:1]"},
+		// Expected reasons from OpenSearch 3.9 (_render/template).
+		{"{{q", "Improperly closed variable @[query-template:1]"},
+		{"x\n\n{{q", "Improperly closed variable @[query-template:3]"},
+		{"a\n{{q}\n\nb", "Improperly closed variable @[query-template:2]"},
+		{"a\nb {{#x}}c", "Failed to close 'x' tag @[query-template:2]"},
+		{"a\n{{#x}}\nb\nc", "Failed to close 'x' tag @[query-template:2]"},
+		{"{{#a}}\n{{#b}}\n{{/b}}", "Failed to close 'a' tag @[query-template:1]"},
+		{"{{#join delimiter=\",\"}}", "Failed to close 'join delimiter=\",\"' tag @[query-template:1]"},
+		{"{{#x}}\n\n{{/y}}", "Mismatched start/end tags: x != y in query-template:3 @[query-template:3]"},
+		{"{{q\n}}\n{{/y}}", "Mismatched start/end tags: null != y in query-template:2 @[query-template:2]"},
+		{"{{^a}}{{/b}}", "Mismatched start/end tags: a != b in query-template:1 @[query-template:1]"},
+		{"{{}}", "Empty mustache @[query-template:1]"},
+		{"{{{q}}", "Improperly closed variable: q in query-template:1@6 @[query-template:1]"},
+		{"{{{q", "Improperly closed variable: q in query-template:1@4 @[query-template:1]"},
+		{"{{{q}x", "Improperly closed variable: q}x in query-template:1@5 @[query-template:1]"},
+		{"{{{q}xyz", "Improperly closed variable: q}xyz in query-template:1@7 @[query-template:1]"},
+		{"a\nbc{{{q}}", "Improperly closed variable: q in query-template:2@8 @[query-template:2]"},
+		{"x{{q}}{{{q}}", "Improperly closed variable: q in query-template:1@11 @[query-template:1]"},
+		{"\u00e9\U0001F600{{{q}}", "Improperly closed variable: q in query-template:1@9 @[query-template:1]"},
+		{"a{{#a}}b\n\nc{{{q}}", "Improperly closed variable: q in query-template:3@7 @[query-template:3]"},
+		{"a{{#a}}b{{/a}}{{{q}}", "Improperly closed variable: q in query-template:1@12 @[query-template:1]"},
+		{"{{>x}}", "Partial templates are not supported in OpenSearch Mustache scripts: [x]"},
 	}
 	for _, tt := range tests {
 		_, err := Render(tt.tpl, map[string]any{"q": 1})

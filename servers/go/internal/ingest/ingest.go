@@ -596,13 +596,9 @@ func (s *Engine) validateProcessorConfig(typ string, cfg map[string]any) *apierr
 	}
 	if typ == "gsub" {
 		p, _ := cfg["pattern"].(string)
-		if _, err := regexp.Compile(p); err != nil {
-			reason := "[pattern] Invalid regex pattern. " + err.Error()
-			if strings.Contains(err.Error(), "missing closing ]") {
-				reason = "[pattern] Invalid regex pattern. Unclosed character class"
-			}
-			return &apierr.Error{Type: "parse_exception", Status: 400, Reason: reason,
-				Fields: map[string]any{"processor_type": "gsub"}}
+		if _, err := compileJava(p); err != nil {
+			return &apierr.Error{Type: "parse_exception", Status: 400, Reason: "[pattern] Invalid regex pattern. " + err.Message(),
+				Fields: map[string]any{"processor_type": "gsub", "property_name": "pattern"}}
 		}
 	}
 	if typ == "grok" {

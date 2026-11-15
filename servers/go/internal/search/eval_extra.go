@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slopensearch/internal/javafmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -3867,23 +3868,6 @@ func hasScoreFunctionKey(bm map[string]any) bool {
 	return false
 }
 
-func javaDoubleString(f float64) string {
-	if math.IsInf(f, 1) {
-		return "Infinity"
-	}
-	if math.IsInf(f, -1) {
-		return "-Infinity"
-	}
-	if math.IsNaN(f) {
-		return "NaN"
-	}
-	s := strconv.FormatFloat(f, 'f', -1, 64)
-	if !strings.ContainsAny(s, ".eE") {
-		s += ".0"
-	}
-	return s
-}
-
 func functionScoreFailure(marker, reason string) *apierr.Error {
 	return &apierr.Error{Type: "search_phase_execution_exception", Status: 400,
 		Reason: reason, SearchFailure: marker}
@@ -4113,7 +4097,7 @@ func (c *QueryCtx) applyScoreFunction(fn map[string]any, baseScore float64) (flo
 		}
 		if result < 0 || math.IsNaN(result) {
 			reason := "field value function must not produce negative scores, but got: [" +
-				javaDoubleString(result) + "] for field value: [" + javaDoubleString(value) +
+				javafmt.Double(result) + "] for field value: [" + javafmt.Double(value) +
 				"]; consider using log1p or log2p instead of log to avoid negative scores"
 			return 0, functionScoreFailure("fvf_log", reason)
 		}

@@ -750,7 +750,6 @@ func flatCopy(m map[string]any) map[string]any {
 }
 
 func (s *Server) handleClusterSettingsPut(w http.ResponseWriter, r *http.Request) {
-	ctype := r.Header.Get("Content-Type")
 	body, apiErr := readBodyJSON(w, r)
 	if apiErr != nil {
 		writeError(w, apiErr)
@@ -822,15 +821,6 @@ func (s *Server) handleClusterSettingsPut(w http.ResponseWriter, r *http.Request
 	} else {
 		resp["persistent"] = nestFlat(flatCopy(s.ClusterPersistent))
 		resp["transient"] = nestFlat(flatCopy(s.ClusterTransient))
-	}
-	if ctype == "application/yaml" {
-		w.Header().Set("Content-Type", "application/yaml")
-		writeJSON(w, 200, map[string]any{"acknowledged": true})
-		cw := w.(*captureWriter)
-		cw.h.Set("Content-Type", "application/yaml")
-		cw.buf.Reset()
-		cw.buf.WriteString("---\nacknowledged: true\n")
-		return
 	}
 	writeJSON(w, 200, resp)
 }

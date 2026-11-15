@@ -1,7 +1,5 @@
 package model
 
-import "hash/fnv"
-
 // Document state of an index: sequence numbers, versions, routing and the
 // unrefreshed (pending) writes.
 
@@ -47,31 +45,13 @@ func (idx *Index) SourceEnabled() bool {
 	return true
 }
 
-// ShardOf is the shard (of n) a routing value maps to.
-func ShardOf(v string, n int) int {
-	if n <= 1 {
-		return 0
-	}
-	h := fnv.New32a()
-	h.Write([]byte(v))
-	return int(h.Sum32() % uint32(n))
-}
-
-// RoutingMatches reports whether routing (or the id when empty) addresses
-// the shard that holds document id.
+// RoutingMatches reports whether a request for document id with routing
+// addresses the shard that holds it.
 func (idx *Index) RoutingMatches(id, routing string) bool {
 	if idx.NumShards() <= 1 {
 		return true
 	}
-	assigned := idx.Routing[id]
-	if assigned == "" {
-		assigned = id
-	}
-	probe := routing
-	if probe == "" {
-		probe = id
-	}
-	return ShardOf(probe, idx.NumShards()) == ShardOf(assigned, idx.NumShards())
+	return idx.ShardFor(id, routing) == idx.DocShard(id)
 }
 
 // MarkPending records an unrefreshed write. A document that searches could

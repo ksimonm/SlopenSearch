@@ -34,7 +34,7 @@ func EvalScriptFields(hit MultiHit, specs map[string]any) (map[string]any, *apie
 			return nil, ScriptShardError(hit.Idx, rerr)
 		}
 		if vals, ok := fieldScriptValues(v); ok {
-			out[name] = vals
+			out[name] = JavaDoubles(vals)
 		}
 	}
 	return out, nil

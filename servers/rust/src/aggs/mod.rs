@@ -3,6 +3,7 @@ pub(crate) mod hdr;
 use crate::search::eval::QueryCtx;
 use crate::mapping::fields::canonical_ip;
 use crate::resp::format_number;
+use crate::calendar::{days_from_civil, offset_id, Zone, ZoneError};
 use crate::dates::{apply_java_date_format, civil_from_days, format_epoch_ms};
 use crate::search::fetch::field_type;
 use crate::dates::parse_date_string;
@@ -500,15 +501,6 @@ fn term_key_and_string(
         },
         _ => (raw.clone(), None),
     }
-}
-
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146097 + doe - 719468
 }
 
 fn month_start_ms(y: i64, m: i64) -> i64 {
@@ -6058,14 +6050,6 @@ fn err_cause(cause: &str) -> ApiError {
     e
 }
 
-fn fmt_zone_offset(off: i64) -> String {
-    let sign = if off < 0 { '-' } else { '+' };
-    let a = off.abs();
-    let h = a / 3_600_000;
-    let m = (a % 3_600_000) / 60_000;
-    format!("{}{:02}:{:02}", sign, h, m)
-}
-
 fn dh_format(format: &str, ms: i64) -> String {
     match format {
         "epoch_millis" => ms.to_string(),
@@ -6079,83 +6063,22 @@ fn dh_format(format: &str, ms: i64) -> String {
     }
 }
 
-fn weekday_of(days: i64) -> i64 {
-    (days + 3).rem_euclid(7)
-}
-
-fn days_in_month(year: i64, month: i64) -> i64 {
-    let start = month_start_ms(year, month);
-    let next = if month == 12 {
-        month_start_ms(year + 1, 1)
-    } else {
-        month_start_ms(year, month + 1)
-    };
-    (next - start) / 86_400_000
-}
-
-fn nth_sunday_ms(year: i64, month: i64, nth: i64) -> i64 {
-    let start_days = month_start_ms(year, month).div_euclid(86_400_000);
-    let first_dow = weekday_of(start_days);
-    let delta = (6 - first_dow).rem_euclid(7);
-    (start_days + delta + (nth - 1) * 7) * 86_400_000
-}
-
-fn last_sunday_ms(year: i64, month: i64) -> i64 {
-    let start_days = month_start_ms(year, month).div_euclid(86_400_000);
-    let total = days_in_month(year, month);
-    let last_days = start_days + total - 1;
-    let last_dow = weekday_of(last_days);
-    let back = (last_dow - 6).rem_euclid(7);
-    (last_days - back) * 86_400_000
-}
-
-fn parse_hhmm(s: &str) -> Option<i64> {
-    let (h, m) = match s.find(':') {
-        Some(i) => (&s[..i], &s[i + 1..]),
-        None => (s, "0"),
-    };
-    let h: i64 = h.parse().ok()?;
-    let m: i64 = m.parse().ok()?;
-    if !(0..=23).contains(&h) || !(0..=59).contains(&m) {
-        return None;
-    }
-    Some(h * 3_600_000 + m * 60_000)
-}
-
-fn zone_offset(zone: &str, t: i64) -> Result<i64, String> {
-    if zone.is_empty() || zone == "UTC" || zone == "Z" || zone == "GMT" || zone == "Etc/UTC" {
+/// The offset of `zone` (a `time_zone` parameter) at instant `t`, in ms.
+fn zone_offset(zone: &str, t: i64) -> Result<i64, ZoneError> {
+    if zone.is_empty() {
         return Ok(0);
     }
-    if let Some(rest) = zone.strip_prefix('+') {
-        return parse_hhmm(rest).ok_or_else(|| format!("Unknown time-zone ID: {}", zone));
-    }
-    if let Some(rest) = zone.strip_prefix('-') {
-        return parse_hhmm(rest)
-            .map(|v| -v)
-            .ok_or_else(|| format!("Unknown time-zone ID: {}", zone));
-    }
-    let (y, _m, _d) = civil_from_days(t.div_euclid(86_400_000));
-    match zone {
-        "America/New_York" => {
-            let start = nth_sunday_ms(y, 3, 2) + 7 * 3_600_000;
-            let end = nth_sunday_ms(y, 11, 1) + 6 * 3_600_000;
-            if t >= start && t < end {
-                Ok(-4 * 3_600_000)
-            } else {
-                Ok(-5 * 3_600_000)
-            }
-        }
-        "Europe/Kyiv" => {
-            let start = last_sunday_ms(y, 3) + 3_600_000;
-            let end = last_sunday_ms(y, 10) + 3_600_000;
-            if t >= start && t < end {
-                Ok(3 * 3_600_000)
-            } else {
-                Ok(2 * 3_600_000)
-            }
-        }
-        _ => Err(format!("Unknown time-zone ID: {}", zone)),
-    }
+    Ok(Zone::cached(zone)?.offset_ms(t))
+}
+
+/// The error of an invalid `time_zone` of a `kind` aggregation.
+fn time_zone_error(kind: &str, e: ZoneError) -> ApiError {
+    ApiError::new(
+        "x_content_parse_exception",
+        &format!("[{}] failed to parse field [time_zone]", kind),
+        400,
+    )
+    .caused_by(e.to_api())
 }
 
 fn variable_width_histogram(
@@ -6652,12 +6575,8 @@ fn date_histogram(
         .get("time_zone")
         .map(|v| value_to_string(v).unwrap_or_default())
         .unwrap_or_default();
-    if !tz.is_empty() {
-        if let Err(msg) = zone_offset(&tz, 0) {
-            let mut e = ApiError::new("illegal_argument_exception", &msg, 400);
-            e.caused_by = Some(Box::new(ApiError::new("zone_rules_exception", &msg, 400)));
-            return Err(e);
-        }
+    if let Err(e) = zone_offset(&tz, 0) {
+        return Err(time_zone_error("date_histogram", e));
     }
     let off_param = t
         .get("offset")
@@ -6754,7 +6673,7 @@ fn date_histogram(
             if format.is_empty() {
                 let s = format_epoch_ms(local);
                 let base = s.trim_end_matches('Z');
-                format!("{}{}", base, fmt_zone_offset(off))
+                format!("{}{}", base, offset_id((off / 1000) as i32))
             } else {
                 dh_format(&format, local)
             }
@@ -7246,31 +7165,18 @@ fn range_agg(
     Ok(json!({"buckets": out}))
 }
 
-fn tz_offset_ms(tz: &str) -> Option<i64> {
-    if tz.is_empty() {
-        return Some(0);
-    }
-    let sign = if tz.starts_with('-') { -1 } else { 1 };
-    let body = tz.trim_start_matches(['+', '-']);
-    let parts: Vec<&str> = body.split(':').collect();
-    if parts.is_empty() {
-        return None;
-    }
-    let h: i64 = parts[0].parse().ok()?;
-    let m: i64 = if parts.len() > 1 { parts[1].parse().ok()? } else { 0 };
-    Some(sign * (h * 3_600_000 + m * 60_000))
-}
-
-fn timed_string(epoch_ms: i64, tz: &str, format: &str) -> String {
+fn timed_string(epoch_ms: i64, zone: &Zone, tz: &str, format: &str) -> String {
+    let off = zone.offset_ms(epoch_ms);
+    let local = epoch_ms + off;
     if !format.is_empty() {
-        return apply_java_date_format(format, epoch_ms).unwrap_or_else(|| format_epoch_ms(epoch_ms));
+        return apply_java_date_format(format, local).unwrap_or_else(|| format_epoch_ms(local));
     }
-    let s = format_epoch_ms(epoch_ms);
+    let s = format_epoch_ms(local);
     if tz.is_empty() {
         return s;
     }
     let t = s.trim_end_matches('Z');
-    format!("{}{}", t, tz)
+    format!("{}{}", t, offset_id((off / 1000) as i32))
 }
 
 fn parse_with_format_or_math(s: &str, format: &str) -> Option<i64> {
@@ -7296,7 +7202,10 @@ fn date_range_agg(
     let field = map_str(t, "field");
     let format = map_str(t, "format");
     let tz = map_str(t, "time_zone");
-    let off = tz_offset_ms(&tz).unwrap_or(0);
+    let zone = match tz.as_str() {
+        "" => Zone::utc(),
+        z => Zone::cached(z).map_err(|e| time_zone_error("date_range", e))?,
+    };
     let keyed = t.get("keyed").and_then(|v| v.as_bool()).unwrap_or(false);
     let ranges = t
         .get("ranges")
@@ -7318,7 +7227,7 @@ fn date_range_agg(
         let parse_bound = |v: Option<&Value>| -> Option<i64> {
             match v {
                 Some(Value::Number(n)) => n.as_f64().map(|f| f as i64),
-                Some(Value::String(s)) => parse_with_format_or_math(s, &format).map(|ms| ms - off),
+                Some(Value::String(s)) => parse_with_format_or_math(s, &format).map(|ms| zone.local_to_epoch_ms(ms)),
                 _ => None,
             }
         };
@@ -7345,8 +7254,8 @@ fn date_range_agg(
     }
     let mut out = vec![];
     for b in parsed.iter() {
-        let from_s = b.from.map(|ms| timed_string(ms + off, &tz, &format));
-        let to_s = b.to.map(|ms| timed_string(ms + off, &tz, &format));
+        let from_s = b.from.map(|ms| timed_string(ms, &zone, &tz, &format));
+        let to_s = b.to.map(|ms| timed_string(ms, &zone, &tz, &format));
         let key = b.key.clone().unwrap_or_else(|| {
             format!(
                 "{}-{}",
@@ -7857,23 +7766,55 @@ fn comp_cmp(a: &CompVal, b: &CompVal, desc: bool) -> Ordering {
     }
 }
 
+/// Rounds `ms` down to its bucket in time zone `tz` the way OpenSearch's
+/// `Rounding` does: calendar units of a day or more round to the first instant
+/// of the local day; shorter units and fixed intervals round the local time and
+/// step back over offset transitions the rounding would cross.
 fn tz_bucket_start(ms: i64, fixed: Option<i64>, cal: Option<&str>, tz: &str) -> i64 {
-    if tz.is_empty() {
+    let zone = match tz {
+        "" => None,
+        z => Zone::cached(z).ok(),
+    };
+    let Some(zone) = zone else {
         return date_bucket_start(ms, fixed, cal);
+    };
+    if let Some(off) = zone.fixed_offset() {
+        let off = off as i64 * 1000;
+        return date_bucket_start(ms + off, fixed, cal) - off;
     }
-    let off_t = zone_offset(tz, ms).unwrap_or(0);
-    let l = ms + off_t;
-    let lb = date_bucket_start(l, fixed, cal);
-    let mut u = lb - off_t;
-    for _ in 0..4 {
-        let o = zone_offset(tz, u).unwrap_or(0);
-        let nu = lb - o;
-        if nu == u {
-            break;
+    let round_local = |utc: i64| date_bucket_start(utc + zone.offset_ms(utc), fixed, cal);
+    if fixed.is_none() && !matches!(cal, Some("hour" | "minute" | "second")) {
+        // JavaTimeToMidnightRounding: the first instant of the local day
+        let midnight = round_local(ms);
+        return match zone.valid_offsets(midnight).first() {
+            Some(&o) => midnight - o as i64 * 1000,
+            None => zone.gap_transition(midnight),
+        };
+    }
+    // TimeIntervalRounding / JavaTimeNotToMidnightRounding
+    let mut utc = ms;
+    for _ in 0..64 {
+        let local = round_local(utc);
+        let offsets = zone.valid_offsets(local);
+        if offsets.is_empty() {
+            if fixed.is_some() {
+                return zone.gap_transition(local);
+            }
+        } else {
+            let prev = zone.transition_at_or_before(utc);
+            let candidate = offsets.iter().rev().map(|&o| local - o as i64 * 1000).find(|&c| c <= utc);
+            match (candidate, prev) {
+                (Some(c), Some(p)) if c < p => {}
+                (Some(c), _) => return c,
+                (None, _) => return local - offsets[0] as i64 * 1000,
+            }
         }
-        u = nu;
+        match zone.transition_at_or_before(utc) {
+            Some(p) => utc = p - 1,
+            None => return local - zone.offset_ms(utc),
+        }
     }
-    u
+    utc
 }
 
 struct CompSource {

@@ -196,11 +196,10 @@ func rangeBound(t *testing.T, s, fieldFormat, queryFormat, tz string, roundUp bo
 		return 0, false
 	}
 	if expr != "" {
-		if tm, res, ok = ApplyMath(tm, expr); !ok {
+		if tm, ok = ApplyMath(tm, expr, roundUp); !ok {
 			return 0, false
 		}
-	}
-	if roundUp {
+	} else if roundUp {
 		tm = RoundUp(tm, res)
 	}
 	return tm.UnixMilli(), true
@@ -242,6 +241,11 @@ func TestRangeBoundDateMath(t *testing.T) {
 		// test_range_date_format
 		{"dd/MM/yyyy", "02/01/2000", "dd/MM/yyyy", "", false, "2000-01-02T00:00:00.000Z"},
 		{"query format applies to every bound", "2001-01-01", "dd/MM/yyyy", "", false, ""},
+		// test_range_date_math_rounds_only_with_unit: additions never round
+		{"lte plus day exact", "2024-01-02T12:00:00Z||+1d", "", "", true, "2024-01-03T12:00:00.000Z"},
+		{"lte plus day then round", "2024-01-02T12:00:00Z||+1d/d", "", "", true, "2024-01-03T23:59:59.999Z"},
+		{"lte day anchor plus hour exact", "2024-01-02||+1h", "", "", true, "2024-01-02T01:00:00.000Z"},
+		{"lte round up then add", "2024-01-02||/d+1h", "", "", true, "2024-01-03T00:59:59.999Z"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -265,12 +269,12 @@ func TestRangeBoundDateMath(t *testing.T) {
 func TestApplyMathRejectsGarbage(t *testing.T) {
 	anchor := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
 	for _, expr := range []string{"+1", "+d", "/", "/q", "*1d", "+1x"} {
-		if _, _, ok := ApplyMath(anchor, expr); ok {
+		if _, ok := ApplyMath(anchor, expr, false); ok {
 			t.Errorf("ApplyMath(%q) accepted", expr)
 		}
 	}
 	// "now-1d/d" style chains on a fixed anchor.
-	got, _, ok := ApplyMath(anchor, "-1d/d")
+	got, ok := ApplyMath(anchor, "-1d/d", false)
 	if !ok || !got.Equal(time.Date(2024, 1, 14, 0, 0, 0, 0, time.UTC)) {
 		t.Errorf("ApplyMath(-1d/d) = %v, %v", got, ok)
 	}

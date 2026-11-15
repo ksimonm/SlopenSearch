@@ -1,0 +1,53 @@
+{
+ "date": "2026-11-15T01:46:18",
+ "size": "tiny",
+ "data": {
+  "version": 1,
+  "seed": 20261115,
+  "docs": 10000,
+  "vectors": 5000,
+  "vector_queries": 100,
+  "dim": 128
+ },
+ "docs_file_bytes": 7270712,
+ "targets": [
+  "ref",
+  "go",
+  "rust",
+  "rust-mem"
+ ],
+ "cpus": "4",
+ "memory": "8g",
+ "heap": "4g",
+ "clients": 8,
+ "batch": 1000,
+ "search_clients": 4,
+ "mixed_clients": 8,
+ "workloads": "index,sweep,verify,search,knn,mixed,update,restart",
+ "slow_limit_s": 5.0,
+ "request_timeout_s": 120,
+ "search_duration_s": 3.0,
+ "git_rev": "aa824cc",
+ "host": "p7760",
+ "kernel": "7.0.0-43-generic",
+ "cpu_model": "11th Gen Intel(R) Core(TM) i7-11850H @ 2.50GHz",
+ "host_cpus": 16,
+ "host_mem_gb": 91,
+ "loadavg_start": [
+  4.17236328125,
+  5.81640625,
+  8.40478515625
+ ],
+ "images": {
+  "ref": "sha256:903c4fa852a6",
+  "go": "sha256:cf3ab0a90ca3",
+  "rust": "sha256:a3dd77d4e49f",
+  "rust-mem": "sha256:a3dd77d4e49f"
+ },
+ "loadavg_end": [
+  20.86376953125,
+  14.64208984375,
+  11.748046875
+ ],
+ "finished": "2026-11-15T02:08:27"
+}

@@ -89,6 +89,9 @@ func (s *Server) handleValidateQuery(w http.ResponseWriter, r *http.Request, nam
 				errText = "[" + idx.Name + "/" + idx.UUID + "] QueryShardException[failed to create query: " +
 					inner + "]; nested: NumberFormatException[" + inner + "];; java.lang.NumberFormatException: " + inner
 			}
+		case "number_format_exception":
+			errText = "[" + idx.Name + "/" + idx.UUID + "] QueryShardException[failed to create query: " +
+				reason + "]; nested: NumberFormatException[" + reason + "];; java.lang.NumberFormatException: " + reason
 		case "illegal_argument_exception":
 			if strings.Contains(reason, "failed to parse value") {
 				val := reason

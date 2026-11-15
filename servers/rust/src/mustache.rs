@@ -1,32 +1,68 @@
 //! Mustache templates with mustache.java semantics (search templates, phrase
-//! suggester collate queries).
+//! suggester collate queries, ingest processor templates).
 
 use serde_json::Value;
 
-/// A template that does not compile, or a value lookup that fails while rendering,
-/// with mustache.java's message (`reason`, including the template location).
+/// A mustache.java compile error, or a value lookup that failed while rendering;
+/// `line` is the 1-based template line it names (newlines inside tags are not
+/// counted, as in mustache.java).
 #[derive(Debug, Clone)]
 pub struct MustacheError {
-    /// The unclosed section, for "Failed to close" errors.
-    pub tag: String,
-    pub reason: String,
-    /// Rendering errors: the message of the intermediate `mustache_exception` and the
-    /// Java exception (type, message) under it.
-    pub lookup: Option<(String, String, String)>,
+    pub kind: MustacheErrorKind,
+    pub line: usize,
 }
 
-/// The location suffix of mustache.java messages; templates are named `query-template`.
-fn location(line: usize) -> String {
-    format!(" @[query-template:{}]", line)
+#[derive(Debug, Clone)]
+pub enum MustacheErrorKind {
+    /// `{{` without its closing delimiter
+    UnclosedVariable,
+    /// `{{{name}}` without the third brace; `col` is the position in the line
+    UnclosedTripleVariable { name: String, col: usize },
+    /// a section opened with `{{#name}}` / `{{^name}}` and never closed
+    UnclosedSection(String),
+    /// `{{/close}}` that does not close the innermost open section
+    Mismatched { open: Option<String>, close: String },
+    /// the template ends right after `{{`
+    Empty,
+    /// `{{>name}}`
+    Partial(String),
+    /// rendering: a list lookup out of range (`name` is the whole tag); `cause` is the
+    /// message of the intermediate exception, `java` the Java exception (type, message)
+    Lookup { name: String, cause: String, java: (String, String) },
 }
 
-/// The 1-based line of byte offset `pos`.
-fn line_at(src: &str, pos: usize) -> usize {
-    1 + src.as_bytes()[..pos.min(src.len())].iter().filter(|b| **b == b'\n').count()
-}
+impl MustacheError {
+    /// The mustache.java message for a template named `file`.
+    pub fn describe(&self, file: &str) -> String {
+        let line = self.line;
+        let msg = match &self.kind {
+            MustacheErrorKind::UnclosedVariable => "Improperly closed variable".to_string(),
+            MustacheErrorKind::UnclosedTripleVariable { name, col } => {
+                format!("Improperly closed variable: {name} in {file}:{line}@{col}")
+            }
+            MustacheErrorKind::UnclosedSection(tag) => format!("Failed to close '{tag}' tag"),
+            MustacheErrorKind::Mismatched { open, close } => format!(
+                "Mismatched start/end tags: {} != {close} in {file}:{line}",
+                open.as_deref().unwrap_or("null")
+            ),
+            MustacheErrorKind::Empty => "Empty mustache".to_string(),
+            MustacheErrorKind::Partial(name) => {
+                return format!("Partial templates are not supported in OpenSearch Mustache scripts: [{name}]")
+            }
+            MustacheErrorKind::Lookup { name, .. } => format!("Failed to get value for {name}"),
+        };
+        format!("{msg} @[{file}:{line}]")
+    }
 
-fn compile_err(message: String, line: usize) -> MustacheError {
-    MustacheError { tag: String::new(), reason: message + &location(line), lookup: None }
+    /// For a failed lookup: the message of its cause and the Java exception under it.
+    pub fn lookup_cause(&self, file: &str) -> Option<(String, &str, &str)> {
+        match &self.kind {
+            MustacheErrorKind::Lookup { cause, java, .. } => {
+                Some((format!("{cause} @[{file}:{}]", self.line), java.0.as_str(), java.1.as_str()))
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -48,7 +84,10 @@ fn first_word(s: &str) -> &str {
 
 fn parse_template(src: &str) -> Result<Vec<Node>, MustacheError> {
     let mut root: Vec<Node> = Vec::new();
+    // open sections: name, parameters, inverted, children, line of the opening tag
     let mut stack: Vec<(String, String, bool, Vec<Node>, usize)> = Vec::new();
+    let mut line = 1usize;
+    let err = |kind, line| Err(MustacheError { kind, line });
     let mut open = "{{".to_string();
     let mut close = "}}".to_string();
     let mut pos = 0usize;
@@ -62,6 +101,7 @@ fn parse_template(src: &str) -> Result<Vec<Node>, MustacheError> {
             break;
         };
         let start = pos + rel;
+        line += src[pos..start].matches('\n').count();
         if start > pos {
             push_node(
                 &mut root,
@@ -71,45 +111,37 @@ fn parse_template(src: &str) -> Result<Vec<Node>, MustacheError> {
         }
         if open == "{{" && bytes.get(start + 2) == Some(&b'{') {
             let body_start = start + 3;
-            let Some(end_rel) = src[body_start..].find("}}") else {
-                let rest = src[body_start..].trim();
-                let line = line_at(src, src.len());
-                return Err(compile_err(
-                    format!(
-                        "Improperly closed variable: {} in query-template:{}@{}",
-                        rest,
-                        line,
-                        src.len().saturating_sub(1)
-                    ),
-                    line,
-                ));
-            };
-            let name = src[body_start..body_start + end_rel].trim().to_string();
-            let after = body_start + end_rel + 2;
-            let line = line_at(src, start);
-            if bytes.get(after) != Some(&b'}') {
-                return Err(compile_err(
-                    format!("Improperly closed variable: {} in query-template:{}@{}", name, line, after),
-                    line,
-                ));
+            match src[body_start..].find("}}}") {
+                Some(end_rel) => {
+                    let name = src[body_start..body_start + end_rel].trim().to_string();
+                    push_node(&mut root, &mut stack, Node::Var { name, escaped: false, line });
+                    pos = body_start + end_rel + 3;
+                    continue;
+                }
+                None => {
+                    let line_start = src[..start].rfind('\n').map_or(0, |i| i + 1);
+                    let (name, end) = match src[body_start..].find("}}") {
+                        Some(e) => (&src[body_start..body_start + e], body_start + e + 2),
+                        None => (&src[body_start..], src.len().saturating_sub(1)),
+                    };
+                    let col = src[line_start..end].chars().count();
+                    let name = name.trim().to_string();
+                    return err(MustacheErrorKind::UnclosedTripleVariable { name, col }, line);
+                }
             }
-            push_node(&mut root, &mut stack, Node::Var { name, escaped: false, line });
-            pos = after + 1;
-            continue;
         }
         let body_start = start + open.len();
+        if body_start >= src.len() {
+            return err(MustacheErrorKind::Empty, line);
+        }
         let Some(end_rel) = src[body_start..].find(close.as_str()) else {
-            let line = line_at(src, src.len());
             let rest = src[body_start..].trim_start();
             if let Some(section) = rest.strip_prefix('#').or_else(|| rest.strip_prefix('^')) {
-                let mut e = compile_err(format!("Failed to close '{}' tag", first_word(section)), line);
-                e.tag = first_word(section).to_string();
-                return Err(e);
+                return err(MustacheErrorKind::UnclosedSection(first_word(section).to_string()), line);
             }
-            return Err(compile_err("Improperly closed variable".to_string(), line));
+            return err(MustacheErrorKind::UnclosedVariable, line);
         };
         let tag = src[body_start..body_start + end_rel].trim().to_string();
-        let line = line_at(src, start);
         let _ = (&open, &close);
         pos = body_start + end_rel + close.len();
         if tag.starts_with('=') && tag.ends_with('=') {
@@ -139,27 +171,21 @@ fn parse_template(src: &str) -> Result<Vec<Node>, MustacheError> {
         if let Some(rest) = tag.strip_prefix('/') {
             let name = first_word(rest);
             let Some((n, params, inverted, children, open_line)) = stack.pop() else {
-                return Err(compile_err(
-                    format!("Mismatched start/end tags: null != {} in query-template:{}", name, line),
-                    line,
-                ));
+                let close = name.to_string();
+                return err(MustacheErrorKind::Mismatched { open: None, close }, line);
             };
-            {
-                if n != name {
-                    return Err(compile_err(
-                        format!("Mismatched start/end tags: {} != {} in query-template:{}", n, name, line),
-                        line,
-                    ));
-                }
-                let node = Node::Section {
-                    line: open_line,
-                    name: n,
-                    params,
-                    inverted,
-                    children,
-                };
-                push_node(&mut root, &mut stack, node);
+            if n != name {
+                let close = name.to_string();
+                return err(MustacheErrorKind::Mismatched { open: Some(n), close }, line);
             }
+            let node = Node::Section {
+                line: open_line,
+                name: n,
+                params,
+                inverted,
+                children,
+            };
+            push_node(&mut root, &mut stack, node);
             continue;
         }
         if let Some(rest) = tag.strip_prefix('&') {
@@ -175,14 +201,7 @@ fn parse_template(src: &str) -> Result<Vec<Node>, MustacheError> {
             continue;
         }
         if let Some(rest) = tag.strip_prefix('>') {
-            return Err(MustacheError {
-                tag: String::new(),
-                reason: format!(
-                    "Partial templates are not supported in OpenSearch Mustache scripts: [{}]",
-                    rest.trim()
-                ),
-                lookup: None,
-            });
+            return err(MustacheErrorKind::Partial(rest.trim().to_string()), line);
         }
         push_node(
             &mut root,
@@ -194,10 +213,8 @@ fn parse_template(src: &str) -> Result<Vec<Node>, MustacheError> {
             },
         );
     }
-    if let Some((name, _, _, _, _)) = stack.last() {
-        let mut e = compile_err(format!("Failed to close '{}' tag", name), line_at(src, src.len()));
-        e.tag = name.clone();
-        return Err(e);
+    if let Some((name, _, _, _, open_line)) = stack.last() {
+        return err(MustacheErrorKind::UnclosedSection(name.clone()), *open_line);
     }
     Ok(root)
 }
@@ -212,30 +229,15 @@ fn push_node(root: &mut Vec<Node>, stack: &mut [(String, String, bool, Vec<Node>
 
 type Lookup<'a> = Result<Option<&'a Value>, MustacheError>;
 
-fn lookup_err(name: &str, inner: String, typ: &str, msg: String) -> MustacheError {
-    MustacheError {
-        tag: String::new(),
-        reason: format!("Failed to get value for {}", name),
-        lookup: Some((inner, typ.to_string(), msg)),
-    }
-}
-
-/// Adds the location of the tag to a failed lookup.
-fn at_line(r: Lookup<'_>, line: usize) -> Lookup<'_> {
-    r.map_err(|mut e| {
-        if let Some((inner, _, _)) = e.lookup.as_mut() {
-            e.reason += &location(line);
-            *inner += &location(line);
-        }
-        e
-    })
-}
-
 /// Lists are indexed like OpenSearch's list wrapper: a numeric segment past the end
 /// (or negative) fails the lookup, any other segment finds nothing.
-fn descend<'a>(val: &'a Value, path: &str, name: &str) -> Lookup<'a> {
+fn descend<'a>(val: &'a Value, name: &str, line: usize) -> Lookup<'a> {
+    let fail = |cause: String, typ: &str, msg: String| MustacheError {
+        kind: MustacheErrorKind::Lookup { name: name.to_string(), cause, java: (typ.to_string(), msg) },
+        line,
+    };
     let mut cur = val;
-    for seg in path.split('.') {
+    for seg in name.split('.') {
         match cur {
             Value::Object(m) => match m.get(seg) {
                 Some(v) => cur = v,
@@ -243,18 +245,11 @@ fn descend<'a>(val: &'a Value, path: &str, name: &str) -> Lookup<'a> {
             },
             Value::Array(a) => match seg.parse::<i64>() {
                 Ok(i) if i < 0 => {
-                    return Err(lookup_err(
-                        name,
-                        "position >= 0".into(),
-                        "illegal_argument_exception",
-                        "position >= 0".into(),
-                    ))
+                    return Err(fail("position >= 0".into(), "illegal_argument_exception", "position >= 0".into()))
                 }
                 Ok(i) => match a.get(i as usize) {
                     Some(v) => cur = v,
-                    None => {
-                        return Err(lookup_err(name, i.to_string(), "index_out_of_bounds_exception", i.to_string()))
-                    }
+                    None => return Err(fail(i.to_string(), "index_out_of_bounds_exception", i.to_string())),
                 },
                 Err(_) => return Ok(None),
             },
@@ -264,12 +259,12 @@ fn descend<'a>(val: &'a Value, path: &str, name: &str) -> Lookup<'a> {
     Ok(Some(cur))
 }
 
-fn resolve<'a>(ctx: &'a [Value], name: &str) -> Lookup<'a> {
+fn resolve<'a>(ctx: &'a [Value], name: &str, line: usize) -> Lookup<'a> {
     if name == "." {
         return Ok(ctx.last());
     }
     for frame in ctx.iter().rev() {
-        if let Some(v) = descend(frame, name, name)? {
+        if let Some(v) = descend(frame, name, line)? {
             return Ok(Some(v));
         }
     }
@@ -357,7 +352,7 @@ fn render_nodes(nodes: &[Node], ctx: &mut Vec<Value>, out: &mut String) -> Resul
         match node {
             Node::Text(t) => out.push_str(t),
             Node::Var { name, escaped, line } => {
-                let v = at_line(resolve(ctx, name), *line)?;
+                let v = resolve(ctx, name, *line)?;
                 out.push_str(&interpolation(v, *escaped));
             }
             Node::Section {
@@ -373,7 +368,7 @@ fn render_nodes(nodes: &[Node], ctx: &mut Vec<Value>, out: &mut String) -> Resul
                     if body.is_empty() {
                         render_nodes(children, ctx, &mut rendered_body)?;
                     }
-                    let resolved = at_line(resolve(ctx, &body), *line)?;
+                    let resolved = resolve(ctx, &body, *line)?;
                     let direct = rendered_body.trim().to_string();
                     match name.as_str() {
                         "toJson" => {
@@ -405,7 +400,7 @@ fn render_nodes(nodes: &[Node], ctx: &mut Vec<Value>, out: &mut String) -> Resul
                     }
                     continue;
                 }
-                let v = at_line(resolve(ctx, name), *line)?;
+                let v = resolve(ctx, name, *line)?;
                 if *inverted {
                     if !is_truthy(v) {
                         render_nodes(children, ctx, out)?;

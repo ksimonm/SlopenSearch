@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slopensearch/internal/javafmt"
 	"strconv"
 	"strings"
 
@@ -27,34 +28,6 @@ func IndexKnnEnabled(idx *model.Index) bool {
 func knnValueError(c *ParseContext, path string, preview, causeType, causeReason string) *apierr.Error {
 	reason := fmt.Sprintf("failed to parse field [%s] of type [knn_vector] in document with id '%s'. Preview of field's value: '%s'", path, c.docID, preview)
 	return mapperErr("mapper_parsing_exception", reason, causeType, causeReason)
-}
-
-// javaFloatString renders a float32 like Java's Float.toString.
-func javaFloatString(f float32) string {
-	if math.IsInf(float64(f), 1) {
-		return "Infinity"
-	}
-	if math.IsInf(float64(f), -1) {
-		return "-Infinity"
-	}
-	if f != f {
-		return "NaN"
-	}
-	a := math.Abs(float64(f))
-	if a != 0 && (a < 1e-3 || a >= 1e7) {
-		s := strconv.FormatFloat(float64(f), 'E', -1, 32)
-		mant, exp, _ := strings.Cut(s, "E")
-		if !strings.Contains(mant, ".") {
-			mant += ".0"
-		}
-		e, _ := strconv.Atoi(exp)
-		return mant + "E" + strconv.Itoa(e)
-	}
-	s := strconv.FormatFloat(float64(f), 'f', -1, 32)
-	if !strings.Contains(s, ".") {
-		s += ".0"
-	}
-	return s
 }
 
 func knnTokenText(v any) string {
@@ -143,7 +116,7 @@ func parseKnnVector(c *ParseContext, path string, def map[string]any, raw any) (
 		default:
 			f32 := float32(f)
 			if math.IsInf(float64(f32), 0) {
-				return nil, knnValueError(c, path, javaFloatString(f32), "illegal_argument_exception",
+				return nil, knnValueError(c, path, javafmt.Float(f32), "illegal_argument_exception",
 					"KNN vector values cannot be infinity")
 			}
 			if f32 != f32 {
@@ -228,7 +201,7 @@ func knnDeriveObject(idx *model.Index, props map[string]any, doc map[string]any)
 				if dt == "byte" || dt == "binary" {
 					out[i] = json.Number(strconv.FormatInt(int64(f), 10))
 				} else {
-					out[i] = json.Number(javaFloatString(float32(f)))
+					out[i] = json.Number(javafmt.Float(float32(f)))
 				}
 			}
 			doc[k] = out

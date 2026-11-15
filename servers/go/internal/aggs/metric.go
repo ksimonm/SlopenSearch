@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slopensearch/internal/javafmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -568,8 +569,9 @@ func maxF(vals []float64) float64 {
 	return m
 }
 
+// formatFloatOne is a double in a Java string ("" + d): Double.toString.
 func formatFloatOne(f float64) string {
-	return strconv.FormatFloat(f, 'f', 1, 64)
+	return javafmt.Double(f)
 }
 
 var knownAggTypes = func() map[string]bool {
@@ -741,7 +743,7 @@ func tdigestCDF(vals []float64, x float64) float64 {
 }
 
 func percentileKey(p float64) string {
-	return strconv.FormatFloat(p, 'f', 1, 64)
+	return javafmt.Double(p) // String.valueOf(double)
 }
 
 func parsePercents(raw any, def []float64) ([]float64, *apierr.Error) {

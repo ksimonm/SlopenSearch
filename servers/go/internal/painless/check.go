@@ -131,7 +131,7 @@ var plStaticMethods = map[string]map[string]plSig{
 	"Period":            ParseSigs("ofDays:Period(int)", "ofMonths:Period(int)", "ofYears:Period(int)", "between:Period(LocalDate,LocalDate)"),
 	"DayOfWeek":         ParseSigs("of:DayOfWeek(int)", "valueOf:DayOfWeek(String)"),
 	"DateTimeFormatter": ParseSigs("ofPattern:DateTimeFormatter(String)"),
-	"Pattern":           ParseSigs("compile:Pattern(String)", "compile:Pattern(String,int)", "quote:String(String)"),
+	"Pattern":           ParseSigs("quote:String(String)"),
 	"Matcher":           ParseSigs("quoteReplacement:String(String)"),
 	"Base64":            ParseSigs("getEncoder:def()", "getDecoder:def()"),
 	"IntStream":         ParseSigs("range:IntStream(int,int)", "rangeClosed:IntStream(int,int)"),
@@ -598,6 +598,9 @@ func (c *plChecker) expr(x plNode) (string, *CompileError) {
 		c.info.consts[n] = n.val
 		return c.set(n, n.typ)
 	case *plERegex:
+		if cerr := plRegexCompileError(n.pattern, n.flags, n.pos); cerr != nil {
+			return "", cerr
+		}
 		return c.set(n, "Pattern")
 	case *plEVar:
 		if t, ok := c.lookup(n.name); ok {
@@ -1089,6 +1092,18 @@ func (c *plChecker) call(n *plECall) (string, *CompileError) {
 			return "", &CompileError{Type: "illegal_argument_exception", Offset: n.pos, NoPos: true,
 				Reason: "Result of null safe operator must be nullable"}
 		}
+		return c.set(n, sig.ret)
+	}
+	if sigs, ok := plRegexMemberSigs[ot]; ok {
+		sig, ok := sigs[key]
+		if !ok {
+			return "", &CompileError{Type: "illegal_argument_exception", Offset: n.pos,
+				Reason: "member method [java.util.regex." + ot + ", " + key + "] not found"}
+		}
+		if err := checkArgs(sig); err != nil {
+			return "", err
+		}
+		c.info.sigs[n] = sig
 		return c.set(n, sig.ret)
 	}
 	return c.set(n, "def")

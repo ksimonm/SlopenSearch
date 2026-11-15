@@ -5,10 +5,10 @@
 
 mod aggs;
 mod analysis;
+mod calendar;
 mod dates;
 mod errors;
 mod geohash;
-mod hashes;
 mod http;
 mod ingest;
 mod jregex;

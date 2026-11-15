@@ -31,8 +31,30 @@ implemented.
 
 ## Performance
 
-- Benchmarks with large data sets that compare the reference OpenSearch, Go and Rust on
-  indexing and search throughput, latency, memory and CPU (in progress).
-- Persistence: every write is fsynced before the response; group commit already batches
-  concurrent writes, but sequential writes are 2–4x slower than in memory. Consider an
+The benchmark harness is in [bench/](bench/README.md); the first report, from a busy
+machine, is [docs/benchmarks.md](docs/benchmarks.md). Ordered by impact:
+
+- **Inverted index and doc values.** Both servers scan every document for every query:
+  a `match` over 100k docs takes 12–16 s (reference: 11 ms), term/range filters are
+  75–200x slower, k-NN over 20k vectors is 100x slower or worse. Needs a real inverted
+  index per field, columnar doc values for filters, sorts and aggregations, and
+  float32 vector storage.
+- **Memory.** Go holds ~13x the source size in RAM, Rust ~45x; both are OOM-killed
+  indexing 1M docs (0.73 GB) in 8 GB. Store raw `_source` bytes compactly, and add a
+  memory circuit breaker that answers `429` instead of dying.
+- **Concurrency in Rust.** A global store mutex keeps Rust at one core; use per-index
+  locks.
+- **Write path.** Go's journal diffs the whole state after each write, so single
+  updates drop from 320/s at 10k docs to 21/s at 100k; journal the operation instead
+  (Rust: in progress). Every write is fsynced before the response; consider an
   OpenSearch-like `index.translog.durability: async` mode.
+- **Cancellation.** Cancel a search when the client disconnects.
+- **Rust as PID 1** ignores SIGTERM, so `docker stop` waits for the timeout.
+
+## Exact aggregations at scale
+
+- `cardinality` is an exact set; above `precision_threshold` OpenSearch uses HyperLogLog++
+  (Murmur3 x64_128, its own bias tables), so large-cardinality values differ. Port
+  OpenSearch's `HyperLogLogPlusPlus`.
+- `percentiles` match t-digest only for small inputs; port t-digest 3.x `MergingDigest`
+  and HDR `DoubleHistogram`.

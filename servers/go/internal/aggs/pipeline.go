@@ -2,6 +2,7 @@ package aggs
 
 import (
 	"fmt"
+	"slopensearch/internal/javafmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -1109,9 +1110,9 @@ func bucketKey(b map[string]any) any {
 	if k, ok := b["key"]; ok {
 		switch t := k.(type) {
 		case jsonv.Float:
-			return strconv.FormatFloat(float64(t), 'f', 1, 64)
+			return javafmt.Double(float64(t))
 		case float64:
-			return strconv.FormatFloat(t, 'f', 1, 64)
+			return javafmt.Double(t)
 		}
 		return k
 	}

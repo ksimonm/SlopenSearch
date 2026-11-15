@@ -155,17 +155,17 @@ pub fn expression_supports_context(ctx: &str) -> bool {
 /// compile is a `script_exception` (400; `fields` go first, e.g. the ingest processor),
 /// a lookup that fails while rendering a `mustache_exception` (500).
 pub fn mustache_error(src: &str, e: &crate::mustache::MustacheError, fields: &[(&str, Value)]) -> ApiError {
-    if let Some((inner, typ, msg)) = &e.lookup {
-        return ApiError::new("mustache_exception", &e.reason, 500).caused_by(
-            ApiError::new("mustache_exception", inner, 500).caused_by(ApiError::new(typ, msg, 500)),
-        );
+    let reason = e.describe("query-template");
+    if let Some((cause, typ, msg)) = e.lookup_cause("query-template") {
+        return ApiError::new("mustache_exception", &reason, 500)
+            .caused_by(ApiError::new("mustache_exception", &cause, 500).caused_by(ApiError::new(typ, msg, 500)));
     }
-    let mut err = ApiError::new("script_exception", &e.reason, 400);
+    let mut err = ApiError::new("script_exception", &reason, 400);
     for (k, v) in fields {
         err = err.field(k, v.clone());
     }
     err.field("script_stack", serde_json::json!([]))
         .field("script", serde_json::json!(src))
         .field("lang", serde_json::json!("mustache"))
-        .caused_by(ApiError::new("mustache_exception", &e.reason, 400))
+        .caused_by(ApiError::new("mustache_exception", &reason, 400))
 }

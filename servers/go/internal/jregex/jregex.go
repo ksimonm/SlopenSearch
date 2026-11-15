@@ -282,7 +282,7 @@ func (p *jParser) parseQuant(atom *jNode) (*jNode, *PatternError) {
 			}
 			p.pos++
 			if max >= 0 && max < min {
-				return nil, p.errAt("Illegal repetition range", start)
+				return nil, p.errAt("Illegal repetition range", p.pos-1)
 			}
 		default:
 			return atom, nil
@@ -379,14 +379,21 @@ func (p *jParser) parseGroup() (*jNode, *PatternError) {
 				p.pos++
 				return p.groupBody(&jNode{kind: jnLook, ahead: false, neg: c2 == '!'})
 			}
+			// Pattern.groupname: an ASCII letter, then ASCII letters/digits, then '>'
 			start := p.pos
-			for p.more() && p.src[p.pos] != '>' {
+			if !p.more() || !asciiAlpha(p.src[p.pos]) {
+				return nil, p.errAt("capturing group name does not start with a Latin letter", p.pos)
+			}
+			for p.more() && (asciiAlpha(p.src[p.pos]) || p.src[p.pos] >= '0' && p.src[p.pos] <= '9') {
 				p.pos++
 			}
-			if !p.more() {
+			if !p.more() || p.src[p.pos] != '>' {
 				return nil, p.errAt("named capturing group is missing trailing '>'", p.pos)
 			}
 			name := string(p.src[start:p.pos])
+			if _, dup := p.names[name]; dup {
+				return nil, p.errAt("Named capturing group <"+name+"> is already defined", p.pos)
+			}
 			p.pos++
 			p.groups++
 			p.names[name] = p.groups
@@ -864,6 +871,10 @@ func (p *jParser) parseClass() (func(rune) bool, *PatternError) {
 			lo = c
 			p.pos++
 		}
+		if p.peek() == '-' && p.pos+1 == len(p.src) {
+			// Pattern.range reads the terminating 0 as the upper bound
+			return nil, p.errAt("Illegal character range", len(p.src))
+		}
 		if p.peek() == '-' && p.pos+1 < len(p.src) && p.src[p.pos+1] != ']' && p.src[p.pos+1] != '[' {
 			p.pos++
 			var hi rune
@@ -975,10 +986,14 @@ type jMatcher struct {
 	in    []rune
 	caps  []int
 	steps int
+	limit int
 }
 
 func (m *jMatcher) match(n *jNode, i int, k func(int) bool) bool {
 	m.steps++
+	if m.limit > 0 && m.steps > m.limit {
+		panic(abortMatch{})
+	}
 	switch n.kind {
 	case jnEmpty:
 		return k(i)
@@ -1277,11 +1292,21 @@ func (re *Regexp) ExpandReplacement(in []rune, caps []int, repl string) ([]rune,
 		}
 		g := -1
 		if rr[i] == '{' {
+			// Matcher.appendExpandedReplacement: ASCII letters/digits, then '}'
 			e := i + 1
-			for e < len(rr) && rr[e] != '}' {
+			for e < len(rr) && (asciiAlpha(rr[e]) || rr[e] >= '0' && rr[e] <= '9') {
 				e++
 			}
+			if e == i+1 {
+				return nil, newError("illegal_argument_exception", "named capturing group has 0 length name")
+			}
+			if e == len(rr) || rr[e] != '}' {
+				return nil, newError("illegal_argument_exception", "named capturing group is missing trailing '}'")
+			}
 			name := string(rr[i+1 : e])
+			if rr[i+1] >= '0' && rr[i+1] <= '9' {
+				return nil, newError("illegal_argument_exception", "capturing group name {"+name+"} starts with digit character")
+			}
 			n, ok := re.names[name]
 			if !ok {
 				return nil, newError("illegal_argument_exception", "No group with name {"+name+"}")

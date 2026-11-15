@@ -5,20 +5,23 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slopensearch/internal/javafmt"
 	"strconv"
 	"strings"
 )
 
-// Float is a double that always renders with a fraction (1.0, not 1), like
-// Jackson writes Java doubles.
+// Float is a Java double: Jackson writes it with Double.toString (1.0, 1.0E7).
 type Float float64
 
 func (f Float) MarshalJSON() ([]byte, error) {
-	s := strconv.FormatFloat(float64(f), 'f', -1, 64)
-	if !strings.Contains(s, ".") {
-		s += ".0"
-	}
-	return []byte(s), nil
+	return []byte(javafmt.Double(float64(f))), nil
+}
+
+// Float32 is a Java float: Jackson writes it with Float.toString (1.0E-4).
+type Float32 float32
+
+func (f Float32) MarshalJSON() ([]byte, error) {
+	return []byte(javafmt.Float(float32(f))), nil
 }
 
 // ToFloat converts a JSON value (or a Go number, bool or numeric string) to a
@@ -74,7 +77,7 @@ func EncodeString(s string) string {
 	sb.WriteByte('"')
 	for _, r := range s {
 		if r < 0x20 && r != '\n' && r != '\r' && r != '\t' && r != '\b' && r != '\f' {
-			sb.WriteString(fmt.Sprintf("\\u%04x", r))
+			sb.WriteString(fmt.Sprintf("\\u%04X", r))
 		} else {
 			sb.WriteString(jsonStringEscaper.Replace(string(r)))
 		}

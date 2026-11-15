@@ -2,8 +2,6 @@ package httpapi
 
 import (
 	"bytes"
-	"compress/gzip"
-	"compress/zlib"
 	"encoding/binary"
 	"hash/crc32"
 	"io"
@@ -12,6 +10,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/klauspost/compress/gzip"
+	"github.com/klauspost/compress/zlib"
 
 	"slopensearch/internal/apierr"
 )

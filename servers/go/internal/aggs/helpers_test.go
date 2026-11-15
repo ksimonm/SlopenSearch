@@ -58,6 +58,10 @@ func TestRangeAndPercentileKeys(t *testing.T) {
 		{50, "50.0", "50.0"},
 		{99.9, "99.9", "99.9"},
 		{0, "0.0", "0.0"},
+		// Double.toString (test_35 test_percentile_keys_and_double_terms)
+		{1e7, "1.0E7", "1.0E7"},
+		{1e-4, "1.0E-4", "1.0E-4"},
+		{99.99999, "99.99999", "99.99999"},
 	}
 	for _, tt := range tests {
 		if got := rangeKeyNumber(tt.f); got != tt.rangeKey {

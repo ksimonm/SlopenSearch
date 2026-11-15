@@ -3,6 +3,7 @@ package mapping
 import (
 	"encoding/json"
 	"fmt"
+	"slopensearch/internal/javafmt"
 	"strconv"
 	"strings"
 
@@ -56,14 +57,6 @@ func intFromAny(v any) (int64, bool) {
 		return 0, false
 	}
 	return int64(f), true
-}
-
-func javaFloatRepr(f float64) string {
-	s := strconv.FormatFloat(f, 'f', -1, 64)
-	if !strings.ContainsAny(s, ".eE") {
-		s += ".0"
-	}
-	return s
 }
 
 func javaMetaRepr(v any) string {
@@ -163,7 +156,7 @@ func ValidateProps(props map[string]any) *validationError {
 			}
 			f, _ := jsonv.ToFloat(sf)
 			if f <= 0 {
-				return mve(fmt.Sprintf("[scaling_factor] must be a positive number, got [%s]", javaFloatRepr(f)), "illegal_argument_exception")
+				return mve(fmt.Sprintf("[scaling_factor] must be a positive number, got [%s]", javafmt.Double(f)), "illegal_argument_exception")
 			}
 		}
 		if t == "text" {

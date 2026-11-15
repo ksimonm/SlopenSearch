@@ -147,7 +147,7 @@ func scriptedMetric(name string, spec map[string]any, docs []map[string]any, idx
 	if se != nil {
 		return nil, pipelineScriptError(se)
 	}
-	return ojson.Object{{"value", painless.ToJSON(res)}}, nil
+	return ojson.Object{{"value", search.JavaDoubles(painless.ToJSON(res))}}, nil
 }
 
 // scriptValueDocs evaluates the script of a numeric bucket aggregation

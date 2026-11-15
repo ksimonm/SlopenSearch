@@ -899,7 +899,7 @@ func (s *Server) catShards(r *http.Request, spec string) ([]catCol, []catRow, *a
 	}
 	rows := []catRow{}
 	for _, idx := range indices {
-		perShard := distributeDocs(len(idx.Docs), idx.NumShards())
+		perShard := docsPerShard(idx)
 		for i := 0; i < idx.NumShards(); i++ {
 			row := catRow{values: map[string]any{}}
 			row.values["index"] = idx.Name
@@ -941,10 +941,13 @@ func (s *Server) catShards(r *http.Request, spec string) ([]catCol, []catRow, *a
 	return catShardsColumns(), rows, nil
 }
 
-func distributeDocs(total, shards int) []int {
-	out := make([]int, shards)
-	for i := 0; i < total; i++ {
-		out[i%shards]++
+// docsPerShard counts the documents of each shard of idx.
+func docsPerShard(idx *model.Index) []int {
+	out := make([]int, idx.NumShards())
+	for id := range idx.Docs {
+		if sh := idx.DocShard(id); sh < len(out) {
+			out[sh]++
+		}
 	}
 	return out
 }
@@ -1253,7 +1256,7 @@ func (s *Server) catSegments(r *http.Request, spec string) ([]catCol, []catRow, 
 		if idx.Closed {
 			continue
 		}
-		perShard := distributeDocs(len(idx.Docs), idx.NumShards())
+		perShard := docsPerShard(idx)
 		for i := 0; i < idx.NumShards(); i++ {
 			if perShard[i] == 0 {
 				continue

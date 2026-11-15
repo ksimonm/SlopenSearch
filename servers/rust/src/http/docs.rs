@@ -2135,7 +2135,8 @@ fn handle_count_visible(store: &mut Store, req: &Req, name: &str) -> Response {
         let idx = &store.indices[n];
         let qm = query.as_object().cloned().unwrap_or_default();
         if let Err(e) = crate::search::eval::validate_query(idx, &qm) {
-            if e.typ == "parsing_exception" && e.reason.starts_with("unknown query") {
+            // a complete shard failure, or an unknown query, is returned as it is
+            if e.raw.is_some() || (e.typ == "parsing_exception" && e.reason.starts_with("unknown query")) {
                 return err_response(e);
             }
             let base = e

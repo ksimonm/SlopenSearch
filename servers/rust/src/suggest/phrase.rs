@@ -664,7 +664,7 @@ pub fn check_body(name: &str, body: &Map<String, Value>, raw: &str) -> Option<Ap
                 } else {
                     vec!["suggest", name, "phrase", "direct_generator", k]
                 };
-                let pos = crate::suggest::completion::locate_key(raw, &path)
+                let pos = crate::jsonv::locate_key(raw, &path)
                     .map(|(l, c)| format!("[{}:{}] ", l, c))
                     .unwrap_or_default();
                 let reason = format!("{}[direct_generator] unknown field [{}]", pos, k);

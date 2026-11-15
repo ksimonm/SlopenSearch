@@ -470,7 +470,9 @@ pub fn run_search(
         }
     }
 
-    let specs = parse_sort_specs(bodym.get("sort"))?;
+    let body_text = String::from_utf8_lossy(&req.body);
+    let sort_loc = crate::search::sort::SortLocation { body: &body_text, path: vec!["sort".to_string()] };
+    let specs = crate::search::sort::parse_sort_specs_at(bodym.get("sort"), Some(&sort_loc))?;
     if !specs.is_empty() && bodym.get("rescore").is_some() {
         return Err(sort_shard_error(
             "illegal_argument_exception",
