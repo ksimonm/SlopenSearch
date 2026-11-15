@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import loadgen  # noqa: E402
 from proxy import Proxy  # noqa: E402
-from targets import Container, Sampler, all_targets, build_images, git_rev, sh  # noqa: E402
+from targets import Sampler, make_box, all_targets, build_images, git_rev, sh  # noqa: E402
 
 BENCH = Path(__file__).resolve().parent
 OSB_BIN = Path(os.environ.get("OSB_BIN", BENCH / ".venv-osb" / "bin" / "opensearch-benchmark"))
@@ -51,7 +51,7 @@ OSB_HOME = Path(os.environ.get("BENCHMARK_HOME", Path.home() / ".cache" / "slopb
 PRESETS = {
     "test": {"test_mode": True, "params": {}},
     "sample": {"test_mode": False, "params": {"ingest_percentage": 1, "warmup_iterations": 2, "iterations": 10,
-                                               "target_throughput": None}},
+                                               "target_throughput": 100000}},
     "full": {"test_mode": False, "params": {}},
 }
 SETUP_RE = re.compile(r"delete-index|create-index|cluster-health|index-append|bulk|refresh|merge|"
@@ -269,7 +269,7 @@ class OsbRun:
     # ------------------------------------------------------------------ per target
     def target(self, t, setup: list[str], queries: list[str]):
         self.t = t
-        self.box = Container(t, self.a.cpus, self.a.memory)
+        self.box = make_box(t, self.a.cpus, self.a.memory, self.a.profile)
         self.tasks: dict[str, dict] = {}
         self.windows: dict[str, tuple[float, float]] = {}
         self.res = {"kind": "osb", "target": t.name, "image": t.image, "workload": self.a.workload,
@@ -282,6 +282,10 @@ class OsbRun:
             self.sampler = Sampler(self.box.cgroup_dir())
             self.sampler.start()
             info = json.loads(loadgen.Conn(t.port).req("GET", "/")[1])
+            prof = None
+            if self.a.profile and t.kind != "ref":
+                from native import Profiler
+                prof = Profiler(self.box.server_pid(), self.out / f"profile-{self.a.workload}-{t.name}").start()
             self.res["version"] = info.get("version", {}).get("number")
             if self.a.proxy:
                 self.proxy = Proxy(t.port, timeout=self.a.request_timeout + 30).start()
@@ -297,6 +301,9 @@ class OsbRun:
                 chunk = self.a.chunk or len(queries) or 1
                 for i in range(0, len(queries), chunk):
                     self.run_tasks(queries[i:i + chunk], f"q{i // chunk}", self.a.task_timeout)
+            if prof:
+                self.res["profile"] = prof.stop()
+                print(f"    profile: {self.res['profile']}", flush=True)
             self.res["disk_end"] = self.box.disk_bytes()
             self.res["oom_kills"] = self.sampler.oom_kills()
             if not self.box.running():
@@ -381,6 +388,8 @@ def main():
     ap.add_argument("--heap", default=os.environ.get("BENCH_HEAP", "4g"))
     ap.add_argument("--out", type=Path, help="results directory (default bench/results/<timestamp>)")
     ap.add_argument("--level", default="adhoc", help="label stored in the scorecard (quick/full/adhoc)")
+    ap.add_argument("--profile", action="store_true",
+                    help="perf record the server (not ref) during the run; see bench/native.py")
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--offline", action="store_true", help="OSB --offline (workloads and corpora already cached)")

@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import datagen  # noqa: E402
 import loadgen  # noqa: E402
 import workloads as W  # noqa: E402
-from targets import Container, Sampler, all_targets, build_images, git_rev, sh  # noqa: E402
+from targets import Sampler, make_box, all_targets, build_images, git_rev, sh  # noqa: E402
 
 ALL_WORKLOADS = ["index", "sweep", "verify", "search", "knn", "mixed", "update", "restart"]
 PRESETS = {
@@ -363,7 +363,7 @@ class Run:
     # ------------------------------------------------------------------ driver
     def target(self, t):
         self.t = t
-        self.box = Container(t, self.a.cpus, self.a.memory)
+        self.box = make_box(t, self.a.cpus, self.a.memory, self.a.profile)
         self.res = {"target": t.name, "image": t.image, "persistent": t.persistent, "workloads": {},
                     "counts": {}, "recall": {}, "started": dt.datetime.now().isoformat(timespec="seconds")}
         self.wl = set(self.a.workloads.split(","))
@@ -377,6 +377,10 @@ class Run:
             self.res["idle_empty"] = self.sampler.window(time.time() - 1, time.time())
             info = self.must("GET", "/")
             self.res["version"] = info.get("version", {}).get("number")
+            prof = None
+            if self.a.profile and t.kind != "ref":
+                from native import Profiler
+                prof = Profiler(self.box.server_pid(), self.out / f"profile-{t.name}").start()
             steps = [("index", self.w_index), ("sweep", self.w_sweep), ("verify", self.w_verify),
                      ("search", self.w_search), ("knn", self.w_knn), ("mixed", self.w_mixed),
                      ("update", self.w_update), ("restart", self.w_restart)]
@@ -391,6 +395,9 @@ class Run:
                 except Exception as e:  # noqa: BLE001
                     traceback.print_exc()
                     self.res.setdefault("errors", {})[name] = f"{type(e).__name__}: {e}"
+            if prof:
+                self.res["profile"] = prof.stop()
+                print(f"    profile: {self.res['profile']}", flush=True)
             self.res["oom_kills"] = self.sampler.oom_kills()
             if not self.box.running():
                 st = self.box.state()
@@ -440,6 +447,8 @@ def main():
     ap.add_argument("--out", type=Path, default=None, help="results directory (default bench/results/<timestamp>)")
     ap.add_argument("--no-build", action="store_true", help="do not rebuild the go/rust images")
     ap.add_argument("--keep", action="store_true", help="keep the containers running afterwards")
+    ap.add_argument("--profile", action="store_true",
+                    help="perf record the server (not ref) during the run; see bench/native.py")
     ap.add_argument("--level", default="adhoc", help="label stored in run.json and the scorecard (quick/full/adhoc)")
     a = ap.parse_args()
 

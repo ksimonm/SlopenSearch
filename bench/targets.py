@@ -30,6 +30,7 @@ class Target:
     env: dict = field(default_factory=dict)
     kind: str = "slop"             # "ref" | "slop"
     persistent: bool = True
+    native: str | None = None      # "go" | "rust": run the binary on the host (bench/native.py)
 
     @property
     def container(self) -> str:
@@ -51,7 +52,17 @@ def all_targets(heap: str) -> dict[str, Target]:
         "rust": Target("rust", RUST_IMAGE, 9592, "/data"),
         "go-mem": Target("go-mem", GO_IMAGE, 9593, None, env={"SLOP_IN_MEMORY": "true"}, persistent=False),
         "rust-mem": Target("rust-mem", RUST_IMAGE, 9594, None, env={"SLOP_IN_MEMORY": "true"}, persistent=False),
+        "go-native": Target("go-native", "native:go", 9595, "data", native="go"),
+        "rust-native": Target("rust-native", "native:rust", 9596, "data", native="rust"),
     }
+
+
+def make_box(t: Target, cpus: str, memory: str, profile: bool = False):
+    """A Container, or a NativeProcess (host binary in a systemd scope) for *-native targets."""
+    if t.native:
+        from native import NativeProcess
+        return NativeProcess(t, cpus, memory, profile)
+    return Container(t, cpus, memory)
 
 
 def sh(*args, check=True, capture=True, timeout=None) -> str:
@@ -129,6 +140,10 @@ class Container:
                 raise RuntimeError(f"{self.t.container} exited:\n{self.logs(40)}")
             time.sleep(0.1)
         raise RuntimeError(f"{self.t.container} not ready after {timeout}s")
+
+    def server_pid(self) -> int:
+        """Host PID of the container's main process (for perf)."""
+        return int(sh("docker", "inspect", "-f", "{{.State.Pid}}", self.t.container))
 
     def running(self) -> bool:
         return sh("docker", "inspect", "-f", "{{.State.Running}}", self.t.container, check=False) == "true"
