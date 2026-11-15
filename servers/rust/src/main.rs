@@ -10,6 +10,7 @@ mod dates;
 mod errors;
 mod http;
 mod ingest;
+mod javafmt;
 mod jregex;
 mod jsonv;
 mod lucene;

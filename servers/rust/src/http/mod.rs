@@ -385,6 +385,7 @@ async fn handle_plain(store: Shared, request: axum::extract::Request) -> axum::r
         if status >= 400 {
             body = resp::upper_case_unicode_escapes(&body);
         }
+        body = crate::javafmt::java_exponents(&body);
         let acc = req
             .headers
             .get("accept")

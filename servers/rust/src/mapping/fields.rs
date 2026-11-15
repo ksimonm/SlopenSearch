@@ -634,7 +634,9 @@ impl IndexCtx {
                     .get("scaling_factor")
                     .and_then(to_f64)
                     .unwrap_or(1.0);
-                Ok(num_f64((f * scale).round() / scale))
+                // ScaledFloatFieldMapper: Math.round(value * factor) is indexed
+                // and read back multiplied by 1 / factor
+                Ok(num_f64((f * scale + 0.5).floor() * (1.0 / scale)))
             }
             _ => Ok(num_f64(f)),
         }
@@ -1224,6 +1226,20 @@ pub fn canonical_ip(s: &str) -> Result<String, i32> {
             }
             Err(_) => Err(-1),
         }
+    }
+}
+
+/// The double Lucene reads back from the doc values of a float, half_float
+/// or scaled_float field for the value `f` (other types: `f`).
+pub(crate) fn doc_value_double(typ: &str, def: &Map<String, Value>, f: f64) -> f64 {
+    match typ {
+        "float" => f as f32 as f64,
+        "half_float" => float32_from_half(float32_half(f)) as f64,
+        "scaled_float" => {
+            let scale = def.get("scaling_factor").and_then(to_f64).unwrap_or(1.0);
+            (f * scale + 0.5).floor() * (1.0 / scale)
+        }
+        _ => f,
     }
 }
 

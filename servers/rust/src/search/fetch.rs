@@ -338,6 +338,12 @@ pub(crate) fn doc_values_output(
         }
         return Ok(None);
     }
+    let vals = match vals {
+        Some(v) if out_format.is_empty() || out_format == "use_field_mapping" => {
+            Some(crate::search::javanum::java_field_values(idx, id, field, &ftype, v, fallback_source))
+        }
+        other => other,
+    };
     match vals {
         Some(v) if !v.is_empty() => Ok(Some(
             v.iter()

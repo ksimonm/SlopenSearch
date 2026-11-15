@@ -900,7 +900,7 @@ pub fn run_search(
         } else if !h.score.is_finite() {
             crate::search::script_ctx::f64_value(h.score)
         } else {
-            json!(h.score)
+            crate::search::javanum::score_value(h.score)
         };
         let mut entry = Map::new();
         entry.insert("_index".to_string(), json!(h.idx_name));
@@ -1214,7 +1214,7 @@ pub fn run_search(
         "hits".to_string(),
         json!({
             "total": {"value": total, "relation": "eq"},
-            "max_score": match max_score { Some(m) => json!(m), None => Value::Null },
+            "max_score": match max_score { Some(m) => crate::search::javanum::score_value(m), None => Value::Null },
             "hits": hits,
         }),
     );

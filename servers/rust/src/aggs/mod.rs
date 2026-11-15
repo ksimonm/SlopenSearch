@@ -132,6 +132,18 @@ fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<
                 })
                 .collect();
         }
+        if matches!(ftype, "float" | "half_float" | "scaled_float") {
+            // aggregations read the doc values: the value at the field's precision
+            vals = vals
+                .into_iter()
+                .map(|v| match to_f64(&v) {
+                    Some(f) if v.is_number() || v.is_string() => crate::javafmt::double_value(
+                        crate::mapping::fields::doc_value_double(ftype, def, f),
+                    ),
+                    _ => v,
+                })
+                .collect();
+        }
         if let Some(ign) = doc.get("_ignored").and_then(|v| v.as_array()) {
             if ign.iter().any(|x| x.as_str() == Some(rf.as_str())) {
                 vals.clear();
@@ -315,19 +327,18 @@ fn doc_matches(idx: &Index, doc: &Value, query: &Map<String, Value>) -> bool {
     }
 }
 
+/// A double OpenSearch computes, written as Jackson writes it (1.0E7); null
+/// when not finite.
 fn json_num(f: f64) -> Value {
-    match serde_json::Number::from_f64(f) {
-        Some(n) => Value::Number(n),
-        None => Value::Null,
+    if f.is_finite() {
+        crate::javafmt::double_value(f)
+    } else {
+        Value::Null
     }
 }
 
 fn fmt_bound(f: f64) -> String {
-    if f == f.trunc() && f.is_finite() && f.abs() < 1e15 {
-        format!("{:.1}", f)
-    } else {
-        format_number(f)
-    }
+    crate::javafmt::double(f)
 }
 
 fn is_mapped_field(idx: &Index, field: &str, prefix: &str) -> bool {
@@ -2238,14 +2249,6 @@ fn field_is_date(idx: &Index, field: &str, prefix: &str) -> bool {
     )
 }
 
-fn java_double_string(f: f64) -> String {
-    if f == f.trunc() && f.is_finite() && f.abs() < 1e15 {
-        format!("{:.1}", f)
-    } else {
-        format!("{}", f)
-    }
-}
-
 fn collect_metric_values(
     idx: &Index,
     docs: &[&Value],
@@ -2510,9 +2513,11 @@ fn th_sort_value(idx: &Index, doc: &Value, id: &str, field: &str, desc: bool) ->
     }
     let f = field.to_string();
     let mut is_date = false;
+    let mut ftype = String::new();
     if let Some(def) = crate::mapping::mapping_field_def(idx, &f) {
         let ft = def.get("type").and_then(|t| t.as_str()).unwrap_or("");
         is_date = ft == "date" || ft == "date_nanos";
+        ftype = ft.to_string();
     }
     let raw = idx.doc_values.get(id)?.get(&f)?;
     let mut list = crate::search::eval::array_values(raw);
@@ -2530,7 +2535,7 @@ fn th_sort_value(idx: &Index, doc: &Value, id: &str, field: &str, desc: bool) ->
             return Some(json!(ms));
         }
     }
-    Some(chosen)
+    Some(crate::search::javanum::java_field_number(&ftype, &chosen, false))
 }
 
 fn th_cmp_opts(a: &Option<Value>, b: &Option<Value>, desc: bool) -> Ordering {
@@ -2751,7 +2756,7 @@ fn top_hits_agg(
             if omit_scores {
                 Value::Null
             } else {
-                json!(c.score)
+                crate::search::javanum::score_value(c.score)
             },
         );
         if !omit_source {
@@ -3158,7 +3163,7 @@ fn percentiles_agg(
     if keyed {
         let mut m = Map::new();
         for (p, v, s) in &out {
-            let k = java_double_string(*p);
+            let k = crate::javafmt::double(*p);
             m.insert(k.clone(), v.clone());
             if let Some(s) = s {
                 m.insert(format!("{}_as_string", k), json!(s));
@@ -3254,7 +3259,7 @@ fn percentile_ranks_agg(
     if keyed {
         let mut m = Map::new();
         for (v, r) in &out {
-            m.insert(java_double_string(*v), r.clone());
+            m.insert(crate::javafmt::double(*v), r.clone());
         }
         Ok(json!({"values": m}))
     } else {
@@ -3562,7 +3567,7 @@ fn leaf_metric_value(
     if let Some(k) = key {
         if let Some(values) = node.get("values").and_then(|v| v.as_object()) {
             let kk = match k.parse::<f64>() {
-                Ok(f) => java_double_string(f),
+                Ok(f) => crate::javafmt::double(f),
                 Err(_) => k.clone(),
             };
             return match values.get(&kk) {
@@ -3650,7 +3655,7 @@ fn bucket_display_key(b: &Value) -> String {
     }
     match b.get("key") {
         Some(Value::String(s)) => s.clone(),
-        Some(Value::Number(n)) => java_double_string(n.as_f64().unwrap_or(0.0)),
+        Some(Value::Number(n)) => crate::javafmt::double(n.as_f64().unwrap_or(0.0)),
         _ => String::new(),
     }
 }
@@ -4005,7 +4010,7 @@ fn eval_metric_pipeline(
             if keyed {
                 let mut m = Map::new();
                 for p in &percents {
-                    m.insert(java_double_string(*p), pick(*p));
+                    m.insert(crate::javafmt::double(*p), pick(*p));
                 }
                 Ok(json!({"values": m}))
             } else {
@@ -5296,7 +5301,7 @@ fn terms_agg(
                 .map(|v| match &v {
                     // a double script value keys as Java's Double.toString
                     Value::Number(n) if n.is_f64() => {
-                        Value::String(java_double_string(n.as_f64().unwrap_or(0.0)))
+                        Value::String(crate::javafmt::double(n.as_f64().unwrap_or(0.0)))
                     }
                     other => Value::String(key_string(other)),
                 })

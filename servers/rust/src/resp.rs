@@ -116,9 +116,8 @@ fn write_pretty(buf: &mut String, v: &Value, indent: usize) {
                 buf.push_str(&i.to_string());
             } else if let Some(u) = n.as_u64() {
                 buf.push_str(&u.to_string());
-            } else if let Some(f) = n.as_f64() {
-                buf.push_str(&format_number(f));
             } else {
+                // the text of the number: a double built with javafmt reads 1.0E7
                 buf.push_str(&n.to_string());
             }
         }
@@ -159,9 +158,8 @@ pub fn write_compact(buf: &mut String, v: &Value) {
                 buf.push_str(&i.to_string());
             } else if let Some(u) = n.as_u64() {
                 buf.push_str(&u.to_string());
-            } else if let Some(f) = n.as_f64() {
-                buf.push_str(&format_number(f));
             } else {
+                // the text of the number: a double built with javafmt reads 1.0E7
                 buf.push_str(&n.to_string());
             }
         }
