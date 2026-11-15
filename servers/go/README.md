@@ -51,7 +51,7 @@ Domain and engine packages:
 | Package | Contents | Depends on (internal) |
 |---|---|---|
 | `internal/model` | the domain state: `State` (indices, cluster settings, templates, data streams, pipelines, stored scripts), `Index` (metadata, settings, mappings, documents, versions, seq_nos, routing, pending/stale writes) with its accessors, `DataStream`, node identity constants | settings |
-| `internal/dates` | date parsing and formatting as OpenSearch does it: Java format names and patterns, epoch values, ISO detection, range date math | jsonv |
+| `internal/dates` | date parsing and formatting as OpenSearch does it: Java format names and patterns, epoch values, ISO detection, range date math | jsonv, zone |
 | `internal/mapping` | mappings and field types: validation, merging, dotted names, dynamic mappings and templates, alias resolution (`FieldDef`), index-time parsing of documents into doc values (`ParseContext`, `ComputeDocValues`), knn_vector/completion/geo field values | analysis, apierr, dates, jsonv, model, ojson, settings, wildcard |
 | `internal/search` | query evaluation (`QueryCtx`, `EvalQuery`), scoring, query_string, inner hits, percolate, function_score, k-NN queries, highlighting, source filtering, sort specs and hit sorting (`SortHits`), `search_after`, collapse, rescore, shard-level query validation, profile; the painless/expressions glue for script queries, scores, fields and sorts. Other indices and stored scripts are reached through `search.Cluster` (`ClusterLookup`, set by the server) | analysis, apierr, dates, expressions, jsonv, mapping, model, mustache, ojson, painless, settings |
 | `internal/aggs` | bucket, metric and pipeline aggregations, scripted aggregations (`aggs.Evaluate` over `aggs.Hit`) | search, mapping, model, ... |
@@ -69,6 +69,8 @@ Leaf libraries (no server state):
 | `internal/wildcard` | `*` pattern matching | - |
 | `internal/settings` | index settings lookup (`Find`, `Int`, `ValueString`, `ValueInt`), setting key patterns (`MatchAny`) | jsonv, wildcard |
 | `internal/apierr` | the API error type (`Error`, `Response` for pre-rendered bodies), common errors (`BadRequest`, `Parsing`, `IndexNotFound`) | - |
+| `internal/zone` | `java.time.ZoneId.of` (Java's ID rules and error texts) with tz rules from the embedded tz database: offsets, valid offsets of a local time, gaps, transitions | apierr |
+| `internal/jbase64` | `java.util.Base64.getDecoder()` semantics and error messages | - |
 | `internal/jregex` | backtracking `java.util.regex` subset (lookaround, possessive, `\p{..}`) | - |
 | `internal/painless` | Painless: lexer, parser, type checks, interpreter, values with Java semantics, class library, `java.time`, script contexts and compile cache | - |
 | `internal/expressions` | Lucene expressions; doc values, fields and params are passed in (`Env`, `Doc`) | painless |

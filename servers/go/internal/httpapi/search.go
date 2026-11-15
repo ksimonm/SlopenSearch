@@ -1348,6 +1348,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 				typed := r.URL.Query().Get("typed_keys") != "" && r.URL.Query().Get("typed_keys") != "false"
 				out, err := aggs.Evaluate(aggSpec, aggHits, aggIdx, "", typed)
 				if err != nil {
+					positionAggParseError(err, bodyRaw)
 					writeError(w, err)
 					return
 				}

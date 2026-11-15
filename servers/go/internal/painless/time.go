@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"slopensearch/internal/zone"
 )
 
 // Painless engine: the java.time subset.
@@ -142,13 +144,22 @@ func plParseZDT(s string, off int) (*plZDT, *RuntimeError) {
 			Reason: "Text '" + s + "' could not be parsed at index 0"}
 	}
 	if zone != "" {
-		if loc, lerr := time.LoadLocation(zone); lerr == nil {
+		if loc, ok := plZoneLocation(zone); ok {
 			t = t.In(loc)
 		}
 	} else if _, o := t.Zone(); o == 0 {
 		t = t.UTC()
 	}
 	return &plZDT{t: t}, nil
+}
+
+// plZoneLocation is the location of a ZoneId.
+func plZoneLocation(id string) (*time.Location, bool) {
+	z, err := zone.Cached(id)
+	if err != nil {
+		return nil, false
+	}
+	return z.Location(), true
 }
 
 func plDateOf(y, m, d int) *plLocalDate {
@@ -183,7 +194,7 @@ func (in *plInterp) callStaticTime(class, name string, args []any, off int) (any
 			}
 			t := time.UnixMilli(inst.ms).UTC().Add(time.Duration(inst.nanos))
 			if z, ok := args[1].(plZoneID); ok && z != "Z" && z != "UTC" {
-				if loc, err := time.LoadLocation(string(z)); err == nil {
+				if loc, ok := plZoneLocation(string(z)); ok {
 					t = t.In(loc)
 				}
 			}
@@ -208,7 +219,11 @@ func (in *plInterp) callStaticTime(class, name string, args []any, off int) (any
 		}
 	case "ZoneId":
 		if name == "of" {
-			return plZoneID(ToString(args[0])), nil, true
+			id := ToString(args[0])
+			if _, zerr := zone.Cached(id); zerr != nil {
+				return nil, &RuntimeError{Type: zerr.Kind, Offset: off, Reason: zerr.Message}, true
+			}
+			return plZoneID(id), nil, true
 		}
 	case "Duration":
 		unit := map[string]time.Duration{"ofDays": 24 * time.Hour, "ofHours": time.Hour, "ofMinutes": time.Minute,
@@ -461,7 +476,7 @@ func (in *plInterp) timeMethod(recv any, name string, args []any, off int) (any,
 			return t, nil, true
 		case "withZoneSameInstant/1":
 			if z, ok := args[0].(plZoneID); ok {
-				if loc, err := time.LoadLocation(string(z)); err == nil && z != "Z" {
+				if loc, ok := plZoneLocation(string(z)); ok && z != "Z" {
 					return &plZDT{t: tt.In(loc)}, nil, true
 				}
 				return &plZDT{t: tt.UTC()}, nil, true

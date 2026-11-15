@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
@@ -21,16 +20,6 @@ import (
 	"slopensearch/internal/model"
 	"slopensearch/internal/painless"
 )
-
-// ---------------------------------------------------------------------------
-// time helpers used by date range queries
-// ---------------------------------------------------------------------------
-
-func timeNowIn(loc *time.Location) (time.Time, int) {
-	now := time.Now().In(loc)
-	_, off := now.Zone()
-	return now, off
-}
 
 // ---------------------------------------------------------------------------
 // multi_match / combined_fields
