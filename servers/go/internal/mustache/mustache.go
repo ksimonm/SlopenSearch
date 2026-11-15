@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"slopensearch/internal/painless"
 )
@@ -29,73 +31,112 @@ type node struct {
 	inner    string // raw text of the section body (for functions)
 }
 
+// parse compiles a template the way mustache.java's MustacheParser does,
+// including its error messages: the line (newlines inside tags are not
+// counted) and, for an unclosed triple mustache, the column counter of the
+// enclosing section (in UTF-16 units, restarted for every section body).
 func parse(tpl string) ([]*node, *Error) {
+	const file = "query-template"
 	open, close := "{{", "}}"
 	type frame struct {
 		node  *node
-		start int
+		start int // byte offset of the section body
+		col   int // the enclosing compile's column counter
+		line  int // line of the section start tag
+	}
+	fail := func(line int, msg string) *Error {
+		return &Error{Reason: msg + " @[" + file + ":" + strconv.Itoa(line) + "]"}
 	}
 	root := &node{}
-	stack := []frame{{node: root}}
-	i := 0
-	for i < len(tpl) {
-		j := strings.Index(tpl[i:], open)
-		if j < 0 {
+	stack := []frame{{node: root, line: 1}}
+	line, col := 1, 0
+	i, textStart := 0, 0
+	flush := func(end int) {
+		if end > textStart {
 			top := stack[len(stack)-1].node
-			top.children = append(top.children, &node{kind: 't', text: tpl[i:]})
-			break
+			top.children = append(top.children, &node{kind: 't', text: tpl[textStart:end]})
+		}
+	}
+	for i < len(tpl) {
+		r, sz := utf8.DecodeRuneInString(tpl[i:])
+		if r == '\n' {
+			line++
+			col = 0
+			i += sz
+			continue
+		}
+		if !strings.HasPrefix(tpl[i:], open) {
+			col += utf16.RuneLen(r)
+			i += sz
+			continue
+		}
+		flush(i)
+		tagStart := i
+		col++ // the second start delimiter character is not counted
+		i += len(open)
+		var sb strings.Builder
+		closed := false
+		for i < len(tpl) {
+			r, sz := utf8.DecodeRuneInString(tpl[i:])
+			i += sz
+			if c := string(r); strings.HasPrefix(close, c) {
+				if len(close) == len(c) {
+					col++
+					closed = true
+					break
+				}
+				if strings.HasPrefix(tpl[i:], close[len(c):]) {
+					col += 2
+					i += len(close) - len(c)
+					closed = true
+					break
+				}
+			} else {
+				col += utf16.RuneLen(r)
+			}
+			sb.WriteRune(r)
+		}
+		textStart = i
+		command := sb.String()
+		if command == "" {
+			return nil, fail(line, "Empty mustache")
 		}
 		top := stack[len(stack)-1].node
-		if j > 0 {
-			top.children = append(top.children, &node{kind: 't', text: tpl[i : i+j]})
-		}
-		tagStart := i + j
-		i = tagStart + len(open)
-		triple := false
-		if open == "{{" && strings.HasPrefix(tpl[i:], "{") {
-			triple = true
-			i++
-		}
-		end := strings.Index(tpl[i:], close)
-		if end < 0 {
-			return nil, &Error{Reason: "Improperly closed variable in query-template:1"}
-		}
-		tag := tpl[i : i+end]
-		i += end + len(close)
-		if triple {
-			if strings.HasPrefix(tpl[i:], "}") {
-				i++
-			}
-			top.children = append(top.children, &node{kind: 'u', text: strings.TrimSpace(tag)})
-			continue
-		}
-		if tag == "" {
-			continue
-		}
-		switch tag[0] {
+		variable := strings.TrimSpace(command[1:])
+		switch command[0] {
 		case '!':
-			continue
 		case '=':
-			d := strings.TrimSpace(strings.TrimSuffix(tag[1:], "="))
+			d := strings.TrimSpace(strings.TrimSuffix(command[1:], "="))
 			parts := strings.Fields(d)
 			if len(parts) == 2 {
 				open, close = parts[0], parts[1]
 			}
-			continue
+		case '{':
+			name := variable
+			if close != "}}" {
+				name = strings.TrimSpace(strings.TrimSuffix(variable, "}"))
+			} else if strings.HasPrefix(tpl[i:], "}") {
+				i++
+				textStart = i
+			} else {
+				col++
+				return nil, fail(line, "Improperly closed variable: "+variable+" in "+file+":"+
+					strconv.Itoa(line)+"@"+strconv.Itoa(col))
+			}
+			top.children = append(top.children, &node{kind: 'u', text: name})
 		case '&':
-			top.children = append(top.children, &node{kind: 'u', text: strings.TrimSpace(tag[1:])})
+			top.children = append(top.children, &node{kind: 'u', text: variable})
 		case '#', '^':
-			name := strings.TrimSpace(tag[1:])
-			n := &node{kind: tag[0], text: name}
-			fields := strings.Fields(name)
+			n := &node{kind: command[0], text: variable}
+			fields := strings.Fields(variable)
 			if len(fields) > 0 {
 				switch fields[0] {
 				case "toJson", "url":
-					if tag[0] == '#' && len(fields) == 1 {
+					if command[0] == '#' && len(fields) == 1 {
 						n.fn = fields[0]
 					}
 				case "join":
-					if tag[0] == '#' {
+					if command[0] == '#' {
 						n.fn = "join"
 						n.delim = ","
 						if len(fields) > 1 {
@@ -107,27 +148,33 @@ func parse(tpl string) ([]*node, *Error) {
 				}
 			}
 			top.children = append(top.children, n)
-			stack = append(stack, frame{node: n, start: i})
+			stack = append(stack, frame{node: n, start: i, col: col, line: line})
+			col = 0
 		case '/':
-			name := strings.TrimSpace(tag[1:])
-			if len(stack) == 1 || stack[len(stack)-1].node.text != name {
-				return nil, &Error{Reason: "Mismatched start/end tags: " + name + " in query-template:1"}
+			if len(stack) == 1 || stack[len(stack)-1].node.text != variable {
+				start := "null"
+				if len(stack) > 1 {
+					start = stack[len(stack)-1].node.text
+				}
+				return nil, fail(line, "Mismatched start/end tags: "+start+" != "+variable+" in "+file+":"+strconv.Itoa(line))
 			}
 			f := stack[len(stack)-1]
 			f.node.inner = tpl[f.start:tagStart]
+			col = f.col
 			stack = stack[:len(stack)-1]
 		case '>':
-			continue
+			return nil, &Error{Reason: "Partial templates are not supported in OpenSearch Mustache scripts: [" + variable + "]"}
 		default:
-			top.children = append(top.children, &node{kind: 'v', text: strings.TrimSpace(tag)})
+			if !closed {
+				return nil, fail(line, "Improperly closed variable")
+			}
+			top.children = append(top.children, &node{kind: 'v', text: strings.TrimSpace(command)})
 		}
 	}
+	flush(len(tpl))
 	if len(stack) > 1 {
-		name := stack[len(stack)-1].node.text
-		if f := strings.Fields(name); len(f) > 0 {
-			name = f[0]
-		}
-		return nil, &Error{Reason: "Failed to close '" + name + "' tag @[query-template:1]"}
+		f := stack[len(stack)-1]
+		return nil, fail(f.line, "Failed to close '"+f.node.text+"' tag")
 	}
 	return root.children, nil
 }
