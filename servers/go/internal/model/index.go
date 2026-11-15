@@ -42,15 +42,10 @@ type Index struct {
 
 	DVGen uint64 // bumped whenever DocValues changes; validates derived caches
 
-	Stale map[string]StaleMark // unrefreshed overwrites of searchable docs
+	Stale map[string]*DocState // last refreshed versions of documents written since (visibility.go)
 
 	pendingSince time.Time // when unrefreshed writes were first seen (refresh.go)
-}
-
-// StaleMark records an unrefreshed overwrite of a searchable document.
-type StaleMark struct {
-	Seq     int64                     // seq_no of the overwrite
-	Pending map[string]map[string]any // Pending map at the time; a refresh replaces it
+	refreshGen   uint64    // bumped by every refresh (visibility.go)
 }
 
 // NewIndex returns an empty index with every map allocated.

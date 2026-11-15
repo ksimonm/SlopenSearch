@@ -54,13 +54,14 @@ func (idx *Index) RoutingMatches(id, routing string) bool {
 	return idx.ShardFor(id, routing) == idx.DocShard(id)
 }
 
-// MarkPending records an unrefreshed write. A document that searches could
-// already see stays visible: a refresh only changes which version they read,
-// it never makes an existing document disappear.
+// MarkPending records an unrefreshed write. Searches keep seeing the version
+// NoteWrite recorded for a document they could already see; without one the
+// new version stays visible (a document never disappears from searches).
 func (idx *Index) MarkPending(id string, doc map[string]any, existed bool) {
 	if _, pending := idx.Pending[id]; existed && !pending {
-		idx.noteStaleOverwrite(id)
-		return
+		if st := idx.Stale[id]; st == nil || st.gen != idx.refreshGen {
+			return
+		}
 	}
 	idx.Pending[id] = doc
 }

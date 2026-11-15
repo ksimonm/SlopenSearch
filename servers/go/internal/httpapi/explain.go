@@ -8,8 +8,7 @@ import (
 )
 
 func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request, name, id string) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	defer s.lockSearchView()()
 	idx, apiErr := s.resolveReadTarget(name)
 	if apiErr != nil {
 		writeError(w, apiErr)

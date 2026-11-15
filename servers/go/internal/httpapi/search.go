@@ -306,8 +306,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 		writeError(w, apiErr)
 		return
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	defer s.lockSearchFor(pitCtx)()
 	o := s.parseResolveParams(r, specOpts{closedError: true})
 	var indices []*model.Index
 	if pitCtx != nil {

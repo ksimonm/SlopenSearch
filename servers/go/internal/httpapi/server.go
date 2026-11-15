@@ -1049,8 +1049,7 @@ func (s *Server) handleCount(w http.ResponseWriter, r *http.Request, name string
 			Reason: "request does not support [suggest]"})
 		return
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	defer s.lockSearchView()()
 	o := s.parseResolveParams(r, specOpts{closedError: true})
 	indices, apiErr := s.resolveSpec(name, o)
 	if apiErr != nil {

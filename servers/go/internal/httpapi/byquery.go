@@ -10,6 +10,7 @@ import (
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/mapping"
+	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
 	"slopensearch/internal/search"
@@ -135,37 +136,20 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 	versionConflicts := int64(0)
 	var failures []any
 	start := time.Now()
-	for _, id := range append([]string(nil), idx.Order...) {
-		if maxDocs >= 0 && total >= maxDocs {
-			break
-		}
-		doc, live := idx.Docs[id]
-		if !live {
-			continue
-		}
-		if _, pending := idx.Pending[id]; pending {
-			continue
-		}
-		qc := search.NewQueryCtxForDoc(idx, id, doc)
-		match, _, qerr := qc.Eval(qmap)
-		if qerr != nil {
-			writeError(w, qerr)
-			return
-		}
-		if !match {
-			continue
-		}
+	hits, qerr := byQueryHits(idx, qmap, maxDocs)
+	if qerr != nil {
+		writeError(w, qerr)
+		return
+	}
+	for _, hit := range hits {
+		id := hit.id
 		total++
-		if idx.SearchSeesStale(id) {
+		doc, live := idx.Docs[id]
+		if !live || idx.SeqNos[id] != hit.seq {
 			// the search hit carries the refreshed version: if_seq_no fails
 			versionConflicts++
 			if conflicts != "proceed" {
-				failures = append(failures, ojson.Object{{"index", idx.Name}, {"id", id},
-					{"cause", ojson.Object{{"type", "version_conflict_engine_exception"},
-						{"reason", fmt.Sprintf("[%s]: version conflict, required seqNo [%d], primary term [1]. current document has seqNo [%d] and primary term [1]",
-							id, idx.SeqNos[id]-1, idx.SeqNos[id])},
-						{"index", idx.Name}, {"shard", "0"}, {"index_uuid", idx.UUID}}},
-					{"status", 409}})
+				failures = append(failures, byQueryConflict(idx, id, hit.seq, live))
 			}
 			continue
 		}
@@ -175,6 +159,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 			slices[si].total++
 		}
 		if isDelete {
+			idx.NoteWrite(id)
 			base := idx.CurrentVersion(id)
 			seq := idx.AllocSeqNo()
 			delete(idx.Docs, id)
@@ -213,6 +198,7 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 			newDoc = res.source
 		}
 		if op == "delete" {
+			idx.NoteWrite(id)
 			base := idx.CurrentVersion(id)
 			seq := idx.AllocSeqNo()
 			delete(idx.Docs, id)
@@ -274,6 +260,9 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 		if si >= 0 {
 			slices[si].updated++
 		}
+	}
+	if rv == "true" && deleted+updated > 0 {
+		idx.Refresh()
 	}
 	if total > 0 {
 		report[3].V = deleted
@@ -357,4 +346,54 @@ func checkByQueryCtx(res updateScriptResult, index, id string) *apierr.Error {
 		return apierr.BadRequest("Modifying [_index] not allowed")
 	}
 	return nil
+}
+
+// byQueryHit is a document a by-query search found, with the seqNo it saw.
+type byQueryHit struct {
+	id  string
+	seq int64
+}
+
+// byQueryHits runs the search of a by-query operation: it reads the last
+// refreshed versions of the documents.
+func byQueryHits(idx *model.Index, query map[string]any, maxDocs int64) ([]byQueryHit, *apierr.Error) {
+	view := idx.EnterSearchView()
+	defer view.Leave()
+	var hits []byQueryHit
+	for _, id := range idx.Order {
+		if maxDocs >= 0 && int64(len(hits)) >= maxDocs {
+			break
+		}
+		doc, live := idx.Docs[id]
+		if !live {
+			continue
+		}
+		if _, pending := idx.Pending[id]; pending {
+			continue
+		}
+		qc := search.NewQueryCtxForDoc(idx, id, doc)
+		match, _, qerr := qc.Eval(query)
+		if qerr != nil {
+			return nil, qerr
+		}
+		if match {
+			hits = append(hits, byQueryHit{id, idx.SeqNos[id]})
+		}
+	}
+	return hits, nil
+}
+
+// byQueryConflict is the failure of writing back a hit whose document was
+// written since the search saw it (seqNo seq).
+func byQueryConflict(idx *model.Index, id string, seq int64, live bool) ojson.Object {
+	reason := fmt.Sprintf("[%s]: version conflict, required seqNo [%d], primary term [1]. ", id, seq)
+	if live {
+		reason += fmt.Sprintf("current document has seqNo [%d] and primary term [1]", idx.SeqNos[id])
+	} else {
+		reason += "but no document was found"
+	}
+	return ojson.Object{{"index", idx.Name}, {"id", id},
+		{"cause", ojson.Object{{"type", "version_conflict_engine_exception"}, {"reason", reason},
+			{"index", idx.Name}, {"shard", "0"}, {"index_uuid", idx.UUID}}},
+		{"status", 409}}
 }

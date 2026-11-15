@@ -1404,6 +1404,12 @@ func ApplyRequestDerived(idx *model.Index, defs any) *apierr.Error {
 // ComputeDocValues validates and indexes a document, storing normalized field
 // values used by search, sort, aggregations and docvalue_fields.
 func ComputeDocValues(idx *model.Index, id string, doc map[string]any) *apierr.Error {
+	// the document is about to change: searches keep its refreshed version
+	idx.NoteWrite(id)
+	return computeDocValues(idx, id, doc)
+}
+
+func computeDocValues(idx *model.Index, id string, doc map[string]any) *apierr.Error {
 	if reason := invalidDocFieldName(doc); reason != "" {
 		return mapperErr("mapper_parsing_exception", reason, "illegal_argument_exception", reason)
 	}
@@ -1472,7 +1478,7 @@ func RecomputeAllDocValues(idx *model.Index) {
 		if !live {
 			continue
 		}
-		_ = ComputeDocValues(idx, id, doc)
+		_ = computeDocValues(idx, id, doc)
 	}
 }
 

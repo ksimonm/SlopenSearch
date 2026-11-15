@@ -439,6 +439,12 @@ func (s *Server) runBulkAction(a bulkAction, rv string, requireAliasURL bool, ur
 		if err != nil {
 			return bulkErrItem("delete", idx.Name, id, err), true
 		}
+		if exists {
+			idx.NoteWrite(id)
+			if rv == "true" {
+				defer idx.ForgetStale(id)
+			}
+		}
 		seq := idx.AllocSeqNo()
 		idx.SeqNos[id] = seq
 		idx.PrimaryTerms[id] = 1
@@ -518,7 +524,7 @@ func (s *Server) runBulkIndex(idx *model.Index, a bulkAction, id, routing, rv, u
 		return bulkErrItem(a.op, idx.Name, id, derr), true
 	}
 	if !exists {
-		idx.Order = append(idx.Order, id)
+		idx.AppendOrder(id)
 	}
 	idx.Docs[id] = src
 	delete(idx.RawDocs, id)
@@ -595,7 +601,7 @@ func (s *Server) runBulkUpdate(idx *model.Index, a bulkAction, id, routing, rv, 
 		if derr := mapping.ComputeDocValues(idx, id, src); derr != nil {
 			return bulkErrItem("update", idx.Name, id, derr), true
 		}
-		idx.Order = append(idx.Order, id)
+		idx.AppendOrder(id)
 		idx.Docs[id] = src
 		delete(idx.RawDocs, id)
 		idx.Versions[id] = 1
@@ -629,6 +635,10 @@ func (s *Server) runBulkUpdate(idx *model.Index, a bulkAction, id, routing, rv, 
 		deepMergeDoc(newDoc, docPatch)
 	}
 	if op == "delete" {
+		idx.NoteWrite(id)
+		if rv == "true" {
+			defer idx.ForgetStale(id)
+		}
 		ver := idx.CurrentVersion(id) + 1
 		seq := idx.AllocSeqNo()
 		delete(idx.Docs, id)

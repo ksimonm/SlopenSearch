@@ -45,7 +45,7 @@ func (idx *Index) refreshInterval() (time.Duration, bool) {
 
 // RefreshTickDue reports whether TickRefresh would change the index.
 func (idx *Index) RefreshTickDue(now time.Time) bool {
-	if len(idx.Pending) == 0 {
+	if len(idx.Pending) == 0 && len(idx.Stale) == 0 {
 		return !idx.pendingSince.IsZero()
 	}
 	if idx.pendingSince.IsZero() {
@@ -62,12 +62,12 @@ func (idx *Index) RefreshTickDue(now time.Time) bool {
 // once its refresh interval has passed since they were first seen.
 func (idx *Index) TickRefresh(now time.Time) {
 	switch {
-	case len(idx.Pending) == 0:
+	case len(idx.Pending) == 0 && len(idx.Stale) == 0:
 		idx.pendingSince = time.Time{}
 	case idx.pendingSince.IsZero():
 		idx.pendingSince = now
 	case idx.RefreshTickDue(now):
-		idx.Pending = nil
+		idx.Refresh()
 		idx.pendingSince = time.Time{}
 	}
 }
