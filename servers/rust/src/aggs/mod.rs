@@ -8334,48 +8334,6 @@ fn plane_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     (dx * dx + dy * dy).sqrt()
 }
 
-const GEOHASH_CHARS: &[u8] = b"0123456789bcdefghjkmnpqrstuvwxyz";
-
-fn geohash_encode(lat: f64, lon: f64, precision: usize) -> String {
-    let mut lat_lo = -90.0f64;
-    let mut lat_hi = 90.0f64;
-    let mut lon_lo = -180.0f64;
-    let mut lon_hi = 180.0f64;
-    let mut out = String::new();
-    let mut bits: u32 = 0;
-    let mut nbits = 0;
-    let mut even = true;
-    while out.len() < precision {
-        if even {
-            let mid = (lon_lo + lon_hi) / 2.0;
-            if lon >= mid {
-                bits = (bits << 1) | 1;
-                lon_lo = mid;
-            } else {
-                bits <<= 1;
-                lon_hi = mid;
-            }
-        } else {
-            let mid = (lat_lo + lat_hi) / 2.0;
-            if lat >= mid {
-                bits = (bits << 1) | 1;
-                lat_lo = mid;
-            } else {
-                bits <<= 1;
-                lat_hi = mid;
-            }
-        }
-        even = !even;
-        nbits += 1;
-        if nbits == 5 {
-            out.push(GEOHASH_CHARS[bits as usize] as char);
-            bits = 0;
-            nbits = 0;
-        }
-    }
-    out
-}
-
 fn geohash_grid_agg(
     t: &Map<String, Value>,
     docs: &[&Value],
@@ -8402,7 +8360,7 @@ fn geohash_grid_agg(
     for d in docs {
         for v in doc_field_values(idx, d, &field, prefix) {
             if let Some((lat, lon)) = geo_point_of(&v) {
-                let gh = geohash_encode(lat, lon, precision as usize);
+                let gh = crate::geohash::encode(lat, lon, precision as usize);
                 if !buckets.contains_key(&gh) {
                     order.push(gh.clone());
                 }

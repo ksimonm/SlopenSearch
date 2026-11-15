@@ -78,7 +78,7 @@ pub fn handle_render(store: &mut Store, req: &Req, path_id: Option<&str>) -> Res
             "application/json; charset=UTF-8",
             format!("{{\"template_output\":{}}}", rendered),
         ),
-        Err(e) => err_response(mustache_script_error(&src_text, &e.tag)),
+        Err(e) => err_response(crate::scripting::mustache_error(&src_text, &e, &[])),
     }
 }
 
@@ -217,7 +217,7 @@ pub fn handle_search_template(store: &mut Store, req: &Req, name: &str) -> Respo
     }
     let rendered = match render_source(&source, &params) {
         Ok(r) => r,
-        Err(e) => return err_response(mustache_script_error(&src_text, &e.tag)),
+        Err(e) => return err_response(crate::scripting::mustache_error(&src_text, &e, &[])),
     };
     let mut rendered_body: Value = match serde_json::from_str(&rendered) {
         Ok(v) => v,
@@ -443,7 +443,7 @@ pub fn handle_msearch(store: &mut Store, req: &Req, path: &str, template: bool) 
                         Value::String(s) => s.clone(),
                         other => serde_json::to_string(other).unwrap_or_default(),
                     };
-                    responses.push(error_item(&mustache_script_error(&src_text, &e.tag)));
+                    responses.push(error_item(&crate::scripting::mustache_error(&src_text, &e, &[])));
                     continue;
                 }
             };

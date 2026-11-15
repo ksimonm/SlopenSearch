@@ -7,6 +7,7 @@ mod aggs;
 mod analysis;
 mod dates;
 mod errors;
+mod geohash;
 mod hashes;
 mod http;
 mod ingest;

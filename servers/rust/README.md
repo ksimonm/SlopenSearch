@@ -130,7 +130,8 @@ Leaf libraries (no server state):
 | `snowball/` | the Snowball runtime and the generated stemmers |
 | `jregex.rs`, `uchar.rs` | backtracking `java.util.regex` subset; Java `Character` classification |
 | `painless/` | Painless: lexer, parser, static checks with Painless-exact compile errors, interpreter, Java value semantics, class library, java.time, regex with the limit-factor circuit breaker; `api.rs`: script contexts, compilation, error rendering, `DEEP_STACK_SIZE` (stack of the runtime threads) |
-| `mustache.rs` | mustache templates (mustache.java semantics) |
+| `mustache.rs` | mustache templates (mustache.java semantics, its compile and lookup errors) |
+| `geohash.rs` | geohash encoding, decoding, cell bounds and neighbours |
 | `hashes.rs` | md5/sha1/sha256/sha3 for the fingerprint processor |
 
 Files of `http/`:

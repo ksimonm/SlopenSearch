@@ -52,47 +52,10 @@ pub(crate) fn geo_point_of(v: &Value) -> Option<(f64, f64)> {
                     return Some((lat, lon));
                 }
             }
-            decode_geohash(t)
+            crate::geohash::decode(t)
         }
         _ => None,
     }
-}
-
-pub(crate) fn decode_geohash(s: &str) -> Option<(f64, f64)> {
-    const B32: &[u8] = b"0123456789bcdefghjkmnpqrstuvwxyz";
-    let mut even = true;
-    let mut lat_min = -90.0f64;
-    let mut lat_max = 90.0f64;
-    let mut lon_min = -180.0f64;
-    let mut lon_max = 180.0f64;
-    let mut seen = false;
-    for c in s.chars() {
-        let ci = B32.iter().position(|b| *b as char == c.to_ascii_lowercase())?;
-        seen = true;
-        for bit in (0..5).rev() {
-            let one = (ci >> bit) & 1 == 1;
-            if even {
-                let mid = (lon_min + lon_max) / 2.0;
-                if one {
-                    lon_min = mid;
-                } else {
-                    lon_max = mid;
-                }
-            } else {
-                let mid = (lat_min + lat_max) / 2.0;
-                if one {
-                    lat_min = mid;
-                } else {
-                    lat_max = mid;
-                }
-            }
-            even = !even;
-        }
-    }
-    if !seen {
-        return None;
-    }
-    Some(((lat_min + lat_max) / 2.0, (lon_min + lon_max) / 2.0))
 }
 
 pub(crate) fn valid_latlon(lat: f64, lon: f64) -> bool {

@@ -179,29 +179,12 @@ impl IndexCtx {
     }
 }
 
+/// Center (lon, lat) of a geohash of a document value (at most 12 characters).
 fn geohash_decode(s: &str) -> Option<(f64, f64)> {
-    const ALPHA: &[u8] = b"0123456789bcdefghjkmnpqrstuvwxyz";
-    if s.is_empty() || s.len() > 12 || !s.is_ascii() {
+    if s.len() > 12 || !s.is_ascii() {
         return None;
     }
-    let (mut lon_lo, mut lon_hi) = (-180.0f64, 180.0f64);
-    let (mut lat_lo, mut lat_hi) = (-90.0f64, 90.0f64);
-    let mut lon_bit = true;
-    for ch in s.bytes() {
-        let idx = ALPHA.iter().position(|c| *c == ch.to_ascii_lowercase())? as u8;
-        for shift in (0..5).rev() {
-            let bit = (idx >> shift) & 1 == 1;
-            if lon_bit {
-                let mid = (lon_lo + lon_hi) / 2.0;
-                if bit { lon_lo = mid } else { lon_hi = mid }
-            } else {
-                let mid = (lat_lo + lat_hi) / 2.0;
-                if bit { lat_lo = mid } else { lat_hi = mid }
-            }
-            lon_bit = !lon_bit;
-        }
-    }
-    Some(((lon_lo + lon_hi) / 2.0, (lat_lo + lat_hi) / 2.0))
+    crate::geohash::decode(s).map(|(lat, lon)| (lon, lat))
 }
 
 fn is_integer_kind(t: &str) -> bool {
