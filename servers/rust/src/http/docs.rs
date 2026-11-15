@@ -759,7 +759,7 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
         );
     }
     if !existing {
-        idx.order.push(doc_id.clone());
+        crate::model::visibility::push_order(idx, &doc_id);
     }
     let seq = idx.index_total;
     idx.versions.insert(doc_id.clone(), planned_version);
@@ -784,7 +784,7 @@ pub fn handle_index_doc(store: &mut Store, req: &Req, name: &str, id: &str, op_t
         idx.routing.insert(doc_id.clone(), routing.clone());
     }
     if req.bool_param("refresh") || req.param("refresh") == Some("wait_for") {
-        idx.pending.remove(&doc_id);
+        crate::model::visibility::refresh(idx);
     } else {
         idx.pending
             .insert(doc_id.clone(), Value::Object(Map::new()));
@@ -935,6 +935,14 @@ fn stored_fields_json(idx: &Index, doc: &Value, spec: &str) -> Map<String, Value
 }
 
 pub fn handle_get_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> Response {
+    // realtime=false reads the last refreshed versions, like a search
+    if req.param("realtime") == Some("false") {
+        return crate::model::visibility::with_view(store, |store| get_doc_at(store, req, name, id));
+    }
+    get_doc_at(store, req, name, id)
+}
+
+fn get_doc_at(store: &mut Store, req: &Req, name: &str, id: &str) -> Response {
     if let Some(r) = bad_param(req) { return r; }
     let target = match resolve_read_target(store, name) {
         Ok(t) => t.name.clone(),
@@ -1075,6 +1083,14 @@ pub fn handle_get_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> Res
 }
 
 pub fn handle_get_source(store: &mut Store, req: &Req, name: &str, id: &str) -> Response {
+    // realtime=false reads the last refreshed versions, like a search
+    if req.param("realtime") == Some("false") {
+        return crate::model::visibility::with_view(store, |store| get_source_at(store, req, name, id));
+    }
+    get_source_at(store, req, name, id)
+}
+
+fn get_source_at(store: &mut Store, req: &Req, name: &str, id: &str) -> Response {
     if let Some(r) = bad_param(req) { return r; }
     let target = match resolve_read_target(store, name) {
         Ok(t) => t.name.clone(),
@@ -1167,6 +1183,7 @@ pub fn handle_delete_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
             return err_response(e);
         }
     };
+    crate::model::visibility::before_write(idx, id);
     idx.docs.remove(id);
     idx.pending.remove(id);
     idx.routing.remove(id);
@@ -1176,6 +1193,9 @@ pub fn handle_delete_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
     idx.seq_nos.insert(id.to_string(), seq);
     idx.index_total += 1;
     idx.delete_total += 1;
+    if req.bool_param("refresh") {
+        crate::model::visibility::refresh(idx);
+    }
     let mut out = json!({"_index": idx.name, "_id": id, "_version": planned,
         "_shards": {"total": idx.num_shards(), "successful": idx.num_shards(), "failed": 0},
         "result": if existed { "deleted" } else { "not_found" }, "_seq_no": seq, "_primary_term": 1});
@@ -1614,6 +1634,7 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
             }
         }
         if result == "deleted" {
+            crate::model::visibility::before_write(store.indices.get_mut(&target).unwrap(), id);
             store.indices.get_mut(&target).unwrap().docs.remove(id);
             store.indices.get_mut(&target).unwrap().raw_sources.remove(id);
             crate::mapping::fields::remove_doc_values(store.indices.get_mut(&target).unwrap(), id);
@@ -1655,7 +1676,7 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
             idx.docs.insert(id.to_string(), Value::Object(cur.clone()));
             idx.raw_sources.insert(id.to_string(), serde_json::to_vec(&Value::Object(cur.clone())).unwrap_or_default());
             if req.bool_param("refresh") || req.param("refresh") == Some("wait_for") {
-                idx.pending.remove(id);
+                crate::model::visibility::refresh(idx);
             } else {
                 idx.pending.insert(id.to_string(), Value::Object(cur.clone()));
             }
@@ -1692,7 +1713,7 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
         if let Err(e) = crate::mapping::fields::compute_doc_values(idx, id, &mut base) {
             return err_response(e);
         }
-        idx.order.push(id.to_string());
+        crate::model::visibility::push_order(idx, id);
         let seq = idx.index_total;
         idx.versions.insert(id.to_string(), 1);
         idx.seq_nos.insert(id.to_string(), seq);
@@ -1700,7 +1721,7 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
         idx.docs.insert(id.to_string(), Value::Object(base.clone()));
         idx.raw_sources.insert(id.to_string(), serde_json::to_vec(&Value::Object(base.clone())).unwrap_or_default());
         if req.bool_param("refresh") || req.param("refresh") == Some("wait_for") {
-            idx.pending.remove(id);
+            crate::model::visibility::refresh(idx);
         } else {
             idx.pending.insert(id.to_string(), Value::Object(base.clone()));
         }
@@ -1751,6 +1772,14 @@ pub fn handle_update_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> 
 }
 
 pub fn handle_mget(store: &mut Store, req: &Req, name: &str) -> Response {
+    // realtime=false reads the last refreshed versions, like a search
+    if req.param("realtime") == Some("false") {
+        return crate::model::visibility::with_view(store, |store| mget_at(store, req, name));
+    }
+    mget_at(store, req, name)
+}
+
+fn mget_at(store: &mut Store, req: &Req, name: &str) -> Response {
     let body = match req.json_body() {
         Ok(b) => b,
         Err(e) => return err_response(e),
@@ -2637,6 +2666,7 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
                     continue;
                 }
             };
+            crate::model::visibility::before_write(idx, &doc_id);
             let existed = idx.docs.remove(&doc_id).is_some();
             idx.pending.remove(&doc_id);
             idx.routing.remove(&doc_id);
@@ -2797,6 +2827,7 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
             let mut seq = idx.seq_nos.get(&doc_id).copied().unwrap_or(0);
             let mut version = old_ver;
             if deleted {
+                crate::model::visibility::before_write(idx, &doc_id);
                 idx.docs.remove(&doc_id);
                 idx.raw_sources.remove(&doc_id);
                 crate::mapping::fields::remove_doc_values(idx, &doc_id);
@@ -2816,7 +2847,7 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
                 seq = idx.index_total;
                 version = old_ver + 1;
                 if existing.is_none() {
-                    idx.order.push(doc_id.clone());
+                    crate::model::visibility::push_order(idx, &doc_id);
                 }
                 idx.versions.insert(doc_id.clone(), version);
                 idx.seq_nos.insert(doc_id.clone(), seq);
@@ -3105,7 +3136,7 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
             continue;
         }
         if !exists {
-            idx.order.push(doc_id.clone());
+            crate::model::visibility::push_order(idx, &doc_id);
         }
         let seq = idx.index_total;
         idx.versions.insert(doc_id.clone(), planned);
@@ -3159,7 +3190,7 @@ pub fn handle_bulk(store: &mut Store, req: &Req, name: &str) -> Response {
     }
     if refresh || req.param("refresh") == Some("wait_for") {
         for idx in store.indices.values_mut() {
-            idx.pending.clear();
+            crate::model::visibility::refresh(idx);
         }
     }
     let mut resp = json!({"took": 1, "errors": has_errors, "items": items});
@@ -3519,6 +3550,11 @@ pub fn handle_mtermvectors(store: &mut Store, req: &Req, name: &str) -> Response
 }
 
 pub fn handle_explain(store: &mut Store, req: &Req, name: &str, id: &str) -> Response {
+    // explain reads the last refreshed version of the document, like a search
+    crate::model::visibility::with_view(store, |store| explain_at(store, req, name, id))
+}
+
+fn explain_at(store: &mut Store, req: &Req, name: &str, id: &str) -> Response {
     let body = if req.method == "POST" || !req.body.is_empty() {
         match req.json_body() {
             Ok(m) => m,
@@ -3890,19 +3926,14 @@ pub fn handle_delete_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
             break;
         }
         let idx = store.indices.get_mut(&target).unwrap();
-        let cur_seq = idx.seq_nos.get(id).copied();
-        if let (Some(want), Some(have)) = (snap_seq.get(id), cur_seq) {
-            if *want != have {
-                conflicts += 1;
-                if !proceed {
-                    failures.push(json!({"index": target, "id": id, "cause": {
-                        "type": "version_conflict_engine_exception",
-                        "reason": format!("[{}]: version conflict, required seqNo [{}], primary term [1]. current document has seqNo [{}] and primary term [1]", id, want, have),
-                        "index": target, "shard": "0", "index_uuid": idx.uuid.clone()}, "status": 409}));
-                }
-                continue;
+        if let Some(f) = snap_seq.get(id).and_then(|want| crate::model::visibility::conflict(idx, id, *want)) {
+            conflicts += 1;
+            if !proceed {
+                failures.push(f);
             }
+            continue;
         }
+        crate::model::visibility::before_write(idx, id);
         if idx.docs.remove(id).is_some() {
             crate::mapping::fields::remove_doc_values(idx, id);
             let old_ver = idx.versions.get(id).copied().unwrap_or(1);
@@ -3914,8 +3945,9 @@ pub fn handle_delete_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
             deleted += 1;
         }
     }
-    if req.bool_param("refresh") {
-        store.indices.get_mut(&target).unwrap().pending.clear();
+    // a refresh follows the writes: none when every hit conflicted
+    if req.bool_param("refresh") && deleted > 0 {
+        crate::model::visibility::refresh(store.indices.get_mut(&target).unwrap());
     }
     let batches = if total > 0 { 1 } else { 0 };
     let mut out = byq_report(total, 0, deleted, 0, batches, &failures);
@@ -3974,27 +4006,28 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
     let mut noops = 0i64;
     let mut failures: Vec<Value> = Vec::new();
     let mut failure_status = 0u16;
-    for id in &ids {
+    let batch_size = req.param("scroll_size").and_then(|v| v.parse::<usize>().ok()).filter(|n| *n > 0).unwrap_or(1000);
+    for (i, id) in ids.iter().enumerate() {
+        if i > 0 && i % batch_size == 0 && failure_status == 409 {
+            // a batch with conflicts aborts the request
+            break;
+        }
+        let conflict = match (snap_seq.get(id), store.indices.get(&target)) {
+            (Some(want), Some(idx)) => crate::model::visibility::conflict(idx, id, *want),
+            _ => None,
+        };
+        if let Some(f) = conflict {
+            conflicts += 1;
+            if !proceed {
+                failure_status = 409;
+                failures.push(f);
+            }
+            continue;
+        }
         let old = match store.indices.get(&target).and_then(|i| i.docs.get(id)).and_then(|d| d.as_object()).cloned() {
             Some(d) => d,
             None => continue,
         };
-        let cur_seq = store.indices.get(&target).and_then(|i| i.seq_nos.get(id)).copied();
-        if let (Some(want), Some(have)) = (snap_seq.get(id), cur_seq) {
-            if *want != have {
-                conflicts += 1;
-                if proceed {
-                    continue;
-                }
-                let uuid = store.indices.get(&target).map(|i| i.uuid.clone()).unwrap_or_default();
-                failure_status = 409;
-                failures.push(json!({"index": target, "id": id, "cause": {
-                    "type": "version_conflict_engine_exception",
-                    "reason": format!("[{}]: version conflict, required seqNo [{}], primary term [1]. current document has seqNo [{}] and primary term [1]", id, want, have),
-                    "index_uuid": uuid, "shard": "0", "index": target}, "status": 409}));
-                break;
-            }
-        }
         let old_ver = store.indices.get(&target).and_then(|i| i.versions.get(id)).copied().unwrap_or(1);
         let mut cur = old.clone();
         let mut op = String::new();
@@ -4013,6 +4046,7 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
         }
         if op == "delete" {
             let idx = store.indices.get_mut(&target).unwrap();
+            crate::model::visibility::before_write(idx, id);
             idx.docs.remove(id);
             crate::mapping::fields::remove_doc_values(idx, id);
             let seq = idx.index_total;
@@ -4037,6 +4071,7 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
                 Ok(out) => {
                     if out.dropped {
                         let idx = store.indices.get_mut(&target).unwrap();
+                        crate::model::visibility::before_write(idx, id);
                         idx.docs.remove(id);
                         idx.raw_sources.remove(id);
                         crate::mapping::fields::remove_doc_values(idx, id);
@@ -4076,8 +4111,9 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
         idx.raw_sources.insert(id.clone(), serde_json::to_vec(&Value::Object(newdoc)).unwrap_or_default());
         updated += 1;
     }
-    if req.bool_param("refresh") {
-        store.indices.get_mut(&target).unwrap().pending.clear();
+    // a refresh follows the writes: none when every hit conflicted
+    if req.bool_param("refresh") && updated + deleted > 0 {
+        crate::model::visibility::refresh(store.indices.get_mut(&target).unwrap());
     }
     let batches = if total > 0 { 1 } else { 0 };
     let mut out = byq_report(total, updated, deleted, noops, batches, &failures);

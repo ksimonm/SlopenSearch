@@ -119,6 +119,36 @@ def test_non_realtime_get_reads_the_refreshed_version(client, idx):
         ("3", True, 1, 3), ("1", True, 1, 1)]
 
 
+def test_source_and_explain_read_the_refreshed_version(client, idx):
+    assert client.delete(f"/{idx}/_doc/3").status_code == 200
+    assert client.post(f"/{idx}/_update/1", json={"doc": {"quantity": 10}}).status_code == 200
+    r = client.get(f"/{idx}/_source/3", params={"realtime": "false"})
+    assert r.status_code == 200 and r.json() == {"user_id": "u1", "quantity": 3}, r.text
+    assert client.get(f"/{idx}/_source/3").status_code == 404
+    r = client.post(f"/{idx}/_explain/3", json={"query": {"term": {"user_id": "u1"}}})
+    assert r.status_code == 200 and r.json()["matched"] is True, r.text
+    r = client.post(f"/{idx}/_explain/1", json={"query": {"term": {"quantity": 1}}})
+    assert r.status_code == 200 and r.json()["matched"] is True, r.text
+
+
+def test_delete_with_refresh_refreshes_the_whole_index(client, idx):
+    assert client.delete(f"/{idx}/_doc/1").status_code == 200
+    assert client.put(f"/{idx}/_doc/7", json={"user_id": "u2", "quantity": 7}).status_code == 201
+    assert client.post(f"/{idx}/_update/3", json={"doc": {"quantity": 30}}).status_code == 200
+    r = client.delete(f"/{idx}/_doc/2", params={"refresh": "true"})
+    assert r.status_code == 200 and r.json()["forced_refresh"] is True, r.text
+    assert _hits(client, idx) == [("4", 4), ("5", 5), ("6", 6), ("7", 7), ("3", 30)]
+    assert _count(client, idx) == 5
+
+
+def test_index_with_refresh_refreshes_unrefreshed_deletes(client, idx):
+    assert client.delete(f"/{idx}/_doc/1").status_code == 200
+    assert _count(client, idx) == 6
+    assert client.put(f"/{idx}/_doc/2", params={"refresh": "true"},
+                      json={"user_id": "u1", "quantity": 20}).status_code == 200
+    assert _hits(client, idx) == [("3", 3), ("4", 4), ("5", 5), ("6", 6), ("2", 20)]
+
+
 def test_deleted_then_recreated_document_shows_the_refreshed_version(client, idx):
     assert client.delete(f"/{idx}/_doc/4").status_code == 200
     assert client.put(f"/{idx}/_doc/4", json={"user_id": "u2", "quantity": 40}).status_code == 201

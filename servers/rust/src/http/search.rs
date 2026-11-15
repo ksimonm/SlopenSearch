@@ -1882,7 +1882,8 @@ fn handle_pit_search(store: &mut Store, req: &Req, mut body: Value) -> Response 
             saved.push((n, std::mem::replace(slot, snap)));
         }
     }
-    let result = run_search(store, "", &names, &body, req);
+    // the indices as they were when it was opened, at their refreshed versions
+    let result = crate::model::visibility::with_view(store, |store| run_search(store, "", &names, &body, req));
     for (n, old) in saved {
         store.indices.insert(n, old);
     }
@@ -2159,7 +2160,7 @@ pub fn handle_scroll(store: &mut Store, req: &Req, rest: &[String]) -> Response 
             std::mem::swap(live, snap);
         }
     }
-    let result = run_search(store, &state.url_name, &names, &body, req);
+    let result = crate::model::visibility::with_view(store, |store| run_search(store, &state.url_name, &names, &body, req));
     for (n, snap) in state.snapshot.iter_mut() {
         if let Some(live) = store.indices.get_mut(n) {
             std::mem::swap(live, snap);

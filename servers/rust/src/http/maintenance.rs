@@ -25,14 +25,14 @@ pub fn maintenance_op(store: &mut Store, req: &Req, spec: &str, op: &str) -> Res
     for name in &names {
         let idx = store.indices.get_mut(name).unwrap();
         match op {
-            "refresh" => idx.pending.clear(),
+            "refresh" => crate::model::visibility::refresh(idx),
             "forcemerge" => idx.force_merged = true,
             _ => {}
         }
     }
     if op == "forcemerge" {
         for name in &names {
-            store.indices.get_mut(name).unwrap().pending.clear();
+            crate::model::visibility::refresh(store.indices.get_mut(name).unwrap());
         }
     }
     store.bump_state();

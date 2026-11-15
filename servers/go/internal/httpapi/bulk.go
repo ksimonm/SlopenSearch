@@ -442,7 +442,7 @@ func (s *Server) runBulkAction(a bulkAction, rv string, requireAliasURL bool, ur
 		if exists {
 			idx.NoteWrite(id)
 			if rv == "true" {
-				defer idx.ForgetStale(id)
+				defer idx.Refresh()
 			}
 		}
 		seq := idx.AllocSeqNo()
@@ -539,7 +539,7 @@ func (s *Server) runBulkIndex(idx *model.Index, a bulkAction, id, routing, rv, u
 		delete(idx.Routing, id)
 	}
 	if rv == "true" || rv == "wait_for" {
-		delete(idx.Pending, id)
+		idx.Refresh()
 	} else {
 		idx.MarkPending(id, src, exists)
 	}
@@ -613,7 +613,7 @@ func (s *Server) runBulkUpdate(idx *model.Index, a bulkAction, id, routing, rv, 
 			idx.Routing[id] = routing
 		}
 		if rv == "true" || rv == "wait_for" {
-			delete(idx.Pending, id)
+			idx.Refresh()
 		} else {
 			idx.Pending[id] = src
 		}
@@ -637,7 +637,7 @@ func (s *Server) runBulkUpdate(idx *model.Index, a bulkAction, id, routing, rv, 
 	if op == "delete" {
 		idx.NoteWrite(id)
 		if rv == "true" {
-			defer idx.ForgetStale(id)
+			defer idx.Refresh()
 		}
 		ver := idx.CurrentVersion(id) + 1
 		seq := idx.AllocSeqNo()
@@ -677,7 +677,7 @@ func (s *Server) runBulkUpdate(idx *model.Index, a bulkAction, id, routing, rv, 
 	idx.PrimaryTerms[id] = 1
 	idx.IndexTotal++
 	if rv == "true" || rv == "wait_for" {
-		delete(idx.Pending, id)
+		idx.Refresh()
 	} else {
 		idx.MarkPending(id, newDoc, true)
 	}

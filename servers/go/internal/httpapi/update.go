@@ -186,7 +186,7 @@ func (s *Server) handleUpdateDoc(w http.ResponseWriter, r *http.Request, name, i
 			idx.Routing[id] = routing
 		}
 		if rv == "true" || rv == "wait_for" {
-			delete(idx.Pending, id)
+			idx.Refresh()
 		} else {
 			idx.Pending[id] = src
 		}
@@ -220,7 +220,7 @@ func (s *Server) handleUpdateDoc(w http.ResponseWriter, r *http.Request, name, i
 	if op == "delete" {
 		idx.NoteWrite(id)
 		if rv == "true" {
-			defer idx.ForgetStale(id)
+			defer idx.Refresh()
 		}
 		ver := idx.Versions[id] + 1
 		seq := idx.AllocSeqNo()
@@ -289,7 +289,7 @@ func (s *Server) handleUpdateDoc(w http.ResponseWriter, r *http.Request, name, i
 		idx.Routing[id] = routing
 	}
 	if rv == "true" || rv == "wait_for" {
-		delete(idx.Pending, id)
+		idx.Refresh()
 	} else {
 		idx.MarkPending(id, newDoc, true)
 	}

@@ -259,6 +259,8 @@ func (s *Server) bbsMatches(action string, segs []string, q url.Values, body map
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// the search reads the last refreshed versions
+	defer leaveSearchViews(enterSearchViews(s.Indices))
 	var refs []bbsRef
 	maxDocs := int64(-1)
 	if v, ok := jsonv.ToFloat(body["max_docs"]); ok {

@@ -184,10 +184,6 @@ func (idx *Index) NoteWrite(id string) {
 	idx.Stale[id] = idx.captureDoc(id)
 }
 
-// ForgetStale drops the recorded version of document id (the write that
-// changed it was refreshed on its own).
-func (idx *Index) ForgetStale(id string) { delete(idx.Stale, id) }
-
 // Refresh makes every write searchable.
 func (idx *Index) Refresh() {
 	idx.Pending = nil
