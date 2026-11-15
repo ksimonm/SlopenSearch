@@ -50,13 +50,13 @@ func parseRangeDateBound(def map[string]any, v any, tz, queryFormat string, roun
 			return nil, rangeDateParseError(s, queryFormat, def)
 		}
 		if mathExpr != "" {
+			// JavaDateMathParser: the anchor of a math expression is never
+			// rounded up; only a "/unit" in the expression rounds.
 			var mok bool
-			t, res, mok = dates.ApplyMath(t, mathExpr)
-			if !mok {
+			if t, mok = dates.ApplyMath(t, mathExpr, roundUp); !mok {
 				return nil, rangeDateParseError(s, queryFormat, def)
 			}
-		}
-		if roundUp {
+		} else if roundUp {
 			t = dates.RoundUp(t, res)
 		}
 		if isNanos {

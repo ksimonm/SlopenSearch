@@ -59,6 +59,8 @@ func TestEncodeString(t *testing.T) {
 		{`a\b`, `"a\\b"`},
 		{"l1\nl2\r\t", `"l1\nl2\r\t"`},
 		{"\b\f", `"\b\f"`},
+		// Jackson writes other control characters with upper-case hex
+		{"a\x1fb\x01", `"a\u001Fb\u0001"`},
 		// no HTML escaping, no escaping of '/' or non-ASCII
 		{"<a>&/", `"<a>&/"`},
 		{"é☃", `"é☃"`},

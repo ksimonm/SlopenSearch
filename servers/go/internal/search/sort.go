@@ -56,11 +56,7 @@ func searchSortSpecValueRaw(h MultiHit, sp SortSpec) (any, bool, bool) {
 				break
 			}
 		}
-		ns := h.Idx.NumShards()
-		if ns < 1 {
-			ns = 1
-		}
-		shard := int64(HashString(h.Id) % uint32(ns))
+		shard := int64(h.Idx.DocShard(h.Id))
 		return shard*1000000000 + int64(pos), true, false
 	case "_doc":
 		pos := 0
@@ -230,9 +226,34 @@ func SortOutputValue(h MultiHit, sp SortSpec) any {
 		return "Infinity"
 	}
 	if ok {
-		return v
+		return javaSortNumber(h, sp, v)
 	}
 	return nil
+}
+
+// javaSortNumber renders a numeric sort value as the Java type of its sort
+// field: Double for double / scaled_float fields and number scripts, Float
+// for float / half_float fields.
+func javaSortNumber(h MultiHit, sp SortSpec, v any) any {
+	if f, ok := v.(float64); ok && sp.Field == "_score" {
+		return ScoreJSON(f)
+	}
+	if sp.Field == "_script" {
+		if sp.ScriptType == "number" {
+			return JavaDoubles(v)
+		}
+		return v
+	}
+	switch sp.NumericType {
+	case "long", "date", "date_nanos":
+		return v
+	}
+	def, ok := mapping.FieldDef(h.Idx, sp.Field)
+	if !ok {
+		return v
+	}
+	t, _ := def["type"].(string)
+	return JavaFieldNumber(t, v, sp.NumericType == "double")
 }
 
 func nestedSortValues(h MultiHit, sp SortSpec) []any {

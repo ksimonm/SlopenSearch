@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"regexp"
-	"strconv"
+	"slopensearch/internal/javafmt"
 	"strings"
 
 	"slopensearch/internal/apierr"
@@ -72,6 +72,7 @@ func ParseSortSpecs(bodySort any, uriSort string) ([]SortSpec, *apierr.Error) {
 						sp.HasMissing = true
 					}
 					if m, ok := ov["mode"].(string); ok {
+						m = strings.ToLower(m) // SortMode.fromString
 						switch m {
 						case "min", "max", "avg", "sum", "median":
 							sp.Mode = m
@@ -206,7 +207,7 @@ func ParseSortSpecs(bodySort any, uriSort string) ([]SortSpec, *apierr.Error) {
 }
 
 func validSortOrder(s string) bool {
-	return s == "asc" || s == "desc" || s == "ASC" || s == "DESC"
+	return strings.EqualFold(s, "asc") || strings.EqualFold(s, "desc") // SortOrder.fromString
 }
 
 func singleEntry(m map[string]any) (string, any, bool) {
@@ -278,13 +279,11 @@ func ScoreJSON(v float64) any {
 	case math.IsNaN(v):
 		return "NaN"
 	}
-	if v == math.Trunc(v) {
-		return json.Number(strconv.FormatFloat(v, 'f', 1, 64))
+	// scores are Java floats
+	if f32 := float32(v); !math.IsInf(float64(f32), 0) {
+		return json.Number(javafmt.Float(f32))
 	}
-	if f32 := float32(v); float64(f32) == v && !math.IsInf(float64(f32), 0) {
-		return json.Number(strconv.FormatFloat(v, 'g', -1, 32))
-	}
-	return v
+	return json.Number(javafmt.Double(v))
 }
 
 func geoUnitMeters(unit string) (float64, bool) {

@@ -404,7 +404,9 @@ func (c *ParseContext) ParseFloatValue(name, typ string, def map[string]any, v a
 		if s, ok := jsonv.ToFloat(def["scaling_factor"]); ok {
 			scale = s
 		}
-		return math.Round(f*scale) / scale, nil
+		// ScaledFloatFieldMapper: Math.round(value * factor) is indexed and
+		// read back multiplied by 1 / factor
+		return math.Floor(f*scale+0.5) * (1 / scale), nil
 	default:
 		return f, nil
 	}

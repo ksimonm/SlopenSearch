@@ -149,6 +149,9 @@ func docValuesOutput(idx *model.Index, id, field string, spec fieldSpec, fallbac
 		return nil, false, nil
 	}
 	res := formatted(vals)
+	if spec.format == "" || spec.format == "use_field_mapping" {
+		res = search.JavaFieldValues(idx.Docs[id], field, ftype, res, fallbackSource)
+	}
 	if ftype == "geo_point" && spec.format == "" {
 		for i, v := range res {
 			if m, ok := v.(map[string]any); ok {
@@ -288,6 +291,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			return
 		}
 		pitCtx = ctx
+	}
+	if search.SortParsedFirst(bodyRaw) {
+		if serr := search.CheckSortClauses(bodyRaw); serr != nil {
+			writeError(w, serr)
+			return
+		}
 	}
 	if apiErr := validateSearchBody(body); apiErr != nil {
 		writeError(w, apiErr)
@@ -647,6 +656,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 	total := 0
 
 	searchSortSpecs, sortErr := search.ParseSortSpecs(body["sort"], r.URL.Query().Get("sort"))
+	if serr := search.CheckSortClauses(bodyRaw); serr != nil {
+		sortErr = serr
+	}
 	if sortErr != nil {
 		writeError(w, sortErr)
 		return
@@ -1111,7 +1123,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			entry["_ignored"] = vals
 		}
 		if explainFlag {
-			entry["_shard"] = "[" + h.Idx.Name + "][0]"
+			entry["_shard"] = "[" + h.Idx.Name + "][" + strconv.Itoa(h.Idx.DocShard(h.Id)) + "]"
 			entry["_node"] = "slopensearch-node-1"
 			if ss, ok := query["script_score"].(map[string]any); ok && len(query) == 1 {
 				entry["_explanation"] = map[string]any{"value": search.ScoreJSON(h.Score),
