@@ -3218,7 +3218,7 @@ fn compare_values_for_type(typ: &str, a: &Value, b: &Value) -> i32 {
 impl IndexCtx {
     pub fn build_doc_values(&mut self, idx: &mut Index) -> Result<(), ApiError> {
         if !idx.mappings.is_object() {
-            idx.mappings = Value::Object(Map::new());
+            *idx.mappings = Value::Object(Map::new());
         }
         let obj = idx.mappings.as_object_mut().unwrap();
         if !obj.get("properties").map(|p| p.is_object()).unwrap_or(false) {

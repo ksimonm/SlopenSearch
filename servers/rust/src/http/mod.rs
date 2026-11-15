@@ -297,7 +297,7 @@ async fn handle_plain(store: Shared, request: axum::extract::Request) -> axum::r
             // Runtime threads have a large stack (main.rs): scripts and nested
             // queries recurse.
             let resp = dispatch(&mut guard, &req);
-            storage::after_request(&guard, &req.method, &req.path);
+            storage::after_request(&mut guard, &req.method, &req.path);
             resp
         };
         (resp, req)

@@ -480,6 +480,7 @@ dependencies = [
  "base64",
  "flate2",
  "regex",
+ "serde",
  "serde_json",
  "snap",
  "tokio",

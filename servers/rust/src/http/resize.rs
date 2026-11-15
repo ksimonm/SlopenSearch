@@ -136,7 +136,7 @@ pub fn handle_resize(
             ))
         }
     }
-    let mut new_settings = idx.settings.clone();
+    let mut new_settings = (*idx.settings).clone();
     new_settings.insert(
         "index.number_of_shards".to_string(),
         json!(want.to_string()),
@@ -150,7 +150,7 @@ pub fn handle_resize(
 
     let mut new_body = serde_json::Map::new();
     new_body.insert("settings".to_string(), Value::Object(new_settings));
-    new_body.insert("mappings".to_string(), idx.mappings.clone());
+    new_body.insert("mappings".to_string(), (*idx.mappings).clone());
     if let Some(a) = body.get("aliases") {
         if !a.is_null() {
             new_body.insert("aliases".to_string(), a.clone());
