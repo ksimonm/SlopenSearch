@@ -14,6 +14,7 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/dates"
+	"slopensearch/internal/geohash"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
@@ -1450,6 +1451,19 @@ func geotileKey(lat, lon float64, precision int) string {
 	return fmt.Sprintf("%d/%d/%d", precision, x, y)
 }
 
+// gridCellHash is the long a grid bucket is keyed by in OpenSearch:
+// Geohash#longEncode for geohash cells, (zoom<<58)|(x<<29)|y for tiles.
+func gridCellHash(key string, tile bool) int64 {
+	if !tile {
+		return geohash.LongEncode(key)
+	}
+	var zxy [3]int64
+	for i, p := range strings.SplitN(key, "/", 3) {
+		zxy[i], _ = strconv.ParseInt(p, 10, 64)
+	}
+	return zxy[0]<<58 | zxy[1]<<29 | zxy[2]
+}
+
 func geoHashGridAgg(name string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool, tile bool) (any, *apierr.Error) {
 	field, _ := jsonv.ToString(spec["field"])
 	precision := jsonv.Int(spec, "precision", 5)
@@ -1485,20 +1499,23 @@ func geoHashGridAgg(name string, spec map[string]any, docs []map[string]any, idx
 			if precision == 0 {
 				continue
 			}
-			key = mapping.EncodeGeohash(lat, lon, precision)
+			key = geohash.Encode(lat, lon, precision)
 		}
 		counts[key]++
 		group[key] = append(group[key], d)
 	}
 	keys := []string{}
+	hashes := map[string]int64{}
 	for k := range counts {
 		keys = append(keys, k)
+		hashes[k] = gridCellHash(k, tile)
 	}
+	// ties: the larger cell hash (a signed long) first
 	sort.SliceStable(keys, func(i, j int) bool {
 		if counts[keys[i]] != counts[keys[j]] {
 			return counts[keys[i]] > counts[keys[j]]
 		}
-		return keys[i] > keys[j]
+		return hashes[keys[i]] > hashes[keys[j]]
 	})
 	size := jsonv.Int(spec, "size", 10)
 	if size > 0 && len(keys) > size {
