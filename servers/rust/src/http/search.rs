@@ -1321,6 +1321,8 @@ pub fn run_search(
                 if simple {
                     let ids: Vec<(&Value, &str)> = agg_matched.iter().map(|h| (h.doc, h.id.as_str())).collect();
                     crate::aggs::set_doc_ids(&ids);
+                    let ids: Vec<&str> = order.iter().map(|&i| agg_matched[i].id.as_str()).collect();
+                    crate::aggs::set_root_docs(crate::search::index::doc_numbers(idx, &ids).map(|(v, nums)| (docs.as_slice(), v, nums)));
                 } else {
                     for h in &matched {
                         agg_scores.insert((h.idx_name.clone(), h.id.clone()), h.score);
@@ -1330,6 +1332,7 @@ pub fn run_search(
                 let out = eval_aggs_root(aggs, &docs, idx, typed);
                 if simple {
                     crate::aggs::set_doc_ids(&[]);
+                    crate::aggs::set_root_docs(None);
                 }
                 let out = out?;
                 resp.insert("aggregations".to_string(), out);

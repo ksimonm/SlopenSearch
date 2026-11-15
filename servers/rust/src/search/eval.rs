@@ -1638,9 +1638,7 @@ impl<'a> QueryCtx<'a> {
         boost: f64,
     ) -> Result<(bool, f64), ApiError> {
         let prep = self.range_prep(field, cond);
-        let ftype = &prep.ftype;
-        let def = &prep.def;
-        if ftype == "wildcard" {
+        if prep.ftype == "wildcard" {
             return Err(shard_query_error(
                 "query_shard_exception",
                 "failed to create query: TODO",
@@ -1650,6 +1648,13 @@ impl<'a> QueryCtx<'a> {
         if !present {
             return Ok((false, 0.0));
         }
+        self.range_on_values(&prep, &vals, boost)
+    }
+
+    /// `range` on the (present) values of a document.
+    pub(crate) fn range_on_values(&self, prep: &RangePrep, vals: &[Value], boost: f64) -> Result<(bool, f64), ApiError> {
+        let ftype = &prep.ftype;
+        let def = &prep.def;
         let mut boost = boost;
         let relation = &prep.relation;
         if let Some(b) = prep.boost {
@@ -1663,7 +1668,7 @@ impl<'a> QueryCtx<'a> {
                 | "ip_range"
         );
         if is_range_field {
-            for v in &vals {
+            for v in vals {
                 if let Value::Object(rng) = v {
                     let mut stored = rng.clone();
                     if ftype == "date_range" {
@@ -1693,7 +1698,7 @@ impl<'a> QueryCtx<'a> {
             }
             return Ok((false, 0.0));
         }
-        for v in &vals {
+        for v in vals {
             if let Value::Object(rng) = v {
                 if let Some(q) = &q_lower {
                     if !in_range_field(rng, q) {
@@ -1706,6 +1711,29 @@ impl<'a> QueryCtx<'a> {
                     }
                 }
                 return Ok((true, boost));
+            }
+            // numbers against numeric bounds: `numeric_less` on parsed parts
+            if let (Value::Number(n), Some(pl), Some(pu)) = (v, &prep.lower_parts, &prep.upper_parts) {
+                let x = NumParts::of(n);
+                let ok_lower = match (lower, pl) {
+                    (Some((_, inclusive)), Some(b)) => {
+                        let c = x.cmp(b);
+                        !((*inclusive && c < 0) || (!*inclusive && c <= 0))
+                    }
+                    _ => true,
+                };
+                let ok = ok_lower
+                    && match (upper, pu) {
+                        (Some((_, inclusive)), Some(b)) => {
+                            let c = x.cmp(b);
+                            !((*inclusive && c > 0) || (!*inclusive && c >= 0))
+                        }
+                        _ => true,
+                    };
+                if ok {
+                    return Ok((true, boost));
+                }
+                continue;
             }
             let candidates: Vec<Value> = if ftype == "text" || ftype == "match_only_text" {
                 analyze(&value_to_string(v).unwrap_or_default())
@@ -1743,7 +1771,7 @@ impl<'a> QueryCtx<'a> {
 
     /// The document-independent part of a `range` query (bounds parsed once
     /// per request, not per document; see [`RANGE_PREPS`]).
-    fn range_prep(&self, field: &str, cond: &Map<String, Value>) -> std::rc::Rc<RangePrep> {
+    pub(crate) fn range_prep(&self, field: &str, cond: &Map<String, Value>) -> std::rc::Rc<RangePrep> {
         let key = (request_epoch(), self.idx.mappings.generation(), self.idx.settings.generation());
         if key.0 == 0 {
             // outside a request (background tasks): no memo
@@ -1882,7 +1910,22 @@ impl<'a> QueryCtx<'a> {
             };
             Ok((q_lower, q_upper))
         })();
-        RangePrep { def, ftype, relation, boost, lower, upper, bounds }
+        // numeric bounds pre-parsed for `range_cmp` on numbers (it calls
+        // `numeric_less` for every type but these)
+        let numeric_cmp = !matches!(ftype.as_str(), "ip" | "text" | "keyword" | "match_only_text" | "wildcard" | "")
+            && !ftype.ends_with("_range");
+        let parts = |b: &Option<Value>| -> Option<Option<NumParts>> {
+            match b {
+                None => Some(None),
+                Some(Value::Number(n)) => Some(Some(NumParts::of(n))),
+                Some(_) => None,
+            }
+        };
+        let (lower_parts, upper_parts) = match &bounds {
+            Ok((l, u)) if numeric_cmp => (parts(l), parts(u)),
+            _ => (None, None),
+        };
+        RangePrep { def, ftype, relation, boost, lower, upper, bounds, lower_parts, upper_parts }
     }
 
     fn range_cmp(&self, ftype: &str, v: &Value, bv: &Value) -> i32 {
@@ -4309,12 +4352,66 @@ pub(crate) fn score_match(
 /// See [`QueryCtx::range_prep`].
 pub(crate) struct RangePrep {
     def: Map<String, Value>,
-    ftype: String,
+    pub(crate) ftype: String,
     relation: String,
     boost: Option<f64>,
     lower: Option<(Value, bool)>,
     upper: Option<(Value, bool)>,
-    bounds: Result<(Option<Value>, Option<Value>), ApiError>,
+    pub(crate) bounds: Result<(Option<Value>, Option<Value>), ApiError>,
+    /// The parsed bounds when both are numbers or absent (and the field type
+    /// compares numbers with [`numeric_less`]).
+    lower_parts: Option<Option<NumParts>>,
+    upper_parts: Option<Option<NumParts>>,
+}
+
+/// A JSON number as [`cmp_ord`] reads it (each form parsed once).
+#[derive(Clone, Copy)]
+pub(crate) struct NumParts {
+    i: Option<i64>,
+    u: Option<u64>,
+    f: Option<f64>,
+}
+
+impl NumParts {
+    pub(crate) fn of(n: &Number) -> NumParts {
+        NumParts { i: n.as_i64(), u: n.as_u64(), f: n.as_f64() }
+    }
+
+    /// [`cmp_ord`] of two numbers.
+    pub(crate) fn cmp(&self, b: &NumParts) -> i32 {
+        let ord = |c: std::cmp::Ordering| match c {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Greater => 1,
+            std::cmp::Ordering::Equal => 0,
+        };
+        if let (Some(x), Some(y)) = (self.i, b.i) {
+            return ord(x.cmp(&y));
+        }
+        if let (Some(x), Some(y)) = (self.u, b.u) {
+            return ord(x.cmp(&y));
+        }
+        if let (Some(x), Some(y)) = (self.i, b.u) {
+            if x < 0 {
+                return -1;
+            }
+            return ord((x as u64).cmp(&y));
+        }
+        if let (Some(x), Some(y)) = (self.u, b.i) {
+            if y < 0 {
+                return 1;
+            }
+            return ord(x.cmp(&(y as u64)));
+        }
+        let af = self.f.unwrap_or(0.0);
+        let bf = b.f.unwrap_or(0.0);
+        if af < bf {
+            -1
+        } else if af > bf {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 type RangePrepEntry = ((u64, u64, u64), String, Map<String, Value>, std::rc::Rc<RangePrep>);

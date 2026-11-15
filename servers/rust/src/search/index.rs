@@ -34,6 +34,8 @@ pub enum Kind {
     Numeric,
     /// geo_point latitudes (in `nums`), for distance prefilters.
     Geo,
+    /// Numeric aggregation values per document (`fwd`), from the stored source.
+    Metric,
 }
 
 fn field_key(kind: Kind, field: &str) -> String {
@@ -42,6 +44,7 @@ fn field_key(kind: Kind, field: &str) -> String {
         Kind::Exact => format!("k\u{1}{}", field),
         Kind::Numeric => format!("n\u{1}{}", field),
         Kind::Geo => format!("g\u{1}{}", field),
+        Kind::Metric => format!("a\u{1}{}", field),
     }
 }
 
@@ -50,6 +53,7 @@ fn parse_key(key: &str) -> (Kind, &str) {
         Some(("t", f)) => (Kind::Text, f),
         Some(("n", f)) => (Kind::Numeric, f),
         Some(("g", f)) => (Kind::Geo, f),
+        Some(("a", f)) => (Kind::Metric, f),
         Some((_, f)) => (Kind::Exact, f),
         None => (Kind::Exact, key),
     }
@@ -70,6 +74,12 @@ fn signature(idx: &Index, key: &str) -> String {
             format!("{}\u{1}{}\u{1}{}", idx.settings.generation(), resolve_alias_field(idx, field), def)
         }
         Kind::Exact | Kind::Numeric | Kind::Geo => resolve_alias_field(idx, field),
+        Kind::Metric => {
+            // the aggregation reading of the source depends on the mapping
+            let def = mapping_field_def(idx, field).map(|d| Value::Object(d.clone())).unwrap_or(Value::Null);
+            let dynamic = idx.mappings.get("dynamic").cloned().unwrap_or(Value::Null);
+            format!("{}\u{1}{}\u{1}{}", idx.settings.generation(), def, dynamic)
+        }
     }
 }
 
@@ -101,7 +111,7 @@ impl<'a> Indexer<'a> {
         let ctx = QueryCtx::new(idx, "", &NULL);
         let analyzer = match kind {
             Kind::Text => Some(ctx.field_analyzer(field, None, Side::Index)),
-            Kind::Exact | Kind::Numeric | Kind::Geo => None,
+            Kind::Exact | Kind::Numeric | Kind::Geo | Kind::Metric => None,
         };
         Indexer { kind, path: resolve_alias_field(idx, field), analyzer, ctx }
     }
@@ -140,7 +150,7 @@ impl<'a> Indexer<'a> {
         };
         for v in vals {
             match self.kind {
-                Kind::Numeric | Kind::Geo => {}
+                Kind::Numeric | Kind::Geo | Kind::Metric => {}
                 Kind::Text => {
                     let s = match v {
                         Value::String(s) => std::borrow::Cow::Borrowed(s.as_str()),
@@ -168,6 +178,22 @@ fn threads() -> usize {
 /// several threads, each building the postings of a contiguous chunk.
 fn fill(idx: &Index, key: &str, f: &mut FieldIndex, docs: &[(u32, String)]) {
     let ix = Indexer::new(idx, key);
+    if ix.kind == Kind::Metric {
+        use rayon::prelude::*;
+        let field = parse_key(key).1;
+        let value = |id: &String| idx.docs.get(id).and_then(|doc| crate::aggs::metric_column_value(idx, doc, field));
+        if docs.len() < 4096 {
+            for (n, id) in docs {
+                f.set_fwd(*n, value(id));
+            }
+        } else {
+            let vals: Vec<Option<f64>> = docs.par_iter().map(|(_, id)| value(id)).collect();
+            for ((n, _), v) in docs.iter().zip(vals) {
+                f.set_fwd(*n, v);
+            }
+        }
+        return;
+    }
     let threads = threads();
     let min_chunk = if ix.kind == Kind::Text { 256 } else { 8192 };
     if docs.len() < 2 * min_chunk || threads < 2 {
@@ -269,14 +295,14 @@ fn sync_locked(idx: &Index, inv: &mut InvertedIndex) {
             }
         }
     }
-    if dirty.all || !inv.numbered {
+    if dirty.all || docs_dirty.all || !inv.numbered {
         renumber(idx, inv);
         return;
     }
-    if dirty.ids.is_empty() {
+    if dirty.ids.is_empty() && docs_dirty.ids.is_empty() {
         return;
     }
-    let mut ids: Vec<String> = dirty.ids.into_iter().collect();
+    let mut ids: Vec<String> = dirty.ids.into_iter().chain(docs_dirty.ids).collect::<HashSet<String>>().into_iter().collect();
     ids.sort();
     for id in &ids {
         inv.kill(id);
@@ -359,6 +385,9 @@ fn eager_keys(idx: &Index) -> Vec<String> {
             continue;
         }
         keys.push(field_key(kind, field));
+        if kind == Kind::Numeric {
+            keys.push(field_key(Kind::Metric, field));
+        }
     }
     keys
 }
@@ -1134,6 +1163,43 @@ fn match_results(inv: &InvertedIndex, dm: &DirectMatch, docs: impl Iterator<Item
     .collect()
 }
 
+/// A top-level `range` on a numeric or date field: decided per candidate
+/// from its doc values with the evaluator's own comparison
+/// (`QueryCtx::range_on_values`), without the per-document query dispatch.
+struct DirectRange {
+    field: String,
+    cond: Map<String, Value>,
+}
+
+fn direct_range(q: &Map<String, Value>, p: &Plan) -> Option<DirectRange> {
+    let (kind, body) = single(q)?;
+    if kind != "range" || !matches!(p, Plan::Range(..)) {
+        return None;
+    }
+    let (field, cond) = single(body.as_object()?)?;
+    Some(DirectRange { field: field.clone(), cond: cond.as_object()?.clone() })
+}
+
+/// [`DirectRange`] results of the documents `docs` (None: let the evaluator decide).
+fn range_results(idx: &Index, inv: &InvertedIndex, dr: &DirectRange, docs: impl Iterator<Item = u32>) -> Option<Vec<(bool, f64)>> {
+    let ctx = QueryCtx::new(idx, "", &NULL);
+    let prep = ctx.range_prep(&dr.field, &dr.cond);
+    if prep.ftype == "wildcard" || prep.bounds.is_err() {
+        return None;
+    }
+    let mut out = Vec::new();
+    for doc in docs {
+        let raw = inv.ids.get(doc as usize)?.as_ref().and_then(|id| idx.doc_values.get(id)).and_then(|dv| dv.get(&dr.field));
+        let r = match raw {
+            Some(Value::Array(a)) if !a.is_empty() => ctx.range_on_values(&prep, a, 1.0).ok()?,
+            Some(Value::Array(_)) | None => (false, 0.0),
+            Some(v) => ctx.range_on_values(&prep, std::slice::from_ref(v), 1.0).ok()?,
+        };
+        out.push(r);
+    }
+    Some(out)
+}
+
 /// The documents `query` can match, or None when every document has to be
 /// evaluated (unsupported query, or documents without doc values).
 pub fn candidates(idx: &Index, query: &Map<String, Value>, extra_values: bool) -> Option<Candidates> {
@@ -1143,6 +1209,7 @@ pub fn candidates(idx: &Index, query: &Map<String, Value>, extra_values: bool) -
     let ctx = QueryCtx::new(idx, "", &NULL);
     let p = plan(&ctx, query)?;
     let direct = direct_match(&ctx, query, &p);
+    let direct_r = if direct.is_none() { direct_range(query, &p) } else { None };
     let mut keys = Vec::new();
     p.keys(&mut keys);
     with_index(idx, &keys, |inv| {
@@ -1161,8 +1228,36 @@ pub fn candidates(idx: &Index, query: &Map<String, Value>, extra_values: bool) -
             .filter(|(_, d)| **d != NO_DOC && bits[**d as usize])
             .map(|(i, _)| i)
             .collect();
-        let results = direct.as_ref().map(|dm| match_results(inv, dm, positions.iter().map(|i| order[*i])));
+        let mut results = direct.as_ref().map(|dm| match_results(inv, dm, positions.iter().map(|i| order[*i])));
+        if let Some(dr) = &direct_r {
+            results = range_results(idx, inv, dr, positions.iter().map(|i| order[*i]));
+        }
         Some(Candidates { positions, results, dup_ids })
+    })
+}
+
+/// The metric column of a numeric/date field (see `Kind::Metric`) and the
+/// index content version it belongs to.
+pub fn metric_column(idx: &Index, field: &str) -> Option<(u64, std::sync::Arc<Vec<Option<f64>>>)> {
+    if disabled() || idx.uuid.is_empty() || !plain_field(idx, field) {
+        return None;
+    }
+    if !matches!(ftype_of(idx, field).as_str(), "integer" | "long" | "short" | "byte" | "float" | "double" | "half_float" | "scaled_float" | "date") {
+        return None;
+    }
+    let key = field_key(Kind::Metric, field);
+    Some(with_index(idx, std::slice::from_ref(&key), |inv| (inv.version, inv.fields[&key].fwd.clone())))
+}
+
+/// The doc numbers of `ids` and the index content version they belong to
+/// (None when some id is not indexed).
+pub fn doc_numbers(idx: &Index, ids: &[&str]) -> Option<(u64, Vec<u32>)> {
+    if disabled() || idx.uuid.is_empty() {
+        return None;
+    }
+    with_index(idx, &[], |inv| {
+        let nums: Option<Vec<u32>> = ids.iter().map(|id| inv.doc_of(id)).collect();
+        nums.map(|n| (inv.version, n))
     })
 }
 

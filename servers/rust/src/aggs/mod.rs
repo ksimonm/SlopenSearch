@@ -2216,21 +2216,23 @@ fn metric_agg(
     let missing = t.get("missing").cloned();
     if script.is_none() && matches!(agg, "avg" | "min" | "max" | "sum" | "stats") {
         let is_date = field_is_date(idx, &field, prefix);
-        let mut vals: Vec<f64> = Vec::new();
-        for d in docs {
-            if let Some(fs) = doc_field_floats(idx, d, &field, prefix) {
-                vals.extend(fs);
+        let mut vals: Vec<f64> = Vec::with_capacity(docs.len());
+        // the single values of the root documents from the index's column
+        let col = if prefix.is_empty() { root_column(idx, docs, &field) } else { None };
+        for (i, d) in docs.iter().enumerate() {
+            if let Some(x) = col.as_ref().and_then(|(nums, c)| c.get(nums[i] as usize).copied().flatten()) {
+                vals.push(x);
                 continue;
             }
-            let dv = doc_field_values(idx, d, &field, prefix);
-            let one = |v: &Value| to_f64(v).or_else(|| if is_date { date_ms_of(v).map(|ms| ms as f64) } else { None });
+            let dv = metric_doc_values(idx, d, &field, prefix, is_date);
             if dv.is_empty() {
+                let one = |v: &Value| to_f64(v).or_else(|| if is_date { date_ms_of(v).map(|ms| ms as f64) } else { None });
                 if let Some(f) = missing.as_ref().and_then(one) {
                     vals.push(f);
                 }
                 continue;
             }
-            vals.extend(dv.iter().filter_map(one));
+            vals.extend(dv);
         }
         return Ok(metric_result(agg, &vals, is_date, &map_str(t, "format")));
     }
@@ -2317,6 +2319,62 @@ fn metric_agg(
         .collect();
     let fmt = map_str(t, "format");
     Ok(metric_result(agg, &vals, is_date, &fmt))
+}
+
+/// The numbers a numeric metric aggregation takes from one document (before
+/// `missing`): its field values as numbers (dates also from date strings).
+fn metric_doc_values(idx: &Index, d: &Value, field: &str, prefix: &str, is_date: bool) -> Vec<f64> {
+    if let Some(fs) = doc_field_floats(idx, d, field, prefix) {
+        return fs;
+    }
+    doc_field_values(idx, d, field, prefix)
+        .iter()
+        .filter_map(|v| to_f64(v).or_else(|| if is_date { date_ms_of(v).map(|ms| ms as f64) } else { None }))
+        .collect()
+}
+
+/// The value of the index's metric column for a stored source: the single
+/// number [`metric_doc_values`] yields for it (None: none or several).
+pub fn metric_column_value(idx: &Index, doc: &Value, field: &str) -> Option<f64> {
+    // documents without the value take the general path at query time
+    match field_value(doc, field) {
+        None | Some(Value::Null) => return None,
+        Some(Value::Array(a)) if a.iter().all(|v| v.is_null()) => return None,
+        _ => {}
+    }
+    let vals = metric_doc_values(idx, doc, field, "", field_is_date(idx, field, ""));
+    match vals.as_slice() {
+        [x] => Some(*x),
+        _ => None,
+    }
+}
+
+type RootColumn = (std::sync::Arc<Vec<u32>>, std::sync::Arc<Vec<Option<f64>>>);
+
+thread_local! {
+    /// The document numbers of the root documents of the current aggregation
+    /// (identified by the slice address and length), see [`set_root_docs`].
+    static ROOT_DOCS: std::cell::RefCell<Option<(usize, usize, u64, std::sync::Arc<Vec<u32>>)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Names the index document numbers (at index content `version`) of the
+/// root documents `docs` of the next aggregation (None clears).
+pub fn set_root_docs(docs: Option<(&[&Value], u64, Vec<u32>)>) {
+    ROOT_DOCS.with(|r| {
+        *r.borrow_mut() = docs.map(|(d, version, nums)| (d.as_ptr() as usize, d.len(), version, std::sync::Arc::new(nums)));
+    });
+}
+
+fn root_column(idx: &Index, docs: &[&Value], field: &str) -> Option<RootColumn> {
+    let (version, nums) = ROOT_DOCS.with(|r| match r.borrow().as_ref() {
+        Some((p, n, v, nums)) if *p == docs.as_ptr() as usize && *n == docs.len() => Some((*v, nums.clone())),
+        _ => None,
+    })?;
+    let (at, col) = crate::search::index::metric_column(idx, field)?;
+    if at != version {
+        return None;
+    }
+    Some((nums, col))
 }
 
 /// The response of avg/min/max/sum/stats over `vals`.

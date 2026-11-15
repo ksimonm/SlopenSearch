@@ -125,6 +125,9 @@ pub struct FieldIndex {
     /// What the analysis of the field depends on (see `search::index`): the
     /// field is rebuilt when it changes.
     pub sig: String,
+    /// Metric columns: the aggregation value per doc number (None: none,
+    /// several, or not computed; the aggregation reads the document).
+    pub fwd: std::sync::Arc<Vec<Option<f64>>>,
 }
 
 impl FieldIndex {
@@ -187,6 +190,17 @@ impl FieldIndex {
         }
         self.nums.extend_from_slice(&other.nums);
         self.non_numeric |= other.non_numeric;
+        if !other.fwd.is_empty() {
+            let fwd = std::sync::Arc::make_mut(&mut self.fwd);
+            if fwd.len() < other.fwd.len() {
+                fwd.resize(other.fwd.len(), None);
+            }
+            for (d, v) in other.fwd.iter().enumerate() {
+                if v.is_some() {
+                    fwd[d] = *v;
+                }
+            }
+        }
     }
 
     /// Adds the numeric values of document `doc`.
@@ -250,8 +264,25 @@ impl FieldIndex {
         self.nums_sorted = self.nums.len();
     }
 
+    /// Sets the metric column value of document `doc`.
+    pub fn set_fwd(&mut self, doc: u32, v: Option<f64>) {
+        let d = doc as usize;
+        if self.fwd.len() <= d {
+            if v.is_none() {
+                return;
+            }
+            std::sync::Arc::make_mut(&mut self.fwd).resize(d + 1, None);
+        }
+        if self.fwd[d] != v {
+            std::sync::Arc::make_mut(&mut self.fwd)[d] = v;
+        }
+    }
+
     fn kill(&mut self, doc: u32) {
         let d = doc as usize;
+        if self.fwd.get(d).is_some_and(|v| v.is_some()) {
+            std::sync::Arc::make_mut(&mut self.fwd)[d] = None;
+        }
         if let Some(l) = self.lens.get_mut(d) {
             if *l > 0 {
                 self.docs_with -= 1;
