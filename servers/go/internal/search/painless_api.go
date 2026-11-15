@@ -309,6 +309,7 @@ func ScoreBindings(qc *QueryCtx) map[string]func(args []any, off int) (any, *pai
 		return d
 	}
 	m := plKnnBindings()
+	decayBindings(m)
 	for k, v := range map[string]func(args []any, off int) (any, *painless.RuntimeError){
 		"saturation": func(a []any, off int) (any, *painless.RuntimeError) { return f(a, 0) / (f(a, 1) + f(a, 0)), nil },
 		"sigmoid": func(a []any, off int) (any, *painless.RuntimeError) {

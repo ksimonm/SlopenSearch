@@ -355,7 +355,7 @@ func (s *Server) handleNodeStats(w http.ResponseWriter, r *http.Request, selecto
 		writeJSON(w, 200, emptyNodesResponse())
 		return
 	}
-	allDefault := []string{"indices", "os", "process", "jvm", "thread_pool", "fs", "transport", "http", "breakers", "script", "discovery", "ingest"}
+	allDefault := nodeStatsSections
 	metrics := []string{}
 	explicitMetrics := metric != ""
 	if explicitMetrics {
@@ -436,133 +436,6 @@ func (s *Server) handleNodeStats(w http.ResponseWriter, r *http.Request, selecto
 		"cluster_name": model.ClusterName,
 		"nodes":        map[string]any{model.NodeID: stats},
 	})
-}
-
-func (s *Server) buildNodeStats(r *http.Request, metrics []string, indexMetric, level string) map[string]any {
-	stats := map[string]any{
-		"timestamp":         nowMillis(),
-		"name":              model.NodeName,
-		"transport_address": nodeTransport,
-		"host":              nodeHost,
-		"ip":                nodeHost,
-		"roles":             nodeRoles(),
-		"attributes":        nodeAttributes(),
-	}
-	want := map[string]bool{}
-	for _, m := range metrics {
-		want[m] = true
-	}
-	if want["breaker"] {
-		want["breakers"] = true
-	}
-	if want["indices"] {
-		s.mu.RLock()
-		indices, _ := s.resolveIndices("*", resolveOpts{wildcardClosed: true})
-		docsTotal, deletedTotal := 0, 0
-		perIndex := map[string]any{}
-		for _, idx := range indices {
-			if idx.Closed {
-				continue
-			}
-			docsTotal += len(idx.Docs)
-			perIndex[idx.Name] = map[string]any{"docs": map[string]any{"count": len(idx.Docs), "deleted": 0}}
-		}
-		s.mu.RUnlock()
-		idxStats := map[string]any{
-			"docs":           map[string]any{"count": docsTotal, "deleted": deletedTotal},
-			"store":          map[string]any{"size_in_bytes": docsTotal * 64, "reserved_in_bytes": 0},
-			"status_counter": map[string]any{"total": 0, "successful": 0, "failed": 0},
-		}
-		if indexMetric != "" && !strings.Contains(indexMetric, "_all") {
-			only := map[string]any{}
-			for _, m := range strings.Split(indexMetric, ",") {
-				if v, ok := idxStats[m]; ok {
-					only[m] = v
-				}
-			}
-			only["status_counter"] = idxStats["status_counter"]
-			idxStats = only
-		}
-		if level == "indices" {
-			idxStats["indices"] = perIndex
-		}
-		stats["indices"] = idxStats
-	}
-	if want["os"] {
-		stats["os"] = map[string]any{
-			"timestamp": nowMillis(),
-			"cpu":       map[string]any{"percent": 0, "load_average": map[string]any{"1m": 0.0, "5m": 0.0, "15m": 0.0}},
-			"mem":       map[string]any{"total_in_bytes": int64(1), "free_in_bytes": int64(1), "used_in_bytes": int64(0), "free_percent": 100, "used_percent": 0},
-			"swap":      map[string]any{"total_in_bytes": int64(1), "free_in_bytes": int64(1), "used_in_bytes": int64(0)},
-		}
-	}
-	if want["process"] {
-		stats["process"] = map[string]any{
-			"timestamp":             nowMillis(),
-			"open_file_descriptors": 100,
-			"max_file_descriptors":  65535,
-			"cpu":                   map[string]any{"percent": 0, "total_in_millis": int64(0)},
-			"mem":                   map[string]any{"total_virtual_in_bytes": int64(1)},
-		}
-	}
-	if want["jvm"] {
-		stats["jvm"] = map[string]any{
-			"timestamp":        nowMillis(),
-			"uptime_in_millis": int64(1000),
-			"mem":              map[string]any{"heap_used_in_bytes": int64(0), "heap_used_percent": 0, "heap_max_in_bytes": int64(1073741824)},
-			"threads":          map[string]any{"count": 50, "peak_count": 60},
-			"gc":               map[string]any{"collectors": map[string]any{"young": map[string]any{"collection_count": 0}, "old": map[string]any{"collection_count": 0}}},
-			"buffer_pools":     map[string]any{},
-			"classes":          map[string]any{"current_loaded_count": 1000, "total_loaded_count": 1000, "total_unloaded_count": 0},
-		}
-	}
-	if want["thread_pool"] {
-		stats["thread_pool"] = nodeThreadPools()
-	}
-	if want["fs"] {
-		stats["fs"] = map[string]any{
-			"timestamp": nowMillis(),
-			"total":     map[string]any{"total_in_bytes": int64(1), "free_in_bytes": int64(1), "available_in_bytes": int64(1)},
-			"data":      []any{map[string]any{"path": "/tmp/os", "mount": "/", "type": "ext4", "total_in_bytes": int64(1), "free_in_bytes": int64(1), "available_in_bytes": int64(1)}},
-			"io_stats":  map[string]any{"devices": []any{}, "total": map[string]any{"operations": int64(0), "read_operations": int64(0), "write_operations": int64(0), "read_kilobytes": int64(0), "write_kilobytes": int64(0)}},
-		}
-	}
-	if want["transport"] {
-		stats["transport"] = map[string]any{"server_open": 1, "total_outbound_connections": 0, "rx_count": 0, "rx_size_in_bytes": int64(0), "tx_count": 0, "tx_size_in_bytes": int64(0)}
-	}
-	if want["http"] {
-		stats["http"] = map[string]any{"current_open": 0, "total_opened": 1}
-	}
-	if want["breakers"] {
-		breaker := func(limit int64) map[string]any {
-			return map[string]any{"limit_size_in_bytes": limit, "limit_size": "1gb", "estimated_size_in_bytes": int64(0), "estimated_size": "0b", "overhead": 1.0, "tripped": int64(0)}
-		}
-		stats["breakers"] = map[string]any{
-			"request": breaker(536870912), "fielddata": breaker(214748364), "in_flight_requests": breaker(1073741824),
-			"parent": breaker(1000000000), "accounting": breaker(1073741824),
-		}
-	}
-	if want["script"] {
-		stats["script"] = map[string]any{"compilations": int64(0), "cache_evictions": int64(0), "compilation_limit_triggered": int64(0)}
-	}
-	if want["discovery"] {
-		stats["discovery"] = map[string]any{
-			"cluster_state_queue":      map[string]any{"total": int64(0), "pending": int64(0), "committed": int64(0)},
-			"published_cluster_states": map[string]any{"full_states": int64(0), "incompatible_diffs": int64(0), "compatible_diffs": int64(0)},
-		}
-	}
-	if want["ingest"] {
-		stats["ingest"] = map[string]any{"total": map[string]any{"count": int64(0), "time_in_millis": int64(0), "current": int64(0), "failed": int64(0)}}
-	}
-	if want["adaptive_selection"] {
-		stats["adaptive_selection"] = map[string]any{}
-	}
-	if want["indexing_pressure"] {
-		stats["indexing_pressure"] = map[string]any{
-			"memory": map[string]any{"current": map[string]any{"all_in_bytes": int64(0)}, "total": map[string]any{"all_in_bytes": int64(0)}},
-		}
-	}
-	return stats
 }
 
 func (s *Server) handleNodeUsage(w http.ResponseWriter, r *http.Request) {

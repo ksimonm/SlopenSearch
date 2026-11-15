@@ -579,7 +579,9 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if strings.HasPrefix(segs[0], "_") {
+	// `_all` names every index (like `*`) for the index-level APIs; the handlers
+	// resolve it, and the document APIs reject it as an index name themselves.
+	if strings.HasPrefix(segs[0], "_") && segs[0] != "_all" {
 		if r.Method == http.MethodPut {
 			s.createIndex(w, r, segs[0])
 			return

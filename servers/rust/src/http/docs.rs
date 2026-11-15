@@ -3857,26 +3857,26 @@ fn byq_matched(store: &Store, target: &str, req: &Req, body: &Map<String, Value>
     Ok(ids)
 }
 
-pub fn handle_delete_by_query(store: &mut Store, req: &Req, name: &str) -> Response {
+pub(crate) fn delete_by_query_one(store: &mut Store, req: &Req, name: &str) -> Result<(u16, Value), Response> {
     if req.method != "POST" {
-        return crate::http::method_not_allowed(req, &["POST"]);
+        return Err(crate::http::method_not_allowed(req, &["POST"]));
     }
     if let Some(v) = req.param("conflicts") {
         if v != "proceed" && v != "abort" {
-            return err_response(ApiError::new(
+            return Err(err_response(ApiError::new(
                 "illegal_argument_exception",
                 &format!("conflicts may only be \"proceed\" or \"abort\" but was [{}]", v),
                 400,
-            ));
+            )));
         }
     }
     let target = match resolve_write_target(store, name) {
         Ok(t) => t.name.clone(),
-        Err(e) => return err_response(e),
+        Err(e) => return Err(err_response(e)),
     };
     let body = match req.json_body() {
         Ok(b) => b,
-        Err(e) => return err_response(e),
+        Err(e) => return Err(err_response(e)),
     };
     // The query runs on the last refreshed versions; documents changed since
     // then are version conflicts (the deletes carry the seqNo the search saw).
@@ -3889,7 +3889,7 @@ pub fn handle_delete_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
     crate::model::visibility::leave(store, view);
     let mut ids = match matched {
         Ok(v) => v,
-        Err(e) => return err_response(e),
+        Err(e) => return Err(err_response(e)),
     };
     if let Some(max) = byq_max_docs(req, &body) {
         ids.truncate(max);
@@ -3942,20 +3942,20 @@ pub fn handle_delete_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
         }
         out.as_object_mut().unwrap().insert("slices".to_string(), json!(arr));
     }
-    json_response(if failures.is_empty() { 200 } else { 409 }, out)
+    Ok((if failures.is_empty() { 200 } else { 409 }, out))
 }
 
-pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Response {
+pub(crate) fn update_by_query_one(store: &mut Store, req: &Req, name: &str) -> Result<(u16, Value), Response> {
     if req.method != "POST" {
-        return crate::http::method_not_allowed(req, &["POST"]);
+        return Err(crate::http::method_not_allowed(req, &["POST"]));
     }
     let target = match resolve_write_target(store, name) {
         Ok(t) => t.name.clone(),
-        Err(e) => return err_response(e),
+        Err(e) => return Err(err_response(e)),
     };
     let body = match req.json_body() {
         Ok(b) => b,
-        Err(e) => return err_response(e),
+        Err(e) => return Err(err_response(e)),
     };
     // The query runs on the last refreshed versions; documents changed since
     // then are version conflicts.
@@ -3968,7 +3968,7 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
     crate::model::visibility::leave(store, view);
     let mut ids = match matched {
         Ok(v) => v,
-        Err(e) => return err_response(e),
+        Err(e) => return Err(err_response(e)),
     };
     if let Some(max) = byq_max_docs(req, &body) {
         ids.truncate(max);
@@ -3980,7 +3980,7 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
     let script_raw = body.get("script").cloned();
     let pipeline_name = match crate::ingest::effective_ingest_pipeline(store, &target, req.param("pipeline").unwrap_or("")) {
         Ok(p) => p,
-        Err(e) => return err_response(e),
+        Err(e) => return Err(err_response(e)),
     };
     let mut updated = 0i64;
     let mut deleted = 0i64;
@@ -4017,10 +4017,10 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
             let routing = idx.routing.get(id).cloned();
             let res = match crate::search::script_ctx::run_update_script(raw, &cur, &idx.name, id, -1, "index", routing.as_deref()) {
                 Ok(r) => r,
-                Err(e) => return err_response(crate::search::script_ctx::bulk_script_failure(&e)),
+                Err(e) => return Err(err_response(crate::search::script_ctx::bulk_script_failure(&e))),
             };
             if let Some(e) = crate::search::script_ctx::check_by_query_ctx(&res, &idx.name, id) {
-                return err_response(e);
+                return Err(err_response(e));
             }
             op = res.op;
             cur = res.source;
@@ -4108,7 +4108,7 @@ pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
         }
         out.as_object_mut().unwrap().insert("slices".to_string(), json!(arr));
     }
-    json_response(if failure_status >= 400 { failure_status } else { 200 }, out)
+    Ok((if failure_status >= 400 { failure_status } else { 200 }, out))
 }
 
 /// The error for a document source that is valid JSON up to a non-standard
