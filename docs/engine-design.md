@@ -167,11 +167,15 @@ not block searches of another).
 - *Direct results*: for a top-level `match` the planner proves the evaluator would score
   every indexed document from the index statistics, so the search loop takes
   `(matched, score)` per candidate from the postings, computed by the same
-  `score_match` function the evaluator calls (same f64 arithmetic). For a top-level
-  `range` on a numeric/date field the loop calls the evaluator's own comparison
+  `score_match` function the evaluator calls (same f64 arithmetic). For a `range` on a
+  numeric/date field it calls the evaluator's own comparison
   (`QueryCtx::range_on_values`) on the candidate's doc values, with the bounds parsed
-  once and numeric bounds pre-parsed into the parts `cmp_ord` compares
-  (`NumParts`). With `SLOP_VERIFY_INDEX=true` the loop still evaluates every document and
+  once and numeric bounds pre-parsed into the parts `cmp_ord` compares (`NumParts`); a
+  keyword/text `term` is posting membership with the constant score `boost`; a `bool`
+  whose clauses all have direct forms replays `eval_bool`'s arithmetic (must+filter
+  sum, minus the filter scores, should count and `minimum_should_match`, must_not,
+  `adjust_pure_negative`, boost) in clause order. Large candidate sets are decided on
+  several threads. With `SLOP_VERIFY_INDEX=true` the loop still evaluates every document and
   logs any difference between the direct and the evaluated result.
 - *Top-k*: a top-level `match` whose response only reads the page (body keys `query`,
   `from`, `size`, `_source`, `track_total_hits`, `timeout`, no routing/preference/named
@@ -242,8 +246,8 @@ by expected impact:
    (`compute_sort_cell` reads and converts the doc values of every hit, ~1 µs, now on
    several threads for large sets): a sort column per field (the cell of single-valued
    documents) and top-k for field sorts.
-3. More direct results: `bool` whose clauses all have direct forms (filters as bitsets,
-   `must` scores summed in clause order), `multi_match`, `term` on keyword.
+3. More direct results: `multi_match`, `terms`, `exists`, `match_phrase` (positions in
+   the postings), `constant_score`; top-k also for `bool`.
 4. Bucket aggregations from columns (`terms` from the keyword postings,
    `histogram`/`date_histogram`/`range` and sub-aggregations from the metric columns of
    the bucket's documents).
@@ -301,57 +305,53 @@ most of the corpus, and every candidate still goes through the per-document eval
 Same corpus and query generators as above (100 k docs, seed 7; 10 variants per
 workload: *first* = the first request of the workload, *median* = median of the other
 nine), native release binaries, persistence on, one client, run back to back on the
-same host (16 threads, load average 6-13 from other agents' benchmarks, so single
-numbers move by ±30 % and more). *main* = `main` at `92ebed2` (phase 1); *phase 2* =
-this branch at `4982865`. The 150 response bodies of both runs (minus `took`) are
-byte-identical, and so are the answers of this branch started on a data directory
-written by `main`. The whole suite passes (also with `SLOP_VERIFY_INDEX=true`, no
-mismatch logged) and test_95 passes with a KILL restart.
+same host (16 threads, load average 2-5 during these two runs; earlier runs at load
+6-13 moved single numbers by ±30 % but gave the same picture). *main* = `main` at
+`92ebed2` (phase 1); *phase 2* = this branch at `73e426a`. The 150 response bodies of
+both runs (minus `took`) are byte-identical, and so are the answers of this branch
+started on a data directory written by `main`. The whole suite passes, also with
+`SLOP_VERIFY_INDEX=true` (no mismatch logged; a deliberately wrong direct score is
+reported there), and test_95 passes with a KILL restart.
 
 | workload | main first | main median | phase 2 first | phase 2 median |
 |---|---:|---:|---:|---:|
-| match (mid-frequency term) | 2,294 ms (builds `body`) | 20.4 ms | 16.3 ms | 1.7 ms |
-| match_frequent | 395 ms | 419 ms | 24.3 ms | 25.3 ms |
-| match_and | 15.9 ms | 22.7 ms | 1.9 ms | 2.1 ms |
-| multi_match (title^2, body) | 363 ms (builds `title`) | 49.5 ms | 16.1 ms | 20.4 ms |
-| bool (match + term + range + must_not) | 255 ms | 13.6 ms | 4.7 ms | 4.1 ms |
-| filter_term_range | 245 ms | 9.0 ms | 1.9 ms | 3.1 ms |
-| geo_distance | 595 ms | 602 ms | 27.2 ms | 23.5 ms |
-| sort_price | 120 ms | 47.6 ms | 72.2 ms | 44.1 ms |
-| sort_date | 35.7 ms | 36.2 ms | 12.8 ms | 9.7 ms |
-| agg_terms | 65.1 ms | 56.0 ms | 5.7 ms | 4.8 ms |
-| agg_date_histogram | 67.1 ms | 78.0 ms | 18.5 ms | 22.0 ms |
-| agg_metrics (range over most docs) | 1,615 ms | 1,351 ms | 125 ms | 118 ms |
-| highlight | 16.4 ms | 16.1 ms | 3.2 ms | 4.4 ms |
-| deep_from (from 5000, frequent term, sort seq) | 532 ms | 1,350 ms | 84.9 ms | 101 ms |
-| search_after page | 146 ms | 175 ms | 50.7 ms | 74.2 ms |
-
-(An earlier pair of runs at load ~5 gave the same picture: e.g. match_frequent 431 ->
-27 ms, agg_metrics 1,415 -> 240 ms before the last commit's parallel range/hit/sort-cell
-work, deep_from 901 -> 201 ms.)
+| match (mid-frequency term) | 2,128 ms (builds `body`) | 19.7 ms | 16.1 ms | 1.8 ms |
+| match_frequent | 403 ms | 414 ms | 22.4 ms | 20.9 ms |
+| match_and | 12.2 ms | 16.4 ms | 1.5 ms | 1.8 ms |
+| multi_match (title^2, body) | 218 ms (builds `title`) | 33.6 ms | 14.6 ms | 13.7 ms |
+| bool (match + term + range + must_not) | 192 ms | 12.0 ms | 3.2 ms | 4.4 ms |
+| filter_term_range | 206 ms | 9.3 ms | 1.8 ms | 1.8 ms |
+| geo_distance | 573 ms | 572 ms | 30.7 ms | 26.9 ms |
+| sort_price | 118 ms | 47.5 ms | 29.7 ms | 23.6 ms |
+| sort_date | 35.7 ms | 29.1 ms | 10.4 ms | 7.0 ms |
+| agg_terms | 59.8 ms | 57.3 ms | 5.9 ms | 5.3 ms |
+| agg_date_histogram | 65.5 ms | 80.2 ms | 12.6 ms | 14.2 ms |
+| agg_metrics (range over most docs) | 1,416 ms | 1,230 ms | 102 ms | 96.0 ms |
+| highlight | 16.9 ms | 14.9 ms | 2.8 ms | 2.2 ms |
+| deep_from (from 5000, frequent term, sort seq) | 488 ms | 705 ms | 38.7 ms | 52.6 ms |
+| search_after page | 47.8 ms | 50.5 ms | 18.0 ms | 15.5 ms |
 
 | | main | phase 2 |
 |---|---:|---:|
-| bulk indexing, 1 client × 1000 docs (docs/s, 5 runs each) | 8,400-11,300 | 7,100-8,800 (one run 4,200) |
-| RSS after indexing / after the queries (MiB) | 1,305 / 1,833 | 1,479 / 1,485 |
-| restart (SIGTERM) until `_count` answers | 4.9-12.8 s | 6.2-8.3 s |
-| first / second `match` after restart | 6,078 ms / 18.2 ms | 9.1 ms / 1.8 ms |
-| RSS after restart (MiB) | 2,084 | 1,826 |
+| bulk indexing, 1 client × 1000 docs (docs/s) | 10,871 (8,400-11,300 over 6 runs) | 9,749 (7,100-9,700 over 6 runs) |
+| RSS after indexing / after the queries (MiB) | 1,305 / 1,854 | 1,521 / 1,540 |
+| restart (SIGTERM) until `_count` answers | 4.7 s | 5.5 s |
+| first / second `match` after restart | 1,927 ms / 8.2 ms | 8.1 ms / 1.4 ms |
+| RSS after restart (MiB) | 2,098 | 1,848 |
 
-- Indexing is ~20-35 % slower: every bulk analyzes and indexes its documents (the
-  `body` text dominates: ~20 ms of a ~75 ms bulk request on this machine) instead of
-  leaving it to the first search after every restart. Moving the indexing to a
-  background thread after the response was tried and not measurably better here.
+- Indexing is ~10-30 % slower: every bulk analyzes and indexes its documents (the
+  `body` text dominates: ~20 ms of a ~75 ms bulk request at load) instead of leaving it
+  to the first search after every restart. Moving the indexing to a background thread
+  after the response was tried and not measurably better.
 - Restart: the index is built in the background after recovery (~1-1.5 s for 16 fields
-  over 100 k docs, rayon); `_count` waits for it because it takes the store exclusively.
-  Recovery itself (snapshot parse, doc values, snapshot rewrite) is unchanged and
-  dominates; run to run it varies by seconds on this busy host.
-- RSS: the eager fields cost ~180 MiB after indexing; after the queries phase 2 is
-  lower (no per-query hit copies, no lazily built leftovers).
-- What still walks every hit or scans: `sort_price` (float sort cells per hit),
-  `deep_from` and `search_after` (sort cells of every matching hit, now on several
-  threads), `agg_metrics` (the range result and the metrics are column-backed, the hit
-  list is still materialized and copied), `agg_date_histogram` (bucketing reads each
-  hit's source), `multi_match` and `bool` (evaluator per candidate), and every query
-  shape the planner does not know (see the coverage table). The bench was not run in
-  Docker (`make bench`).
+  over 100 k docs, rayon); `_count` waits for it because it takes the store
+  exclusively. Recovery itself (snapshot parse, doc values, snapshot rewrite) is
+  unchanged and dominates.
+- RSS: the eager fields and columns cost ~200 MiB after indexing; after the queries
+  phase 2 is lower (no per-query hit copies, no lazily built leftovers).
+- What still walks every hit or scans: field sorts (`sort_price`, `deep_from`,
+  `search_after`: a sort cell per matching hit, on several threads for large sets),
+  `agg_metrics` (the range result and the metrics are column-backed, the hit list is
+  still materialized), `agg_date_histogram` (bucketing reads each hit's source),
+  `multi_match` (evaluator per candidate), and every query shape the planner does not
+  know (see the coverage table). The bench was not run in Docker (`make bench`).
