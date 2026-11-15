@@ -129,3 +129,46 @@ not block searches of another).
    inverted index already has them), f32 vectors; then persist the index segments.
 6. Per-index `RwLock`s; geo (bounding-box prefilter on the lat/lon columns), k-NN on
    f32 arrays.
+
+## Bench note (2026-11-15)
+
+`small` corpus of `bench/datagen.py` (100 k docs, 73 MB), the query generators of
+`bench/workloads.py` (seed 7), native release binaries on the same host (16 threads,
+load average 1-4 from other agents), persistence on, one client unless noted. *before* =
+`main` at `3f75a11`; *after* = this branch. Latency is the median wall time of one
+request; *warm* = the fields the query uses were already built (each field's postings
+are built once, on first use: a few seconds for the 100 k-doc `body` field, ~0.1-0.3 s
+for keyword/numeric fields). The first-query responses of all 15 workloads are
+byte-identical between before and after.
+
+| workload | before | after, first use | after, warm |
+|---|---:|---:|---:|
+| match (mid-frequency term) | 8,015 ms | 3,557 ms (builds `body`) | 56 ms |
+| match_frequent (stop-word-like) | 28,637 ms | 1,323 ms | 1,161 ms |
+| match_and | 7,558 ms | 19 ms | 22 ms |
+| multi_match (title^2, body) | 9,629 ms | 354 ms (builds `title`) | 51 ms |
+| bool (match + term + range + must_not) | 8,707 ms | 327 ms | 21 ms |
+| filter_term_range (term + date range) | 484 ms | 428 ms | 21 ms |
+| geo_distance (scan) | 561 ms | 951 ms | 811 ms |
+| sort_price | 1,060 ms | 53 ms | 53 ms |
+| sort_date | 9,682 ms | 27 ms | 78 ms |
+| agg_terms | 8,245 ms | 90 ms | 67 ms |
+| agg_date_histogram | 1,489 ms | 161 ms | 119 ms |
+| agg_metrics (range over most docs) | 20,342 ms | 1,755 ms | 1,348 ms |
+| highlight | 8,262 ms | 25 ms | 21 ms |
+| deep_from (from 5000, frequent term) | 18,594 ms | 415 ms | 377 ms |
+| search_after page | 1,988 ms | 60 ms | 45 ms |
+
+| | before | after |
+|---|---:|---:|
+| bulk indexing, 1 client × 1000 docs (docs/s) | 9,867 | 8,848 (noise; indexing path unchanged) |
+| RSS after indexing / after the queries (MiB) | 1,303 / 1,980 | 1,323 / 1,864 |
+| warm searches, 1 vs 4 clients (req/s) | (one core) | 32 vs 148 |
+| restart until `_count` answers | — | 6.4 s |
+| first `match` after restart | ~8 s | 3.2 s (builds `body`), then 15 ms |
+
+What is still slow and why: `match_frequent`, `deep_from` and `agg_metrics` match
+most of the corpus, and every candidate still goes through the per-document evaluator
+(~15-20 µs: query re-analysis, value clones) and the hit list/aggregation code;
+`geo_distance` scans. These are next steps 2-4 above. The bench was not run in Docker
+(`make bench`); the absolute numbers are from one busy machine.
