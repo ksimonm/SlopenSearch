@@ -444,15 +444,6 @@ fn trim_float(f: f64) -> String {
     s.strip_suffix(".0").map(|x| x.to_string()).unwrap_or(s)
 }
 
-fn distribute_docs(total: usize, shards: i64) -> Vec<usize> {
-    let shards = if shards <= 0 { 1 } else { shards as usize };
-    let mut out = vec![0usize; shards];
-    for i in 0..total {
-        out[i % shards] += 1;
-    }
-    out
-}
-
 fn time_of_day() -> String {
     let ts = format_utc_millis(now_millis());
     ts.get(11..19).unwrap_or("00:00:00").to_string()
@@ -1079,7 +1070,7 @@ fn cat_shards(store: &Store, req: &Req, spec: &str) -> (Vec<CatCol>, Vec<CatRow>
     let bytes_unit = req.param_or("bytes", "");
     let mut rows: Vec<CatRow> = vec![];
     for idx in &indices {
-        let per_shard = distribute_docs(idx.docs.len(), idx.num_shards());
+        let per_shard = idx.docs_per_shard();
         for i in 0..idx.num_shards() as usize {
             let mut values = Map::new();
             values.insert("index".into(), json!(idx.name));
@@ -1452,7 +1443,7 @@ fn cat_segments(store: &Store, req: &Req, spec: &str) -> (Vec<CatCol>, Vec<CatRo
         if idx.closed {
             continue;
         }
-        let per_shard = distribute_docs(idx.docs.len(), idx.num_shards());
+        let per_shard = idx.docs_per_shard();
         for i in 0..idx.num_shards() as usize {
             if per_shard[i] == 0 {
                 continue;

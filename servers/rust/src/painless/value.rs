@@ -693,78 +693,7 @@ pub fn parse_number(text: &str, is_float: bool, neg: bool) -> Result<(PV, &'stat
 
 // ---- string conversion ----
 
-pub fn fmt_double(f: f64) -> String {
-    if f.is_nan() {
-        return "NaN".into();
-    }
-    if f.is_infinite() {
-        return if f > 0.0 { "Infinity".into() } else { "-Infinity".into() };
-    }
-    if f == 0.0 {
-        return if f.is_sign_negative() { "-0.0".into() } else { "0.0".into() };
-    }
-    let mut e = format!("{:e}", f);
-    let (m, _) = e.split_once('e').unwrap();
-    if !m.contains('.') {
-        let two = format!("{:.1e}", f);
-        if !two.contains(".0e") {
-            e = two;
-        }
-    }
-    fmt_shortest(&e, f.abs())
-}
-
-pub fn fmt_float(f: f32) -> String {
-    if f.is_nan() {
-        return "NaN".into();
-    }
-    if f.is_infinite() {
-        return if f > 0.0 { "Infinity".into() } else { "-Infinity".into() };
-    }
-    if f == 0.0 {
-        return if f.is_sign_negative() { "-0.0".into() } else { "0.0".into() };
-    }
-    let mut e = format!("{:e}", f);
-    let (m, _) = e.split_once('e').unwrap();
-    if !m.contains('.') {
-        let two = format!("{:.1e}", f);
-        if !two.contains(".0e") {
-            e = two;
-        }
-    }
-    fmt_shortest(&e, f.abs() as f64)
-}
-
-/// Renders shortest digits ("d.ddde±x") the way Double.toString does.
-fn fmt_shortest(e: &str, abs: f64) -> String {
-    let (neg, e) = match e.strip_prefix('-') {
-        Some(r) => (true, r),
-        None => (false, e),
-    };
-    let (mant, exp_s) = e.split_once('e').unwrap();
-    let exp: i32 = exp_s.parse().unwrap_or(0);
-    let digits: String = mant.replace('.', "");
-    let out = if (1e-3..1e7).contains(&abs) {
-        if exp >= 0 {
-            let p = (exp + 1) as usize;
-            if digits.len() <= p {
-                format!("{}{}.0", digits, "0".repeat(p - digits.len()))
-            } else {
-                format!("{}.{}", &digits[..p], &digits[p..])
-            }
-        } else {
-            format!("0.{}{}", "0".repeat((-exp - 1) as usize), digits)
-        }
-    } else {
-        let rest = if digits.len() > 1 { &digits[1..] } else { "0" };
-        format!("{}.{}E{}", &digits[..1], rest, exp)
-    };
-    if neg {
-        format!("-{}", out)
-    } else {
-        out
-    }
-}
+pub use crate::javafmt::{double as fmt_double, float as fmt_float};
 
 fn join_items(items: &[PV]) -> String {
     let parts: Vec<String> = items.iter().map(jstr).collect();
@@ -1065,16 +994,8 @@ pub fn from_json(v: &Value, kind: MapKind) -> PV {
     }
 }
 
-pub fn json_num(text: &str) -> Value {
-    serde_json::from_str::<Value>(text).unwrap_or(Value::Null)
-}
-
 fn json_double(f: f64) -> Value {
-    if f.is_finite() {
-        serde_json::Number::from_f64(f).map(Value::Number).unwrap_or(Value::Null)
-    } else {
-        Value::String(fmt_double(f))
-    }
+    crate::javafmt::double_value(f)
 }
 
 /// Converts a Painless value back to JSON for responses and documents.
@@ -1089,13 +1010,7 @@ pub fn to_json(v: &PV) -> Value {
         PV::Byte(i) => Value::from(*i),
         PV::Char(_) => Value::String(jstr(v)),
         PV::Double(f) => json_double(*f),
-        PV::Float(f) => {
-            if f.is_finite() {
-                json_num(&fmt_float(*f))
-            } else {
-                Value::String(fmt_float(*f))
-            }
-        }
+        PV::Float(f) => crate::javafmt::float_value(*f),
         PV::List(l) => Value::Array(l.borrow().iter().map(to_json).collect()),
         PV::EntrySet(l) => Value::Array(l.borrow().iter().map(to_json).collect()),
         PV::DocValues(d) => Value::Array(d.vals.iter().map(to_json).collect()),

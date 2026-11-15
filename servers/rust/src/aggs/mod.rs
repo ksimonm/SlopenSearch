@@ -1,4 +1,5 @@
 pub(crate) mod hdr;
+mod kahan;
 
 use crate::search::eval::QueryCtx;
 use crate::mapping::fields::canonical_ip;
@@ -132,6 +133,18 @@ fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<
                 })
                 .collect();
         }
+        if matches!(ftype, "float" | "half_float" | "scaled_float") {
+            // aggregations read the doc values: the value at the field's precision
+            vals = vals
+                .into_iter()
+                .map(|v| match to_f64(&v) {
+                    Some(f) if v.is_number() || v.is_string() => crate::javafmt::double_value(
+                        crate::mapping::fields::doc_value_double(ftype, def, f),
+                    ),
+                    _ => v,
+                })
+                .collect();
+        }
         if let Some(ign) = doc.get("_ignored").and_then(|v| v.as_array()) {
             if ign.iter().any(|x| x.as_str() == Some(rf.as_str())) {
                 vals.clear();
@@ -152,32 +165,6 @@ fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<
                 .into_iter()
                 .map(|v| match v.as_str().and_then(|s| crate::mapping::fields::canonical_ip(s).ok()) {
                     Some(c) => Value::String(c),
-                    None => v,
-                })
-                .collect();
-        }
-        if ftype == "scaled_float" {
-            if let Some(scale) = def.get("scaling_factor").and_then(to_f64) {
-                if scale != 0.0 {
-                    vals = vals
-                        .into_iter()
-                        .map(|v| match to_f64(&v) {
-                            Some(f) => serde_json::json!((f * scale).round() / scale),
-                            None => v,
-                        })
-                        .collect();
-                }
-            }
-        }
-        if ftype == "float" || ftype == "half_float" {
-            // doc values hold the indexed precision: float32 / float16
-            vals = vals
-                .into_iter()
-                .map(|v| match to_f64(&v) {
-                    Some(f) if ftype == "float" => serde_json::json!(f as f32 as f64),
-                    Some(f) => serde_json::json!(crate::mapping::fields::float32_from_half(
-                        crate::mapping::fields::float32_half(f)
-                    ) as f64),
                     None => v,
                 })
                 .collect();
@@ -328,19 +315,18 @@ fn doc_matches(idx: &Index, doc: &Value, query: &Map<String, Value>) -> bool {
     }
 }
 
+/// A double OpenSearch computes, written as Jackson writes it (1.0E7); null
+/// when not finite.
 fn json_num(f: f64) -> Value {
-    match serde_json::Number::from_f64(f) {
-        Some(n) => Value::Number(n),
-        None => Value::Null,
+    if f.is_finite() {
+        crate::javafmt::double_value(f)
+    } else {
+        Value::Null
     }
 }
 
 fn fmt_bound(f: f64) -> String {
-    if f == f.trunc() && f.is_finite() && f.abs() < 1e15 {
-        format!("{:.1}", f)
-    } else {
-        format_number(f)
-    }
+    crate::javafmt::double(f)
 }
 
 fn is_mapped_field(idx: &Index, field: &str, prefix: &str) -> bool {
@@ -1403,74 +1389,6 @@ fn mix64_stafford(z: i64) -> i64 {
     (z ^ (z >> 32)) as i64
 }
 
-fn murmur3_h1(data: &[u8]) -> u64 {
-    const MASK: u64 = u64::MAX;
-    const C1: u64 = 0x87c37b91114253d5;
-    const C2: u64 = 0x4cf5ad432745937f;
-    let mut h1: u64 = 0;
-    let mut h2: u64 = 0;
-    let length = data.len();
-    let nblocks = length / 16;
-    for i in 0..nblocks {
-        let mut k1 = u64::from_le_bytes(data[i * 16..i * 16 + 8].try_into().unwrap());
-        let mut k2 = u64::from_le_bytes(data[i * 16 + 8..i * 16 + 16].try_into().unwrap());
-        k1 = k1.wrapping_mul(C1);
-        k1 = k1.rotate_left(31);
-        k1 = k1.wrapping_mul(C2);
-        h1 ^= k1;
-        h1 = h1.rotate_left(27);
-        h1 = h1.wrapping_add(h2);
-        h1 = h1.wrapping_mul(5).wrapping_add(0x52dce729);
-        k2 = k2.wrapping_mul(C2);
-        k2 = k2.rotate_left(33);
-        k2 = k2.wrapping_mul(C1);
-        h2 ^= k2;
-        h2 = h2.rotate_left(31);
-        h2 = h2.wrapping_add(h1);
-        h2 = h2.wrapping_mul(5).wrapping_add(0x38495ab5);
-    }
-    let tail = &data[nblocks * 16..];
-    let mut k1: u64 = 0;
-    let mut k2: u64 = 0;
-    let tl = tail.len();
-    for i in 0..tl.min(8) {
-        k1 ^= (tail[i] as u64) << (i * 8);
-    }
-    for i in 8..tl {
-        k2 ^= (tail[i] as u64) << ((i - 8) * 8);
-    }
-    if tl > 8 {
-        k2 = k2.wrapping_mul(C2);
-        k2 = k2.rotate_left(33);
-        k2 = k2.wrapping_mul(C1);
-        h2 ^= k2;
-    }
-    if tl > 0 {
-        k1 = k1.wrapping_mul(C1);
-        k1 = k1.rotate_left(31);
-        k1 = k1.wrapping_mul(C2);
-        h1 ^= k1;
-    }
-    h1 ^= length as u64;
-    h2 ^= length as u64;
-    h1 = h1.wrapping_add(h2);
-    h2 = h2.wrapping_add(h1);
-    fn fmix(mut k: u64) -> u64 {
-        k ^= k >> 33;
-        k = k.wrapping_mul(0xff51afd7ed558ccd);
-        k ^= k >> 33;
-        k = k.wrapping_mul(0xc4ceb9fe1a85ec53);
-        k ^= k >> 33;
-        k
-    }
-    h1 = fmix(h1);
-    h2 = fmix(h2);
-    h1 = h1.wrapping_add(h2);
-    h2 = h2.wrapping_add(h1);
-    let _ = MASK;
-    h1
-}
-
 pub fn contains_sampler(v: &Value) -> bool {
     match v {
         Value::Object(m) => {
@@ -1518,7 +1436,7 @@ fn value_matches_include_exclude(
                         let m = ((h % ni) + ni) % ni;
                         return m as f64 == part;
                     }
-                    let h = murmur3_h1(s.as_bytes());
+                    let h = crate::murmur3::x64_128_h1(s.as_bytes());
                     return (h % n) as f64 == part;
                 }
                 true
@@ -2319,14 +2237,6 @@ fn field_is_date(idx: &Index, field: &str, prefix: &str) -> bool {
     )
 }
 
-fn java_double_string(f: f64) -> String {
-    if f == f.trunc() && f.is_finite() && f.abs() < 1e15 {
-        format!("{:.1}", f)
-    } else {
-        format!("{}", f)
-    }
-}
-
 fn collect_metric_values(
     idx: &Index,
     docs: &[&Value],
@@ -2508,8 +2418,8 @@ fn weighted_avg_agg(
     weighted_avg_type_check(idx, &value_field, prefix)?;
     weighted_avg_type_check(idx, &weight_field, prefix)?;
     let value_is_date = !value_field.is_empty() && field_is_date(idx, &value_field, prefix);
-    let mut num = 0.0f64;
-    let mut den = 0.0f64;
+    let mut num = kahan::CompensatedSum::default();
+    let mut den = kahan::CompensatedSum::default();
     for d in docs {
         let weights = mvs_values_for_doc(&weight_cfg, d, idx, prefix, false)?;
         if weights.is_empty() {
@@ -2523,10 +2433,11 @@ fn weighted_avg_agg(
         let w = weights[0];
         let vals = mvs_values_for_doc(&value_cfg, d, idx, prefix, value_is_date)?;
         for v in vals {
-            num += v * w;
-            den += w;
+            num.add(v * w);
+            den.add(w);
         }
     }
+    let (num, den) = (num.value(), den.value());
     if den == 0.0 {
         return Ok(json!({"value": Value::Null}));
     }
@@ -2591,9 +2502,11 @@ fn th_sort_value(idx: &Index, doc: &Value, id: &str, field: &str, desc: bool) ->
     }
     let f = field.to_string();
     let mut is_date = false;
+    let mut ftype = String::new();
     if let Some(def) = crate::mapping::mapping_field_def(idx, &f) {
         let ft = def.get("type").and_then(|t| t.as_str()).unwrap_or("");
         is_date = ft == "date" || ft == "date_nanos";
+        ftype = ft.to_string();
     }
     let raw = idx.doc_values.get(id)?.get(&f)?;
     let mut list = crate::search::eval::array_values(raw);
@@ -2611,7 +2524,7 @@ fn th_sort_value(idx: &Index, doc: &Value, id: &str, field: &str, desc: bool) ->
             return Some(json!(ms));
         }
     }
-    Some(chosen)
+    Some(crate::search::javanum::java_field_number(&ftype, &chosen, false))
 }
 
 fn th_cmp_opts(a: &Option<Value>, b: &Option<Value>, desc: bool) -> Ordering {
@@ -2832,7 +2745,7 @@ fn top_hits_agg(
             if omit_scores {
                 Value::Null
             } else {
-                json!(c.score)
+                crate::search::javanum::score_value(c.score)
             },
         );
         if !omit_source {
@@ -3239,7 +3152,7 @@ fn percentiles_agg(
     if keyed {
         let mut m = Map::new();
         for (p, v, s) in &out {
-            let k = java_double_string(*p);
+            let k = crate::javafmt::double(*p);
             m.insert(k.clone(), v.clone());
             if let Some(s) = s {
                 m.insert(format!("{}_as_string", k), json!(s));
@@ -3335,7 +3248,7 @@ fn percentile_ranks_agg(
     if keyed {
         let mut m = Map::new();
         for (v, r) in &out {
-            m.insert(java_double_string(*v), r.clone());
+            m.insert(crate::javafmt::double(*v), r.clone());
         }
         Ok(json!({"values": m}))
     } else {
@@ -3407,7 +3320,7 @@ fn extended_stats_agg(
     }
     let n = vals.len() as f64;
     let sum = sum_of(&vals);
-    let sos: f64 = vals.iter().map(|x| x * x).sum();
+    let sos = kahan::sum(vals.iter().map(|x| x * x));
     let avg = sum / n;
     let var_pop = sos / n - avg * avg;
     let var_samp = if n > 1.0 {
@@ -3643,7 +3556,7 @@ fn leaf_metric_value(
     if let Some(k) = key {
         if let Some(values) = node.get("values").and_then(|v| v.as_object()) {
             let kk = match k.parse::<f64>() {
-                Ok(f) => java_double_string(f),
+                Ok(f) => crate::javafmt::double(f),
                 Err(_) => k.clone(),
             };
             return match values.get(&kk) {
@@ -3731,7 +3644,7 @@ fn bucket_display_key(b: &Value) -> String {
     }
     match b.get("key") {
         Some(Value::String(s)) => s.clone(),
-        Some(Value::Number(n)) => java_double_string(n.as_f64().unwrap_or(0.0)),
+        Some(Value::Number(n)) => crate::javafmt::double(n.as_f64().unwrap_or(0.0)),
         _ => String::new(),
     }
 }
@@ -3927,7 +3840,7 @@ fn extended_stats_json(vals: &[f64], sigma: f64) -> Value {
     }
     let n = vals.len() as f64;
     let sum = sum_of(vals);
-    let sos: f64 = vals.iter().map(|x| x * x).sum();
+    let sos = kahan::sum(vals.iter().map(|x| x * x));
     let avg = sum / n;
     let var_pop = sos / n - avg * avg;
     let var_samp = if n > 1.0 {
@@ -4086,7 +3999,7 @@ fn eval_metric_pipeline(
             if keyed {
                 let mut m = Map::new();
                 for p in &percents {
-                    m.insert(java_double_string(*p), pick(*p));
+                    m.insert(crate::javafmt::double(*p), pick(*p));
                 }
                 Ok(json!({"values": m}))
             } else {
@@ -5377,7 +5290,7 @@ fn terms_agg(
                 .map(|v| match &v {
                     // a double script value keys as Java's Double.toString
                     Value::Number(n) if n.is_f64() => {
-                        Value::String(java_double_string(n.as_f64().unwrap_or(0.0)))
+                        Value::String(crate::javafmt::double(n.as_f64().unwrap_or(0.0)))
                     }
                     other => Value::String(key_string(other)),
                 })
@@ -8571,7 +8484,7 @@ fn mean(vals: &[f64]) -> f64 {
     if vals.is_empty() {
         0.0
     } else {
-        vals.iter().sum::<f64>() / vals.len() as f64
+        kahan::sum(vals.iter().copied()) / vals.len() as f64
     }
 }
 
@@ -8584,5 +8497,5 @@ fn max_of(vals: &[f64]) -> f64 {
 }
 
 fn sum_of(vals: &[f64]) -> f64 {
-    vals.iter().sum()
+    kahan::sum(vals.iter().copied())
 }

@@ -663,7 +663,7 @@ pub(crate) fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f64 {
 
 pub(crate) fn compute_sort_cell(store: &Store, h: &MultiHit, sp: &SortSpec) -> Result<(bool, Value), ApiError> {
     if sp.kind == 1 {
-        return Ok((false, json!(h.score)));
+        return Ok((false, crate::search::javanum::score_value(h.score)));
     }
     if sp.kind == 2 {
         return Ok((false, json!(h.id)));
@@ -825,7 +825,10 @@ pub(crate) fn compute_sort_cell(store: &Store, h: &MultiHit, sp: &SortSpec) -> R
         }
     }
     match apply_sort_mode(sp, &ftype, vals, sp.desc) {
-        Some(v) => Ok((false, v)),
+        Some(v) => Ok((false, match sp.numeric_type.as_deref() {
+            Some("long" | "date" | "date_nanos") => v,
+            nt => crate::search::javanum::java_field_number(&ftype, &v, nt == Some("double")),
+        })),
         None => Ok((true, sort_missing_sentinel(sp, &ftype, sp.desc))),
     }
 }

@@ -81,10 +81,10 @@ pub fn field_value<'a>(doc: &'a Value, path: &str) -> Option<&'a Value> {
     None
 }
 
-/// serde_json normalizes an exponent marker `E` to `e` while parsing. Go's
-/// decoder (UseNumber) keeps the literal text, so documents indexed with
-/// `1E+2` echo back verbatim. Re-apply the original spelling for numbers that
-/// contained an uppercase exponent marker.
+/// serde_json normalizes the exponent of a number while parsing (`1E2` and
+/// `1e2` read `1e+2`). Go's decoder (UseNumber) keeps the literal text, so
+/// documents indexed with `1E+2` echo back verbatim. Re-apply the original
+/// spelling for numbers whose exponent was normalized.
 pub(crate) fn fix_exponent_literals(s: &str, v: &mut Value) {
     let bytes = s.as_bytes();
     let mut map: HashMap<String, String> = HashMap::new();
@@ -123,9 +123,12 @@ pub(crate) fn fix_exponent_literals(s: &str, v: &mut Value) {
                 }
             }
             let tok = &s[start..i];
-            if tok.contains('E') {
+            // serde_json also adds a `+` to an unsigned exponent (1e7 reads 1e+7)
+            if tok.contains(['e', 'E']) {
                 if let Ok(Value::Number(n)) = serde_json::from_str::<Value>(tok) {
-                    map.insert(n.to_string(), tok.to_string());
+                    if n.to_string() != tok {
+                        map.insert(n.to_string(), tok.to_string());
+                    }
                 }
             }
             continue;

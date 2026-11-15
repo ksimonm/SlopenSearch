@@ -962,15 +962,9 @@ pub fn handle_get_doc(store: &mut Store, req: &Req, name: &str, id: &str) -> Res
     }
     let realtime = req.param("realtime").map(|v| v != "false").unwrap_or(true);
     let missing = || json_response(404, json!({"_index": idx.name, "_id": id, "found": false}));
-    if idx.num_shards() > 1 {
-        let stored_routing = idx.routing.get(id).map(|s| s.as_str()).unwrap_or("");
-        if !get_routing.is_empty() {
-            if stored_routing != get_routing {
-                return missing();
-            }
-        } else if !stored_routing.is_empty() {
-            return missing();
-        }
+    // a get with another routing looks at the shard that routing names
+    if idx.num_shards() > 1 && idx.docs.contains_key(id) && idx.shard_for(id, get_routing) != idx.doc_shard(id) {
+        return missing();
     }
     if !realtime && idx.pending.contains_key(id) {
         return missing();
@@ -1854,16 +1848,9 @@ pub fn handle_mget(store: &mut Store, req: &Req, name: &str) -> Response {
                     "index": idx_name}}));
             continue;
         }
-        if idx.num_shards() > 1 {
-            let rid = idx.routing.get(id).map(|s| s.as_str()).unwrap_or("");
-            if !routing.is_empty() && rid != routing {
-                out.push(json!({"_index": idx_name, "_id": id, "found": false}));
-                continue;
-            }
-            if routing.is_empty() && !rid.is_empty() {
-                out.push(json!({"_index": idx_name, "_id": id, "found": false}));
-                continue;
-            }
+        if idx.num_shards() > 1 && idx.docs.contains_key(id) && idx.shard_for(id, &routing) != idx.doc_shard(id) {
+            out.push(json!({"_index": idx_name, "_id": id, "found": false}));
+            continue;
         }
         if !req.param("realtime").map(|v| v != "false").unwrap_or(true)
             && idx.pending.contains_key(id)
@@ -2174,7 +2161,7 @@ fn handle_count_visible(store: &mut Store, req: &Req, name: &str) -> Response {
         if let Some(tokens) = &routing_tokens {
             let mut used = std::collections::HashSet::new();
             for t in tokens {
-                used.insert(crate::model::routing_shard_of_pub(t, idx.num_shards()));
+                used.extend(idx.routing_shards(t));
             }
             shards += used.len() as i64;
         } else {
@@ -2191,15 +2178,9 @@ fn handle_count_visible(store: &mut Store, req: &Req, name: &str) -> Response {
                 continue;
             }
             if let Some(tokens) = &routing_tokens {
-                let rid = idx.routing.get(id).map(|s| s.as_str()).unwrap_or("");
-                if !rid.is_empty() {
-                    let sh = crate::model::routing_shard_of_pub(rid, idx.num_shards());
-                    let ok = tokens.iter().any(|t| {
-                        crate::model::routing_shard_of_pub(t, idx.num_shards()) == sh
-                    });
-                    if !ok {
-                        continue;
-                    }
+                let sh = idx.doc_shard(id);
+                if !tokens.iter().any(|t| idx.routing_shards(t).contains(&sh)) {
+                    continue;
                 }
             }
             match eval_doc(idx, id, doc, &extra, &qm) {

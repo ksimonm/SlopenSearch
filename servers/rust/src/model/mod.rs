@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use crate::settings::{find_setting, setting_int, settings_value_string};
 
 pub(crate) mod contexts;
+pub(crate) mod routing;
 pub(crate) mod tracked;
 pub(crate) mod visibility;
 
@@ -251,16 +252,4 @@ fn build_field_types(mappings: &Value, prefix: &str, out: &mut HashMap<String, S
         }
         build_field_types(&Value::Object(def.clone()), &path, out);
     }
-}
-
-pub fn routing_shard_of_pub(routing: &str, n: i64) -> i64 {
-    routing_shard_of(routing, n)
-}
-
-pub(crate) fn routing_shard_of(routing: &str, n: i64) -> i64 {
-    if n <= 1 {
-        return 0;
-    }
-    let sum: i64 = routing.bytes().map(|b| b as i64).sum();
-    (sum + 1).rem_euclid(n)
 }

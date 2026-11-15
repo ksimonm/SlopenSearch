@@ -11,6 +11,7 @@ pub(crate) mod fetch;
 pub(crate) mod highlight;
 pub(crate) mod hl_analyzed;
 pub(crate) mod inner_hits;
+pub(crate) mod javanum;
 pub(crate) mod knn_query;
 pub(crate) mod painless_doc;
 pub(crate) mod request;
