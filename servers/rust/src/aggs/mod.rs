@@ -1,4 +1,5 @@
 pub(crate) mod hdr;
+mod kahan;
 
 use crate::search::eval::QueryCtx;
 use crate::mapping::fields::canonical_ip;
@@ -167,19 +168,6 @@ fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<
                     None => v,
                 })
                 .collect();
-        }
-        if ftype == "scaled_float" {
-            if let Some(scale) = def.get("scaling_factor").and_then(to_f64) {
-                if scale != 0.0 {
-                    vals = vals
-                        .into_iter()
-                        .map(|v| match to_f64(&v) {
-                            Some(f) => serde_json::json!((f * scale).round() / scale),
-                            None => v,
-                        })
-                        .collect();
-                }
-            }
         }
         if ftype == "text"
             && def.get("fielddata").and_then(|v| v.as_bool()) == Some(true)
@@ -2430,8 +2418,8 @@ fn weighted_avg_agg(
     weighted_avg_type_check(idx, &value_field, prefix)?;
     weighted_avg_type_check(idx, &weight_field, prefix)?;
     let value_is_date = !value_field.is_empty() && field_is_date(idx, &value_field, prefix);
-    let mut num = 0.0f64;
-    let mut den = 0.0f64;
+    let mut num = kahan::CompensatedSum::default();
+    let mut den = kahan::CompensatedSum::default();
     for d in docs {
         let weights = mvs_values_for_doc(&weight_cfg, d, idx, prefix, false)?;
         if weights.is_empty() {
@@ -2445,10 +2433,11 @@ fn weighted_avg_agg(
         let w = weights[0];
         let vals = mvs_values_for_doc(&value_cfg, d, idx, prefix, value_is_date)?;
         for v in vals {
-            num += v * w;
-            den += w;
+            num.add(v * w);
+            den.add(w);
         }
     }
+    let (num, den) = (num.value(), den.value());
     if den == 0.0 {
         return Ok(json!({"value": Value::Null}));
     }
@@ -3331,7 +3320,7 @@ fn extended_stats_agg(
     }
     let n = vals.len() as f64;
     let sum = sum_of(&vals);
-    let sos: f64 = vals.iter().map(|x| x * x).sum();
+    let sos = kahan::sum(vals.iter().map(|x| x * x));
     let avg = sum / n;
     let var_pop = sos / n - avg * avg;
     let var_samp = if n > 1.0 {
@@ -3851,7 +3840,7 @@ fn extended_stats_json(vals: &[f64], sigma: f64) -> Value {
     }
     let n = vals.len() as f64;
     let sum = sum_of(vals);
-    let sos: f64 = vals.iter().map(|x| x * x).sum();
+    let sos = kahan::sum(vals.iter().map(|x| x * x));
     let avg = sum / n;
     let var_pop = sos / n - avg * avg;
     let var_samp = if n > 1.0 {
@@ -8534,7 +8523,7 @@ fn mean(vals: &[f64]) -> f64 {
     if vals.is_empty() {
         0.0
     } else {
-        vals.iter().sum::<f64>() / vals.len() as f64
+        kahan::sum(vals.iter().copied()) / vals.len() as f64
     }
 }
 
@@ -8547,5 +8536,5 @@ fn max_of(vals: &[f64]) -> f64 {
 }
 
 fn sum_of(vals: &[f64]) -> f64 {
-    vals.iter().sum()
+    kahan::sum(vals.iter().copied())
 }

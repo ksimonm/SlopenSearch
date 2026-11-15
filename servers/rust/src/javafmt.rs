@@ -33,7 +33,7 @@ pub fn double(f: f64) -> String {
     if f == 0.0 {
         return if f.is_sign_negative() { "-0.0".into() } else { "0.0".into() };
     }
-    let mut e = format!("{:e}", f);
+    let mut e = even_tie(format!("{:e}", f), |p| format!("{:.*e}", p, f), |t| t.parse::<f64>().ok() == Some(f));
     let (m, _) = e.split_once('e').unwrap();
     if !m.contains('.') {
         let two = format!("{:.1e}", f);
@@ -54,7 +54,7 @@ pub fn float(f: f32) -> String {
     if f == 0.0 {
         return if f.is_sign_negative() { "-0.0".into() } else { "0.0".into() };
     }
-    let mut e = format!("{:e}", f);
+    let mut e = even_tie(format!("{:e}", f), |p| format!("{:.*e}", p, f), |t| t.parse::<f32>().ok() == Some(f));
     let (m, _) = e.split_once('e').unwrap();
     if !m.contains('.') {
         let two = format!("{:.1e}", f);
@@ -63,6 +63,45 @@ pub fn float(f: f32) -> String {
         }
     }
     fmt_shortest(&e, f.abs() as f64)
+}
+
+/// Of two shortest decimals equally close to the value (the exact value has
+/// one digit more, a 5), Java takes the one with the even last digit; Rust's
+/// formatter (`e`, "d.ddde±x") may take the other. `exact(p)` formats the
+/// value with `p` fraction digits, `round_trips` checks a candidate.
+fn even_tie(e: String, exact: impl Fn(usize) -> String, round_trips: impl Fn(&str) -> bool) -> String {
+    let split = |t: &str| -> Option<(bool, String, i32)> {
+        let (m, x) = t.split_once('e')?;
+        Some((m.starts_with('-'), m.chars().filter(char::is_ascii_digit).collect(), x.parse().ok()?))
+    };
+    let Some((neg, digits, exp)) = split(&e) else { return e };
+    let l = digits.len();
+    if !(2..=18).contains(&l) || (digits.as_bytes()[l - 1] - b'0') % 2 == 0 {
+        return e;
+    }
+    let Some((_, long, lexp)) = split(&exact(l + 24)) else { return e };
+    if long.as_bytes()[l] != b'5' || long[l + 1..].bytes().any(|b| b != b'0') {
+        return e;
+    }
+    let (Ok(lower), Ok(mine)) = (long[..l].parse::<u64>(), digits.parse::<u64>()) else { return e };
+    if exp != lexp || (mine != lower && mine != lower + 1) {
+        return e;
+    }
+    let mut other = if mine == lower { lower + 1 } else { lower }.to_string();
+    let mut oexp = lexp;
+    if other.len() > l {
+        oexp += 1;
+    }
+    while other.len() > 1 && other.ends_with('0') {
+        other.pop();
+    }
+    let rest = if other.len() > 1 { &other[1..] } else { "0" };
+    let cand = format!("{}{}.{}e{}", if neg { "-" } else { "" }, &other[..1], rest, oexp);
+    if round_trips(&cand) {
+        cand
+    } else {
+        e
+    }
 }
 
 /// Renders shortest digits ("d.ddde±x") the way Double.toString does.
@@ -229,6 +268,9 @@ mod tests {
         assert_eq!(float(1.0e-4), "1.0E-4");
         assert_eq!(float(3.4e38), "3.4E38");
         assert_eq!(double(3.4e38f32 as f64), "3.3999999521443642E38");
+        // ties between two shortest decimals go to the even digit
+        assert_eq!(double(141.90005493164062f32 as f64), "141.90005493164062");
+        assert_eq!(double(154.10000610351562f32 as f64), "154.10000610351562");
     }
 
     #[test]
