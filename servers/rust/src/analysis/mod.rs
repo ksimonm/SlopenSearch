@@ -15,23 +15,20 @@
 //! Built-in analyzers are created in [`builtin_analyzer`]; language analyzers
 //! (english, french, ...) hook in there.
 
-pub mod api;
-pub mod charfilters;
-pub mod filters;
+pub(crate) mod basic;
+pub(crate) mod charfilters;
+pub(crate) mod filters;
 mod fold_table;
-pub mod jregex;
-pub mod script;
-pub mod search;
-pub mod settings;
-pub mod stem;
-pub mod stopwords;
-pub mod tokenizers;
-pub mod uchar;
+use crate::jregex;
+pub(crate) mod script;
+pub(crate) mod settings;
+pub(crate) mod stem;
+pub(crate) mod stopwords;
+pub(crate) mod tokenizers;
 
 use serde_json::{Map, Value};
 
 use crate::errors::ApiError;
-use crate::store::Index;
 
 use charfilters::{CharFilter, OffsetMap};
 use filters::Filter;
@@ -145,7 +142,7 @@ pub fn value_list(v: &Value) -> Option<Vec<String>> {
             a.iter()
                 .map(|x| match x {
                     Value::String(s) => s.clone(),
-                    other => crate::store::value_to_string(other).unwrap_or_default(),
+                    other => crate::jsonv::value_to_string(other).unwrap_or_default(),
                 })
                 .collect(),
         ),
@@ -158,7 +155,7 @@ pub fn value_list(v: &Value) -> Option<Vec<String>> {
             }
             Some(vec![s.clone()])
         }
-        Value::Number(_) | Value::Bool(_) => Some(vec![crate::store::value_to_string(v).unwrap_or_default()]),
+        Value::Number(_) | Value::Bool(_) => Some(vec![crate::jsonv::value_to_string(v).unwrap_or_default()]),
         _ => None,
     }
 }
@@ -226,7 +223,7 @@ impl Ctx {
 
     pub fn for_settings(settings: &Map<String, Value>) -> Ctx {
         let get = |k: &str, d: i64| -> i64 {
-            crate::store::find_setting(settings, k)
+            crate::settings::find_setting(settings, k)
                 .and_then(|v| match v {
                     Value::Number(n) => n.as_i64(),
                     Value::String(s) => s.parse().ok(),
@@ -240,10 +237,6 @@ impl Ctx {
             max_ngram_diff: get("max_ngram_diff", 1),
             max_shingle_diff: get("max_shingle_diff", 3),
         }
-    }
-
-    pub fn for_index(idx: &Index) -> Ctx {
-        Ctx::for_settings(&idx.settings)
     }
 
     pub fn section(&self, kind: &str, name: &str) -> Option<&Map<String, Value>> {
@@ -560,7 +553,7 @@ pub fn builtin_analyzer(typ: &str, p: &Map<String, Value>, ctx: &Ctx) -> AResult
             simple_chain(Tokenizer::Standard { max_len: 255 }, "standard", f)
         }
         // Language analyzers ("english", "french", ...) are resolved here.
-        lang if crate::lang::chains::LANGUAGE_ANALYZERS.contains(&lang) => simple_chain(
+        lang if crate::lucene::chains::LANGUAGE_ANALYZERS.contains(&lang) => simple_chain(
             Tokenizer::Language { name: lang.to_string(), params: p.clone() },
             if lang == "thai" { "thai" } else { "standard" },
             vec![],
@@ -627,14 +620,16 @@ pub fn analyzer_from_def(name: &str, def: &Map<String, Value>, ctx: &Ctx) -> ARe
 // ------------------------------------------------- indexing / search support
 
 /// Whether an analyzer name resolves in the index (or globally).
-pub fn analyzer_exists(idx: &Index, name: &str) -> bool {
-    let ctx = Ctx::for_index(idx);
+/// `settings` are the index settings.
+pub fn analyzer_exists(settings: &Map<String, Value>, name: &str) -> bool {
+    let ctx = Ctx::for_settings(settings);
     matches!(ctx.analyzer(name), Ok(Some(_)))
 }
 
 /// Applies a keyword field's normalizer to a value.
-pub fn normalize_keyword(idx: &Index, normalizer: &str, text: &str) -> Option<String> {
-    let ctx = Ctx::for_index(idx);
+/// `settings` are the index settings.
+pub fn normalize_keyword(settings: &Map<String, Value>, normalizer: &str, text: &str) -> Option<String> {
+    let ctx = Ctx::for_settings(settings);
     let n = ctx.normalizer(normalizer).ok()??;
     let s = n.run(text);
     Some(s.tokens.into_iter().map(|t| t.term).collect::<Vec<_>>().join(""))

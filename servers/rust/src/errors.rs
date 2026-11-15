@@ -2,7 +2,6 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde_json::{json, Map, Value};
 
-use crate::resp::pretty_json;
 
 #[derive(Debug, Clone)]
 pub struct ApiError {
@@ -164,16 +163,6 @@ pub fn json_response(status: u16, v: Value) -> Response {
     json_value_response(status, &v)
 }
 
-pub fn pretty_response(status: u16, v: &Value) -> Response {
-    let body = pretty_json(v);
-    (
-        StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-        [(header::CONTENT_TYPE, "application/json; charset=UTF-8")],
-        body,
-    )
-        .into_response()
-}
-
 pub fn text_response(status: u16, content_type: &str, body: String) -> Response {
     (
         StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
@@ -190,33 +179,6 @@ pub fn err_response(e: ApiError) -> Response {
 
 pub fn write_simple_error(status: u16, msg: &str) -> Response {
     json_response(status, json!({"error": msg, "status": status}))
-}
-
-pub fn method_not_allowed(req: &crate::Req, allowed: &[&str]) -> Response {
-    let allow = if allowed.is_empty() {
-        "GET,PUT,POST,DELETE,HEAD,OPTIONS".to_string()
-    } else {
-        allowed.join(",")
-    };
-    if req.method == "OPTIONS" {
-        // RestController answers OPTIONS with the allowed methods and no body
-        let mut resp = text_response(200, "text/plain; charset=UTF-8", String::new());
-        resp.headers_mut().insert(header::ALLOW, allow.parse().unwrap());
-        return resp;
-    }
-    let v = json!({
-        "error": format!(
-            "Incorrect HTTP method for uri [{}] and method [{}], allowed: [{}]",
-            req.path, req.method, allow.replace(',', ", ")
-        ),
-        "status": 405,
-    });
-    let mut resp = json_response(405, v);
-    resp.headers_mut().insert(
-        header::ALLOW,
-        allow.parse().unwrap(),
-    );
-    resp
 }
 
 pub fn no_handler(method: &str, path: &str) -> Response {

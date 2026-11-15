@@ -4,8 +4,8 @@ use std::collections::HashSet;
 
 use serde_json::{Map, Value};
 
-use super::jregex::{self, JRegex};
-use super::uchar::{self, utf16_len};
+use crate::jregex::{self, JRegex};
+use crate::uchar::{self, utf16_len};
 use super::{bad, p_bool, p_int, p_list, p_str, AResult, Ctx, Stream, Token};
 use crate::errors::ApiError;
 
@@ -56,7 +56,7 @@ pub enum Tokenizer {
     SimplePatternSplit { re: JRegex },
     CharGroup { split: Vec<CharClass>, chars: HashSet<char>, max_len: usize },
     Thai,
-    /// A complete language analyzer of `crate::lang` (see builtin_analyzer).
+    /// A complete language analyzer of `crate::lucene` (see builtin_analyzer).
     Language { name: String, params: Map<String, Value> },
 }
 
@@ -293,10 +293,10 @@ impl Tokenizer {
     }
 }
 
-/// A whole Lucene language analyzer chain from `crate::lang` (it runs as
+/// A whole Lucene language analyzer chain from `crate::lucene` (it runs as
 /// the tokenizer of a filter-less chain).
 fn language_analyzer(name: &str, params: &Map<String, Value>, text: &str) -> Stream {
-    let (toks, trailing) = crate::lang::chains::language_analyzer_end(name, params, text).unwrap_or_default();
+    let (toks, trailing) = crate::lucene::chains::language_analyzer_end(name, params, text).unwrap_or_default();
     let mut pos: isize = -1;
     let mut end_pos = 0usize;
     let mut out = Vec::with_capacity(toks.len());
@@ -1088,9 +1088,9 @@ fn simple_pattern(t: &Text, re: &JRegex, split: bool) -> Stream {
 
 /// Thai needs a dictionary-based word break; without one, runs of Thai
 /// letters and other words are emitted whole.
-/// Lucene ThaiTokenizer (JDK dictionary-based word breaks), from `crate::lang`.
+/// Lucene ThaiTokenizer (JDK dictionary-based word breaks), from `crate::lucene`.
 fn thai(text: &str) -> Stream {
-    let toks = crate::lang::chains::thai_tokens(text);
+    let toks = crate::lucene::chains::thai_tokens(text);
     let n = toks.len();
     let tokens = toks.into_iter().enumerate().map(|(i, (term, s, e))| Token::new(term, s, e, "word", i)).collect();
     Stream { tokens, end_pos: n }

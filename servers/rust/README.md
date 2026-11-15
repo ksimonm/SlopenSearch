@@ -47,7 +47,7 @@ The Docker image uses `SLOP_DATA_DIR=/data`; `compose.yaml` mounts the named vol
 `rust-data` there, so the state survives `docker compose restart rust` and rebuilds
 (`docker compose down -v` drops it).
 
-`src/persist.rs` keeps an atomic snapshot (`rust-state.json`) plus a write-ahead journal
+`src/storage/` keeps an atomic snapshot (`rust-state.json`) plus a write-ahead journal
 (`rust-journal-<gen>.log`): every request that changed durable state appends one fsynced
 journal line before its response is sent, so acknowledged writes survive `kill -9`. On
 startup the snapshot is loaded, the journal replayed and compacted into a new snapshot.
@@ -69,28 +69,10 @@ OS_RESTART_CMD="$CMD" OS_PORT=9292 .venv/bin/pytest tests/test_95_persistence.py
 (`restart.sh` starts the server if nothing listens on the port yet; the binary path is
 relative to the repository root here, adjust it to your build.)
 
-## Layout
-
-| File | Area |
-|---|---|
-| `main.rs` | entry point, request abstraction (`Req`), routing |
-| `store.rs`, `persist.rs` | indices, documents, node/cluster constants; optional on-disk snapshot + journal |
-| `shared.rs`, `errors.rs`, `resp.rs` | name validation and index resolution, error shapes, response formats (`filter_path`, YAML, ...) |
-| `meta.rs`, `cluster.rs`, `nodes.rs`, `cat.rs` | `_cluster`, `_nodes`, `_tasks`, `_remote`, `_cat` |
-| `admin.rs`, `fields.rs` | index create/delete/get, settings, mappings, index-time field extraction |
-| `alias.rs`, `templates.rs`, `datastreams.rs`, `rollover.rs` | aliases, index templates, data streams, rollover |
-| `resize.rs`, `reindex.rs`, `resolve_index.rs`, `maintenance.rs` | clone/shrink/split, `_reindex`, `_resolve/index`, refresh/flush/forcemerge |
-| `docs.rs` | document CRUD, `_mget`, `_bulk`, by-query APIs |
-| `search.rs`, `eval.rs`, `eval_extra.rs`, `highlight.rs`, `suggest.rs` | search API, query evaluation, highlighting, suggesters |
-| `aggs.rs`, `hdr.rs` | aggregations; HDR histogram for percentiles |
-| `ingest.rs`, `ingest_script.rs`, `hashes.rs` | ingest pipelines and processors, their script subset, fingerprint hashes |
-| `pl_*.rs` | Painless engine (port of the Go server's): lexer, parser, static checks with Painless-exact compile errors, interpreter, Java value semantics, class library, java.time, regex with the limit-factor circuit breaker; `pl_api.rs` holds contexts, error rendering, the `doc` lookup and `_scripts/painless/_execute` |
-| `painless.rs`, `painless_exec.rs`, `scripts.rs`, `render.rs` | older Painless subset used by search/update/aggs, `_execute` entry point, stored scripts, Mustache templates |
-
 ## Status
 
 The whole suite passes (see the table in the [main README](../../README.md#status)). HTTP compression
-(gzip/deflate/snappy) uses the `flate2` and `snap` crates. The build still has many warnings; cleaning them up is welcome.
+(gzip/deflate/snappy) uses the `flate2` and `snap` crates. The build has a few warnings left (unused values and methods); cleaning them up is welcome.
 
 ## Rules
 
@@ -99,3 +81,69 @@ The whole suite passes (see the table in the [main README](../../README.md#statu
 - Don't edit `tests/` to make a test pass. If you believe a test is wrong, prove it with
   `make ref-test ARGS=<test>` against the reference.
 - Rust-only changes stay in `servers/rust/`.
+
+## Layout
+
+One crate, layered like the Go server. `main.rs` only reads the configuration from the
+environment and wires storage and the HTTP server; everything else lives in modules
+under `src/`. Inner modules never `use` outer ones:
+
+```
+main ─► http ─► suggest ─► search ─► mapping ─► model ─► settings
+            ├─► aggs ───►┘    │         │
+            ├─► ingest ─► scripting ◄───┤  (search, ingest, storage)
+            └─► storage ─► mapping, model, scripting
+       (all of them may use the leaf libraries: errors, resp, jsonv, dates,
+        analysis, painless, mustache, jregex, ...)
+```
+
+Checked with `grep -rhoE 'crate::[a-z_]+' src/<module>`: no module outside `src/http`
+names `crate::http`; `search` does not name `aggs`, `suggest`, `ingest` or `storage`;
+`mapping` does not name `search`; `model` only names `settings`; `painless` and
+`mustache` name nothing in the crate.
+
+Domain and engine modules:
+
+| Module | Contents | Depends on (crate) |
+|---|---|---|
+| `model/` | the domain state: `Store` (indices, cluster settings, templates, data streams, pipelines, stored scripts, scroll/PIT contexts), `Index` with its accessors, node identity constants, uuids, shard routing; `visibility.rs`: what searches see between refreshes and the request cache | settings |
+| `mapping/` | mappings and field types (`nonstd_json.rs`: Jackson NaN/Infinity token detection and the document-parse errors it causes; `mod.rs`: validation, merging, dynamic type inference, `mapping_field_def`, alias resolution); `fields.rs`: index-time parsing of documents into doc values; `knn.rs`/`knn_index.rs`: knn_vector mappings and values; `geo.rs`: geo points and shapes; `completion.rs`: completion field mappings and inputs | analysis, dates, errors, jsonv, model, resp, settings |
+| `scripting.rs` | the script service: stored-script registry, script specs, size and language checks | errors |
+| `search/` | `eval.rs`/`eval_extra.rs`: query evaluation and scoring (`QueryCtx`); `analyzed.rs`: query-time analysis; `highlight.rs`/`hl_analyzed.rs`; `knn_query.rs`; `fetch.rs` (doc values, `fields`, script fields), `sort.rs` (sort specs, `search_after`), `source.rs` (`_source` filtering), `inner_hits.rs` (inner hits, collapse), `request.rs` (named queries, rescore, terms lookup), `validate.rs` (shard-level query validation); script glue: `script_ctx.rs` (prepared scripts, shard failures), `script_env.rs`, `painless_doc.rs` (the `doc` variable, score functions), `expressions.rs` (Lucene expressions, bound to `QueryCtx`) | analysis, dates, errors, jsonv, mapping, model, painless, resp, scripting, settings |
+| `aggs/` | bucket, metric and pipeline aggregations; `hdr.rs`: HDR histogram for percentiles | search, mapping, model, ... |
+| `suggest/` | term (`mod.rs`), phrase with collate (`phrase.rs`) and completion (`completion.rs`) suggesters | search, mapping, model, mustache, ... |
+| `ingest/` | ingest pipelines: validation, processors, `on_failure`, `_simulate`, search pipelines; `script.rs`: the script subset of ingest processors | errors, hashes, model, resp, scripting, settings |
+| `storage/` | durable state: snapshot + synced journal of the `Store` (`storage::open`, `after_request`) | mapping, model, scripting |
+| `http/` | the HTTP adapter (see below) | everything above |
+
+Leaf libraries (no server state):
+
+| Module | Contents |
+|---|---|
+| `errors.rs` | `ApiError`, error and JSON response builders |
+| `resp.rs` | response rendering: pretty JSON, `filter_path`, YAML, number formatting, `glob_match` |
+| `jsonv.rs` | JSON value helpers (`to_f64`, `value_to_string`, dotted paths), exponent literal preservation, duplicate key detection |
+| `settings.rs` | index settings lookup (`find_setting`, `setting_int`, ...) |
+| `dates.rs` | date parsing, civil calendar arithmetic, Java date format patterns |
+| `analysis/` | tokenizers, token/char filters, analyzers and analysis chains from index settings; `basic.rs`: the simple built-in analysis (lowercasing, CJK bigrams, fuzziness) |
+| `lucene/` | Lucene analysis algorithm ports: stemmers, normalizers, case mapping, UAX#29 tokenizer, Thai, generated tables |
+| `snowball/` | the Snowball runtime and the generated stemmers |
+| `jregex.rs`, `uchar.rs` | backtracking `java.util.regex` subset; Java `Character` classification |
+| `painless/` | Painless: lexer, parser, static checks with Painless-exact compile errors, interpreter, Java value semantics, class library, java.time, regex with the limit-factor circuit breaker; `api.rs`: script contexts, compilation, error rendering, `run_with_stack` |
+| `mustache.rs` | mustache templates (mustache.java semantics) |
+| `hashes.rs` | md5/sha1/sha256/sha3 for the fingerprint processor |
+
+Files of `http/`:
+
+| File | Area |
+|---|---|
+| `mod.rs`, `compression.rs`, `net_io.rs` | `Req`, request parsing, routing (`dispatch`), response post-processing, `method_not_allowed`, body compression, the TCP listener |
+| `shared.rs` | name validation, index pattern resolution, settings views and mapping validation |
+| `meta.rs`, `cluster.rs`, `nodes.rs`, `cat.rs`, `tasks_async.rs`, `human.rs` | `_cluster`, `_nodes`, `_tasks`, `_remote`, `_cat`, `human=true` |
+| `admin.rs` | index create/delete/get, settings, mappings |
+| `alias.rs`, `templates.rs`, `datastreams.rs`, `rollover.rs` | aliases, index templates, data streams, rollover |
+| `resize.rs`, `reindex.rs`, `resolve_index.rs`, `maintenance.rs` | clone/shrink/split, `_reindex`, `_resolve/index`, refresh/flush/forcemerge |
+| `docs.rs` | document CRUD, `_mget`, `_bulk`, by-query APIs, `_count`, term vectors |
+| `search.rs`, `search_templates.rs` | `_search` request handling and response assembly (`run_search`), scroll, PIT, `_field_caps`, `_validate`, `_rank_eval`, `_search_shards`; `_msearch`, search templates, `_render` |
+| `ingest_api.rs`, `knn_api.rs`, `analyze_api.rs` | `_ingest` and `_search/pipeline` routes, `_plugins/_knn`, `_analyze` |
+| `scripts.rs`, `script_meta.rs`, `painless_exec.rs` | stored scripts, script contexts/languages listing, `_scripts/painless/_execute` |
