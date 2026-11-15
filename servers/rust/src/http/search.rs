@@ -204,7 +204,8 @@ pub fn run_search(
                 window = n;
             }
         }
-        if from + size > window {
+        let scroll_page = crate::http::scroll_pages::in_scroll_page();
+        if from + size > window && !scroll_page {
             if req.param("scroll").is_some() && size > window {
                 let reason = format!(
                     "Batch size is too large, size must be less than or equal to: [{}] but was [{}]. Scroll batch sizes cost as much memory as result windows so they are controlled by the [index.max_result_window] index level setting.",
@@ -259,6 +260,22 @@ pub fn run_search(
         && req.query.iter().all(|(k, _)| {
             matches!(k.as_str(), "pretty" | "human" | "error_trace" | "filter_path" | "from" | "size" | "track_total_hits" | "rest_total_hits_as_int" | "timeout" | "typed_keys")
         });
+    // a search sorted by fields (and `_doc`) where only the page is read:
+    // select the page from sort columns (see search::sort_topk)
+    let sort_topk_specs = if names.len() == 1
+        && bodym.contains_key("sort")
+        && bodym.keys().all(|k| matches!(k.as_str(), "query" | "from" | "size" | "_source" | "track_total_hits" | "timeout" | "sort" | "search_after"))
+        && req.query.iter().all(|(k, _)| {
+            matches!(k.as_str(), "pretty" | "human" | "error_trace" | "filter_path" | "from" | "size" | "track_total_hits" | "rest_total_hits_as_int" | "timeout" | "typed_keys" | "sort" | "scroll")
+        }) {
+        let body_text = String::from_utf8_lossy(&req.body);
+        let loc = crate::search::sort::SortLocation { body: &body_text, path: vec!["sort".to_string()] };
+        crate::search::sort::parse_sort_specs_at(bodym.get("sort"), Some(&loc))
+            .ok()
+            .filter(|sp| crate::search::sort_topk::eligible(sp))
+    } else {
+        None
+    };
     let mut topk_total: Option<usize> = None;
     for n in names {
         let idx = &store.indices[n];
@@ -303,6 +320,9 @@ pub fn run_search(
             }
         };
         let dup_ids = cands.as_ref().is_none_or(|c| c.dup_ids);
+        // every candidate (a doc number: it has doc values) has a source when
+        // both tables hold as many ids (no document lacks doc values here)
+        let docs_match = cands.is_some() && idx.docs.len() == idx.doc_values.len();
         let named_queries = crate::search::request::find_query_name(&qv).is_some();
         let topk = topk_body
             && !verify
@@ -311,38 +331,75 @@ pub fn run_search(
             && routing_tokens.is_none()
             && pref_shard.is_none()
             && cands.as_ref().is_some_and(|c| c.results.is_some());
+        let sort_topk = sort_topk_specs.is_some()
+            && !verify
+            && !dup_ids
+            && !named_queries
+            && routing_tokens.is_none()
+            && pref_shard.is_none()
+            && cands.as_ref().is_some_and(|c| c.results.is_some());
+        if sort_topk {
+            let c = cands.as_ref().unwrap();
+            let results = c.results.as_ref().unwrap();
+            let cand: Vec<(usize, u32)> = c
+                .positions
+                .iter()
+                .zip(&c.docs)
+                .zip(results)
+                .filter(|((&i, _), &(ok, _))| {
+                    ok && (docs_match || idx.docs.contains_key(&idx.order[i]))
+                        && (idx.pending.is_empty() || !idx.pending.contains_key(&idx.order[i]))
+                })
+                .map(|((&i, &d), _)| (i, d))
+                .collect();
+            let want = (from.max(0) + size.max(0)) as usize;
+            let after = bodym.get("search_after").and_then(|v| v.as_array()).map(|a| a.as_slice());
+            let specs = sort_topk_specs.as_deref().unwrap_or_default();
+            if let Some(sel) = crate::search::sort_topk::select(store, n, idx, c.version, &cand, specs, after, want) {
+                for i in sel.positions {
+                    let Ok(k) = c.positions.binary_search(&i) else { continue };
+                    let id = &idx.order[i];
+                    let Some(doc) = idx.docs.get(id) else { continue };
+                    let score = crate::mapping::knn::f32r(results[k].1);
+                    matched.push(MultiHit { idx_name: n, id, doc, score, pos: i as i64, named: Vec::new() });
+                }
+                topk_total = Some(sel.count);
+                continue;
+            }
+        }
         if topk {
             let c = cands.as_ref().unwrap();
             let results = c.results.as_ref().unwrap();
-            let mut best: Vec<(f64, usize)> = Vec::new();
+            // the best `from + size` by (score desc, position asc); positions
+            // come ascending, so an equal score never displaces a kept hit
+            let want = (from.max(0) + size.max(0)) as usize;
+            let mut heap: std::collections::BinaryHeap<crate::search::topk::Worse> = std::collections::BinaryHeap::with_capacity(want.min(1 << 16) + 1);
             let mut count = 0usize;
             let mut nan = false;
             for (k, &i) in c.positions.iter().enumerate() {
                 let (ok, score) = results[k];
-                if !ok || !idx.docs.contains_key(&idx.order[i]) || (!idx.pending.is_empty() && idx.pending.contains_key(&idx.order[i])) {
+                if !ok || (!docs_match && !idx.docs.contains_key(&idx.order[i])) || (!idx.pending.is_empty() && idx.pending.contains_key(&idx.order[i])) {
                     continue;
                 }
                 let score = crate::mapping::knn::f32r(score);
                 nan |= score.is_nan();
                 count += 1;
-                best.push((score, i));
+                if want == 0 {
+                    continue;
+                }
+                if heap.len() < want {
+                    heap.push(crate::search::topk::Worse(score, i));
+                } else if heap.peek().is_some_and(|w| score > w.0) {
+                    heap.pop();
+                    heap.push(crate::search::topk::Worse(score, i));
+                }
             }
             if !nan {
-                let want = (from.max(0) + size.max(0)) as usize;
-                let cmp = |a: &(f64, usize), b: &(f64, usize)| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal).then(a.1.cmp(&b.1));
-                if best.len() > want {
-                    if want == 0 {
-                        best.clear();
-                    } else {
-                        best.select_nth_unstable_by(want - 1, cmp);
-                        best.truncate(want);
-                    }
-                }
-                best.sort_by(cmp);
+                let best: Vec<(f64, usize)> = heap.into_sorted_vec().into_iter().map(|w| (w.0, w.1)).collect();
                 for (score, i) in best {
                     let id = &idx.order[i];
                     let Some(doc) = idx.docs.get(id) else { continue };
-                    matched.push(MultiHit { idx_name: n.clone(), id: id.clone(), doc, score, pos: i as i64, named: Vec::new() });
+                    matched.push(MultiHit { idx_name: n, id, doc, score, pos: i as i64, named: Vec::new() });
                 }
                 topk_total = Some(count);
                 continue;
@@ -371,8 +428,8 @@ pub fn run_search(
                                     return None;
                                 }
                                 Some(MultiHit {
-                                    idx_name: n.clone(),
-                                    id: id.clone(),
+                                    idx_name: n,
+                                    id,
                                     doc,
                                     score: crate::mapping::knn::f32r(score),
                                     pos: i as i64,
@@ -447,8 +504,8 @@ pub fn run_search(
                     walk_named_queries(&mut named, idx, id, doc, &extra, &qv)?;
                 }
                 matched.push(MultiHit {
-                    idx_name: n.clone(),
-                    id: id.clone(),
+                    idx_name: n,
+                    id,
                     doc,
                     score: crate::mapping::knn::f32r(score),
                     pos,
@@ -514,11 +571,14 @@ pub fn run_search(
     // the hits aggregations run over (before post_filter): copied only when
     // there are aggregations
     let has_aggs = bodym.contains_key("aggs") || bodym.contains_key("aggregations");
-    let agg_matched = if has_aggs { matched.clone() } else { Vec::new() };
+    // (the hit list itself when nothing reorders or filters it before the
+    // aggregations: no hits to return, no sort, post_filter or collapse)
+    let agg_shared = has_aggs && size <= 0 && !bodym.contains_key("sort") && !bodym.contains_key("post_filter") && !bodym.contains_key("collapse") && !bodym.contains_key("search_after");
+    let agg_matched = if has_aggs && !agg_shared { matched.clone() } else { Vec::new() };
     if let Some(pf) = bodym.get("post_filter") {
         let mut kept = Vec::new();
         for mut h in matched.drain(..) {
-            let idx = &store.indices[&h.idx_name];
+            let idx = &store.indices[h.idx_name];
             let extra = precompute_doc_values(idx);
             let pm = pf.as_object().cloned().unwrap_or_default();
             let (ok, _) = eval_doc(idx, &h.id, &h.doc, &extra, &pm)?;
@@ -709,7 +769,7 @@ pub fn run_search(
         }
     }
     if !failed_sort.is_empty() {
-        matched.retain(|h| !failed_sort.contains(&h.idx_name));
+        matched.retain(|h| !failed_sort.iter().any(|f| f == h.idx_name));
         total = matched.len();
     }
     if !specs.is_empty() {
@@ -820,7 +880,8 @@ pub fn run_search(
             sort_after_gt(&hit_vals, after, &specs)
         });
     }
-    if specs.is_empty() {
+    // without hits to return (size 0) the order is not read
+    if specs.is_empty() && !(size <= 0 && collapse_cfg.is_none()) {
         matched.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
@@ -1049,17 +1110,20 @@ pub fn run_search(
 
     let any_score_spec = specs.iter().any(|sp| sp.kind == 1);
     let omit_scores = sorted_by_field && !any_score_spec && !track_scores;
-    let max_score = if !specs.is_empty() && specs[0].kind == 1 {
-        if specs[0].desc && !page.is_empty() {
-            Some(page.iter().map(|h| h.score).fold(f64::NEG_INFINITY, f64::max))
+    // the maximum over every hit (none without hits to return: size 0)
+    let max_score = if size <= 0 && !names.is_empty() {
+        None
+    } else if !specs.is_empty() && specs[0].kind == 1 {
+        if specs[0].desc && !matched.is_empty() {
+            Some(matched.iter().map(|h| h.score).fold(f64::NEG_INFINITY, f64::max))
         } else {
             None
         }
     } else if names.is_empty() {
         Some(0.0)
-    } else if !omit_scores && !page.is_empty() && (track_scores || specs.is_empty()) {
+    } else if !omit_scores && !matched.is_empty() && (track_scores || specs.is_empty()) {
         Some(
-            page.iter()
+            matched.iter()
                 .map(|h| h.score)
                 .fold(f64::NEG_INFINITY, f64::max),
         )
@@ -1070,7 +1134,7 @@ pub fn run_search(
 
     let mut hits = vec![];
     for h in page {
-        let idx = &store.indices[&h.idx_name];
+        let idx = &store.indices[h.idx_name];
         let src = match &source_filter {
             Some(spec) => filter_source(&h.doc, spec),
             None => h.doc.clone(),
@@ -1087,7 +1151,7 @@ pub fn run_search(
         if !omit_id {
             entry.insert("_id".to_string(), json!(h.id));
         }
-        if let Some(r) = idx.routing.get(&h.id) {
+        if let Some(r) = idx.routing.get(h.id) {
             if !r.is_empty() {
                 entry.insert("_routing".to_string(), json!(r));
             }
@@ -1127,7 +1191,7 @@ pub fn run_search(
         if !omit_source && source_enabled_search(idx) {
             entry.insert("_source".to_string(), src);
         }
-        if let Some(ign) = idx.doc_ignored.get(&h.id) {
+        if let Some(ign) = idx.doc_ignored.get(h.id) {
             entry.insert(
                 "_ignored".to_string(),
                 json!(ign.iter().map(|f| json!(f)).collect::<Vec<_>>()),
@@ -1140,7 +1204,7 @@ pub fn run_search(
         if want_version {
             entry.insert(
                 "_version".to_string(),
-                json!(idx.versions.get(&h.id).copied().unwrap_or(1)),
+                json!(idx.versions.get(h.id).copied().unwrap_or(1)),
             );
         }
         let want_seq = bodym
@@ -1152,7 +1216,7 @@ pub fn run_search(
             let seq = if req.param("seq_no_primary_term") == Some("true") {
                 1
             } else {
-                idx.seq_nos.get(&h.id).copied().unwrap_or(0)
+                idx.seq_nos.get(h.id).copied().unwrap_or(0)
             };
             entry.insert("_seq_no".to_string(), json!(seq));
             entry.insert("_primary_term".to_string(), json!(1));
@@ -1256,7 +1320,7 @@ pub fn run_search(
                     if spec.name.contains('*') || spec.name.contains('?') {
                         fnames.clear();
                         let re = wildcard_regex(&spec.name);
-                        if let Some(dv) = idx.doc_values.get(&h.id) {
+                        if let Some(dv) = idx.doc_values.get(h.id) {
                             for f in dv.keys() {
                                 if re.is_match(f) {
                                     fnames.push(f.clone());
@@ -1350,7 +1414,7 @@ pub fn run_search(
                 entry.insert("inner_hits".to_string(), Value::Object(out));
             }
         }
-        hits.push(Value::Object(entry));
+        hits.push(Value::Object(canonical_hit_order(entry)));
     }
 
     let mut resp = Map::new();
@@ -1409,12 +1473,13 @@ pub fn run_search(
             .and_then(|a| a.as_object());
         if let Some(aggs) = agg_section {
             {
-                let mut order: Vec<usize> = (0..agg_matched.len()).collect();
+                let agg_hits: &[MultiHit] = if agg_shared { &matched } else { &agg_matched };
+                let mut order: Vec<usize> = (0..agg_hits.len()).collect();
                 if crate::aggs::contains_sampler(&Value::Object(aggs.clone())) {
                     order.sort_by(|&a, &b| {
-                        agg_matched[b]
+                        agg_hits[b]
                             .score
-                            .partial_cmp(&agg_matched[a].score)
+                            .partial_cmp(&agg_hits[a].score)
                             .unwrap_or(std::cmp::Ordering::Equal)
                     });
                 }
@@ -1427,11 +1492,11 @@ pub fn run_search(
                     order
                         .iter()
                         .map(|&i| {
-                            let h = &agg_matched[i];
+                            let h = &agg_hits[i];
                             let mut d = h.doc.clone();
                             if let Value::Object(ref mut m) = d {
                                 if !m.contains_key("_id") {
-                                    m.insert("_id".to_string(), json!(h.id.clone()));
+                                    m.insert("_id".to_string(), json!(h.id));
                                 }
                             }
                             d
@@ -1439,7 +1504,7 @@ pub fn run_search(
                         .collect()
                 };
                 let docs: Vec<&Value> = if simple {
-                    order.iter().map(|&i| agg_matched[i].doc).collect()
+                    order.iter().map(|&i| agg_hits[i].doc).collect()
                 } else {
                     with_ids.iter().collect()
                 };
@@ -1449,19 +1514,21 @@ pub fn run_search(
                     .unwrap_or(false);
                 let mut agg_scores: HashMap<(String, String), f64> = HashMap::new();
                 if simple {
-                    let ids: Vec<(&Value, &str)> = agg_matched.iter().map(|h| (h.doc, h.id.as_str())).collect();
-                    crate::aggs::set_doc_ids(&ids);
-                    let ids: Vec<&str> = order.iter().map(|&i| agg_matched[i].id.as_str()).collect();
-                    crate::aggs::set_root_docs(crate::search::index::doc_numbers(idx, &ids).map(|(v, nums)| (docs.as_slice(), v, nums)));
+                    let ids: Vec<(&Value, &str)> = agg_hits.iter().map(|h| (h.doc, h.id)).collect();
+                    // SAFETY: the ids belong to the hits (borrowed from the
+                    // index), which outlive the aggregation; cleared below
+                    unsafe { crate::aggs::set_doc_ids(&ids) };
+                    let positions: Vec<usize> = order.iter().map(|&i| agg_hits[i].pos as usize).collect();
+                    crate::aggs::set_root_docs(crate::search::index::doc_numbers_at(idx, &positions).map(|(v, nums)| (docs.as_slice(), v, nums)));
                 } else {
                     for h in &matched {
-                        agg_scores.insert((h.idx_name.clone(), h.id.clone()), h.score);
+                        agg_scores.insert((h.idx_name.to_string(), h.id.to_string()), h.score);
                     }
                 }
                 crate::aggs::set_agg_search_context(agg_scores, tokens.clone());
                 let out = eval_aggs_root(aggs, &docs, idx, typed);
                 if simple {
-                    crate::aggs::set_doc_ids(&[]);
+                    unsafe { crate::aggs::set_doc_ids(&[]) };
                     crate::aggs::set_root_docs(None);
                 }
                 let out = out?;
@@ -1603,6 +1670,23 @@ fn profile_query(q: &Value) -> Value {
         "time_in_nanos": 0,
         "breakdown": breakdown
     })
+}
+
+/// The keys of a search hit in the order OpenSearch writes them
+/// (`SearchHit.toXContent`); other keys keep their order, at the end.
+pub(crate) fn canonical_hit_order(mut entry: Map<String, Value>) -> Map<String, Value> {
+    const ORDER: [&str; 18] = [
+        "_shard", "_node", "_index", "_id", "_nested", "_version", "_seq_no", "_primary_term", "_score", "_routing",
+        "_ignored", "_source", "fields", "highlight", "sort", "matched_queries", "_explanation", "inner_hits",
+    ];
+    let mut out = Map::with_capacity(entry.len());
+    for k in ORDER {
+        if let Some(v) = entry.shift_remove(k) {
+            out.insert(k.to_string(), v);
+        }
+    }
+    out.extend(entry);
+    out
 }
 
 fn apply_search_extras(
@@ -1817,6 +1901,7 @@ fn apply_search_extras(
                     let shard = store.indices.get(&idx_name).map(|i| i.doc_shard(&id)).unwrap_or(0);
                     o.insert("_shard".to_string(), json!(format!("[{}][{}]", idx_name, shard)));
                     o.insert("_node".to_string(), json!("node-1"));
+                    *o = canonical_hit_order(std::mem::take(o));
                 }
             }
         }
@@ -2259,6 +2344,62 @@ fn scroll_parse_id(id: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// Searches the scroll's view for the page at the scroll position: a window of
+/// several pages, kept in the state, when the page can be cut from it.
+fn scroll_search(store: &mut Store, state: &mut ScrollState, req: &Req) -> Result<Value, ApiError> {
+    use crate::http::scroll_pages;
+    // the starting request's parameters, then the page request's own
+    let mut query = state.params.clone();
+    query.extend(scroll_pages::carried_params(&req.query).into_iter().filter(|(k, _)| k != "scroll_id"));
+    let preq = Req { method: req.method.clone(), path: req.path.clone(), query, headers: req.headers.clone(), body: state.raw_body.clone() };
+    let windowed = state.body.get("profile").is_none();
+    if windowed {
+        let size = scroll_pages::window_size(state.page);
+        let resp = scroll_view_search(store, state, &preq, size)?;
+        let mut w = scroll_pages::Window { start: state.pos, size, resp };
+        let page = w.take_page(state.pos, state.page);
+        state.window = Some(w);
+        if let Some(p) = page {
+            return Ok(p);
+        }
+        // the page cannot be cut from the window (not expected): search it alone
+        state.window = None;
+    }
+    let page = state.page;
+    scroll_view_search(store, state, &preq, page)
+}
+
+/// The search of the scroll's view with `from` = the scroll position. The live
+/// index answers as long as it did not change since the scroll started; else
+/// the copy taken then is swapped in for the search.
+fn scroll_view_search(store: &mut Store, state: &mut ScrollState, preq: &Req, size: usize) -> Result<Value, ApiError> {
+    let mut body = state.body.clone();
+    if let Some(o) = body.as_object_mut() {
+        o.insert("from".to_string(), json!(state.pos));
+        o.insert("size".to_string(), json!(size));
+    }
+    let swap: Vec<String> = state
+        .snapshot
+        .iter()
+        .filter(|(n, snap)| store.indices.get(*n).is_some_and(|live| !live.same_content(snap)))
+        .map(|(n, _)| n.clone())
+        .collect();
+    let exchange = |store: &mut Store, state: &mut ScrollState| {
+        for n in &swap {
+            if let (Some(live), Some(snap)) = (store.indices.get_mut(n), state.snapshot.get_mut(n)) {
+                std::mem::swap(live, snap);
+            }
+        }
+    };
+    exchange(store, state);
+    let (url_name, names) = (state.url_name.clone(), state.names.clone());
+    let result = crate::http::scroll_pages::as_scroll_page(|| {
+        crate::model::visibility::with_view(store, |store| run_search(store, &url_name, &names, &body, preq))
+    });
+    exchange(store, state);
+    result
+}
+
 pub fn handle_scroll(store: &mut Store, req: &Req, rest: &[String]) -> Response {
     if req.method == "DELETE" {
         let mut ids: Vec<String> = Vec::new();
@@ -2340,23 +2481,11 @@ pub fn handle_scroll(store: &mut Store, req: &Req, rest: &[String]) -> Response 
     let Some(mut state) = store.scrolls.remove(&id) else {
         return err_response(scroll_not_found(&id));
     };
-    let mut body = state.body.clone();
-    if let Some(o) = body.as_object_mut() {
-        o.insert("from".to_string(), json!(state.pos));
-        o.insert("size".to_string(), json!(state.page));
-    }
-    let names = state.names.clone();
-    for (n, snap) in state.snapshot.iter_mut() {
-        if let Some(live) = store.indices.get_mut(n) {
-            std::mem::swap(live, snap);
-        }
-    }
-    let result = crate::model::visibility::with_view(store, |store| run_search(store, &state.url_name, &names, &body, req));
-    for (n, snap) in state.snapshot.iter_mut() {
-        if let Some(live) = store.indices.get_mut(n) {
-            std::mem::swap(live, snap);
-        }
-    }
+    let cached = state.window.as_mut().and_then(|w| w.take_page(state.pos, state.page));
+    let result = match cached {
+        Some(v) => Ok(v),
+        None => scroll_search(store, &mut state, req),
+    };
     match result {
         Ok(mut v) => {
             let mut raw_len = 0usize;
@@ -2918,9 +3047,10 @@ fn handle_search_in(st: &mut StoreRef, req: &Req, name: &str) -> Response {
                 }
             }
             if let Some(_keep) = scroll_keep {
-                let page = body_value
-                    .get("size")
-                    .and_then(|v| v.as_i64())
+                let page = req
+                    .param("size")
+                    .and_then(|v| v.parse::<i64>().ok())
+                    .or_else(|| body_value.get("size").and_then(|v| v.as_i64()))
                     .unwrap_or(10)
                     .max(1) as usize;
                 let slice = scroll_slice_of(&body_value);
@@ -2948,6 +3078,9 @@ fn handle_search_in(st: &mut StoreRef, req: &Req, name: &str) -> Response {
                             .iter()
                             .filter_map(|n| store.indices.get(n).map(|i| (n.clone(), i.clone())))
                             .collect(),
+                        params: crate::http::scroll_pages::carried_params(&req.query),
+                        raw_body: req.body.clone(),
+                        window: None,
                     },
                 );
                 let mut out = Map::new();
@@ -3499,8 +3632,8 @@ pub fn handle_rank_eval(store: &mut Store, req: &Req, name: &str) -> Response {
                         .position(|x| x == doc_id)
                         .unwrap_or(0) as i64;
                     hits.push(MultiHit {
-                        idx_name: n.clone(),
-                        id: doc_id.clone(),
+                        idx_name: n,
+                        id: doc_id,
                         doc,
                         score,
                         pos,
@@ -3544,7 +3677,7 @@ pub fn handle_rank_eval(store: &mut Store, req: &Req, name: &str) -> Response {
         let mut unrated = Vec::new();
         let mut hit_list = Vec::new();
         for (i, h) in hits.iter().enumerate() {
-            let rating = ratings.get(&(h.idx_name.clone(), h.id.clone())).copied();
+            let rating = ratings.get(&(h.idx_name.to_string(), h.id.to_string())).copied();
             if rating.is_none() {
                 unrated.push(json!({"_index": h.idx_name, "_id": h.id}));
             }

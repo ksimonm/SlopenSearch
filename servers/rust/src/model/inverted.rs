@@ -31,7 +31,8 @@ pub struct Dirty {
 /// inverted index). Reads go through `Deref`; every mutation goes through the
 /// methods below.
 pub struct TrackedMap<V> {
-    map: HashMap<String, V>,
+    /// Copy-on-write (see `model::shared`): clones share the table.
+    map: crate::model::shared::Shared<HashMap<String, V>>,
     dirty: Mutex<Dirty>,
     flag: AtomicBool,
 }
@@ -43,7 +44,7 @@ pub type Docs = TrackedMap<Value>;
 
 impl<V> Default for TrackedMap<V> {
     fn default() -> Self {
-        TrackedMap { map: HashMap::new(), dirty: Mutex::new(Dirty::default()), flag: AtomicBool::new(false) }
+        TrackedMap { map: HashMap::new().into(), dirty: Mutex::new(Dirty::default()), flag: AtomicBool::new(false) }
     }
 }
 
@@ -65,6 +66,13 @@ impl<V> Deref for TrackedMap<V> {
 }
 
 impl<V> TrackedMap<V> {
+    /// Whether both share the same table (no write since one was cloned from the other).
+    pub fn same(&self, other: &TrackedMap<V>) -> bool {
+        self.map.same(&other.map)
+    }
+}
+
+impl<V: Clone> TrackedMap<V> {
     fn mark(&mut self, id: &str) {
         let d = self.dirty.get_mut().unwrap_or_else(|e| e.into_inner());
         if !d.all {

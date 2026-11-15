@@ -1,5 +1,6 @@
 pub(crate) mod hdr;
 mod kahan;
+mod terms_column;
 
 use crate::search::eval::QueryCtx;
 use crate::mapping::fields::canonical_ip;
@@ -137,6 +138,11 @@ fn doc_field_floats(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Opti
 }
 
 fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<Value> {
+    doc_field_values_at(idx, doc, None, field, prefix)
+}
+
+/// [`doc_field_values`] of the stored source of document `known_id`, when known.
+fn doc_field_values_at(idx: &Index, doc: &Value, known_id: Option<&str>, field: &str, prefix: &str) -> Vec<Value> {
     if let Some(n) = doc.get("__nest").and_then(|v| v.as_object()) {
         let p0 = n.get("path").and_then(|v| v.as_str()).unwrap_or("");
         let elem = n.get("elem").cloned().unwrap_or(Value::Null);
@@ -176,10 +182,10 @@ fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<
             &d == orig
         };
         let by_id = match doc.get("_id") {
+            None if known_id.is_some() => known_id.and_then(|id| idx.doc_values.get(id)),
             Some(v) => v.as_str().filter(|id| same_doc(id)).and_then(|id| idx.doc_values.get(id)),
             // a stored source without the injected `_id` (see [`set_doc_ids`])
-            None => AGG_DOC_IDS
-                .with(|m| m.borrow().get(&(doc as *const Value as usize)).cloned())
+            None => agg_doc_id(doc)
                 .filter(|id| idx.docs.get(id).is_some_and(|orig| std::ptr::eq(orig, doc) || orig == doc))
                 .and_then(|id| idx.doc_values.get(&id)),
         };
@@ -2354,22 +2360,48 @@ type RootColumn = (std::sync::Arc<Vec<u32>>, std::sync::Arc<Vec<Option<f64>>>);
 thread_local! {
     /// The document numbers of the root documents of the current aggregation
     /// (identified by the slice address and length), see [`set_root_docs`].
-    static ROOT_DOCS: std::cell::RefCell<Option<(usize, usize, u64, std::sync::Arc<Vec<u32>>)>> = const { std::cell::RefCell::new(None) };
+    static ROOT_DOCS: std::cell::RefCell<Vec<(usize, usize, u64, std::sync::Arc<Vec<u32>>)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The doc numbers (and index content version) of the documents `docs`,
+/// when the slice is the root documents or a bucket registered with
+/// [`with_bucket_docs`].
+fn docs_numbers(docs: &[&Value]) -> Option<(u64, std::sync::Arc<Vec<u32>>)> {
+    ROOT_DOCS.with(|r| {
+        r.borrow()
+            .iter()
+            .rev()
+            .find(|(p, n, _, _)| *p == docs.as_ptr() as usize && *n == docs.len())
+            .map(|(_, _, v, nums)| (*v, nums.clone()))
+    })
+}
+
+/// Runs `f` with the doc numbers of the bucket documents `docs` known (the
+/// registration ends with `f`: the slice address is only meaningful while
+/// it lives).
+fn with_bucket_docs<R>(docs: &[&Value], version: u64, nums: Vec<u32>, f: impl FnOnce() -> R) -> R {
+    ROOT_DOCS.with(|r| r.borrow_mut().push((docs.as_ptr() as usize, docs.len(), version, std::sync::Arc::new(nums))));
+    let out = f();
+    ROOT_DOCS.with(|r| {
+        r.borrow_mut().pop();
+    });
+    out
 }
 
 /// Names the index document numbers (at index content `version`) of the
 /// root documents `docs` of the next aggregation (None clears).
 pub fn set_root_docs(docs: Option<(&[&Value], u64, Vec<u32>)>) {
     ROOT_DOCS.with(|r| {
-        *r.borrow_mut() = docs.map(|(d, version, nums)| (d.as_ptr() as usize, d.len(), version, std::sync::Arc::new(nums)));
+        let mut r = r.borrow_mut();
+        r.clear();
+        if let Some((d, version, nums)) = docs {
+            r.push((d.as_ptr() as usize, d.len(), version, std::sync::Arc::new(nums)));
+        }
     });
 }
 
 fn root_column(idx: &Index, docs: &[&Value], field: &str) -> Option<RootColumn> {
-    let (version, nums) = ROOT_DOCS.with(|r| match r.borrow().as_ref() {
-        Some((p, n, v, nums)) if *p == docs.as_ptr() as usize && *n == docs.len() => Some((*v, nums.clone())),
-        _ => None,
-    })?;
+    let (version, nums) = docs_numbers(docs)?;
     let (at, col) = crate::search::index::metric_column(idx, field)?;
     if at != version {
         return None;
@@ -5407,7 +5439,30 @@ fn terms_agg<'a>(
     let script_params = agg_script_params(t);
     let script_only = script_src.is_some() && field.is_empty();
     let value_script = script_src.is_some() && !field.is_empty();
-    for d in docs {
+    // the values of the documents from the terms column of the field (the
+    // same `doc_field_values`, cached per index content), with the doc
+    // numbers of each bucket for its sub-aggregations
+    let joined = agg_join_field(idx).is_some_and(|jf| field == jf || field.starts_with(&format!("{}#", jf)));
+    let fast = if script_src.is_none() && missing.is_none() && value_type.is_empty() && prefix.is_empty() && !field.is_empty() && !joined {
+        terms_column::bucket_docs(idx, docs, &field)
+    } else {
+        None
+    };
+    let fast_done = fast.is_some();
+    let mut bucket_nums: HashMap<String, Vec<u32>> = HashMap::new();
+    let mut fast_version = 0u64;
+    if let Some(fb) = fast {
+        fast_version = fb.version;
+        for g in fb.groups {
+            let b = make_bucket(&g.raw);
+            let mut b = TermBucket { count: g.docs.len(), ..b };
+            b.docs = g.docs;
+            order_ids.push(g.id.clone());
+            bucket_nums.insert(g.id.clone(), g.nums);
+            buckets.insert(g.id, b);
+        }
+    }
+    for d in docs.iter().filter(|_| !fast_done) {
         let join_handled: Option<(String, String)> = if script_src.is_none() {
             match agg_join_field(idx) {
                 Some(jf) if field == jf => Some((jf.clone(), String::new())),
@@ -5582,7 +5637,11 @@ fn terms_agg<'a>(
         }
         if let Some(sub) = sub_aggs(def) {
             let refs: Vec<&Value> = b.docs.clone();
-            if let Value::Object(m) = eval_aggs_typed(&sub, &refs, idx, prefix, typed)? {
+            let out = match bucket_nums.remove(id) {
+                Some(nums) => with_bucket_docs(&refs, fast_version, nums, || eval_aggs_typed(&sub, &refs, idx, prefix, typed)),
+                None => eval_aggs_typed(&sub, &refs, idx, prefix, typed),
+            };
+            if let Value::Object(m) = out? {
                 for (sk, sv) in m {
                     bm.insert(sk, sv);
                 }
@@ -8673,22 +8732,52 @@ fn sum_of(vals: &[f64]) -> f64 {
     kahan::sum(vals.iter().copied())
 }
 
+/// Ids of the stored sources an aggregation runs over when they are passed
+/// as they are (without an injected `_id`), by address: the (source address,
+/// id address, id length) triples, indexed on first use (most aggregations
+/// never ask).
+#[derive(Default)]
+struct DocIds {
+    entries: Vec<(usize, usize, usize)>,
+    by_addr: Option<HashMap<usize, (usize, usize)>>,
+}
+
 thread_local! {
-    /// Ids of the stored sources an aggregation runs over when they are passed
-    /// as they are (without an injected `_id`), by address.
-    static AGG_DOC_IDS: std::cell::RefCell<HashMap<usize, String>> = std::cell::RefCell::new(HashMap::new());
+    static AGG_DOC_IDS: std::cell::RefCell<DocIds> = std::cell::RefCell::new(DocIds::default());
 }
 
 /// Names the ids of the stored sources `docs` (see [`simple_agg_tree`]);
 /// an empty list clears the table.
-pub fn set_doc_ids(docs: &[(&Value, &str)]) {
+///
+/// # Safety
+///
+/// The table keeps the addresses of the id strings: they must stay alive
+/// and unchanged until the table is cleared (`set_doc_ids(&[])`).
+pub unsafe fn set_doc_ids(docs: &[(&Value, &str)]) {
     AGG_DOC_IDS.with(|m| {
         let mut m = m.borrow_mut();
-        m.clear();
-        for (d, id) in docs {
-            m.insert(*d as *const Value as usize, id.to_string());
-        }
+        m.by_addr = None;
+        m.entries = docs.iter().map(|(d, id)| (*d as *const Value as usize, id.as_ptr() as usize, id.len())).collect();
     });
+}
+
+/// The id [`set_doc_ids`] named for the stored source `doc`.
+fn agg_doc_id(doc: &Value) -> Option<String> {
+    AGG_DOC_IDS.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.entries.is_empty() {
+            return None;
+        }
+        if m.by_addr.is_none() {
+            let map = m.entries.iter().map(|&(d, p, l)| (d, (p, l))).collect();
+            m.by_addr = Some(map);
+        }
+        let &(p, l) = m.by_addr.as_ref()?.get(&(doc as *const Value as usize))?;
+        // SAFETY: `set_doc_ids`' contract keeps the id strings alive until the
+        // table is cleared; (p, l) is the address and length of one of them
+        let id = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(p as *const u8, l)) };
+        Some(id.to_string())
+    })
 }
 
 /// Whether the aggregations only read mapped fields' values (no scripts, no

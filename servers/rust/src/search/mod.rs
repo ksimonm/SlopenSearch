@@ -19,5 +19,7 @@ pub(crate) mod request;
 pub(crate) mod script_ctx;
 pub(crate) mod script_env;
 pub(crate) mod sort;
+pub(crate) mod sort_topk;
 pub(crate) mod source;
+pub(crate) mod topk;
 pub(crate) mod validate;
