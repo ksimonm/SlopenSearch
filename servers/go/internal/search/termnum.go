@@ -16,7 +16,7 @@ var javaDecimalFloat = regexp.MustCompile(`^[+-]?(NaN|Infinity|(\d+\.?\d*|\.\d+)
 
 // javaParseDouble parses s like Double.parseDouble: leading and trailing
 // characters up to ' ' are ignored. A failure is the NumberFormatException
-// Java throws ("empty String" or `For input string: "<trimmed>"`).
+// Java throws ("empty String" or `For input string: "<input>"`).
 func javaParseDouble(s string) (float64, *apierr.Error) {
 	t := strings.TrimFunc(s, func(r rune) bool { return r <= ' ' })
 	if t == "" {
@@ -27,7 +27,8 @@ func javaParseDouble(s string) (float64, *apierr.Error) {
 			return f, nil
 		}
 	}
-	return 0, &apierr.Error{Type: "number_format_exception", Status: 400, Reason: `For input string: "` + t + `"`}
+	// the JDK OpenSearch 3.9 ships names the untrimmed input
+	return 0, &apierr.Error{Type: "number_format_exception", Status: 400, Reason: `For input string: "` + s + `"`}
 }
 
 func isQueryNumberType(t string) bool {
