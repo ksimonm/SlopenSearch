@@ -15,6 +15,7 @@ import (
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/dates"
+	"slopensearch/internal/geohash"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
@@ -1395,7 +1396,7 @@ func GeoPointOf(v any) (float64, float64, bool) {
 				}
 			}
 		}
-		if lat, lon, ok := mapping.DecodeGeohash(t); ok {
+		if lat, lon, ok := geohash.Decode(t); ok {
 			return lat, lon, true
 		}
 	}

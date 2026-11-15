@@ -9,6 +9,7 @@ import (
 
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/geohash"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
@@ -369,44 +370,11 @@ func parseCategoryQueryContexts(v any) []completionQueryCtx {
 
 func geoContextPoint(v any) (float64, float64, bool) {
 	if s, ok := v.(string); ok && !strings.Contains(s, ",") {
-		if lat, lon, ok := mapping.DecodeGeohash(s); ok {
+		if lat, lon, ok := geohash.Decode(s); ok {
 			return lat, lon, true
 		}
 	}
 	return search.GeoPointOf(v)
-}
-
-// geohashNeighbors returns the cells around a geohash at the same precision.
-func geohashNeighbors(hash string) []string {
-	lat, lon, ok := mapping.DecodeGeohash(hash)
-	if !ok {
-		return nil
-	}
-	bits := len(hash) * 5
-	lonBits := (bits + 1) / 2
-	latBits := bits / 2
-	w := 360.0 / float64(uint64(1)<<uint(lonBits))
-	h := 180.0 / float64(uint64(1)<<uint(latBits))
-	var out []string
-	for _, dy := range []float64{-1, 0, 1} {
-		for _, dx := range []float64{-1, 0, 1} {
-			if dx == 0 && dy == 0 {
-				continue
-			}
-			nlat := lat + dy*h
-			if nlat > 90 || nlat < -90 {
-				continue
-			}
-			nlon := lon + dx*w
-			if nlon >= 180 {
-				nlon -= 360
-			} else if nlon < -180 {
-				nlon += 360
-			}
-			out = append(out, mapping.EncodeGeohash(nlat, nlon, len(hash)))
-		}
-	}
-	return out
 }
 
 func parseGeoQueryContexts(v any, mappingPrecision int) []completionQueryCtx {
@@ -453,16 +421,16 @@ func parseGeoQueryContexts(v any, mappingPrecision int) []completionQueryCtx {
 			continue
 		}
 		minPrecision := min(precision, mappingPrecision)
-		hash := mapping.EncodeGeohash(lat, lon, minPrecision)
+		hash := geohash.Encode(lat, lon, minPrecision)
 		locations := []string{hash}
 		if len(neighbours) == 0 && len(hash) == mappingPrecision {
-			locations = append(locations, geohashNeighbors(hash)...)
+			locations = append(locations, geohash.Neighbors(hash)...)
 		} else {
 			for _, np := range neighbours {
 				if np < len(hash) {
 					tr := hash[:np]
 					locations = append(locations, tr)
-					locations = append(locations, geohashNeighbors(tr)...)
+					locations = append(locations, geohash.Neighbors(tr)...)
 				}
 			}
 		}
@@ -499,7 +467,7 @@ func indexedContexts(ctxs []mapping.CompletionContextDef, e completionEntry, doc
 			}
 			for _, p := range points {
 				if lat, lon, ok := geoContextPoint(p); ok {
-					out[cd.Name] = append(out[cd.Name], mapping.EncodeGeohash(lat, lon, cd.Precision))
+					out[cd.Name] = append(out[cd.Name], geohash.Encode(lat, lon, cd.Precision))
 				}
 			}
 			continue

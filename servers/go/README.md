@@ -52,11 +52,11 @@ Domain and engine packages:
 |---|---|---|
 | `internal/model` | the domain state: `State` (indices, cluster settings, templates, data streams, pipelines, stored scripts), `Index` (metadata, settings, mappings, documents, versions, seq_nos, routing, pending/stale writes) with its accessors, `DataStream`, node identity constants | settings |
 | `internal/dates` | date parsing and formatting as OpenSearch does it: Java format names and patterns, epoch values, ISO detection, range date math | jsonv, zone |
-| `internal/mapping` | mappings and field types: validation, merging, dotted names, dynamic mappings and templates, alias resolution (`FieldDef`), index-time parsing of documents into doc values (`ParseContext`, `ComputeDocValues`), knn_vector/completion/geo field values | analysis, apierr, dates, jsonv, model, ojson, settings, wildcard |
+| `internal/mapping` | mappings and field types: validation, merging, dotted names, dynamic mappings and templates, alias resolution (`FieldDef`), index-time parsing of documents into doc values (`ParseContext`, `ComputeDocValues`), knn_vector/completion/geo field values | analysis, apierr, dates, geohash, jsonv, model, ojson, settings, wildcard |
 | `internal/search` | query evaluation (`QueryCtx`, `EvalQuery`), scoring, query_string, inner hits, percolate, function_score, k-NN queries, highlighting, source filtering, sort specs and hit sorting (`SortHits`), `search_after`, collapse, rescore, shard-level query validation, profile; the painless/expressions glue for script queries, scores, fields and sorts. Other indices and stored scripts are reached through `search.Cluster` (`ClusterLookup`, set by the server) | analysis, apierr, dates, expressions, jsonv, mapping, model, mustache, ojson, painless, settings |
 | `internal/aggs` | bucket, metric and pipeline aggregations, scripted aggregations (`aggs.Evaluate` over `aggs.Hit`) | search, mapping, model, ... |
 | `internal/suggest` | term, phrase (with collate) and completion suggesters (`suggest.Evaluate`) | search, mapping, model, ... |
-| `internal/ingest` | ingest pipelines: validation, processors, `on_failure`, `_simulate`, default/final pipelines (`ingest.Engine`); script processors compile through the `ingest.Scripts` interface | apierr, jsonv, model, painless, settings, wildcard |
+| `internal/ingest` | ingest pipelines: validation, processors, `on_failure`, `_simulate`, default/final pipelines (`ingest.Engine`); template properties render through `internal/mustache` on the document's template model (`templates.go`); script processors compile through the `ingest.Scripts` interface | apierr, jsonv, model, mustache, ojson, painless, settings, wildcard |
 | `internal/storage` | durable state: snapshot + synced journal of a `model.State` (`storage.Open`, `Store.Persist`); the server's locks are passed in (`storage.Locks`) | model |
 | `internal/httpapi` | the HTTP adapter: `Server` (embeds `model.State`, owns the locks, scroll/PIT contexts, tasks), routing, request parsing, all REST handlers, response and error rendering, `_cat`, `_nodes`, tasks, the request cache | everything above |
 
@@ -67,6 +67,7 @@ Leaf libraries (no server state):
 | `internal/ojson` | ordered JSON objects (`Object`, `KV`), `Verbatim`, `Marshal` | - |
 | `internal/jsonv` | decoded JSON value helpers: `ToFloat`, `ToInt64`, `Int`, `ToString`, `ScalarString`, `Float` (Java-style doubles), `NormalizeNumbers`, `FormatNumber`, `EncodeString`, `DeepCopy`, `SortedKeys`, `Unmarshal` | - |
 | `internal/wildcard` | `*` pattern matching | - |
+| `internal/geohash` | geohashes: encoding, cell bounds, the cell-corner point a geohash stands for, `LongEncode` (grid bucket order), neighbors | - |
 | `internal/settings` | index settings lookup (`Find`, `Int`, `ValueString`, `ValueInt`), setting key patterns (`MatchAny`) | jsonv, wildcard |
 | `internal/apierr` | the API error type (`Error`, `Response` for pre-rendered bodies), common errors (`BadRequest`, `Parsing`, `IndexNotFound`) | - |
 | `internal/zone` | `java.time.ZoneId.of` (Java's ID rules and error texts) with tz rules from the embedded tz database: offsets, valid offsets of a local time, gaps, transitions | apierr |
