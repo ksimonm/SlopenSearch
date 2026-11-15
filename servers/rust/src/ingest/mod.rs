@@ -2739,7 +2739,7 @@ fn proc_date(
     };
     let zone = zone.map_err(|e| {
         let shown = crate::jsonv::value_to_string(&value).unwrap_or_default();
-        ApiError::bad(&format!("unable to parse date [{}]", shown)).caused_by(ApiError::new(e.kind, &e.message, 400))
+        ApiError::bad(&format!("unable to parse date [{}]", shown)).caused_by(e.to_api())
     })?;
     let ms_naive = parse_date_value(&value, &formats, None)?;
     let ms = match &zone {
@@ -3450,7 +3450,8 @@ fn proc_fingerprint(
         };
         canonical.push('|');
         canonical.push_str(f);
-        canonical.push_str("|1:");
+        // the value is prefixed with its length in UTF-16 units
+        canonical.push_str(&format!("|{}:", text.encode_utf16().count()));
         canonical.push_str(&text);
     }
     canonical.push('|');

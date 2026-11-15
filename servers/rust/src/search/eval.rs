@@ -438,7 +438,7 @@ pub fn validate_query(idx: &Index, q: &Map<String, Value>) -> Result<(), ApiErro
                             if let Err(e) = crate::calendar::Zone::cached(tz) {
                                 let reason = format!("{}: {}", e.java_class(), e.message);
                                 return Err(ApiError::new("illegal_argument_exception", &reason, 400)
-                                    .caused_by(ApiError::new(e.kind, &e.message, 400)));
+                                    .caused_by(e.to_api()));
                             }
                         }
                         let def = mapping_field_def(idx, field).cloned().unwrap_or_default();
@@ -788,7 +788,7 @@ fn date_floor(ms: i64, unit: char) -> i64 {
         }
         'w' => {
             let day = ms.div_euclid(86_400_000);
-            let weekday = (day + 4).rem_euclid(7);
+            let weekday = (day + 3).rem_euclid(7);
             (day - weekday) * 86_400_000
         }
         'd' => ms.div_euclid(86_400_000) * 86_400_000,

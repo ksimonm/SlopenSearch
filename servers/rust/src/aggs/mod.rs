@@ -6078,7 +6078,7 @@ fn time_zone_error(kind: &str, e: ZoneError) -> ApiError {
         &format!("[{}] failed to parse field [time_zone]", kind),
         400,
     )
-    .caused_by(ApiError::new(e.kind, &e.message, 400))
+    .caused_by(e.to_api())
 }
 
 fn variable_width_histogram(

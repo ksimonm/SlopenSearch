@@ -39,6 +39,8 @@ pub fn civil_from_days(z: i64) -> (i64, i64, i64) {
 pub struct ZoneError {
     pub kind: &'static str,
     pub message: String,
+    /// the error this one wraps (`GMT+19`: the invalid offset)
+    pub cause: Option<Box<ZoneError>>,
 }
 
 impl ZoneError {
@@ -50,10 +52,19 @@ impl ZoneError {
         }
     }
     fn unknown(id: &str) -> Self {
-        ZoneError { kind: "zone_rules_exception", message: format!("Unknown time-zone ID: {}", id) }
+        ZoneError { kind: "zone_rules_exception", message: format!("Unknown time-zone ID: {}", id), cause: None }
     }
     fn invalid(message: String) -> Self {
-        ZoneError { kind: "date_time_exception", message }
+        ZoneError { kind: "date_time_exception", message, cause: None }
+    }
+
+    /// The error as OpenSearch renders the exception (with its cause).
+    pub fn to_api(&self) -> crate::errors::ApiError {
+        let e = crate::errors::ApiError::new(self.kind, &self.message, 400);
+        match &self.cause {
+            Some(c) => e.caused_by(c.to_api()),
+            None => e,
+        }
     }
 }
 
@@ -167,7 +178,10 @@ impl Zone {
             if let Some(rest) = id.strip_prefix(prefix) {
                 if rest.starts_with('+') || rest.starts_with('-') {
                     let secs = parse_offset_id(rest)
-                        .map_err(|_| ZoneError::invalid(format!("Invalid ID for offset-based ZoneId: {}", id)))?;
+                        .map_err(|e| ZoneError {
+                            cause: Some(Box::new(e)),
+                            ..ZoneError::invalid(format!("Invalid ID for offset-based ZoneId: {}", id))
+                        })?;
                     return Ok(fixed(secs));
                 }
             }
