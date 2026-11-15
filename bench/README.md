@@ -16,7 +16,8 @@ The Go and Rust images are built from this checkout as `slopbench-go:latest` /
 `slopbench-rust:latest` (`--no-build` reuses them). Results land in
 `bench/results/<timestamp>/`: `run.json` (parameters, host, image ids), one `<target>.json`
 per target (every number, all latency percentiles, resource samples per workload,
-correctness digests) and `report.md`. `bench/results/sample/` is a committed example; the
+correctness digests) and `report.md`. `bench/results/sample/` is a committed example (a
+`tiny` run made while developing the harness, on a busy machine); the
 latest full report is [docs/benchmarks.md](../docs/benchmarks.md).
 
 ## Targets
