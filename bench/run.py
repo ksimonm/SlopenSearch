@@ -440,6 +440,7 @@ def main():
     ap.add_argument("--out", type=Path, default=None, help="results directory (default bench/results/<timestamp>)")
     ap.add_argument("--no-build", action="store_true", help="do not rebuild the go/rust images")
     ap.add_argument("--keep", action="store_true", help="keep the containers running afterwards")
+    ap.add_argument("--level", default="adhoc", help="label stored in run.json and the scorecard (quick/full/adhoc)")
     a = ap.parse_args()
 
     targets = all_targets(a.heap)
@@ -462,7 +463,7 @@ def main():
         "mixed_clients": a.mixed_clients, "workloads": a.workloads,
         "slow_limit_s": a.slow_limit, "request_timeout_s": a.request_timeout,
         "search_duration_s": a.search_duration or PRESETS[a.size][0],
-        "git_rev": git_rev(), "host": platform.node(), "kernel": platform.release(),
+        "level": a.level, "git_rev": git_rev(), "host": platform.node(), "kernel": platform.release(),
         "cpu_model": _cpu_model(), "host_cpus": os.cpu_count(), "host_mem_gb": _mem_gb(),
         "loadavg_start": os.getloadavg(),
         "images": {n: sh("docker", "image", "inspect", "-f", "{{.Id}}", targets[n].image, check=False)[:19]

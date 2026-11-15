@@ -26,3 +26,6 @@ data/
 # Benchmark results (bench/run.py); bench/results/sample is committed
 bench/results/*
 !bench/results/sample/
+
+# opensearch-benchmark venv (bench/osb_setup.sh)
+bench/.venv-osb/

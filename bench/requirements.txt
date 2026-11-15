@@ -1,2 +1,3 @@
-# bench/ needs only the standard library plus numpy (data generation, k-NN ground truth)
+# bench/run.py needs only the standard library plus numpy (data generation, k-NN ground truth).
+# opensearch-benchmark (bench/osb.py) has its own venv: bench/requirements-osb.txt, bench/osb_setup.sh.
 numpy==2.5.4
