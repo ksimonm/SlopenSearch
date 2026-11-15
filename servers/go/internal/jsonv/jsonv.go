@@ -74,7 +74,7 @@ func EncodeString(s string) string {
 	sb.WriteByte('"')
 	for _, r := range s {
 		if r < 0x20 && r != '\n' && r != '\r' && r != '\t' && r != '\b' && r != '\f' {
-			sb.WriteString(fmt.Sprintf("\\u%04x", r))
+			sb.WriteString(fmt.Sprintf("\\u%04X", r))
 		} else {
 			sb.WriteString(jsonStringEscaper.Replace(string(r)))
 		}

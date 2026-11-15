@@ -454,6 +454,15 @@ func termDateParseError(err *apierr.Error) *apierr.Error {
 // parseTermValue converts a term query value into the indexed representation
 // for the field type.
 func parseTermValue(ftype string, def map[string]any, v any) ([]any, *apierr.Error) {
+	if s, ok := v.(string); ok && isQueryNumberType(ftype) {
+		if err := checkQueryNumber(ftype, s); err != nil {
+			return nil, err
+		}
+		if ftype != "long" && ftype != "unsigned_long" {
+			// converted from the double; long goes through Long.parseLong
+			v = strings.TrimFunc(s, func(r rune) bool { return r <= ' ' })
+		}
+	}
 	switch ftype {
 	case "integer", "long", "short", "byte", "unsigned_long":
 		ctx := &mapping.ParseContext{Idx: nil, IndexCoerce: true}
