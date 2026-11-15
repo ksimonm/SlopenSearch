@@ -18,7 +18,6 @@ use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, RwLock};
 
-pub type DvMap = HashMap<String, Map<String, Value>>;
 
 /// Documents whose doc values changed since the inverted index caught up.
 #[derive(Default)]
