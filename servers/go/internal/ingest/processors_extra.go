@@ -519,12 +519,12 @@ func (s *Engine) procFingerprint(cfg map[string]any, env *ingestEnv) *apierr.Err
 			}
 			sort.Strings(keys)
 			for _, k := range keys {
-				sv := fmt.Sprint(flat[k])
-				b.WriteString("|" + f + "." + k + "|" + strconv.Itoa(len(sv)) + ":" + sv)
+				sv := fingerprintText(flat[k])
+				b.WriteString("|" + f + "." + k + "|" + strconv.Itoa(utf16Len(sv)) + ":" + sv)
 			}
 		} else {
-			sv := fmt.Sprint(v)
-			b.WriteString("|" + f + "|" + strconv.Itoa(len(sv)) + ":" + sv)
+			sv := fingerprintText(v)
+			b.WriteString("|" + f + "|" + strconv.Itoa(utf16Len(sv)) + ":" + sv)
 		}
 	}
 	b.WriteString("|")
@@ -550,6 +550,26 @@ func (s *Engine) procFingerprint(cfg map[string]any, env *ingestEnv) *apierr.Err
 	}
 	val := method + ":" + base64.StdEncoding.EncodeToString(digest)
 	return env.setField(target, val, true)
+}
+
+// fingerprintText is the value's text in the fingerprint's canonical form.
+func fingerprintText(v any) string {
+	if v == nil {
+		return "null"
+	}
+	return fmt.Sprint(v)
+}
+
+// utf16Len is Java's String.length: the fingerprint prefixes each value with it.
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		n++
+		if r >= 0x10000 {
+			n++
+		}
+	}
+	return n
 }
 
 func ingestFlattenMap(m map[string]any, prefix string, out map[string]any) {
