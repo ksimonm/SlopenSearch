@@ -3,6 +3,7 @@
 //! index's `default`/`default_search`, or a query's `analyzer` override).
 
 use serde_json::{Map, Value};
+use std::sync::Arc;
 
 use crate::analysis::{Analyzer, Ctx, Token};
 use crate::search::eval::QueryCtx;
@@ -29,8 +30,40 @@ fn resolve(ctx: &Ctx, name: &str) -> FieldAnalyzer {
     }
 }
 
+type AnalyzerKey = (u64, u64, String, u8, String);
+
+thread_local! {
+    /// Resolved analyzers per (settings, mappings) generation, field, side and
+    /// query override: resolving one parses the analysis settings and builds
+    /// its components, which searches would otherwise repeat per document.
+    static ANALYZERS: std::cell::RefCell<std::collections::HashMap<AnalyzerKey, Arc<FieldAnalyzer>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
 impl<'a> QueryCtx<'a> {
-    pub fn field_analyzer(&self, field: &str, opts: Option<&Map<String, Value>>, side: Side) -> FieldAnalyzer {
+    /// The analyzer of `field` for `side` (cached; see [`ANALYZERS`]).
+    pub fn field_analyzer(&self, field: &str, opts: Option<&Map<String, Value>>, side: Side) -> Arc<FieldAnalyzer> {
+        let over = if side != Side::Index {
+            opts.and_then(|m| m.get("analyzer")).and_then(|v| v.as_str()).unwrap_or("")
+        } else {
+            ""
+        };
+        let key: AnalyzerKey = (self.idx.settings.generation(), self.idx.mappings.generation(), field.to_string(), side as u8, over.to_string());
+        if let Some(a) = ANALYZERS.with(|c| c.borrow().get(&key).cloned()) {
+            return a;
+        }
+        let a = Arc::new(self.build_field_analyzer(field, opts, side));
+        ANALYZERS.with(|c| {
+            let mut c = c.borrow_mut();
+            if c.len() > 512 {
+                c.clear();
+            }
+            c.insert(key, a.clone());
+        });
+        a
+    }
+
+    fn build_field_analyzer(&self, field: &str, opts: Option<&Map<String, Value>>, side: Side) -> FieldAnalyzer {
         let ctx = Ctx::for_settings(&self.idx.settings);
         if side != Side::Index {
             if let Some(a) = opts.and_then(|m| m.get("analyzer")).and_then(|v| v.as_str()) {
@@ -66,17 +99,17 @@ impl<'a> QueryCtx<'a> {
         resolve(&ctx, "standard")
     }
 
-    fn terms_with(&self, fa: FieldAnalyzer, text: &str) -> Vec<String> {
-        match fa {
+    fn terms_with(&self, fa: Arc<FieldAnalyzer>, text: &str) -> Vec<String> {
+        match &*fa {
             FieldAnalyzer::Resolved(a) => a.terms(text),
-            FieldAnalyzer::Legacy(name) => self.legacy_analyze(&name, text),
+            FieldAnalyzer::Legacy(name) => self.legacy_analyze(name, text),
         }
     }
 
-    fn positions_with(&self, fa: FieldAnalyzer, text: &str) -> Vec<(String, usize)> {
-        match fa {
+    fn positions_with(&self, fa: Arc<FieldAnalyzer>, text: &str) -> Vec<(String, usize)> {
+        match &*fa {
             FieldAnalyzer::Resolved(a) => a.run(text).tokens.into_iter().map(|t| (t.term, t.pos)).collect(),
-            FieldAnalyzer::Legacy(name) => crate::search::eval::analyze_positions(&name, text),
+            FieldAnalyzer::Legacy(name) => crate::search::eval::analyze_positions(name, text),
         }
     }
 
@@ -114,7 +147,7 @@ impl<'a> QueryCtx<'a> {
 
     /// The query token stream when it is a graph (multi-word synonyms).
     pub(crate) fn query_graph(&self, field: &str, opts: Option<&Map<String, Value>>, text: &str, side: Side) -> Option<Vec<Token>> {
-        match self.field_analyzer(field, opts, side) {
+        match &*self.field_analyzer(field, opts, side) {
             FieldAnalyzer::Resolved(a) => {
                 let toks = a.run(text).tokens;
                 if toks.iter().any(|t| t.pos_len > 1) {

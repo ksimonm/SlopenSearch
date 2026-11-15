@@ -284,16 +284,30 @@ pub fn run_search(
         let verify = cands.is_some() && crate::search::index::verify();
         let mut seen: HashSet<&str> = HashSet::new();
         let qv = Value::Object(qm.clone());
-        for (i, id) in idx.order.iter().enumerate() {
-            let candidate = cands.as_ref().is_none_or(|c| c.contains(id.as_str()));
-            if !candidate && !verify {
-                continue;
+        // the positions to evaluate: the candidates, or every document
+        let all_positions;
+        let positions: &[usize] = match &cands {
+            Some(c) if !verify => &c.positions,
+            _ => {
+                all_positions = (0..idx.order.len()).collect::<Vec<usize>>();
+                &all_positions
             }
+        };
+        let dup_ids = cands.as_ref().is_none_or(|c| c.dup_ids);
+        let named_queries = crate::search::request::find_query_name(&qv).is_some();
+        for (k, &i) in positions.iter().enumerate() {
+            let id = &idx.order[i];
+            let cand_at = match &cands {
+                Some(c) if verify => c.find(i),
+                Some(_) => Some(k),
+                None => None,
+            };
+            let candidate = cands.is_none() || cand_at.is_some();
             let doc = match idx.docs.get(id) {
                 Some(d) => d,
                 None => continue,
             };
-            if idx.pending.contains_key(id) {
+            if !idx.pending.is_empty() && idx.pending.contains_key(id) {
                 continue;
             }
             if routing_tokens.is_some() || pref_shard.is_some() {
@@ -307,19 +321,38 @@ pub fn run_search(
                     continue;
                 }
             }
-            let (ok, score) = eval_doc(idx, id, doc, &extra, &qm)?;
+            let direct = match (&cands, cand_at) {
+                (Some(c), Some(j)) => c.results.as_ref().map(|r| r[j]),
+                _ => None,
+            };
+            let (ok, score) = match direct {
+                Some(r) if !verify => r,
+                _ => {
+                    let r = eval_doc(idx, id, doc, &extra, &qm)?;
+                    if verify && candidate {
+                        if let Some(d) = direct {
+                            if d != r && (d.0 || r.0) {
+                                eprintln!("[verify-index] {} / {}: direct result {:?}, evaluator {:?} for {}", n, id, d, r, qv);
+                            }
+                        }
+                    }
+                    r
+                }
+            };
             if ok {
                 if !candidate {
-                    eprintln!("[verify-index] {} / {} matches {} but is no candidate", n, id, Value::Object(qm.clone()));
+                    eprintln!("[verify-index] {} / {} matches {} but is no candidate", n, id, qv);
                 }
                 // the first occurrence of the id in the index order
-                let pos = if seen.insert(id.as_str()) {
+                let pos = if !dup_ids || seen.insert(id.as_str()) {
                     i as i64
                 } else {
                     idx.order.iter().position(|x| x == id).unwrap_or(0) as i64
                 };
                 let mut named = Vec::new();
-                walk_named_queries(&mut named, idx, id, doc, &extra, &qv)?;
+                if named_queries {
+                    walk_named_queries(&mut named, idx, id, doc, &extra, &qv)?;
+                }
                 matched.push(MultiHit {
                     idx_name: n.clone(),
                     id: id.clone(),

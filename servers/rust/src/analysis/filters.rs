@@ -781,6 +781,16 @@ impl Filter {
         match self {
             Filter::Lowercase(lang) => {
                 let lang = *lang;
+                if lang == LowerLang::Plain {
+                    for t in s.tokens.iter_mut() {
+                        if t.term.is_ascii() {
+                            t.term.make_ascii_lowercase();
+                        } else {
+                            t.term = uchar::lower_str(&t.term);
+                        }
+                    }
+                    return s;
+                }
                 map_terms(s, |t| match lang {
                     LowerLang::Plain => uchar::lower_str(&t.term),
                     LowerLang::Greek => greek_lower(&t.term),
@@ -881,7 +891,7 @@ impl Filter {
                 Some(i) => t.term[..i].to_string(),
                 None => t.term.clone(),
             }),
-            Filter::Classic => map_terms(s, |t| match t.typ.as_str() {
+            Filter::Classic => map_terms(s, |t| match &*t.typ {
                 "<APOSTROPHE>" => {
                     let l = t.term.len();
                     if l >= 2 && (t.term.ends_with("'s") || t.term.ends_with("'S")) {
@@ -1424,14 +1434,14 @@ fn word_delimiter(s: Stream, o: &WdOpts, graph: bool) -> Stream {
             let (_, en) = span(parts[b].0, parts[b].1);
             let p0 = (a..=b).find_map(|i| part_pos[i]).unwrap_or(0);
             let plen = (a..=b).filter(|i| part_pos[*i].is_some()).count().max(1);
-            let mut x = Token::new(term, st, en, &t.typ, base + p0);
+            let mut x = Token::new(term, st, en, t.typ.clone(), base + p0);
             x.pos_len = if graph { plen } else { 1 };
             x
         };
         let part_token = |pi: usize| -> Token {
             let (a, b) = parts[pi];
             let (st, en) = span(a, b);
-            Token::new(c[a..b].iter().collect(), st, en, &t.typ, base + part_pos[pi].unwrap())
+            Token::new(c[a..b].iter().collect(), st, en, t.typ.clone(), base + part_pos[pi].unwrap())
         };
         let mut group: Vec<Token> = Vec::new();
         if o.preserve {
@@ -1507,7 +1517,7 @@ fn common_grams(s: Stream, words: &HashSet<String>, ignore_case: bool, query: bo
     for cur in all {
         if prev.is_some() && cur.typ != "gram" {
             let mut p = prev.take().unwrap();
-            prev_type = p.typ.clone();
+            prev_type = p.typ.to_string();
             p.pos_len = 1;
             out.push(p);
         }

@@ -117,22 +117,20 @@ pub struct FieldIndex {
     /// Live documents with at least one token, and their total token count.
     pub docs_with: usize,
     pub sum_len: u64,
-    /// Numeric fields: (value, doc number), sorted by value when `nums_sorted`.
+    /// Numeric fields: (value, doc number), sorted by value up to `nums_sorted`.
     pub nums: Vec<(f64, u32)>,
-    pub nums_sorted: bool,
+    pub nums_sorted: usize,
     /// A numeric field had a value that is not a number (the column is incomplete).
     pub non_numeric: bool,
+    /// What the analysis of the field depends on (see `search::index`): the
+    /// field is rebuilt when it changes.
+    pub sig: String,
 }
 
 impl FieldIndex {
     /// Adds the tokens of document `doc` (higher than every number added before).
-    pub fn add<I: IntoIterator<Item = String>>(&mut self, doc: u32, tokens: I) {
-        let mut tf: HashMap<String, u32> = HashMap::new();
-        let mut len = 0u32;
-        for t in tokens {
-            len += 1;
-            *tf.entry(t).or_insert(0) += 1;
-        }
+    pub fn add(&mut self, doc: u32, mut tokens: Vec<String>) {
+        let len = tokens.len() as u32;
         let d = doc as usize;
         if self.lens.len() <= d {
             self.lens.resize(d + 1, 0);
@@ -143,9 +141,52 @@ impl FieldIndex {
         }
         self.docs_with += 1;
         self.sum_len += len as u64;
-        for (t, n) in tf {
-            self.postings.entry(t).or_default().push((doc, n));
+        tokens.sort_unstable();
+        let mut it = tokens.into_iter();
+        let mut cur = it.next();
+        while let Some(t) = cur {
+            let mut n = 1u32;
+            loop {
+                match it.next() {
+                    Some(x) if x == t => n += 1,
+                    other => {
+                        cur = other;
+                        break;
+                    }
+                }
+            }
+            match self.postings.get_mut(&t) {
+                Some(p) => p.push((doc, n)),
+                None => {
+                    self.postings.insert(t, vec![(doc, n)]);
+                }
+            }
         }
+    }
+
+    /// Appends `other`, built over documents numbered above every document of
+    /// this field.
+    pub fn append(&mut self, other: FieldIndex) {
+        if self.lens.len() < other.lens.len() {
+            self.lens.resize(other.lens.len(), 0);
+        }
+        for (d, l) in other.lens.iter().enumerate() {
+            if *l > 0 {
+                self.lens[d] = *l;
+            }
+        }
+        self.docs_with += other.docs_with;
+        self.sum_len += other.sum_len;
+        for (t, p) in other.postings {
+            match self.postings.get_mut(&t) {
+                Some(mine) => mine.extend_from_slice(&p),
+                None => {
+                    self.postings.insert(t, p);
+                }
+            }
+        }
+        self.nums.extend_from_slice(&other.nums);
+        self.non_numeric |= other.non_numeric;
     }
 
     /// Adds the numeric values of document `doc`.
@@ -169,7 +210,6 @@ impl FieldIndex {
             }
         }
         if n > 0 {
-            self.nums_sorted = false;
             self.lens[d] = n;
             self.docs_with += 1;
             self.sum_len += n as u64;
@@ -178,14 +218,36 @@ impl FieldIndex {
 
     /// Whether the numeric column is ready for range lookups.
     pub fn nums_ready(&self) -> bool {
-        self.nums_sorted || self.nums.is_empty()
+        self.nums_sorted == self.nums.len()
     }
 
+    /// Sorts the values added since the last call and merges them in.
     pub fn sort_nums(&mut self) {
-        if !self.nums_ready() {
-            self.nums.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-            self.nums_sorted = true;
+        if self.nums_ready() {
+            return;
         }
+        let cmp = |a: &(f64, u32), b: &(f64, u32)| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1));
+        let k = self.nums_sorted;
+        self.nums[k..].sort_by(cmp);
+        if k > 0 {
+            let tail = self.nums.split_off(k);
+            let head = std::mem::take(&mut self.nums);
+            let mut out = Vec::with_capacity(head.len() + tail.len());
+            let (mut i, mut j) = (0, 0);
+            while i < head.len() && j < tail.len() {
+                if cmp(&tail[j], &head[i]) == std::cmp::Ordering::Less {
+                    out.push(tail[j]);
+                    j += 1;
+                } else {
+                    out.push(head[i]);
+                    i += 1;
+                }
+            }
+            out.extend_from_slice(&head[i..]);
+            out.extend_from_slice(&tail[j..]);
+            self.nums = out;
+        }
+        self.nums_sorted = self.nums.len();
     }
 
     fn kill(&mut self, doc: u32) {
@@ -231,6 +293,10 @@ pub struct InvertedIndex {
     /// Ids of documents (in `docs`) without doc values, when `missing_known`.
     pub missing: HashSet<String>,
     pub missing_known: bool,
+    /// Doc number per position of the index order (see `search::index`).
+    pub order_map: Mutex<Option<OrderMap>>,
+    /// The eagerly indexed fields, for the mapping/settings generations.
+    pub eager: Option<((u64, u64), Vec<String>)>,
     /// Process-wide unique stamp of the current content (see [`InvertedIndex::touch`]).
     pub version: u64,
 }
@@ -255,17 +321,14 @@ impl InvertedIndex {
         self.by_id.get(id).copied()
     }
 
-    pub fn id_of(&self, doc: u32) -> Option<&str> {
-        self.ids.get(doc as usize).and_then(|x| x.as_deref())
-    }
-
     /// Forgets every document and every field's postings (field keys stay).
     pub fn reset_docs(&mut self) {
         self.ids.clear();
         self.by_id.clear();
         self.dead = 0;
         for f in self.fields.values_mut() {
-            *f = FieldIndex::default();
+            let sig = std::mem::take(&mut f.sig);
+            *f = FieldIndex { sig, ..FieldIndex::default() };
         }
     }
 
@@ -285,6 +348,14 @@ impl InvertedIndex {
         self.by_id.insert(id.to_string(), n);
         n
     }
+}
+
+/// Doc numbers of the index order at one content version.
+pub struct OrderMap {
+    pub version: u64,
+    pub last: Option<u32>,
+    pub docs: std::sync::Arc<Vec<u32>>,
+    pub dups: bool,
 }
 
 /// The inverted index of an `Index`, behind its own lock so searches holding

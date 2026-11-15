@@ -23,7 +23,7 @@ use crate::mapping::{mapping_field_def, resolve_alias_field};
 use crate::model::inverted::{FieldIndex, InvertedIndex};
 use crate::model::Index;
 use crate::search::analyzed::{FieldAnalyzer, Side};
-use crate::search::eval::{array_values, as_query_list, minimum_should_match, minimum_should_match_checked, QueryCtx};
+use crate::search::eval::{as_query_list, minimum_should_match, minimum_should_match_checked, QueryCtx};
 
 static NULL: Value = Value::Null;
 
@@ -55,6 +55,20 @@ fn schema(idx: &Index) -> (u64, u64) {
     (idx.mappings.generation(), idx.settings.generation())
 }
 
+/// What the terms of field `key` depend on besides the doc values: text
+/// fields are analyzed with the analyzer the mapping and the analysis
+/// settings select. A field whose signature changes is rebuilt.
+fn signature(idx: &Index, key: &str) -> String {
+    let (kind, field) = parse_key(key);
+    match kind {
+        Kind::Text => {
+            let def = mapping_field_def(idx, field).map(|d| Value::Object(d.clone())).unwrap_or(Value::Null);
+            format!("{}\u{1}{}\u{1}{}", idx.settings.generation(), resolve_alias_field(idx, field), def)
+        }
+        Kind::Exact | Kind::Numeric => resolve_alias_field(idx, field),
+    }
+}
+
 /// Whether index-backed execution is disabled (`SLOP_NO_INDEX=true`).
 pub fn disabled() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -73,7 +87,7 @@ struct Indexer<'a> {
     kind: Kind,
     /// The doc values key (the field with aliases resolved).
     path: String,
-    analyzer: Option<FieldAnalyzer>,
+    analyzer: Option<std::sync::Arc<FieldAnalyzer>>,
     ctx: QueryCtx<'a>,
 }
 
@@ -91,7 +105,10 @@ impl<'a> Indexer<'a> {
     fn add(&self, f: &mut FieldIndex, doc: u32, dv: &Map<String, Value>) {
         if self.kind == Kind::Numeric {
             if let Some(raw) = dv.get(&self.path) {
-                f.add_numbers(doc, &array_values(raw));
+                match raw {
+                    Value::Array(a) => f.add_numbers(doc, a),
+                    other => f.add_numbers(doc, std::slice::from_ref(other)),
+                }
             }
             return;
         }
@@ -101,15 +118,22 @@ impl<'a> Indexer<'a> {
     fn terms(&self, dv: &Map<String, Value>) -> Vec<String> {
         let mut out = Vec::new();
         let Some(raw) = dv.get(&self.path) else { return out };
-        for v in array_values(raw) {
+        let vals = match raw {
+            Value::Array(a) => a.as_slice(),
+            other => std::slice::from_ref(other),
+        };
+        for v in vals {
             match self.kind {
                 Kind::Numeric => {}
                 Kind::Text => {
-                    let s = value_scalar_string(&v).unwrap_or_default();
-                    out.extend(self.ctx.terms_ref(self.analyzer.as_ref().unwrap(), &s));
+                    let s = match v {
+                        Value::String(s) => std::borrow::Cow::Borrowed(s.as_str()),
+                        other => std::borrow::Cow::Owned(value_scalar_string(other).unwrap_or_default()),
+                    };
+                    out.extend(self.ctx.terms_ref(self.analyzer.as_deref().unwrap(), &s));
                 }
                 Kind::Exact => {
-                    if let Some(s) = value_scalar_string(&v) {
+                    if let Some(s) = value_scalar_string(v) {
                         out.push(s);
                     }
                 }
@@ -119,12 +143,18 @@ impl<'a> Indexer<'a> {
     }
 }
 
-/// Adds the documents `docs` (ascending doc numbers, all live) to the field
-/// `key`; text and keyword values are analyzed on several threads.
+fn threads() -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(16)
+}
+
+/// Adds the documents `docs` (ascending doc numbers above every number of
+/// the field, all live) to the field `key`; large batches are analyzed on
+/// several threads, each building the postings of a contiguous chunk.
 fn fill(idx: &Index, key: &str, f: &mut FieldIndex, docs: &[(u32, String)]) {
     let ix = Indexer::new(idx, key);
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(8);
-    if ix.kind == Kind::Numeric || docs.len() < 2048 || threads < 2 {
+    let threads = threads();
+    let min_chunk = if ix.kind == Kind::Text { 256 } else { 8192 };
+    if docs.len() < 2 * min_chunk || threads < 2 {
         for (n, id) in docs {
             if let Some(dv) = idx.doc_values.get(id) {
                 ix.add(f, *n, dv);
@@ -132,23 +162,46 @@ fn fill(idx: &Index, key: &str, f: &mut FieldIndex, docs: &[(u32, String)]) {
         }
         return;
     }
-    let chunk = docs.len().div_ceil(threads);
-    let parts: Vec<Vec<Vec<String>>> = std::thread::scope(|sc| {
-        let handles: Vec<_> = docs
-            .chunks(chunk)
-            .map(|part| {
-                sc.spawn(move || {
-                    let ix = Indexer::new(idx, key);
-                    part.iter()
-                        .map(|(_, id)| idx.doc_values.get(id).map(|dv| ix.terms(dv)).unwrap_or_default())
-                        .collect::<Vec<Vec<String>>>()
-                })
-            })
-            .collect();
-        handles.into_iter().map(|h| h.join().unwrap_or_default()).collect()
-    });
-    for ((n, _), terms) in docs.iter().zip(parts.into_iter().flatten()) {
-        f.add(*n, terms);
+    use rayon::prelude::*;
+    let chunk = docs.len().div_ceil(threads * 2).max(min_chunk);
+    let parts: Vec<FieldIndex> = docs
+        .par_chunks(chunk)
+        .map(|part| {
+            let ix = Indexer::new(idx, key);
+            let mut local = FieldIndex::default();
+            for (n, id) in part {
+                if let Some(dv) = idx.doc_values.get(id) {
+                    ix.add(&mut local, *n, dv);
+                }
+            }
+            local
+        })
+        .collect();
+    for p in parts {
+        f.append(p);
+    }
+}
+
+/// Builds the fields `keys` over the documents `docs`, several fields at once.
+fn fill_fields(idx: &Index, inv: &mut InvertedIndex, keys: &[String], docs: &[(u32, String)]) {
+    let mut taken: Vec<(String, FieldIndex)> = keys
+        .iter()
+        .map(|k| {
+            let f = inv.fields.remove(k).unwrap_or_else(|| FieldIndex { sig: signature(idx, k), ..FieldIndex::default() });
+            (k.clone(), f)
+        })
+        .collect();
+    if taken.len() > 1 && docs.len() >= 4096 {
+        use rayon::prelude::*;
+        taken.par_iter_mut().for_each(|(k, f)| fill(idx, k, f, docs));
+    } else {
+        for (k, f) in taken.iter_mut() {
+            fill(idx, k, f, docs);
+        }
+    }
+    for (k, mut f) in taken {
+        f.sort_nums();
+        inv.fields.insert(k, f);
     }
 }
 
@@ -159,24 +212,32 @@ fn add_docs<'a>(idx: &Index, inv: &mut InvertedIndex, ids: impl Iterator<Item = 
         .map(|id| (inv.alloc(id), id.clone()))
         .collect();
     let keys: Vec<String> = inv.fields.keys().cloned().collect();
-    for key in keys {
-        let mut f = inv.fields.remove(&key).unwrap_or_default();
-        fill(idx, &key, &mut f, &docs);
-        inv.fields.insert(key, f);
-    }
+    fill_fields(idx, inv, &keys, &docs);
 }
 
 fn renumber(idx: &Index, inv: &mut InvertedIndex) {
     inv.reset_docs();
-    add_docs(idx, inv, idx.doc_values.keys());
+    // in index order (doc numbers then follow it until documents change)
+    let mut seen: HashSet<&str> = HashSet::with_capacity(idx.doc_values.len());
+    let mut ids: Vec<&String> = Vec::with_capacity(idx.doc_values.len());
+    for id in idx.order.iter().chain(idx.doc_values.keys()) {
+        if idx.doc_values.contains_key(id) && seen.insert(id.as_str()) {
+            ids.push(id);
+        }
+    }
+    add_docs(idx, inv, ids.into_iter());
     inv.numbered = true;
 }
 
 fn sync_locked(idx: &Index, inv: &mut InvertedIndex) {
     let sch = schema(idx);
     if inv.schema != sch {
-        inv.fields.clear();
+        let stale: Vec<String> = inv.fields.iter().filter(|(k, f)| f.sig != signature(idx, k)).map(|(k, _)| k.clone()).collect();
+        for k in stale {
+            inv.fields.remove(&k);
+        }
         inv.schema = sch;
+        inv.eager = None;
     }
     let dirty = idx.doc_values.take_dirty();
     let docs_dirty = idx.docs.take_dirty();
@@ -218,6 +279,27 @@ fn up_to_date(idx: &Index, inv: &InvertedIndex, keys: &[String]) -> bool {
         && keys.iter().all(|k| inv.fields.get(k).is_some_and(|f| f.nums_ready()))
 }
 
+/// Builds the fields `keys` that are missing (the index is in sync).
+fn build_missing(idx: &Index, inv: &mut InvertedIndex, keys: &[String]) {
+    let missing: Vec<String> = keys.iter().filter(|k| !inv.fields.contains_key(*k)).cloned().collect();
+    if !missing.is_empty() {
+        let t0 = std::time::Instant::now();
+        let docs: Vec<(u32, String)> = inv
+            .ids
+            .iter()
+            .enumerate()
+            .filter_map(|(n, id)| id.as_ref().map(|id| (n as u32, id.clone())))
+            .collect();
+        fill_fields(idx, inv, &missing, &docs);
+        trace_dur(&format!("built {} fields of {} over {} docs", missing.len(), idx.name, docs.len()), t0);
+    }
+    for key in keys {
+        if let Some(f) = inv.fields.get_mut(key) {
+            f.sort_nums();
+        }
+    }
+}
+
 /// Brings the index up to date and builds the fields `keys` when missing.
 fn ensure(idx: &Index, keys: &[String]) {
     {
@@ -228,25 +310,7 @@ fn ensure(idx: &Index, keys: &[String]) {
     }
     let mut inv = idx.inverted.0.write().unwrap_or_else(|e| e.into_inner());
     sync_locked(idx, &mut inv);
-    for key in keys {
-        if inv.fields.contains_key(key) {
-            continue;
-        }
-        let docs: Vec<(u32, String)> = inv
-            .ids
-            .iter()
-            .enumerate()
-            .filter_map(|(n, id)| id.as_ref().map(|id| (n as u32, id.clone())))
-            .collect();
-        let mut f = FieldIndex::default();
-        fill(idx, key, &mut f, &docs);
-        inv.fields.insert(key.clone(), f);
-    }
-    for key in keys {
-        if let Some(f) = inv.fields.get_mut(key) {
-            f.sort_nums();
-        }
-    }
+    build_missing(idx, &mut inv, keys);
     inv.touch();
 }
 
@@ -258,6 +322,77 @@ fn with_index<R>(idx: &Index, keys: &[String], f: impl FnOnce(&InvertedIndex) ->
         if up_to_date(idx, &inv, keys) {
             return f(&inv);
         }
+    }
+}
+
+/// The fields indexed at write time: every plain text, keyword, numeric and
+/// date field of the mapping (others are built on first use).
+fn eager_keys(idx: &Index) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut fields: Vec<(&String, &String)> = idx.field_types.iter().collect();
+    fields.sort();
+    for (field, ftype) in fields {
+        let kind = match ftype.as_str() {
+            "text" => Kind::Text,
+            "keyword" => Kind::Exact,
+            "integer" | "long" | "short" | "byte" | "float" | "double" | "half_float" | "date" => Kind::Numeric,
+            _ => continue,
+        };
+        if !plain_field(idx, field) || ftype_of(idx, field) != *ftype {
+            continue;
+        }
+        keys.push(field_key(kind, field));
+    }
+    keys
+}
+
+/// Brings the inverted index of `idx` up to date with its documents and
+/// builds every eagerly indexed field (after writes and at startup), so the
+/// first search does not pay for indexing.
+pub fn index_now(idx: &Index) {
+    if disabled() || idx.uuid.is_empty() || idx.closed {
+        return;
+    }
+    {
+        let inv = idx.inverted.0.read().unwrap_or_else(|e| e.into_inner());
+        if inv.eager.as_ref().is_some_and(|(s, keys)| *s == schema(idx) && up_to_date(idx, &inv, keys)) {
+            return;
+        }
+    }
+    let mut inv = idx.inverted.0.write().unwrap_or_else(|e| e.into_inner());
+    sync_locked(idx, &mut inv);
+    let keys = match &inv.eager {
+        Some((s, keys)) if *s == schema(idx) => keys.clone(),
+        _ => {
+            let keys = eager_keys(idx);
+            inv.eager = Some((schema(idx), keys.clone()));
+            keys
+        }
+    };
+    build_missing(idx, &mut inv, &keys);
+    inv.touch();
+}
+
+/// [`index_now`] for the indices a request may have changed.
+pub fn after_write(store: &crate::model::Store) {
+    for idx in store.indices.values() {
+        index_now(idx);
+    }
+}
+
+/// [`index_now`] for every index of the store, several indices at once.
+pub fn index_all(store: &crate::model::Store) {
+    let t0 = std::time::Instant::now();
+    let mut list: Vec<&Index> = store.indices.values().collect();
+    list.sort_by_key(|i| std::cmp::Reverse(i.docs.len()));
+    use rayon::prelude::*;
+    list.par_iter().for_each(|idx| index_now(idx));
+    trace_dur(&format!("indexed {} indices", list.len()), t0);
+}
+
+fn trace_dur(label: &str, t0: std::time::Instant) {
+    if trace_on() {
+        eprintln!("[trace] {:>8.2} ms {}", t0.elapsed().as_secs_f64() * 1000.0, label);
     }
 }
 
@@ -343,7 +478,7 @@ fn plan_match(ctx: &QueryCtx, field: &str, raw: &Value) -> Option<Plan> {
     if qtokens.is_empty() {
         return Some(Plan::Empty);
     }
-    if let FieldAnalyzer::Legacy(_) = ctx.field_analyzer(field, None, Side::Search) {
+    if let FieldAnalyzer::Legacy(_) = *ctx.field_analyzer(field, None, Side::Search) {
         if !crate::search::eval::synonym_groups(idx, field).is_empty() {
             return None;
         }
@@ -814,14 +949,155 @@ fn run(inv: &InvertedIndex, p: &Plan) -> Vec<u32> {
     }
 }
 
-/// The ids of the documents `query` can match, or None when every document
-/// has to be evaluated (unsupported query, or documents without doc values).
-pub fn candidates(idx: &Index, query: &Map<String, Value>, extra_values: bool) -> Option<HashSet<String>> {
+/// The documents a search has to evaluate, as positions in the index order.
+pub struct Candidates {
+    /// Positions in `Index::order`, ascending.
+    pub positions: Vec<usize>,
+    /// For a top-level `match`: the evaluator's result for each position,
+    /// computed from the postings (the same BM25 arithmetic).
+    pub results: Option<Vec<(bool, f64)>>,
+    /// Whether an id occurs more than once in the index order.
+    pub dup_ids: bool,
+}
+
+impl Candidates {
+    /// The index into `positions` of order position `i`, when it is a candidate.
+    pub fn find(&self, i: usize) -> Option<usize> {
+        self.positions.binary_search(&i).ok()
+    }
+}
+
+const NO_DOC: u32 = u32::MAX;
+
+/// Doc number per position of the index order (NO_DOC: not indexed), cached
+/// per index content.
+fn order_docs(idx: &Index, inv: &InvertedIndex) -> (std::sync::Arc<Vec<u32>>, bool) {
+    let last = idx.order.last().and_then(|id| inv.doc_of(id));
+    {
+        let c = inv.order_map.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(m) = c.as_ref() {
+            if m.version == inv.version && m.docs.len() == idx.order.len() && m.last == last {
+                return (m.docs.clone(), m.dups);
+            }
+        }
+    }
+    let mut seen = vec![false; inv.ids.len()];
+    let mut dups = false;
+    let docs: Vec<u32> = idx
+        .order
+        .iter()
+        .map(|id| match inv.doc_of(id) {
+            Some(d) => {
+                dups |= std::mem::replace(&mut seen[d as usize], true);
+                d
+            }
+            None => NO_DOC,
+        })
+        .collect();
+    let docs = std::sync::Arc::new(docs);
+    *inv.order_map.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some(crate::model::inverted::OrderMap { version: inv.version, last, docs: docs.clone(), dups });
+    (docs, dups)
+}
+
+/// A top-level `match` the postings answer exactly (see [`match_results`]).
+struct DirectMatch {
+    key: String,
+    def: Map<String, Value>,
+    qtokens: Vec<String>,
+    required: usize,
+    boost: f64,
+}
+
+/// The direct form of a top-level `match` query: the evaluator would score
+/// every document from the index statistics (`QueryCtx::eval_match` reaches
+/// `score_match` for every indexed document under the conditions of
+/// `plan_match`), so the result of each document follows from the postings.
+fn direct_match(ctx: &QueryCtx, q: &Map<String, Value>, p: &Plan) -> Option<DirectMatch> {
+    let (kind, body) = single(q)?;
+    if kind != "match" {
+        return None;
+    }
+    let (key, qtokens) = match p {
+        Plan::Any(k, t) | Plan::All(k, t) => (k.clone(), t.clone()),
+        _ => return None,
+    };
+    let (field, raw) = single(body.as_object()?)?;
+    let (_, opts) = crate::search::eval::query_text(raw);
+    let mut boost = 1.0;
+    if let Some(b) = opts.and_then(|m| m.get("boost")).and_then(to_f64) {
+        boost *= b;
+    }
+    let operator = opts.and_then(|m| m.get("operator")).and_then(|o| o.as_str()).unwrap_or("or").to_lowercase();
+    let mut required = 1usize;
+    if qtokens.len() > 1 {
+        if let Some(spec) = opts.and_then(|m| m.get("minimum_should_match")) {
+            required = minimum_should_match_checked(spec, qtokens.len()).ok()?;
+        } else if operator == "and" {
+            required = qtokens.len();
+        }
+    }
+    if required == 0 {
+        return None;
+    }
+    let def = mapping_field_def(ctx.idx, field)?.clone();
+    Some(DirectMatch { key, def, qtokens, required, boost })
+}
+
+/// [`DirectMatch`] results of the documents `docs`.
+fn match_results(inv: &InvertedIndex, dm: &DirectMatch, docs: impl Iterator<Item = u32>) -> Vec<(bool, f64)> {
+    let f = &inv.fields[&dm.key];
+    let lists: Vec<Option<&Vec<(u32, u32)>>> = dm.qtokens.iter().map(|t| f.postings.get(t)).collect();
+    let dfs: Vec<usize> = dm
+        .qtokens
+        .iter()
+        .zip(&lists)
+        .map(|(t, p)| match p {
+            Some(p) => cached_df(inv, &dm.key, t, p),
+            None => 0,
+        })
+        .collect();
+    let mut st = MatchStats { total_docs: f.docs_with, total_len: f.sum_len as usize, dfs, dl: 0, tfs: vec![0; dm.qtokens.len()] };
+    // postings are sorted by doc and the documents come mostly ascending:
+    // continue where each list was left
+    let mut at = vec![0usize; lists.len()];
+    docs.map(|doc| {
+        st.dl = f.len_of(doc) as usize;
+        for (qi, l) in lists.iter().enumerate() {
+            st.tfs[qi] = match l {
+                Some(p) => {
+                    let mut i = at[qi];
+                    if i >= p.len() || p[i].0 > doc {
+                        i = p.partition_point(|e| e.0 < doc);
+                    } else {
+                        while i < p.len() && p[i].0 < doc {
+                            i += 1;
+                        }
+                    }
+                    at[qi] = i;
+                    if i < p.len() && p[i].0 == doc {
+                        p[i].1 as usize
+                    } else {
+                        0
+                    }
+                }
+                None => 0,
+            };
+        }
+        crate::search::eval::score_match(&dm.def, "text", &dm.qtokens, dm.required, dm.boost, &st)
+    })
+    .collect()
+}
+
+/// The documents `query` can match, or None when every document has to be
+/// evaluated (unsupported query, or documents without doc values).
+pub fn candidates(idx: &Index, query: &Map<String, Value>, extra_values: bool) -> Option<Candidates> {
     if disabled() || extra_values || query.is_empty() || idx.uuid.is_empty() {
         return None;
     }
     let ctx = QueryCtx::new(idx, "", &NULL);
     let p = plan(&ctx, query)?;
+    let direct = direct_match(&ctx, query, &p);
     let mut keys = Vec::new();
     p.keys(&mut keys);
     with_index(idx, &keys, |inv| {
@@ -829,7 +1105,19 @@ pub fn candidates(idx: &Index, query: &Map<String, Value>, extra_values: bool) -
             return None;
         }
         let docs = run(inv, &p);
-        Some(docs.into_iter().filter_map(|d| inv.id_of(d).map(|s| s.to_string())).collect())
+        let mut bits = vec![false; inv.ids.len()];
+        for d in docs {
+            bits[d as usize] = true;
+        }
+        let (order, dup_ids) = order_docs(idx, inv);
+        let positions: Vec<usize> = order
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| **d != NO_DOC && bits[**d as usize])
+            .map(|(i, _)| i)
+            .collect();
+        let results = direct.as_ref().map(|dm| match_results(inv, dm, positions.iter().map(|i| order[*i])));
+        Some(Candidates { positions, results, dup_ids })
     })
 }
 
@@ -900,9 +1188,13 @@ thread_local! {
 }
 
 /// `SLOP_TRACE=true`: prints the time since the last `trace("start")` of this thread.
-pub fn trace(label: &str) {
+fn trace_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if !*ON.get_or_init(|| std::env::var("SLOP_TRACE").map(|v| v == "true" || v == "1").unwrap_or(false)) {
+    *ON.get_or_init(|| std::env::var("SLOP_TRACE").map(|v| v == "true" || v == "1").unwrap_or(false))
+}
+
+pub fn trace(label: &str) {
+    if !trace_on() {
         return;
     }
     let now = std::time::Instant::now();

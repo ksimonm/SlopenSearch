@@ -328,6 +328,8 @@ async fn handle_plain(store: Shared, request: axum::extract::Request) -> axum::r
             crate::model::visibility::scheduled_refresh(&mut guard);
             storage::after_request(&mut guard, &req.method, &req.path);
             crate::search::index::trace("after request");
+            crate::search::index::after_write(&guard);
+            crate::search::index::trace("indexed");
             resp
         };
         (resp, req)

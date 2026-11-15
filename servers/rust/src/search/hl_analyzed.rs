@@ -20,9 +20,9 @@ pub struct FieldAnalyzers {
     field: String,
 }
 
-fn resolved(fa: FieldAnalyzer) -> Option<Analyzer> {
-    match fa {
-        FieldAnalyzer::Resolved(a) => Some(a),
+fn resolved(fa: std::sync::Arc<FieldAnalyzer>) -> Option<Analyzer> {
+    match &*fa {
+        FieldAnalyzer::Resolved(a) => Some(a.clone()),
         FieldAnalyzer::Legacy(_) => None,
     }
 }
