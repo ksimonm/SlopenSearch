@@ -100,6 +100,7 @@ Each file has a pytest marker, so an area can be run on its own (`ARGS="-m <mark
 | `documents` | `test_21_documents.py` | CRUD, versioning, routing, `_mget`, `_update`, `_bulk`, by-query APIs |
 | `documents` | `test_23_nonstandard_json.py` | `NaN`/`Infinity` tokens in `_bulk`, `_update` and ingest bodies |
 | `ingest` | `test_22_ingest.py` | ingest pipelines and processors, search pipelines |
+| `parity` | `test_34_parity_errors.py` | mustache compile errors, control-character escaping, `field_sort` parse positions, date math rounding |
 | `fulltext` | `test_31_fulltext.py` | match family, multi_match, query_string, intervals, span queries |
 | `queries` | `test_32_queries.py` | term-level, bool, function_score, nested, join, geo, percolate |
 | `search_api` | `test_33_search_api.py` | sort, paging, scroll, PIT, highlight, collapse, rescore, msearch, templates |
