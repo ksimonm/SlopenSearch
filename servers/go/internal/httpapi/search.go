@@ -1120,7 +1120,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, name strin
 			entry["_ignored"] = vals
 		}
 		if explainFlag {
-			entry["_shard"] = "[" + h.Idx.Name + "][0]"
+			entry["_shard"] = "[" + h.Idx.Name + "][" + strconv.Itoa(h.Idx.DocShard(h.Id)) + "]"
 			entry["_node"] = "slopensearch-node-1"
 			if ss, ok := query["script_score"].(map[string]any); ok && len(query) == 1 {
 				entry["_explanation"] = map[string]any{"value": search.ScoreJSON(h.Score),

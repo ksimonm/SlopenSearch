@@ -19,6 +19,7 @@ import (
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
+	"slopensearch/internal/murmur3"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/painless"
 	"slopensearch/internal/search"
@@ -1186,7 +1187,7 @@ func termsFilters(inc any, hasInc bool, exc any, hasExc bool, ft string, idx *mo
 				case float64:
 					h = int32(bitMix64(math.Float64bits(k)))
 				default:
-					h = murmur3x86_32([]byte(fmt.Sprint(v)), 31)
+					h = murmur3.Sum32([]byte(fmt.Sprint(v)), 31)
 				}
 				return int((int64(h)%int64(num)+int64(num))%int64(num)) == part
 			}
@@ -1240,44 +1241,6 @@ func bitMix64(v uint64) uint64 {
 	v = (v ^ (v >> 29)) * 18163797613775837673
 	v ^= v >> 32
 	return v
-}
-
-func murmur3x86_32(data []byte, seed int32) int32 {
-	const c1 int32 = -862048943
-	const c2 int32 = 0x1b873593
-	h := seed
-	n := len(data) &^ 3
-	for i := 0; i < n; i += 4 {
-		k := int32(data[i]) | int32(data[i+1])<<8 | int32(data[i+2])<<16 | int32(data[i+3])<<24
-		k *= c1
-		k = int32(uint32(k)<<15 | uint32(k)>>17)
-		k *= c2
-		h ^= k
-		h = int32(uint32(h)<<13 | uint32(h)>>19)
-		h = int32(uint32(h)*5 + 0xe6546b64)
-	}
-	var k int32
-	switch len(data) & 3 {
-	case 3:
-		k ^= int32(data[n+2]) << 16
-		fallthrough
-	case 2:
-		k ^= int32(data[n+1]) << 8
-		fallthrough
-	case 1:
-		k ^= int32(data[n])
-		k *= c1
-		k = int32(uint32(k)<<15 | uint32(k)>>17)
-		k *= c2
-		h ^= k
-	}
-	h ^= int32(len(data))
-	h ^= int32(uint32(h) >> 16)
-	h *= -2048144789
-	h ^= int32(uint32(h) >> 13)
-	h *= -1028477387
-	h ^= int32(uint32(h) >> 16)
-	return h
 }
 
 // termsScriptKey converts a terms script value to a bucket key: without a

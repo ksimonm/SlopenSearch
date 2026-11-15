@@ -56,11 +56,7 @@ func searchSortSpecValueRaw(h MultiHit, sp SortSpec) (any, bool, bool) {
 				break
 			}
 		}
-		ns := h.Idx.NumShards()
-		if ns < 1 {
-			ns = 1
-		}
-		shard := int64(HashString(h.Id) % uint32(ns))
+		shard := int64(h.Idx.DocShard(h.Id))
 		return shard*1000000000 + int64(pos), true, false
 	case "_doc":
 		pos := 0
