@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use crate::settings::{find_setting, setting_int, settings_value_string};
 
 pub(crate) mod contexts;
+pub(crate) mod inverted;
 pub(crate) mod routing;
 pub(crate) mod tracked;
 pub(crate) mod visibility;
@@ -41,13 +42,15 @@ pub struct Index {
     pub index_total: i64,
     pub delete_total: i64,
     pub force_merged: bool,
-    pub doc_values: HashMap<String, Map<String, Value>>,
+    pub doc_values: inverted::DocValues,
     pub doc_ignored: HashMap<String, Vec<String>>,
     pub versions: HashMap<String, i64>,
     pub seq_nos: SeqNos,
     pub raw_sources: HashMap<String, Vec<u8>>,
     /// Last refreshed versions of updated documents, request cache.
     pub searcher: visibility::SearcherState,
+    /// Inverted index over `doc_values` (derived, never persisted).
+    pub inverted: inverted::SharedInverted,
 }
 
 impl Index {
@@ -75,12 +78,13 @@ impl Index {
             index_total: 0,
             delete_total: 0,
             force_merged: false,
-            doc_values: HashMap::new(),
+            doc_values: Default::default(),
             doc_ignored: HashMap::new(),
             versions: HashMap::new(),
             seq_nos: SeqNos::default(),
             raw_sources: HashMap::new(),
             searcher: Default::default(),
+            inverted: Default::default(),
         }
     }
 

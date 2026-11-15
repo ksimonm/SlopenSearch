@@ -277,7 +277,14 @@ pub fn run_search(
             );
         }
         let extra = precompute_doc_values(idx);
-        for id in &idx.order {
+        let cands = crate::search::index::candidates(idx, &qm, !extra.is_empty());
+        let verify = cands.is_some() && crate::search::index::verify();
+        let mut seen: HashSet<&str> = HashSet::new();
+        for (i, id) in idx.order.iter().enumerate() {
+            let candidate = cands.as_ref().is_none_or(|c| c.contains(id.as_str()));
+            if !candidate && !verify {
+                continue;
+            }
             let doc = match idx.docs.get(id) {
                 Some(d) => d,
                 None => continue,
@@ -298,11 +305,15 @@ pub fn run_search(
             }
             let (ok, score) = eval_doc(idx, id, doc, &extra, &qm)?;
             if ok {
-                let pos = store.indices[n]
-                    .order
-                    .iter()
-                    .position(|x| x == id)
-                    .unwrap_or(0) as i64;
+                if !candidate {
+                    eprintln!("[verify-index] {} / {} matches {} but is no candidate", n, id, Value::Object(qm.clone()));
+                }
+                // the first occurrence of the id in the index order
+                let pos = if seen.insert(id.as_str()) {
+                    i as i64
+                } else {
+                    idx.order.iter().position(|x| x == id).unwrap_or(0) as i64
+                };
                 let mut named = Vec::new();
                 walk_named_queries(&mut named, idx, id, doc, &extra, &Value::Object(qm.clone()))?;
                 matched.push(MultiHit {

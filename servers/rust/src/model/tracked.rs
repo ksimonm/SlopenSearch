@@ -13,11 +13,25 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub struct Tracked<T> {
     value: T,
     dirty: bool,
+    /// Changes on every mutable access (process-wide counter): derived data
+    /// such as the inverted index notices that the value changed.
+    gen: u64,
+}
+
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_generation() -> u64 {
+    GENERATION.fetch_add(1, Ordering::Relaxed)
 }
 
 impl<T> Tracked<T> {
     pub fn new(value: T) -> Self {
-        Tracked { value, dirty: true }
+        Tracked { value, dirty: true, gen: next_generation() }
+    }
+
+    /// A number that changes whenever the value may have changed.
+    pub fn generation(&self) -> u64 {
+        self.gen
     }
 
     /// Whether the value was mutably accessed since the last call; resets the flag.
@@ -42,6 +56,7 @@ impl<T> Deref for Tracked<T> {
 impl<T> DerefMut for Tracked<T> {
     fn deref_mut(&mut self) -> &mut T {
         self.dirty = true;
+        self.gen = next_generation();
         &mut self.value
     }
 }

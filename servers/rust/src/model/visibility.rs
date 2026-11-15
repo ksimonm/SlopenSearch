@@ -143,7 +143,11 @@ fn swap_slot<V>(map: &mut HashMap<String, V>, id: &str, slot: &mut Option<V>) {
 
 fn swap_doc(idx: &mut Index, id: &str, st: &mut Stale) {
     swap_slot(&mut idx.docs, id, &mut st.doc);
-    swap_slot(&mut idx.doc_values, id, &mut st.dv);
+    let cur = idx.doc_values.remove(id);
+    if let Some(v) = st.dv.take() {
+        idx.doc_values.insert(id.to_string(), v);
+    }
+    st.dv = cur;
     swap_slot(&mut idx.doc_ignored, id, &mut st.ignored);
     swap_slot(&mut idx.raw_sources, id, &mut st.raw);
     swap_slot(&mut idx.versions, id, &mut st.version);
