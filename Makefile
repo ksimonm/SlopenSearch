@@ -20,7 +20,7 @@ PYTEST := pytest -n $(JOBS) --dist loadfile --tb=$(TB)
 .DEFAULT_GOAL := help
 .PHONY: help go-up rust-up ref-up go-test rust-test ref-test go-score rust-score ref-score \
         ref-show ref-record \
-        go-dev rust-dev go-unit test go-logs rust-logs down
+        go-dev rust-dev go-unit test go-logs rust-logs down bench bench-report
 
 help: ## list targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -69,6 +69,18 @@ go-unit: ## run the Go unit tests natively (needs Go)
 
 test: ## run tests against any server: make test PORT=9291 [HOST=host.docker.internal] ARGS=...
 	$(RUN_TESTS) env OS_HOST=$(or $(HOST),host.docker.internal) OS_PORT=$(PORT) $(PYTEST) $(ARGS)
+
+# benchmarks run on the host (Python venv with bench/requirements.txt) and start their own
+# containers bench-* on ports 9590-9594; the dev stack above is not touched
+BENCH_PY ?= .venv/bin/python
+SIZE ?= small
+TARGETS ?= ref,go,rust
+
+bench: ## benchmark ref vs Go vs Rust in Docker: make bench SIZE=small|medium|large TARGETS=ref,go,rust ARGS=...
+	$(BENCH_PY) bench/run.py --size $(SIZE) --targets $(TARGETS) $(ARGS)
+
+bench-report: ## Markdown report of a benchmark run: make bench-report DIR=bench/results/<timestamp>
+	$(BENCH_PY) bench/report.py $(DIR)
 
 go-logs: ## follow Go server logs
 	$(COMPOSE) logs -f go
