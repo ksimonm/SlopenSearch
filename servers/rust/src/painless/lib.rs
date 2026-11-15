@@ -5,7 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::painless::interp::{exception_type, native, Interp, PFn};
-use crate::painless::regex::{compile_pattern, java_replacement, PMatcher};
+use crate::painless::regex::{find_in, matcher_method, pattern_method, replace_with};
 use crate::painless::time::{call_static_time, static_time_enum, time_method};
 use crate::painless::value::*;
 
@@ -1029,7 +1029,6 @@ pub fn call_static(
             return Err(e);
         }
         "Pattern" => match name {
-            "compile" => return compile_pattern(&s(0), "", off),
             "quote" => return Ok(PV::str(&format!("\\Q{}\\E", s(0)))),
             _ => {}
         },
@@ -1134,25 +1133,15 @@ pub fn call_method(inp: &Interp<'_>, recv: &PV, name: &str, args: Vec<PV>, off: 
                 return r;
             }
         }
-        PV::Pattern(p) => match name {
-            "matcher" if n == 1 => {
-                return Ok(PV::Matcher(Rc::new(RefCell::new(PMatcher::new(p.clone(), &str_arg(&args[0]))))))
-            }
-            "pattern" | "toString" => return Ok(PV::str(&p.src)),
-            "split" if n == 1 => {
-                let input = str_arg(&args[0]);
-                let mut parts: Vec<&str> = p.re.split(&input).collect();
-                while parts.len() > 1 && parts.last() == Some(&"") {
-                    parts.pop();
-                }
-                return Ok(PV::array("String", parts.into_iter().map(PV::str).collect()));
-            }
-            "asPredicate" => {
+        PV::Pattern(p) => {
+            if name == "asPredicate" && n == 0 {
                 let p = p.clone();
-                return Ok(native(move |_, xs, _| Ok(PV::Bool(p.re.is_match(&jstr(&xs[0]))))));
+                return Ok(native(move |_, xs, _| Ok(PV::Bool(find_in(&p, &jstr(&xs[0]))))));
             }
-            _ => {}
-        },
+            if let Some(r) = pattern_method(p, name, &args, off) {
+                return r;
+            }
+        }
         PV::Matcher(m) => {
             if let Some(r) = matcher_method(m, name, &args, off) {
                 return r;
@@ -1339,73 +1328,6 @@ fn fn_method(inp: &Interp<'_>, f: &Rc<PFn>, recv: &PV, name: &str, args: Vec<PV>
     inp.call_fn(recv, args, off)
 }
 
-fn matcher_method(m: &Rc<RefCell<PMatcher>>, name: &str, args: &[PV], off: usize) -> Option<R<PV>> {
-    let n = args.len();
-    Some(match name {
-        "find" => m.borrow_mut().find(off).map(PV::Bool),
-        "matches" => m.borrow_mut().matches(off).map(PV::Bool),
-        "lookingAt" => Ok(PV::Bool(m.borrow_mut().looking_at())),
-        "group" => {
-            let mm = m.borrow();
-            if n == 0 {
-                return Some(mm.group(0, off));
-            }
-            if let PV::Str(s) = &args[0] {
-                return Some(match mm.group_index(s) {
-                    Some(i) => mm.group(i, off),
-                    None => Err(iae(off, &format!("No group with name <{}>", s))),
-                });
-            }
-            mm.group(i64_of(&args[0]).max(0) as usize, off)
-        }
-        "namedGroup" => {
-            let mm = m.borrow();
-            match mm.group_index(&jstr(&args[0])) {
-                Some(i) => mm.group(i, off),
-                None => Ok(PV::Null),
-            }
-        }
-        "groupCount" => Ok(PV::Int(m.borrow().p.re.captures_len() as i32 - 1)),
-        "start" | "end" => {
-            let mm = m.borrow();
-            let loc = match &mm.loc {
-                None => return Some(Err(RtErr::new("illegal_state_exception", "No match available", off))),
-                Some(l) => l,
-            };
-            let g = if n == 1 { i64_of(&args[0]).max(0) as usize } else { 0 };
-            match loc.get(g).copied().flatten() {
-                Some((s, e)) => {
-                    let b = if name == "end" { e } else { s };
-                    Ok(PV::Int(mm.input[..b].encode_utf16().count() as i32))
-                }
-                None => Ok(PV::Int(-1)),
-            }
-        }
-        "replaceAll" | "replaceFirst" if n == 1 => {
-            let mm = m.borrow();
-            let repl = java_replacement(&jstr(&args[0]));
-            let out = if name == "replaceAll" {
-                mm.p.re.replace_all(&mm.input, repl.as_str()).into_owned()
-            } else {
-                mm.p.re.replace(&mm.input, repl.as_str()).into_owned()
-            };
-            Ok(PV::str(&out))
-        }
-        "reset" => {
-            let mut mm = m.borrow_mut();
-            mm.pos = 0;
-            mm.loc = None;
-            drop(mm);
-            Ok(PV::Matcher(m.clone()))
-        }
-        "hitEnd" => {
-            let mm = m.borrow();
-            Ok(PV::Bool(mm.pos >= mm.input.len()))
-        }
-        _ => return None,
-    })
-}
-
 fn string_method(inp: &Interp<'_>, s: &str, name: &str, args: Vec<PV>, off: usize) -> R<PV> {
     let n = args.len();
     let sa = |i: usize| str_arg(&args[i]);
@@ -1556,26 +1478,7 @@ fn string_method(inp: &Interp<'_>, s: &str, name: &str, args: Vec<PV>, off: usiz
                     return Err(cce(off, &format!("Cannot cast {} to java.util.regex.Pattern", class_name(other))))
                 }
             };
-            let mut out = String::new();
-            let mut last = 0;
-            let all: Vec<Vec<Option<(usize, usize)>>> = p
-                .re
-                .captures_iter(s)
-                .map(|c| (0..c.len()).map(|i| c.get(i).map(|m| (m.start(), m.end()))).collect())
-                .collect();
-            for (i, loc) in all.into_iter().enumerate() {
-                if name == "replaceFirst" && i > 0 {
-                    break;
-                }
-                let (ms, me) = loc[0].unwrap();
-                let m = PMatcher { p: p.clone(), input: s.to_string(), loc: Some(loc), pos: me };
-                let r = inp.call_fn(&args[1], vec![PV::Matcher(Rc::new(RefCell::new(m)))], off)?;
-                out.push_str(&s[last..ms]);
-                out.push_str(&jstr(&r));
-                last = me;
-            }
-            out.push_str(&s[last..]);
-            Ok(PV::str(&out))
+            replace_with(inp, &p, s, &args[1], name == "replaceFirst", off)
         }
         ("getClass", 0) => Err(dyn_method_err(&PV::str(s), name, n, off)),
         ("regionMatches", 4) | ("regionMatches", 5) => {

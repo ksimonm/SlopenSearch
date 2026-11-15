@@ -330,18 +330,11 @@ impl Script {
 
 // ---- score functions ----
 
-/// Runs f on a scoped thread with a large stack, so that deeply nested
-/// scripts (parser, checker and interpreter all recurse) cannot overflow the
-/// small stack of a server worker thread.
-pub fn run_with_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
-    std::thread::scope(|s| {
-        std::thread::Builder::new()
-            .stack_size(256 << 20)
-            .spawn_scoped(s, f)
-            .expect("spawn script thread")
-            .join()
-            .expect("script thread panicked")
-    })
-}
+/// Stack size of every thread that may compile or run scripts or otherwise
+/// recurse deeply (the Painless parser, checker and interpreter, nested
+/// queries): the server's runtime threads (see main.rs) and task threads.
+/// Explicit depth limits turn too-deep input into errors long before this
+/// is exhausted.
+pub const DEEP_STACK_SIZE: usize = 256 << 20;
 
 // ---- _execute ----

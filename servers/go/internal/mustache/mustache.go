@@ -7,7 +7,6 @@ package mustache
 import (
 	"bytes"
 	"encoding/json"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,8 +16,24 @@ import (
 	"slopensearch/internal/painless"
 )
 
-// Error is a template error (a mustache_exception in OpenSearch).
-type Error struct{ Reason string }
+// Error is a template error (a mustache_exception in OpenSearch). A value
+// lookup that failed while rendering (a list index out of range) also has a
+// cause: the message of mustache.java's inner MustacheException and the Java
+// exception under it.
+type Error struct {
+	Reason string
+	// Lookup is set for a failed value lookup.
+	Lookup *LookupFailure
+}
+
+// LookupFailure is the cause chain of a failed value lookup.
+type LookupFailure struct {
+	Cause     string // the inner mustache_exception's reason
+	JavaType  string // the Java exception type (snake case)
+	JavaCause string // the Java exception message
+}
+
+const templateFile = "query-template"
 
 func (e *Error) Error() string { return e.Reason }
 
@@ -29,6 +44,7 @@ type node struct {
 	fn       string // toJson, join, url
 	delim    string // join delimiter
 	inner    string // raw text of the section body (for functions)
+	line     int    // template line of the tag
 }
 
 // parse compiles a template the way mustache.java's MustacheParser does,
@@ -36,7 +52,7 @@ type node struct {
 // counted) and, for an unclosed triple mustache, the column counter of the
 // enclosing section (in UTF-16 units, restarted for every section body).
 func parse(tpl string) ([]*node, *Error) {
-	const file = "query-template"
+	const file = templateFile
 	open, close := "{{", "}}"
 	type frame struct {
 		node  *node
@@ -123,11 +139,11 @@ func parse(tpl string) ([]*node, *Error) {
 				return nil, fail(line, "Improperly closed variable: "+variable+" in "+file+":"+
 					strconv.Itoa(line)+"@"+strconv.Itoa(col))
 			}
-			top.children = append(top.children, &node{kind: 'u', text: name})
+			top.children = append(top.children, &node{kind: 'u', text: name, line: line})
 		case '&':
-			top.children = append(top.children, &node{kind: 'u', text: variable})
+			top.children = append(top.children, &node{kind: 'u', text: variable, line: line})
 		case '#', '^':
-			n := &node{kind: command[0], text: variable}
+			n := &node{kind: command[0], text: variable, line: line}
 			fields := strings.Fields(variable)
 			if len(fields) > 0 {
 				switch fields[0] {
@@ -168,7 +184,7 @@ func parse(tpl string) ([]*node, *Error) {
 			if !closed {
 				return nil, fail(line, "Improperly closed variable")
 			}
-			top.children = append(top.children, &node{kind: 'v', text: strings.TrimSpace(command)})
+			top.children = append(top.children, &node{kind: 'v', text: strings.TrimSpace(command), line: line})
 		}
 	}
 	flush(len(tpl))
@@ -179,29 +195,51 @@ func parse(tpl string) ([]*node, *Error) {
 	return root.children, nil
 }
 
+// Compile checks that a template compiles.
+func Compile(tpl string) *Error {
+	_, err := parse(tpl)
+	return err
+}
+
 // Render renders a template against params.
-func Render(tpl string, params map[string]any) (string, *Error) {
+func Render(tpl string, params map[string]any) (out string, err *Error) {
 	nodes, err := parse(tpl)
 	if err != nil {
 		return "", err
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			f, ok := r.(lookupPanic)
+			if !ok {
+				panic(r)
+			}
+			out, err = "", f.err
+		}
+	}()
 	var sb strings.Builder
 	renderNodes(&sb, nodes, []any{params})
 	return sb.String(), nil
 }
 
-func lookup(stack []any, name string) (any, bool) {
+// lookupPanic carries a failed lookup out of the renderer.
+type lookupPanic struct{ err *Error }
+
+// lookup resolves a (dotted) name against the context stack. A list is
+// indexed like OpenSearch's list wrapper: a numeric key out of range fails
+// the lookup (panics with a lookupPanic, recovered by Render), any other key
+// finds nothing.
+func lookup(stack []any, name string, line int) (any, bool) {
 	if name == "." {
 		return stack[len(stack)-1], true
 	}
 	parts := strings.Split(name, ".")
 	for i := len(stack) - 1; i >= 0; i-- {
-		v, ok := get(stack[i], parts[0])
+		v, ok := get(stack[i], parts[0], name, line)
 		if !ok {
 			continue
 		}
 		for _, p := range parts[1:] {
-			v, ok = get(v, p)
+			v, ok = get(v, p, name, line)
 			if !ok {
 				return nil, false
 			}
@@ -211,15 +249,26 @@ func lookup(stack []any, name string) (any, bool) {
 	return nil, false
 }
 
-func get(v any, key string) (any, bool) {
+func get(v any, key, name string, line int) (any, bool) {
 	switch t := v.(type) {
 	case map[string]any:
 		x, ok := t[key]
 		return x, ok
 	case []any:
 		i, err := strconv.Atoi(key)
-		if err != nil || i < 0 || i >= len(t) {
+		if err != nil {
 			return nil, false
+		}
+		at := " @[" + templateFile + ":" + strconv.Itoa(line) + "]"
+		fail := func(typ, msg string) {
+			panic(lookupPanic{&Error{Reason: "Failed to get value for " + name + at,
+				Lookup: &LookupFailure{Cause: msg + at, JavaType: typ, JavaCause: msg}}})
+		}
+		if i < 0 {
+			fail("illegal_argument_exception", "position >= 0")
+		}
+		if i >= len(t) {
+			fail("index_out_of_bounds_exception", strconv.Itoa(i))
 		}
 		return t[i], true
 	}
@@ -345,22 +394,22 @@ func renderNodes(sb *strings.Builder, nodes []*node, stack []any) {
 		case 't':
 			sb.WriteString(n.text)
 		case 'v':
-			if v, ok := lookup(stack, n.text); ok {
+			if v, ok := lookup(stack, n.text, n.line); ok {
 				sb.WriteString(jsonEscape(toString(v)))
 			}
 		case 'u':
-			if v, ok := lookup(stack, n.text); ok {
+			if v, ok := lookup(stack, n.text, n.line); ok {
 				sb.WriteString(toString(v))
 			}
 		case '#':
 			switch n.fn {
 			case "toJson":
-				if v, ok := lookup(stack, strings.TrimSpace(n.inner)); ok {
+				if v, ok := lookup(stack, strings.TrimSpace(n.inner), n.line); ok {
 					sb.WriteString(toJSON(v))
 				}
 				continue
 			case "join":
-				if v, ok := lookup(stack, strings.TrimSpace(n.inner)); ok {
+				if v, ok := lookup(stack, strings.TrimSpace(n.inner), n.line); ok {
 					if list, ok := v.([]any); ok {
 						parts := make([]string, len(list))
 						for i, e := range list {
@@ -375,10 +424,10 @@ func renderNodes(sb *strings.Builder, nodes []*node, stack []any) {
 			case "url":
 				var inner strings.Builder
 				renderNodes(&inner, n.children, stack)
-				sb.WriteString(url.QueryEscape(inner.String()))
+				sb.WriteString(javaURLEncode(inner.String()))
 				continue
 			}
-			v, _ := lookup(stack, n.text)
+			v, _ := lookup(stack, n.text, n.line)
 			if !truthy(v) {
 				continue
 			}
@@ -390,12 +439,32 @@ func renderNodes(sb *strings.Builder, nodes []*node, stack []any) {
 			}
 			renderNodes(sb, n.children, append(stack, v))
 		case '^':
-			v, _ := lookup(stack, n.text)
+			v, _ := lookup(stack, n.text, n.line)
 			if !truthy(v) {
 				renderNodes(sb, n.children, stack)
 			}
 		}
 	}
+}
+
+// javaURLEncode encodes like java.net.URLEncoder with UTF-8.
+func javaURLEncode(s string) string {
+	const hex = "0123456789ABCDEF"
+	var sb strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_', c == '.', c == '*':
+			sb.WriteByte(c)
+		case c == ' ':
+			sb.WriteByte('+')
+		default:
+			sb.WriteByte('%')
+			sb.WriteByte(hex[c>>4])
+			sb.WriteByte(hex[c&15])
+		}
+	}
+	return sb.String()
 }
 
 // TemplateText returns the template text of a source: strings are

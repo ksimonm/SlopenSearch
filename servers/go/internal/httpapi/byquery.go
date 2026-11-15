@@ -160,11 +160,12 @@ func (s *Server) runByQuery(w http.ResponseWriter, r *http.Request, name string,
 			// the search hit carries the refreshed version: if_seq_no fails
 			versionConflicts++
 			if conflicts != "proceed" {
-				failures = append(failures, map[string]any{"index": idx.Name, "id": id, "status": 409,
-					"cause": map[string]any{"type": "version_conflict_engine_exception",
-						"reason": fmt.Sprintf("[%s]: version conflict, required seqNo [%d], primary term [1]. current document has seqNo [%d] and primary term [1]",
-							id, idx.SeqNos[id]-1, idx.SeqNos[id]),
-						"index_uuid": idx.UUID, "shard": "0", "index": idx.Name}})
+				failures = append(failures, ojson.Object{{"index", idx.Name}, {"id", id},
+					{"cause", ojson.Object{{"type", "version_conflict_engine_exception"},
+						{"reason", fmt.Sprintf("[%s]: version conflict, required seqNo [%d], primary term [1]. current document has seqNo [%d] and primary term [1]",
+							id, idx.SeqNos[id]-1, idx.SeqNos[id])},
+						{"index", idx.Name}, {"shard", "0"}, {"index_uuid", idx.UUID}}},
+					{"status", 409}})
 			}
 			continue
 		}

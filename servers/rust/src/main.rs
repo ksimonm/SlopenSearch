@@ -8,6 +8,7 @@ mod analysis;
 mod calendar;
 mod dates;
 mod errors;
+mod geohash;
 mod http;
 mod ingest;
 mod javafmt;
@@ -30,8 +31,18 @@ mod uchar;
 
 use std::sync::{Arc, Mutex};
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    // Requests run on the blocking pool (http::handle); its threads get a large
+    // stack once instead of a fresh big-stack thread per scripted request.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(painless::api::DEEP_STACK_SIZE)
+        .build()
+        .expect("tokio runtime");
+    runtime.block_on(run());
+}
+
+async fn run() {
     let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let port = std::env::var("PORT").unwrap_or_else(|_| "9200".to_string());
     let addr = format!("{}:{}", host, port);

@@ -1,7 +1,6 @@
 package mapping
 
 import (
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"strings"
 
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/jbase64"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 	"slopensearch/internal/settings"
@@ -59,10 +59,10 @@ func parseKnnVector(c *ParseContext, path string, def map[string]any, raw any) (
 		return nil, knnValueError(c, path, javaMapDebug(t), "illegal_argument_exception",
 			fmt.Sprintf("Vector dimension mismatch. Expected: %d, Given: 0", fi.Dim))
 	case string:
-		s := strings.TrimRight(t, "=")
-		b, err := base64.RawStdEncoding.DecodeString(s)
+		b, err := jbase64.DecodeString(t)
 		if err != nil {
-			b, _ = base64.RawStdEncoding.DecodeString(s[:len(s)-len(s)%4])
+			return nil, knnValueError(c, path, t, "illegal_argument_exception",
+				fmt.Sprintf("Failed to decode Base64 vector for field [%s]", path))
 		}
 		if len(b)%4 != 0 {
 			return nil, knnValueError(c, path, t, "illegal_argument_exception",

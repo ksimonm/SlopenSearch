@@ -5,7 +5,6 @@ package ingest
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -100,8 +99,6 @@ func deepCopyValue(v any) any {
 	return v
 }
 
-var ingestTemplateRE = regexp.MustCompile(`\{\{\{?\s*([^{}]+?)\s*\}?\}\}`)
-
 func (e *ingestEnv) lookup(path string) (any, bool) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -194,20 +191,6 @@ func ingestString(v any) string {
 	default:
 		return fmt.Sprint(t)
 	}
-}
-
-func (e *ingestEnv) render(s string) string {
-	return ingestTemplateRE.ReplaceAllStringFunc(s, func(m string) string {
-		sub := ingestTemplateRE.FindStringSubmatch(m)
-		if len(sub) < 2 {
-			return ""
-		}
-		v, ok := e.lookup(sub[1])
-		if !ok {
-			return ""
-		}
-		return ingestString(v)
-	})
 }
 
 func setNested(root map[string]any, path string, value any) *apierr.Error {
@@ -545,6 +528,9 @@ func (s *Engine) validateProcessorConfig(typ string, cfg map[string]any) *apierr
 				Fields: map[string]any{"processor_type": typ, "property_name": key}}
 		}
 	}
+	if err := checkTemplates(typ, cfg); err != nil {
+		return err
+	}
 	if typ == "remove_by_pattern" {
 		fp, hasFP := cfg["field_pattern"]
 		ep, hasEP := cfg["exclude_field_pattern"]
@@ -732,7 +718,7 @@ func (s *Engine) Simulate(pipeline map[string]any, name string, docs []any, verb
 			pipeline: name, timestamp: ingestTimestamp(), verbose: verbose,
 		}
 		err, dropped := s.runIngestProcessors(pipeline, env)
-		if err != nil && ((err.Status >= 500 && err.Type != "fail_processor_exception") || err.Status == 404 || err.ForceTop) {
+		if err != nil && ((err.Status >= 500 && err.Type != "fail_processor_exception" && err.Type != "mustache_exception") || err.Status == 404 || err.ForceTop) {
 			return nil, err
 		}
 		if err != nil {
@@ -985,6 +971,11 @@ func (s *Engine) Apply(idx *model.Index, doc map[string]any, params map[string]a
 func failureMessage(e *apierr.Error) string {
 	if e.Type == "script_exception" && e.CausedBy != nil {
 		return e.CausedBy.Reason
+	}
+	if e.Type == "mustache_exception" {
+		for e.CausedBy != nil {
+			e = e.CausedBy
+		}
 	}
 	return e.Reason
 }

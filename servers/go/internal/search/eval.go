@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
@@ -22,6 +21,7 @@ import (
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/settings"
+	"slopensearch/internal/zone"
 )
 
 // ---------------------------------------------------------------------------
@@ -1556,8 +1556,8 @@ func parseQueryDate(def map[string]any, v any, tz string) (any, *apierr.Error) {
 		}
 		if abs, ok := dates.ParseAny(def, s); ok {
 			if tz != "" {
-				if offset, err := ParseTZOffset(tz); err == nil {
-					abs -= offset
+				if z, err := zone.Cached(tz); err == nil {
+					abs = z.LocalToEpochMs(abs)
 				}
 			}
 			return abs, nil
@@ -1570,36 +1570,6 @@ func parseQueryDate(def map[string]any, v any, tz string) (any, *apierr.Error) {
 			Reason: "failed to parse date field [" + mapping.PreviewValue(scalar) + "]", RootCause: err}
 	}
 	return parsed, nil
-}
-
-func ParseTZOffset(tz string) (int64, error) {
-	tz = strings.TrimSpace(tz)
-	if tz == "UTC" || tz == "utc" || tz == "Z" || tz == "" {
-		return 0, nil
-	}
-	if strings.HasPrefix(tz, "+") || strings.HasPrefix(tz, "-") {
-		sign := int64(1)
-		if tz[0] == '-' {
-			sign = -1
-		}
-		body := tz[1:]
-		parts := strings.Split(body, ":")
-		hours, err := strconv.ParseInt(parts[0], 10, 64)
-		if err != nil {
-			return 0, err
-		}
-		var mins int64
-		if len(parts) > 1 {
-			mins, _ = strconv.ParseInt(parts[1], 10, 64)
-		}
-		return sign * (hours*3600 + mins*60) * 1000, nil
-	}
-	loc, err := time.LoadLocation(tz)
-	if err != nil {
-		return 0, err
-	}
-	_, off := timeNowIn(loc)
-	return int64(off) * 1000, nil
 }
 
 // ---------------------------------------------------------------------------

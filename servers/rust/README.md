@@ -1,7 +1,7 @@
 # SlopenSearch — Rust implementation
 
 `axum` + `tokio` + `serde_json` (plus `regex`, `base64`, `jiff` for the tz database and the
-RustCrypto `md-5`/`sha1`/`sha2`/`sha3` hashes); the server keeps all data
+RustCrypto `md-5`/`sha1`/`sha2`/`sha3` hashes, `yaml-rust2` for YAML request bodies); the server keeps all data
 in memory behind one `Arc<Mutex<Store>>` and, by default, persists it to a data
 directory (see [Persistence](#persistence)). Much of the query and aggregation code is a port
 of the Go server, which remains a useful second reading of the expected behaviour.
@@ -100,20 +100,20 @@ main ─► http ─► suggest ─► search ─► mapping ─► model ─►
 
 Checked with `grep -rhoE 'crate::[a-z_]+' src/<module>`: no module outside `src/http`
 names `crate::http`; `search` does not name `aggs`, `suggest`, `ingest` or `storage`;
-`mapping` does not name `search`; `model` only names `settings`; `painless` only names
-`calendar`; `mustache` names nothing in the crate.
+`mapping` does not name `search`; `model` only names `settings` and `murmur3`; `painless` only names
+`calendar`, `javafmt` and `jregex`; `mustache` names nothing in the crate.
 
 Domain and engine modules:
 
 | Module | Contents | Depends on (crate) |
 |---|---|---|
-| `model/` | the domain state: `Store` (indices, cluster settings, templates, data streams, pipelines, stored scripts, scroll/PIT contexts), `Index` with its accessors, node identity constants, uuids, shard routing; `visibility.rs`: what searches see between refreshes and the request cache | settings |
+| `model/` | the domain state: `Store` (indices, cluster settings, templates, data streams, pipelines, stored scripts, scroll/PIT contexts), `Index` with its accessors, node identity constants, uuids; `routing.rs`: shard routing (Murmur3 of the routing value or `_id`, `number_of_routing_shards`, routing partitions; shards are computed, never stored); `visibility.rs`: what searches see between refreshes and the request cache; `tracked.rs`: change marks (`Tracked`, the `SeqNos` write log) that tell `storage` what to journal | settings |
 | `mapping/` | mappings and field types (`nonstd_json.rs`: Jackson NaN/Infinity token detection and the document-parse errors it causes; `mod.rs`: validation, merging, dynamic type inference, `mapping_field_def`, alias resolution); `fields.rs`: index-time parsing of documents into doc values; `knn.rs`/`knn_index.rs`: knn_vector mappings and values; `geo.rs`: geo points and shapes; `completion.rs`: completion field mappings and inputs | analysis, dates, errors, jsonv, model, resp, settings |
 | `scripting.rs` | the script service: stored-script registry, script specs, size and language checks | errors |
-| `search/` | `eval.rs`/`eval_extra.rs`: query evaluation and scoring (`QueryCtx`); `analyzed.rs`: query-time analysis; `highlight.rs`/`hl_analyzed.rs`; `knn_query.rs`; `fetch.rs` (doc values, `fields`, script fields), `sort.rs` (sort specs, `search_after`), `source.rs` (`_source` filtering), `inner_hits.rs` (inner hits, collapse), `request.rs` (named queries, rescore, terms lookup), `validate.rs` (shard-level query validation); script glue: `script_ctx.rs` (prepared scripts, shard failures), `script_env.rs`, `painless_doc.rs` (the `doc` variable, score functions), `expressions.rs` (Lucene expressions, bound to `QueryCtx`) | analysis, dates, errors, jsonv, mapping, model, painless, resp, scripting, settings |
-| `aggs/` | bucket, metric and pipeline aggregations; `hdr.rs`: HDR histogram for percentiles | search, mapping, model, ... |
+| `search/` | `eval.rs`/`eval_extra.rs`: query evaluation and scoring (`QueryCtx`); `analyzed.rs`: query-time analysis; `highlight.rs`/`hl_analyzed.rs`; `knn_query.rs`; `fetch.rs` (doc values, `fields`, script fields), `sort.rs` (sort specs, `search_after`), `source.rs` (`_source` filtering), `inner_hits.rs` (inner hits, collapse), `request.rs` (named queries, rescore, terms lookup), `validate.rs` (shard-level query validation); script glue: `script_ctx.rs` (prepared scripts, shard failures), `script_env.rs`, `painless_doc.rs` (the `doc` variable, score functions), `javanum.rs` (field values, sort values and scores as the Java float/double OpenSearch holds), `expressions.rs` (Lucene expressions, bound to `QueryCtx`) | analysis, dates, errors, jsonv, mapping, model, painless, resp, scripting, settings |
+| `aggs/` | bucket, metric and pipeline aggregations; `hdr.rs`: HDR histogram for percentiles; `kahan.rs`: CompensatedSum | search, mapping, model, ... |
 | `suggest/` | term (`mod.rs`), phrase with collate (`phrase.rs`) and completion (`completion.rs`) suggesters | search, mapping, model, mustache, ... |
-| `ingest/` | ingest pipelines: validation, processors, `on_failure`, `_simulate`, search pipelines; `script.rs`: the script subset of ingest processors | calendar, errors, model, resp, scripting, settings |
+| `ingest/` | ingest pipelines: validation, processors, `on_failure`, `_simulate`, search pipelines; `script.rs`: the script subset of ingest processors; `javaregex.rs`: java.util.regex for gsub/split/kv/split_to_fields, grok's Oniguruma syntax and error texts on `jregex` | calendar, errors, jregex, model, resp, scripting, settings |
 | `storage/` | durable state: snapshot + synced journal of the `Store` (`storage::open`, `after_request`) | mapping, model, scripting |
 | `http/` | the HTTP adapter (see below) | everything above |
 
@@ -130,15 +130,19 @@ Leaf libraries (no server state):
 | `analysis/` | tokenizers, token/char filters, analyzers and analysis chains from index settings; `basic.rs`: the simple built-in analysis (lowercasing, CJK bigrams, fuzziness) |
 | `lucene/` | Lucene analysis algorithm ports: stemmers, normalizers, case mapping, UAX#29 tokenizer, Thai, generated tables |
 | `snowball/` | the Snowball runtime and the generated stemmers |
-| `jregex.rs`, `uchar.rs` | backtracking `java.util.regex` subset; Java `Character` classification |
-| `painless/` | Painless: lexer, parser, static checks with Painless-exact compile errors, interpreter, Java value semantics, class library, java.time, regex with the limit-factor circuit breaker; `api.rs`: script contexts, compilation, error rendering, `run_with_stack` |
-| `mustache.rs` | mustache templates (mustache.java semantics) |
+| `javafmt.rs` | Java `Double.toString` / `Float.toString` (`1.0E7`, ties to even), Java-text JSON numbers, and the response pass that writes re-parsed doubles back as `1.5E20` (outside `_source`) |
+| `murmur3.rs` | MurmurHash3 x86_32 (shard routing over UTF-16) and x64_128 h1 (cardinality) |
+| `jregex.rs`, `uchar.rs` | backtracking `java.util.regex` emulation (lookaround, backreferences, possessive quantifiers, named groups, `PatternSyntaxException` texts, Matcher-style find/matches/split/replacement with a step budget); Java `Character` classification |
+| `painless/` | Painless: lexer, parser, static checks with Painless-exact compile errors, interpreter, Java value semantics, class library, java.time, `java.util.regex` on `jregex` with the limit-factor circuit breaker; `api.rs`: script contexts, compilation, error rendering, `DEEP_STACK_SIZE` (stack of the runtime threads) |
+| `mustache.rs` | mustache templates (mustache.java semantics, its compile and lookup errors) |
+| `geohash.rs` | geohash encoding, decoding, cell bounds and neighbours |
 
 Files of `http/`:
 
 | File | Area |
 |---|---|
 | `mod.rs`, `compression.rs`, `net_io.rs` | `Req`, request parsing, routing (`dispatch`), response post-processing, `method_not_allowed`, body compression, the TCP listener |
+| `xcontent.rs` | YAML (YAML 1.1 scalars) and CBOR request bodies transcoded to JSON before routing; the response format (format parameter, Accept, request body type) and the CBOR encoder |
 | `shared.rs` | name validation, index pattern resolution, settings views and mapping validation |
 | `meta.rs`, `cluster.rs`, `nodes.rs`, `cat.rs`, `tasks_async.rs`, `human.rs` | `_cluster`, `_nodes`, `_tasks`, `_remote`, `_cat`, `human=true` |
 | `admin.rs` | index create/delete/get, settings, mappings |

@@ -11,26 +11,16 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/dates"
+	"slopensearch/internal/geohash"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/painless"
 )
-
-// ---------------------------------------------------------------------------
-// time helpers used by date range queries
-// ---------------------------------------------------------------------------
-
-func timeNowIn(loc *time.Location) (time.Time, int) {
-	now := time.Now().In(loc)
-	_, off := now.Zone()
-	return now, off
-}
 
 // ---------------------------------------------------------------------------
 // multi_match / combined_fields
@@ -1406,7 +1396,7 @@ func GeoPointOf(v any) (float64, float64, bool) {
 				}
 			}
 		}
-		if lat, lon, ok := mapping.DecodeGeohash(t); ok {
+		if lat, lon, ok := geohash.Decode(t); ok {
 			return lat, lon, true
 		}
 	}

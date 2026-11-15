@@ -8144,7 +8144,7 @@ fn geo_point_of(v: &Value) -> Option<(f64, f64)> {
                     return Some((nums[1], nums[0]));
                 }
             }
-            None
+            crate::geohash::decode(s.trim())
         }
         Value::Object(m) => {
             let lat = m.get("lat").and_then(to_f64)?;
@@ -8201,48 +8201,6 @@ fn plane_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     (dx * dx + dy * dy).sqrt()
 }
 
-const GEOHASH_CHARS: &[u8] = b"0123456789bcdefghjkmnpqrstuvwxyz";
-
-fn geohash_encode(lat: f64, lon: f64, precision: usize) -> String {
-    let mut lat_lo = -90.0f64;
-    let mut lat_hi = 90.0f64;
-    let mut lon_lo = -180.0f64;
-    let mut lon_hi = 180.0f64;
-    let mut out = String::new();
-    let mut bits: u32 = 0;
-    let mut nbits = 0;
-    let mut even = true;
-    while out.len() < precision {
-        if even {
-            let mid = (lon_lo + lon_hi) / 2.0;
-            if lon >= mid {
-                bits = (bits << 1) | 1;
-                lon_lo = mid;
-            } else {
-                bits <<= 1;
-                lon_hi = mid;
-            }
-        } else {
-            let mid = (lat_lo + lat_hi) / 2.0;
-            if lat >= mid {
-                bits = (bits << 1) | 1;
-                lat_lo = mid;
-            } else {
-                bits <<= 1;
-                lat_hi = mid;
-            }
-        }
-        even = !even;
-        nbits += 1;
-        if nbits == 5 {
-            out.push(GEOHASH_CHARS[bits as usize] as char);
-            bits = 0;
-            nbits = 0;
-        }
-    }
-    out
-}
-
 fn geohash_grid_agg(
     t: &Map<String, Value>,
     docs: &[&Value],
@@ -8269,7 +8227,7 @@ fn geohash_grid_agg(
     for d in docs {
         for v in doc_field_values(idx, d, &field, prefix) {
             if let Some((lat, lon)) = geo_point_of(&v) {
-                let gh = geohash_encode(lat, lon, precision as usize);
+                let gh = crate::geohash::encode(lat, lon, precision as usize);
                 if !buckets.contains_key(&gh) {
                     order.push(gh.clone());
                 }
@@ -8278,10 +8236,11 @@ fn geohash_grid_agg(
         }
     }
     let mut keys = order;
+    // ties: the larger cell hash (Geohash#longEncode) first
     keys.sort_by(|a, b| {
         let ca = buckets[a].len();
         let cb = buckets[b].len();
-        cb.cmp(&ca)
+        cb.cmp(&ca).then_with(|| crate::geohash::long_encode(b).cmp(&crate::geohash::long_encode(a)))
     });
     let mut out = vec![];
     for k in keys.into_iter().take(size) {
@@ -8353,10 +8312,12 @@ fn geotile_grid_agg(
         }
     }
     let mut keys = order;
+    // ties: the larger cell hash ((zoom, x, y) packed into a long) first
+    let tile = |k: &String| -> Vec<u64> { k.split('/').map(|p| p.parse().unwrap_or(0)).collect() };
     keys.sort_by(|a, b| {
         let ca = buckets[a].len();
         let cb = buckets[b].len();
-        cb.cmp(&ca)
+        cb.cmp(&ca).then_with(|| tile(b).cmp(&tile(a)))
     });
     let mut out = vec![];
     for k in keys.into_iter().take(size) {

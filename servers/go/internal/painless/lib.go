@@ -9,6 +9,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf16"
+
+	"slopensearch/internal/jbase64"
 )
 
 // Painless engine: the class library (whitelisted methods and fields).
@@ -1618,9 +1620,9 @@ func (in *plInterp) stringMethod(s, name string, args []any, off int) (any, *Run
 	case "encodeBase64/0":
 		return base64.StdEncoding.EncodeToString([]byte(s)), nil
 	case "decodeBase64/0":
-		b, err := base64.StdEncoding.DecodeString(s)
+		b, err := jbase64.DecodeString(s)
 		if err != nil {
-			return nil, plIAE(off, "Illegal base64 character")
+			return nil, plIAE(off, err.Error())
 		}
 		return string(b), nil
 	case "splitOnToken/1", "splitOnToken/2":

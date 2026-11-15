@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"slopensearch/internal/zone"
 )
 
 // Resolution is the precision of a date anchor, used to round range bounds up.
@@ -295,27 +297,14 @@ func ParseAnchor(s, defFormat, queryFormat string, loc *time.Location) (time.Tim
 	return parseDefaultDateAnchor(s, loc)
 }
 
-// ParseLocation resolves a time_zone parameter (zone ID or offset).
-func ParseLocation(tz string) (*time.Location, error) {
-	tz = strings.TrimSpace(tz)
-	if tz == "" || tz == "UTC" || tz == "utc" || tz == "Z" {
+// ParseLocation resolves a time_zone parameter with ZoneId.of ("" is UTC).
+func ParseLocation(tz string) (*time.Location, *zone.Error) {
+	if tz == "" {
 		return time.UTC, nil
 	}
-	if strings.HasPrefix(tz, "+") || strings.HasPrefix(tz, "-") {
-		sign := 1
-		if tz[0] == '-' {
-			sign = -1
-		}
-		parts := strings.Split(tz[1:], ":")
-		h, err := strconv.Atoi(parts[0])
-		if err != nil {
-			return nil, err
-		}
-		m := 0
-		if len(parts) > 1 {
-			m, _ = strconv.Atoi(parts[1])
-		}
-		return time.FixedZone(tz, sign*(h*3600+m*60)), nil
+	z, err := zone.Cached(tz)
+	if err != nil {
+		return nil, err
 	}
-	return time.LoadLocation(tz)
+	return z.Location(), nil
 }

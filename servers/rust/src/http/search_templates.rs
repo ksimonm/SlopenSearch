@@ -6,12 +6,7 @@ use axum::response::Response;
 use serde_json::{json, Value};
 
 fn mustache_script_error(src: &str, e: &MustacheError) -> ApiError {
-    let reason = e.describe("query-template");
-    ApiError::new("script_exception", &reason, 400)
-        .field("lang", json!("mustache"))
-        .field("script", json!(src))
-        .field("script_stack", json!([]))
-        .caused_by(ApiError::new("mustache_exception", &reason, 400))
+    crate::scripting::mustache_error(src, e, &[])
 }
 
 fn script_not_found(id: &str) -> ApiError {

@@ -3,7 +3,11 @@
 // and data streams, plus the accessors that need nothing but that data.
 package model
 
-import "slopensearch/internal/settings"
+import (
+	"time"
+
+	"slopensearch/internal/settings"
+)
 
 // Index is one index: metadata, mappings, settings and the documents with
 // their versions, sequence numbers and indexed values.
@@ -39,6 +43,8 @@ type Index struct {
 	DVGen uint64 // bumped whenever DocValues changes; validates derived caches
 
 	Stale map[string]StaleMark // unrefreshed overwrites of searchable docs
+
+	pendingSince time.Time // when unrefreshed writes were first seen (refresh.go)
 }
 
 // StaleMark records an unrefreshed overwrite of a searchable document.

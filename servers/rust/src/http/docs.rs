@@ -134,6 +134,9 @@ fn mixed_array_path(v: &Value, prefix: &str) -> Option<String> {
 // ------------------------------------------------------------- write targets
 
 fn parse_index_body(req: &Req) -> Result<Map<String, Value>, ApiError> {
+    if let Some(e) = crate::http::xcontent::doc_error(req) {
+        return Err(e);
+    }
     if let Err(e) = std::str::from_utf8(&req.body) {
         return Err(crate::errors::invalid_utf8_error(&req.body, &e));
     }
@@ -3839,7 +3842,16 @@ pub fn handle_delete_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
         Ok(b) => b,
         Err(e) => return err_response(e),
     };
-    let mut ids = match byq_matched(store, &target, req, &body, true) {
+    // The query runs on the last refreshed versions; documents changed since
+    // then are version conflicts (the deletes carry the seqNo the search saw).
+    let view = crate::model::visibility::enter(store, std::slice::from_ref(&target));
+    let matched = byq_matched(store, &target, req, &body, true);
+    let snap_seq: std::collections::HashMap<String, i64> = match (&matched, store.indices.get(&target)) {
+        (Ok(ids), Some(idx)) => ids.iter().filter_map(|id| idx.seq_nos.get(id).map(|s| (id.clone(), *s))).collect(),
+        _ => std::collections::HashMap::new(),
+    };
+    crate::model::visibility::leave(store, view);
+    let mut ids = match matched {
         Ok(v) => v,
         Err(e) => return err_response(e),
     };
@@ -3847,9 +3859,31 @@ pub fn handle_delete_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
         ids.truncate(max);
     }
     let total = ids.len() as i64;
+    let proceed = req.param("conflicts") == Some("proceed")
+        || body.get("conflicts").and_then(|v| v.as_str()) == Some("proceed");
+    let batch_size = req.param("scroll_size").and_then(|v| v.parse::<usize>().ok()).filter(|n| *n > 0).unwrap_or(1000);
+    let mut conflicts = 0i64;
+    let mut failures: Vec<Value> = Vec::new();
     let mut deleted = 0i64;
-    for id in &ids {
+    for (i, id) in ids.iter().enumerate() {
+        if i > 0 && i % batch_size == 0 && !failures.is_empty() {
+            // a batch with conflicts aborts the request
+            break;
+        }
         let idx = store.indices.get_mut(&target).unwrap();
+        let cur_seq = idx.seq_nos.get(id).copied();
+        if let (Some(want), Some(have)) = (snap_seq.get(id), cur_seq) {
+            if *want != have {
+                conflicts += 1;
+                if !proceed {
+                    failures.push(json!({"index": target, "id": id, "cause": {
+                        "type": "version_conflict_engine_exception",
+                        "reason": format!("[{}]: version conflict, required seqNo [{}], primary term [1]. current document has seqNo [{}] and primary term [1]", id, want, have),
+                        "index": target, "shard": "0", "index_uuid": idx.uuid.clone()}, "status": 409}));
+                }
+                continue;
+            }
+        }
         if idx.docs.remove(id).is_some() {
             crate::mapping::fields::remove_doc_values(idx, id);
             let old_ver = idx.versions.get(id).copied().unwrap_or(1);
@@ -3865,7 +3899,8 @@ pub fn handle_delete_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
         store.indices.get_mut(&target).unwrap().pending.clear();
     }
     let batches = if total > 0 { 1 } else { 0 };
-    let mut out = byq_report(total, 0, deleted, 0, batches, &[]);
+    let mut out = byq_report(total, 0, deleted, 0, batches, &failures);
+    out.as_object_mut().unwrap().insert("version_conflicts".to_string(), json!(conflicts));
     let slices = req.param("slices").and_then(|v| v.parse::<usize>().ok()).filter(|n| *n > 0);
     if let Some(n) = slices {
         let mut arr = Vec::new();
@@ -3875,7 +3910,7 @@ pub fn handle_delete_by_query(store: &mut Store, req: &Req, name: &str) -> Respo
         }
         out.as_object_mut().unwrap().insert("slices".to_string(), json!(arr));
     }
-    json_response(200, out)
+    json_response(if failures.is_empty() { 200 } else { 409 }, out)
 }
 
 pub fn handle_update_by_query(store: &mut Store, req: &Req, name: &str) -> Response {

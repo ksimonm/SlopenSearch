@@ -17,6 +17,7 @@ import (
 	"slopensearch/internal/analysis"
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/dates"
+	"slopensearch/internal/geohash"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 	"slopensearch/internal/settings"
@@ -1544,44 +1545,6 @@ func (c *ParseContext) parseTokenCount(path string, def map[string]any, v any) (
 	return int64(len(tokens)), nil
 }
 
-const geohashBase32 = "0123456789bcdefghjkmnpqrstuvwxyz"
-
-func DecodeGeohash(s string) (float64, float64, bool) {
-	s = strings.ToLower(strings.TrimSpace(s))
-	if s == "" {
-		return 0, 0, false
-	}
-	latMin, latMax := -90.0, 90.0
-	lonMin, lonMax := -180.0, 180.0
-	even := true
-	for _, c := range s {
-		idx := strings.IndexRune(geohashBase32, c)
-		if idx < 0 {
-			return 0, 0, false
-		}
-		for bit := 4; bit >= 0; bit-- {
-			b := (idx >> uint(bit)) & 1
-			if even {
-				mid := (lonMin + lonMax) / 2
-				if b == 1 {
-					lonMin = mid
-				} else {
-					lonMax = mid
-				}
-			} else {
-				mid := (latMin + latMax) / 2
-				if b == 1 {
-					latMin = mid
-				} else {
-					latMax = mid
-				}
-			}
-			even = !even
-		}
-	}
-	return (latMin + latMax) / 2, (lonMin + lonMax) / 2, true
-}
-
 func (c *ParseContext) parseGeoPoint(path string, def map[string]any, v any) (any, *apierr.Error) {
 	ignoreZ := true
 	if b, ok := def["ignore_z_value"].(bool); ok {
@@ -1671,17 +1634,11 @@ func (c *ParseContext) parseGeoPoint(path string, def map[string]any, v any) (an
 				return check(nums[0], nums[1])
 			}
 		}
-		if lat, lon, ok := DecodeGeohash(trimmed); ok {
-			return check(lat, lon)
+		lat, lon, gherr := geohash.Point(trimmed)
+		if gherr != "" {
+			return nil, errf("parse_exception", gherr)
 		}
-		bad := ' '
-		for _, ch := range trimmed {
-			if !strings.ContainsRune("0123456789bcdefghjkmnpqrstuvwxyzBCDEFGHJKMNPQRSTUVWXYZ", ch) {
-				bad = ch
-				break
-			}
-		}
-		return nil, errf("parse_exception", fmt.Sprintf("unsupported symbol [%c] in geohash [%s]", bad, trimmed))
+		return check(lat, lon)
 	case map[string]any:
 		_, hasLat := t["lat"]
 		_, hasLon := t["lon"]

@@ -1,10 +1,11 @@
 //! Mustache templates with mustache.java semantics (search templates, phrase
-//! suggester collate queries).
+//! suggester collate queries, ingest processor templates).
 
 use serde_json::Value;
 
-/// A mustache.java compile error; `line` is the 1-based template line it names
-/// (newlines inside tags are not counted, as in mustache.java).
+/// A mustache.java compile error, or a value lookup that failed while rendering;
+/// `line` is the 1-based template line it names (newlines inside tags are not
+/// counted, as in mustache.java).
 #[derive(Debug, Clone)]
 pub struct MustacheError {
     pub kind: MustacheErrorKind,
@@ -23,6 +24,11 @@ pub enum MustacheErrorKind {
     Mismatched { open: Option<String>, close: String },
     /// the template ends right after `{{`
     Empty,
+    /// `{{>name}}`
+    Partial(String),
+    /// rendering: a list lookup out of range (`name` is the whole tag); `cause` is the
+    /// message of the intermediate exception, `java` the Java exception (type, message)
+    Lookup { name: String, cause: String, java: (String, String) },
 }
 
 impl MustacheError {
@@ -40,16 +46,31 @@ impl MustacheError {
                 open.as_deref().unwrap_or("null")
             ),
             MustacheErrorKind::Empty => "Empty mustache".to_string(),
+            MustacheErrorKind::Partial(name) => {
+                return format!("Partial templates are not supported in OpenSearch Mustache scripts: [{name}]")
+            }
+            MustacheErrorKind::Lookup { name, .. } => format!("Failed to get value for {name}"),
         };
         format!("{msg} @[{file}:{line}]")
+    }
+
+    /// For a failed lookup: the message of its cause and the Java exception under it.
+    pub fn lookup_cause(&self, file: &str) -> Option<(String, &str, &str)> {
+        match &self.kind {
+            MustacheErrorKind::Lookup { cause, java, .. } => {
+                Some((format!("{cause} @[{file}:{}]", self.line), java.0.as_str(), java.1.as_str()))
+            }
+            _ => None,
+        }
     }
 }
 
 #[derive(Debug, Clone)]
 enum Node {
     Text(String),
-    Var { name: String, escaped: bool },
+    Var { name: String, escaped: bool, line: usize },
     Section {
+        line: usize,
         name: String,
         params: String,
         inverted: bool,
@@ -93,7 +114,7 @@ fn parse_template(src: &str) -> Result<Vec<Node>, MustacheError> {
             match src[body_start..].find("}}}") {
                 Some(end_rel) => {
                     let name = src[body_start..body_start + end_rel].trim().to_string();
-                    push_node(&mut root, &mut stack, Node::Var { name, escaped: false });
+                    push_node(&mut root, &mut stack, Node::Var { name, escaped: false, line });
                     pos = body_start + end_rel + 3;
                     continue;
                 }
@@ -101,7 +122,7 @@ fn parse_template(src: &str) -> Result<Vec<Node>, MustacheError> {
                     let line_start = src[..start].rfind('\n').map_or(0, |i| i + 1);
                     let (name, end) = match src[body_start..].find("}}") {
                         Some(e) => (&src[body_start..body_start + e], body_start + e + 2),
-                        None => (&src[body_start..], src.len()),
+                        None => (&src[body_start..], src.len().saturating_sub(1)),
                     };
                     let col = src[line_start..end].chars().count();
                     let name = name.trim().to_string();
@@ -114,6 +135,10 @@ fn parse_template(src: &str) -> Result<Vec<Node>, MustacheError> {
             return err(MustacheErrorKind::Empty, line);
         }
         let Some(end_rel) = src[body_start..].find(close.as_str()) else {
+            let rest = src[body_start..].trim_start();
+            if let Some(section) = rest.strip_prefix('#').or_else(|| rest.strip_prefix('^')) {
+                return err(MustacheErrorKind::UnclosedSection(first_word(section).to_string()), line);
+            }
             return err(MustacheErrorKind::UnclosedVariable, line);
         };
         let tag = src[body_start..body_start + end_rel].trim().to_string();
@@ -145,7 +170,7 @@ fn parse_template(src: &str) -> Result<Vec<Node>, MustacheError> {
         }
         if let Some(rest) = tag.strip_prefix('/') {
             let name = first_word(rest);
-            let Some((n, params, inverted, children, _)) = stack.pop() else {
+            let Some((n, params, inverted, children, open_line)) = stack.pop() else {
                 let close = name.to_string();
                 return err(MustacheErrorKind::Mismatched { open: None, close }, line);
             };
@@ -154,6 +179,7 @@ fn parse_template(src: &str) -> Result<Vec<Node>, MustacheError> {
                 return err(MustacheErrorKind::Mismatched { open: Some(n), close }, line);
             }
             let node = Node::Section {
+                line: open_line,
                 name: n,
                 params,
                 inverted,
@@ -169,12 +195,13 @@ fn parse_template(src: &str) -> Result<Vec<Node>, MustacheError> {
                 Node::Var {
                     name: rest.trim().to_string(),
                     escaped: false,
+                    line,
                 },
             );
             continue;
         }
-        if tag.starts_with('>') {
-            continue;
+        if let Some(rest) = tag.strip_prefix('>') {
+            return err(MustacheErrorKind::Partial(rest.trim().to_string()), line);
         }
         push_node(
             &mut root,
@@ -182,6 +209,7 @@ fn parse_template(src: &str) -> Result<Vec<Node>, MustacheError> {
             Node::Var {
                 name: tag,
                 escaped: true,
+                line,
             },
         );
     }
@@ -199,28 +227,48 @@ fn push_node(root: &mut Vec<Node>, stack: &mut [(String, String, bool, Vec<Node>
     }
 }
 
-fn descend<'a>(val: &'a Value, path: &str) -> Option<&'a Value> {
+type Lookup<'a> = Result<Option<&'a Value>, MustacheError>;
+
+/// Lists are indexed like OpenSearch's list wrapper: a numeric segment past the end
+/// (or negative) fails the lookup, any other segment finds nothing.
+fn descend<'a>(val: &'a Value, name: &str, line: usize) -> Lookup<'a> {
+    let fail = |cause: String, typ: &str, msg: String| MustacheError {
+        kind: MustacheErrorKind::Lookup { name: name.to_string(), cause, java: (typ.to_string(), msg) },
+        line,
+    };
     let mut cur = val;
-    for seg in path.split('.') {
+    for seg in name.split('.') {
         match cur {
-            Value::Object(m) => cur = m.get(seg)?,
-            Value::Array(a) => cur = a.get(seg.parse::<usize>().ok()?)?,
-            _ => return None,
+            Value::Object(m) => match m.get(seg) {
+                Some(v) => cur = v,
+                None => return Ok(None),
+            },
+            Value::Array(a) => match seg.parse::<i64>() {
+                Ok(i) if i < 0 => {
+                    return Err(fail("position >= 0".into(), "illegal_argument_exception", "position >= 0".into()))
+                }
+                Ok(i) => match a.get(i as usize) {
+                    Some(v) => cur = v,
+                    None => return Err(fail(i.to_string(), "index_out_of_bounds_exception", i.to_string())),
+                },
+                Err(_) => return Ok(None),
+            },
+            _ => return Ok(None),
         }
     }
-    Some(cur)
+    Ok(Some(cur))
 }
 
-fn resolve<'a>(ctx: &'a [Value], name: &str) -> Option<&'a Value> {
+fn resolve<'a>(ctx: &'a [Value], name: &str, line: usize) -> Lookup<'a> {
     if name == "." {
-        return ctx.last();
+        return Ok(ctx.last());
     }
     for frame in ctx.iter().rev() {
-        if let Some(v) = descend(frame, name) {
-            return Some(v);
+        if let Some(v) = descend(frame, name, line)? {
+            return Ok(Some(v));
         }
     }
-    None
+    Ok(None)
 }
 
 fn json_escape(s: &str) -> String {
@@ -299,15 +347,16 @@ fn raw_text(children: &[Node]) -> String {
     out
 }
 
-fn render_nodes(nodes: &[Node], ctx: &mut Vec<Value>, out: &mut String) {
+fn render_nodes(nodes: &[Node], ctx: &mut Vec<Value>, out: &mut String) -> Result<(), MustacheError> {
     for node in nodes {
         match node {
             Node::Text(t) => out.push_str(t),
-            Node::Var { name, escaped } => {
-                let v = resolve(ctx, name);
+            Node::Var { name, escaped, line } => {
+                let v = resolve(ctx, name, *line)?;
                 out.push_str(&interpolation(v, *escaped));
             }
             Node::Section {
+                line,
                 name,
                 params,
                 inverted,
@@ -317,9 +366,9 @@ fn render_nodes(nodes: &[Node], ctx: &mut Vec<Value>, out: &mut String) {
                     let body = raw_text(children).trim().to_string();
                     let mut rendered_body = String::new();
                     if body.is_empty() {
-                        render_nodes(children, ctx, &mut rendered_body);
+                        render_nodes(children, ctx, &mut rendered_body)?;
                     }
-                    let resolved = resolve(ctx, &body);
+                    let resolved = resolve(ctx, &body, *line)?;
                     let direct = rendered_body.trim().to_string();
                     match name.as_str() {
                         "toJson" => {
@@ -351,32 +400,35 @@ fn render_nodes(nodes: &[Node], ctx: &mut Vec<Value>, out: &mut String) {
                     }
                     continue;
                 }
-                let v = resolve(ctx, name);
+                let v = resolve(ctx, name, *line)?;
                 if *inverted {
                     if !is_truthy(v) {
-                        render_nodes(children, ctx, out);
+                        render_nodes(children, ctx, out)?;
                     }
                 } else if let Some(Value::Array(a)) = v {
                     for item in a.clone() {
                         ctx.push(item);
-                        render_nodes(children, ctx, out);
+                        let r = render_nodes(children, ctx, out);
                         ctx.pop();
+                        r?;
                     }
                 } else if is_truthy(v) {
                     ctx.push(v.cloned().unwrap_or(Value::Null));
-                    render_nodes(children, ctx, out);
+                    let r = render_nodes(children, ctx, out);
                     ctx.pop();
+                    r?;
                 }
             }
         }
     }
+    Ok(())
 }
 
 pub fn render_mustache(src: &str, params: &Value) -> Result<String, MustacheError> {
     let nodes = parse_template(src)?;
     let mut ctx = vec![params.clone()];
     let mut out = String::new();
-    render_nodes(&nodes, &mut ctx, &mut out);
+    render_nodes(&nodes, &mut ctx, &mut out)?;
     Ok(out)
 }
 

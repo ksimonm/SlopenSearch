@@ -704,7 +704,7 @@ fn start(shared: &Shared, req: &Req, segs: &[String], kind: Kind) -> Response {
     let shared = shared.clone();
     let spawned = std::thread::Builder::new()
         .name(format!("task-{}", id))
-        .stack_size(256 << 20)
+        .stack_size(crate::painless::api::DEEP_STACK_SIZE)
         .spawn(move || run(shared, id, job, q_param, max_docs_param));
     if spawned.is_err() {
         finish_error(id, &ApiError::new("exception", "failed to start task", 500));
@@ -768,7 +768,7 @@ fn run(shared: Shared, id: u64, job: Job, q_param: Option<String>, max_docs: Opt
             {
                 let r = read_response(crate::http::dispatch(&mut st, &req));
                 // background batches change state outside a request: journal them too
-                crate::storage::after_request(&st, &req.method, &req.path);
+                crate::storage::after_request(&mut st, &req.method, &req.path);
                 r
             }
         };
@@ -864,7 +864,7 @@ fn run(shared: Shared, id: u64, job: Job, q_param: Option<String>, max_docs: Opt
                 {
                 let r = read_response(crate::http::dispatch(&mut st, &req));
                 // background batches change state outside a request: journal them too
-                crate::storage::after_request(&st, &req.method, &req.path);
+                crate::storage::after_request(&mut st, &req.method, &req.path);
                 r
             }
             };
@@ -1024,7 +1024,7 @@ fn run_sliced(shared: &Shared, id: u64, job: &Job) {
         {
                 let r = read_response(crate::http::dispatch(&mut st, &req));
                 // background batches change state outside a request: journal them too
-                crate::storage::after_request(&st, &req.method, &req.path);
+                crate::storage::after_request(&mut st, &req.method, &req.path);
                 r
             }
     };

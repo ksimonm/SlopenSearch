@@ -14,11 +14,13 @@ import (
 
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/dates"
+	"slopensearch/internal/geohash"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/mapping"
 	"slopensearch/internal/model"
 	"slopensearch/internal/ojson"
 	"slopensearch/internal/search"
+	"slopensearch/internal/zone"
 )
 
 func allIndexDocs(idx *model.Index) []map[string]any {
@@ -265,12 +267,11 @@ func parseRangeDateValue(v any, def map[string]any, format, tz string, now time.
 		if format != "" {
 			tmp = map[string]any{"type": "date", "format": format}
 		}
-		if ms, ok := dates.ParseAny(tmp, s); ok {
-			if tz != "" {
-				if off, err := search.ParseTZOffset(tz); err == nil {
-					ms -= off
-				}
-			}
+		loc, _ := dates.ParseLocation(tz)
+		if t, _, ok := dates.ParseAnchor(s, dates.FormatOf(tmp), "", loc); ok && tz != "" && loc != nil {
+			// a date without an offset is a local time of the time zone
+			base = t.UTC()
+		} else if ms, ok := dates.ParseAny(tmp, s); ok {
 			base = time.UnixMilli(ms).UTC()
 		} else {
 			return 0, false
@@ -358,6 +359,9 @@ func dateRangeAgg(name, field string, spec map[string]any, docs []map[string]any
 	}
 	format, _ := jsonv.ToString(spec["format"])
 	tz, _ := jsonv.ToString(spec["time_zone"])
+	if _, terr := aggZone(spec, "date_range"); terr != nil {
+		return nil, terr
+	}
 	keyed, _ := spec["keyed"].(bool)
 	missing, hasMissing := spec["missing"]
 	now := time.Now().UTC()
@@ -406,11 +410,9 @@ func dateRangeAgg(name, field string, spec map[string]any, docs []map[string]any
 		return false
 	})
 	fmtDate := func(ms int64) string {
-		loc := time.UTC
-		if tz != "" {
-			if off, err := search.ParseTZOffset(tz); err == nil {
-				loc = time.FixedZone(tz, int(off/1000))
-			}
+		loc, _ := dates.ParseLocation(tz)
+		if loc == nil {
+			loc = time.UTC
 		}
 		t := time.UnixMilli(ms).In(loc)
 		if format != "" {
@@ -418,10 +420,7 @@ func dateRangeAgg(name, field string, spec map[string]any, docs []map[string]any
 				return t.Format(layout)
 			}
 		}
-		if tz != "" && tz != "UTC" && tz != "Z" && tz != "+00:00" {
-			return t.Format("2006-01-02T15:04:05.000-07:00")
-		}
-		return t.UTC().Format("2006-01-02T15:04:05.000Z")
+		return t.Format("2006-01-02T15:04:05.000Z07:00")
 	}
 	buckets := []any{}
 	keyedBuckets := ojson.Object{}
@@ -1017,6 +1016,7 @@ type compositeSource struct {
 	fixedMs       int64
 	isFixed       bool
 	loc           *time.Location
+	zone          *zone.Zone
 	format        string
 	tz            string
 	offsetMs      int64
@@ -1068,11 +1068,11 @@ func compositeAgg(name string, spec map[string]any, docs []map[string]any, idx *
 					src.field, _ = jsonv.ToString(ss["field"])
 					src.format, _ = jsonv.ToString(ss["format"])
 					src.tz, _ = jsonv.ToString(ss["time_zone"])
-					loc, terr := loadAggLocation(src.tz)
+					z, terr := aggZone(ss, "date_histogram")
 					if terr != nil {
 						return nil, terr
 					}
-					src.loc = loc
+					src.loc, src.zone = z.Location(), z
 					if off, ok := jsonv.ToString(ss["offset"]); ok {
 						src.offsetMs = parseDateOffsetMillis(off)
 					}
@@ -1318,12 +1318,10 @@ func compositeValues(src *compositeSource, doc map[string]any, idx *model.Index,
 		}
 		shifted := ms - src.offsetMs
 		var k int64
-		if src.isFixed && !(src.fixedMs%86400000 == 0 && src.loc != time.UTC) {
-			k = int64(math.Floor(float64(shifted)/float64(src.fixedMs))) * src.fixedMs
-		} else if src.isFixed {
-			k = calendarBucketStart(shifted, "day", src.loc)
+		if src.isFixed {
+			k = tzBucketStart(shifted, src.fixedMs, "", src.zone)
 		} else {
-			k = calendarBucketStart(shifted, src.calUnit, src.loc)
+			k = tzBucketStart(shifted, 0, src.calUnit, src.zone)
 		}
 		k += src.offsetMs
 		if src.format != "" {
@@ -1450,6 +1448,19 @@ func geotileKey(lat, lon float64, precision int) string {
 	return fmt.Sprintf("%d/%d/%d", precision, x, y)
 }
 
+// gridCellHash is the long a grid bucket is keyed by in OpenSearch:
+// Geohash#longEncode for geohash cells, (zoom<<58)|(x<<29)|y for tiles.
+func gridCellHash(key string, tile bool) int64 {
+	if !tile {
+		return geohash.LongEncode(key)
+	}
+	var zxy [3]int64
+	for i, p := range strings.SplitN(key, "/", 3) {
+		zxy[i], _ = strconv.ParseInt(p, 10, 64)
+	}
+	return zxy[0]<<58 | zxy[1]<<29 | zxy[2]
+}
+
 func geoHashGridAgg(name string, spec map[string]any, docs []map[string]any, idx *model.Index, pathPrefix string, sub map[string]any, typed bool, tile bool) (any, *apierr.Error) {
 	field, _ := jsonv.ToString(spec["field"])
 	precision := jsonv.Int(spec, "precision", 5)
@@ -1485,20 +1496,23 @@ func geoHashGridAgg(name string, spec map[string]any, docs []map[string]any, idx
 			if precision == 0 {
 				continue
 			}
-			key = mapping.EncodeGeohash(lat, lon, precision)
+			key = geohash.Encode(lat, lon, precision)
 		}
 		counts[key]++
 		group[key] = append(group[key], d)
 	}
 	keys := []string{}
+	hashes := map[string]int64{}
 	for k := range counts {
 		keys = append(keys, k)
+		hashes[k] = gridCellHash(k, tile)
 	}
+	// ties: the larger cell hash (a signed long) first
 	sort.SliceStable(keys, func(i, j int) bool {
 		if counts[keys[i]] != counts[keys[j]] {
 			return counts[keys[i]] > counts[keys[j]]
 		}
-		return keys[i] > keys[j]
+		return hashes[keys[i]] > hashes[keys[j]]
 	})
 	size := jsonv.Int(spec, "size", 10)
 	if size > 0 && len(keys) > size {
@@ -1853,10 +1867,11 @@ func autoDateHistogramAgg(field string, spec map[string]any, docs []map[string]a
 	ft, _ := idx.FieldTypes[resolved]
 	format, _ := jsonv.ToString(spec["format"])
 	tz, _ := jsonv.ToString(spec["time_zone"])
-	loc, terr := loadAggLocation(tz)
+	z, terr := aggZone(spec, "auto_date_histogram")
 	if terr != nil {
 		return nil, terr
 	}
+	loc := z.Location()
 	vals := []int64{}
 	for _, d := range docs {
 		v, ok := aggFieldValue(d, field, pathPrefix)

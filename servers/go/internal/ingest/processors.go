@@ -12,7 +12,8 @@ import (
 	"slopensearch/internal/wildcard"
 )
 
-func (s *Engine) runIngestProcessor(typ string, cfg map[string]any, env *ingestEnv) (bool, *apierr.Error) {
+func (s *Engine) runIngestProcessor(typ string, cfg map[string]any, env *ingestEnv) (dropped bool, err *apierr.Error) {
+	defer recoverTemplateFailure(&err)
 	switch typ {
 	case "set":
 		return false, s.procSet(cfg, env)
@@ -121,9 +122,8 @@ func (e *ingestEnv) resolveFieldPath(raw any) []string {
 
 func (s *Engine) procSet(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	field := env.render(cfgString(cfg, "field"))
-	value := cfg["value"]
-	if sv, ok := value.(string); ok {
-		value = env.render(sv)
+	value := env.renderValue(cfg["value"])
+	if sv, ok := cfg["value"].(string); ok {
 		if cfgBool(cfg, "ignore_empty_value", false) && value == "" && strings.Contains(sv, "{{") {
 			return nil
 		}
@@ -316,9 +316,7 @@ func (s *Engine) procAppend(cfg map[string]any, env *ingestEnv) *apierr.Error {
 		values = append(values, t)
 	}
 	for i, v := range values {
-		if sv, ok := v.(string); ok {
-			values[i] = env.render(sv)
-		}
+		values[i] = env.renderValue(v)
 	}
 	existing, ok := env.lookup(field)
 	allowDup := cfgBool(cfg, "allow_duplicates", true)

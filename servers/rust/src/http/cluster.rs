@@ -2,7 +2,6 @@ use serde_json::{json, Map, Number, Value};
 
 use crate::errors::{err_response, json_response, ApiError};
 use crate::http::method_not_allowed;
-use crate::resp::parse_simple_yaml;
 use crate::http::shared::{
     err_index_not_found_named, resolve_indices, settings_to_nested, sorted_index_names,
 };
@@ -906,7 +905,7 @@ pub fn handle_cluster_settings(store: &mut Store, req: &Req) -> Response {
             if flat {
                 body.insert(
                     "persistent".into(),
-                    Value::Object(store.cluster_persistent.clone()),
+                    Value::Object((*store.cluster_persistent).clone()),
                 );
                 body.insert(
                     "transient".into(),
@@ -977,8 +976,10 @@ fn handle_cluster_settings_put(store: &mut Store, req: &Req) -> Response {
                 ))
             }
         },
+        // a YAML body the HTTP layer could not transcode to JSON
         "application/yaml" | "application/x-yaml" | "text/yaml" => {
-            Some(parse_simple_yaml(&String::from_utf8_lossy(&req.body)))
+            let reason = crate::http::xcontent::yaml_to_json(&req.body).err().unwrap_or_default();
+            return err_response(ApiError::new("json_parse_exception", &reason, 400));
         }
         _ => None,
     };
@@ -1001,21 +1002,13 @@ fn handle_cluster_settings_put(store: &mut Store, req: &Req) -> Response {
     }
     store.bump_state();
 
-    if ctype == "application/yaml" {
-        return crate::errors::text_response(
-            200,
-            "application/yaml",
-            "---\nacknowledged: true\n".to_string(),
-        );
-    }
-
     let flat = req.bool_param("flat_settings");
     let mut resp = Map::new();
     resp.insert("acknowledged".into(), json!(true));
     if flat {
         resp.insert(
             "persistent".into(),
-            Value::Object(store.cluster_persistent.clone()),
+            Value::Object((*store.cluster_persistent).clone()),
         );
         resp.insert(
             "transient".into(),

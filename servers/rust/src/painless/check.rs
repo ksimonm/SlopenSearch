@@ -135,7 +135,7 @@ pub fn static_methods() -> &'static HashMap<&'static str, Sigs> {
             "between:Period(LocalDate,LocalDate)"]));
         m.insert("DayOfWeek", parse_sigs(&["of:DayOfWeek(int)", "valueOf:DayOfWeek(String)"]));
         m.insert("DateTimeFormatter", parse_sigs(&["ofPattern:DateTimeFormatter(String)"]));
-        m.insert("Pattern", parse_sigs(&["compile:Pattern(String)", "compile:Pattern(String,int)", "quote:String(String)"]));
+        m.insert("Pattern", parse_sigs(&["quote:String(String)"]));
         m.insert("Matcher", parse_sigs(&["quoteReplacement:String(String)"]));
         m.insert("Base64", parse_sigs(&["getEncoder:def()", "getDecoder:def()"]));
         m.insert("IntStream", parse_sigs(&["range:IntStream(int,int)", "rangeClosed:IntStream(int,int)"]));
@@ -187,6 +187,31 @@ pub fn static_field(class: &str, name: &str) -> Option<(PV, &'static str)> {
 }
 
 /// The java.lang.String whitelist including Painless augmentations.
+/// The Painless whitelist (java.util.regex.txt plus the java.lang.Object
+/// methods) for statically typed Pattern / Matcher receivers.
+pub fn regex_member_methods() -> &'static HashMap<&'static str, Sigs> {
+    static M: OnceLock<HashMap<&'static str, Sigs>> = OnceLock::new();
+    M.get_or_init(|| {
+        let mut m = HashMap::new();
+        m.insert("Pattern", parse_sigs(&[
+            "asPredicate:def()", "flags:int()", "matcher:Matcher(CharSequence)", "pattern:String()",
+            "quote:String(String)", "split:def(CharSequence)", "split:def(CharSequence,int)",
+            "splitAsStream:def(CharSequence)", "toString:String()", "equals:boolean(def)", "hashCode:int()",
+        ]));
+        m.insert("Matcher", parse_sigs(&[
+            "end:int()", "end:int(int)", "find:boolean()", "find:boolean(int)", "group:String()",
+            "group:String(int)", "namedGroup:String(String)", "groupCount:int()", "hasAnchoringBounds:boolean()",
+            "hasTransparentBounds:boolean()", "hitEnd:boolean()", "lookingAt:boolean()", "matches:boolean()",
+            "pattern:Pattern()", "quoteReplacement:String(String)", "region:Matcher(int,int)", "regionEnd:int()",
+            "regionStart:int()", "replaceAll:String(String)", "replaceFirst:String(String)", "requireEnd:boolean()",
+            "reset:Matcher()", "start:int()", "start:int(int)", "useAnchoringBounds:Matcher(boolean)",
+            "usePattern:Matcher(Pattern)", "useTransparentBounds:Matcher(boolean)", "toString:String()",
+            "equals:boolean(def)", "hashCode:int()",
+        ]));
+        m
+    })
+}
+
 pub fn string_methods() -> &'static Sigs {
     static M: OnceLock<Sigs> = OnceLock::new();
     M.get_or_init(|| {
@@ -606,7 +631,12 @@ impl<'a> Checker<'a> {
                 self.info.consts.insert(x.id, v.clone());
                 self.set(x, t)
             }
-            EK::Regex(..) => self.set(x, "Pattern"),
+            EK::Regex(p, f) => {
+                if let Some(e) = crate::painless::regex::constant_error(p, f, x.pos) {
+                    return Err(e);
+                }
+                self.set(x, "Pattern")
+            }
             EK::Var(name) => match self.lookup(name) {
                 Some(t) => self.set(x, &t),
                 None => Err(CompileErr::iae(&format!("cannot resolve symbol [{}]", name), x.pos)),
@@ -1059,6 +1089,21 @@ impl<'a> Checker<'a> {
                 e.no_pos = true;
                 return Err(e);
             }
+            let ret = sig.ret.clone();
+            self.info.sigs.insert(x.id, sig);
+            return self.set(x, &ret);
+        }
+        if let Some(sigs) = regex_member_methods().get(ot.as_str()) {
+            let sig = match sigs.get(&key) {
+                Some(s) => s.clone(),
+                None => {
+                    return Err(CompileErr::iae(
+                        &format!("member method [java.util.regex.{}, {}] not found", ot, key),
+                        x.pos,
+                    ))
+                }
+            };
+            check_args(&sig.params)?;
             let ret = sig.ret.clone();
             self.info.sigs.insert(x.id, sig);
             return self.set(x, &ret);

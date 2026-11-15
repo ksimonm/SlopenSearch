@@ -180,29 +180,12 @@ impl IndexCtx {
     }
 }
 
+/// The (lon, lat) of a geohash document value; document values are case-sensitive.
 fn geohash_decode(s: &str) -> Option<(f64, f64)> {
-    const ALPHA: &[u8] = b"0123456789bcdefghjkmnpqrstuvwxyz";
-    if s.is_empty() || s.len() > 12 || !s.is_ascii() {
+    if s.bytes().any(|b| b.is_ascii_uppercase()) {
         return None;
     }
-    let (mut lon_lo, mut lon_hi) = (-180.0f64, 180.0f64);
-    let (mut lat_lo, mut lat_hi) = (-90.0f64, 90.0f64);
-    let mut lon_bit = true;
-    for ch in s.bytes() {
-        let idx = ALPHA.iter().position(|c| *c == ch.to_ascii_lowercase())? as u8;
-        for shift in (0..5).rev() {
-            let bit = (idx >> shift) & 1 == 1;
-            if lon_bit {
-                let mid = (lon_lo + lon_hi) / 2.0;
-                if bit { lon_lo = mid } else { lon_hi = mid }
-            } else {
-                let mid = (lat_lo + lat_hi) / 2.0;
-                if bit { lat_lo = mid } else { lat_hi = mid }
-            }
-            lon_bit = !lon_bit;
-        }
-    }
-    Some(((lon_lo + lon_hi) / 2.0, (lat_lo + lat_hi) / 2.0))
+    crate::geohash::decode(s).map(|(lat, lon)| (lon, lat))
 }
 
 fn is_integer_kind(t: &str) -> bool {
@@ -1246,7 +1229,7 @@ pub(crate) fn doc_value_double(typ: &str, def: &Map<String, Value>, f: f64) -> f
     }
 }
 
-fn float32_half(f: f64) -> u16 {
+pub(crate) fn float32_half(f: f64) -> u16 {
     let bits = (f as f32).to_bits();
     let sign = ((bits >> 31) as u16) << 15;
     let exp = ((bits >> 23) & 0xff) as i32 - 127;
@@ -1276,7 +1259,7 @@ fn float32_half(f: f64) -> u16 {
     sign | half
 }
 
-fn float32_from_half(h: u16) -> f32 {
+pub(crate) fn float32_from_half(h: u16) -> f32 {
     let sign = ((h >> 15) as u32) << 31;
     let exp = ((h >> 10) & 0x1f) as u32;
     let mut frac = (h & 0x3ff) as u32;
@@ -2699,9 +2682,10 @@ impl IndexCtx {
                 if let Some((lon, lat)) = geohash_decode(t) {
                     return check(lat, lon, false);
                 }
-                let bad = t
-                    .chars()
-                    .find(|c| !"0123456789bcdefghjkmnpqrstuvwxyzBCDEFGHJKMNPQRSTUVWXYZ".contains(*c));
+                if t.is_empty() {
+                    return Err(err("parse_exception", "empty geohash"));
+                }
+                let bad = t.chars().find(|c| !"0123456789bcdefghjkmnpqrstuvwxyz".contains(*c));
                 let ch = bad.unwrap_or(' ');
                 Err(err(
                     "parse_exception",
@@ -3229,7 +3213,7 @@ fn compare_values_for_type(typ: &str, a: &Value, b: &Value) -> i32 {
 impl IndexCtx {
     pub fn build_doc_values(&mut self, idx: &mut Index) -> Result<(), ApiError> {
         if !idx.mappings.is_object() {
-            idx.mappings = Value::Object(Map::new());
+            *idx.mappings = Value::Object(Map::new());
         }
         let obj = idx.mappings.as_object_mut().unwrap();
         if !obj.get("properties").map(|p| p.is_object()).unwrap_or(false) {

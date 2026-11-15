@@ -1,3 +1,4 @@
+mod javaregex;
 pub(crate) mod script;
 
 use crate::errors::{err_response, json_response, ApiError};
@@ -300,6 +301,7 @@ fn validate_processor(p: &Value, _top: bool) -> Result<(), ApiError> {
             return Err(e);
         }
     }
+    check_templates(typ, c)?;
     if typ == "remove_by_pattern" {
         let has_fp = c.contains_key("field_pattern");
         let has_ex = c.contains_key("exclude_field_pattern");
@@ -349,21 +351,11 @@ fn validate_processor(p: &Value, _top: bool) -> Result<(), ApiError> {
     }
     if typ == "gsub" {
         if let Some(pat) = cfg_str(c, "pattern") {
-            if let Err(e) = Regex::new(pat) {
-                let detail = e.to_string();
-                let detail = if let Some(idx) = detail.find("regex parse error") {
-                    detail[idx + "regex parse error".len()..].trim_start_matches(':').trim()
-                } else {
-                    detail.as_str()
-                };
-                let msg = if detail.contains("unclosed character class") {
-                    "[pattern] Invalid regex pattern. Unclosed character class".to_string()
-                } else {
-                    format!("[pattern] Invalid regex pattern. {}", detail)
-                };
-                let mut err = parse_exception(&msg);
-                err.fields.insert("processor_type".to_string(), json!(typ));
-                return Err(err);
+            if let Err(e) = javaregex::compile_java(pat) {
+                let msg = format!("[pattern] Invalid regex pattern. {}", e.message());
+                return Err(parse_exception(&msg)
+                    .field("processor_type", json!(typ))
+                    .field("property_name", json!("pattern")));
             }
         }
     }
@@ -387,6 +379,13 @@ fn validate_processor(p: &Value, _top: bool) -> Result<(), ApiError> {
                 ));
                 e.fields.insert("processor_type".to_string(), json!(typ));
                 return Err(e);
+            }
+            if let Ok(expanded) = expand_grok(p, &defs, &mut Vec::new()) {
+                if let Err(msg) = javaregex::grok_compile(&expanded) {
+                    return Err(parse_exception(&format!("[patterns] Invalid regex pattern found in: [{}]. {}", p, msg))
+                        .field("processor_type", json!(typ))
+                        .field("property_name", json!("patterns")));
+                }
             }
         }
     }
@@ -918,7 +917,14 @@ fn set_failure_meta(
         .entry("_ingest".to_string())
         .or_insert_with(|| Value::Object(Map::new()));
     if let Value::Object(m) = ing {
-        let message = if e.typ == "script_exception" {
+        let message = if e.typ == "mustache_exception" {
+            // the message of the innermost cause (a failed template lookup)
+            let mut inner = e;
+            while let Some(c) = inner.caused_by.as_deref() {
+                inner = c;
+            }
+            inner.reason.clone()
+        } else if e.typ == "script_exception" {
             e.caused_by
                 .as_ref()
                 .map(|c| c.reason.clone())
@@ -993,33 +999,56 @@ fn run_processor(
     }
 }
 
-fn resolve_template(s: &str, meta: &Map<String, Value>, source: &Map<String, Value>) -> String {
-    let re = Regex::new(r"\{\{\{?\s*([^}]+?)\s*\}?\}\}").unwrap();
-    re.replace_all(s, |caps: &regex::Captures| {
-        let path = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
-        match lookup_path(meta, source, path) {
-            Some(v) => format_value(&v),
-            None => String::new(),
+/// The mustache model of an ingest document, as `IngestDocument#createTemplateModel`
+/// builds it: the source and metadata fields, `_source` (the same fields) and `_ingest`.
+fn template_model(meta: &Map<String, Value>, source: &Map<String, Value>) -> Value {
+    let mut m = source.clone();
+    let mut ingest = None;
+    for (k, v) in meta {
+        if k == "_ingest" {
+            ingest = Some(v.clone());
+        } else {
+            m.insert(k.clone(), v.clone());
         }
-    })
-    .to_string()
+    }
+    let all = Value::Object(m.clone());
+    m.insert("_source".to_string(), all);
+    if let Some(i) = ingest {
+        m.insert("_ingest".to_string(), i);
+    }
+    Value::Object(m)
 }
 
-fn resolve_value(
-    v: &Value,
-    meta: &Map<String, Value>,
-    source: &Map<String, Value>,
-) -> Value {
-    match v {
-        Value::String(s) => Value::String(resolve_template(s, meta, source)),
-        Value::Array(a) => Value::Array(a.iter().map(|x| resolve_value(x, meta, source)).collect()),
-        Value::Object(o) => Value::Object(
-            o.iter()
-                .map(|(k, x)| (k.clone(), resolve_value(x, meta, source)))
-                .collect(),
-        ),
-        other => other.clone(),
+/// Renders a template property: strings containing `{{` are mustache templates
+/// (`ConfigurationUtils#compileTemplate`), anything else is taken literally.
+fn render_template(s: &str, meta: &Map<String, Value>, source: &Map<String, Value>) -> Result<String, ApiError> {
+    if !s.contains("{{") {
+        return Ok(s.to_string());
     }
+    crate::mustache::render_mustache(s, &template_model(meta, source))
+        .map_err(|e| crate::scripting::mustache_error(s, &e, &[]))
+}
+
+/// `render_template` for properties OpenSearch does not template-check; a template
+/// that fails to render is taken literally.
+fn resolve_template(s: &str, meta: &Map<String, Value>, source: &Map<String, Value>) -> String {
+    render_template(s, meta, source).unwrap_or_else(|_| s.to_string())
+}
+
+/// A templated value (`ValueSource`): strings, list elements, map keys and values.
+fn render_value(v: &Value, meta: &Map<String, Value>, source: &Map<String, Value>) -> Result<Value, ApiError> {
+    Ok(match v {
+        Value::String(s) => Value::String(render_template(s, meta, source)?),
+        Value::Array(a) => Value::Array(a.iter().map(|x| render_value(x, meta, source)).collect::<Result<_, _>>()?),
+        Value::Object(o) => {
+            let mut out = Map::new();
+            for (k, x) in o {
+                out.insert(render_template(k, meta, source)?, render_value(x, meta, source)?);
+            }
+            Value::Object(out)
+        }
+        other => other.clone(),
+    })
 }
 
 fn resolve_field_name(
@@ -1031,28 +1060,55 @@ fn resolve_field_name(
     resolve_template(f, meta, source)
 }
 
-fn lookup_path(
+fn render_field_name(
+    cfg: &Map<String, Value>,
     meta: &Map<String, Value>,
     source: &Map<String, Value>,
-    path: &str,
-) -> Option<Value> {
-    if path.is_empty() {
-        return None;
-    }
-    let segs: Vec<&str> = path.split('.').collect();
-    let mut cur: Value = if segs[0].starts_with('_') {
-        Value::Object(meta.clone())
-    } else {
-        Value::Object(source.clone())
+) -> Result<String, ApiError> {
+    render_template(cfg_str(cfg, "field").unwrap_or(""), meta, source)
+}
+
+/// Compile errors of the template properties of a processor, reported when the
+/// pipeline is created (`property` is the name OpenSearch reports, if any).
+fn check_templates(typ: &str, c: &Map<String, Value>) -> Result<(), ApiError> {
+    let props: &[(&str, bool)] = match typ {
+        "set" | "append" => &[("field", true), ("value", false)],
+        "fail" => &[("message", true)],
+        "rename" => &[("field", true), ("target_field", true)],
+        _ => &[],
     };
-    for s in segs {
-        cur = match cur {
-            Value::Object(m) => m.get(s).cloned()?,
-            Value::Array(a) => a.get(s.parse::<usize>().ok()?)?.clone(),
-            _ => return None,
-        };
+    fn strings<'a>(v: &'a Value, out: &mut Vec<&'a str>) {
+        match v {
+            Value::String(s) => out.push(s),
+            Value::Array(a) => a.iter().for_each(|x| strings(x, out)),
+            Value::Object(o) => o.iter().for_each(|(k, x)| {
+                out.push(k);
+                strings(x, out)
+            }),
+            _ => {}
+        }
     }
-    Some(cur)
+    for (prop, named) in props {
+        let Some(v) = c.get(*prop) else { continue };
+        let mut texts = Vec::new();
+        strings(v, &mut texts);
+        for t in texts.into_iter().filter(|t| t.contains("{{")) {
+            if let Err(e) = crate::mustache::render_mustache(t, &Value::Object(Map::new())) {
+                if e.lookup_cause("query-template").is_some() {
+                    continue;
+                }
+                let mut fields = vec![("processor_type", json!(typ))];
+                if let Some(tag) = cfg_str(c, "tag") {
+                    fields.push(("processor_tag", json!(tag)));
+                }
+                if *named {
+                    fields.push(("property_name", json!(prop)));
+                }
+                return Err(crate::scripting::mustache_error(t, &e, &fields));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn source_get(source: &Map<String, Value>, path: &str) -> Option<Value> {
@@ -1217,13 +1273,13 @@ fn proc_set(
     meta: &mut Map<String, Value>,
     source: &mut Map<String, Value>,
 ) -> Result<bool, ApiError> {
-    let field = resolve_field_name(cfg, meta, source);
+    let field = render_field_name(cfg, meta, source)?;
     let raw = cfg.get("value").cloned().unwrap_or(Value::Null);
     let is_template = raw
         .as_str()
         .map(|t| t.contains("{{"))
         .unwrap_or(false);
-    let val = resolve_value(&raw, meta, source);
+    let val = render_value(&raw, meta, source)?;
     if cfg_bool(cfg, "ignore_empty_value", false) && is_template && is_empty_value(&val) {
         return Ok(false);
     }
@@ -1290,8 +1346,8 @@ fn proc_rename(
     meta: &mut Map<String, Value>,
     source: &mut Map<String, Value>,
 ) -> Result<bool, ApiError> {
-    let field = resolve_field_name(cfg, meta, source);
-    let target = resolve_template(cfg_str(cfg, "target_field").unwrap_or(""), meta, source);
+    let field = render_field_name(cfg, meta, source)?;
+    let target = render_template(cfg_str(cfg, "target_field").unwrap_or(""), meta, source)?;
     let val = match get_any(meta, source, &field) {
         Some(v) => v,
         None => {
@@ -1394,8 +1450,8 @@ fn proc_append(
     meta: &mut Map<String, Value>,
     source: &mut Map<String, Value>,
 ) -> Result<bool, ApiError> {
-    let field = resolve_field_name(cfg, meta, source);
-    let value = resolve_value(&cfg.get("value").cloned().unwrap_or(Value::Null), meta, source);
+    let field = render_field_name(cfg, meta, source)?;
+    let value = render_value(&cfg.get("value").cloned().unwrap_or(Value::Null), meta, source)?;
     let new_vals: Vec<Value> = match value {
         Value::Array(a) => a,
         v => vec![v],
@@ -1719,21 +1775,7 @@ fn proc_split(
     };
     let sep = cfg_str(cfg, "separator").unwrap_or(",");
     let preserve = cfg_bool(cfg, "preserve_trailing", false);
-    let mut parts: Vec<String> = if sep == "|" {
-        s.chars().map(|c| c.to_string()).collect()
-    } else {
-        match Regex::new(sep) {
-            Ok(re) => re.split(&s).map(|x| x.to_string()).collect(),
-            Err(_) => s.split(sep).map(|x| x.to_string()).collect(),
-        }
-    };
-    if s.is_empty() {
-        parts = vec![String::new()];
-    } else if !preserve {
-        while parts.len() > 1 && parts.last().map(|x| x.is_empty()).unwrap_or(false) {
-            parts.pop();
-        }
-    }
+    let parts = javaregex::java_split(&s, sep, if preserve { -1 } else { 0 })?;
     set_source_path(
         source,
         &target,
@@ -1802,9 +1844,7 @@ fn proc_gsub(
         .and_then(|v| v.as_str())
         .map(|s| resolve_template(s, meta, source))
         .unwrap_or_else(|| field.clone());
-    let re = Regex::new(cfg_str(cfg, "pattern").unwrap_or("")).map_err(|_| {
-        parse_exception("[pattern] Invalid regex pattern. Unclosed character class")
-    })?;
+    let re = javaregex::java_pattern(cfg_str(cfg, "pattern").unwrap_or(""))?;
     let repl = cfg_str(cfg, "replacement").unwrap_or("");
     let val = match source_get(source, &field) {
         Some(v) => v,
@@ -1820,9 +1860,7 @@ fn proc_gsub(
     };
     let do_one = |v: &Value| -> Result<Value, ApiError> {
         match v {
-            Value::String(s) => Ok(Value::String(
-                re.replace_all(s, repl as &str).to_string(),
-            )),
+            Value::String(s) => Ok(Value::String(javaregex::java_replace_all(&re, s, repl)?)),
             other => Err(ApiError::bad(&format!(
                 "field [{}] of type [{}] cannot be cast to [java.lang.String]",
                 field,
@@ -1974,7 +2012,6 @@ pub fn grok_patterns_json() -> Value {
 }
 
 struct GrokField {
-    name: String,
     typ: String,
     group: String,
 }
@@ -2017,7 +2054,6 @@ fn expand_grok(
                 ("agent", "string"),
             ] {
                 fields.push(GrokField {
-                    name: f.to_string(),
                     typ: t.to_string(),
                     group: f.to_string(),
                 });
@@ -2040,21 +2076,15 @@ fn expand_grok(
             out.push(')');
             continue;
         }
-        let group = field.replace('.', "_");
-        let group = if group.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
-            format!("g{}", group)
-        } else {
-            group
-        };
+        let group = field.to_string();
         if used.contains(&field.to_string()) {
             out.push_str("(?:");
             out.push_str(&rx);
             out.push(')');
         } else {
             used.push(field.to_string());
-            out.push_str(&format!("(?P<{}>{})", group, rx));
+            out.push_str(&format!("(?<{}>{})", group, rx));
             fields.push(GrokField {
-                name: field.to_string(),
                 typ: typ.to_string(),
                 group,
             });
@@ -2104,37 +2134,34 @@ fn proc_grok(
             Ok(r) => r,
             Err(_) => continue,
         };
-        let re = match Regex::new(&rx) {
+        let re = match javaregex::grok_compile(&rx) {
             Ok(r) => r,
             Err(_) => continue,
         };
-        if let Some(caps) = re.captures(&msg) {
-            if fields.is_empty() {
-                for name in re.capture_names().flatten() {
-                    if let Some(m) = caps.name(name) {
-                        set_source_path(source, name, json!(m.as_str()))?;
-                    }
+        if let Some(caps) = re.find(&msg) {
+            let mut seen: Vec<&str> = Vec::new();
+            for (i, name) in re.names.iter().enumerate().skip(1) {
+                let raw = match &caps[i] {
+                    Some(v) if !v.is_empty() => v.as_str(),
+                    _ => continue,
+                };
+                if seen.contains(&name.as_str()) {
+                    continue;
                 }
-            }
-            for f in &fields {
-                if let Some(m) = caps.name(&f.group) {
-                    let raw = m.as_str();
-                    let val = match f.typ.as_str() {
-                        "int" | "long" => raw
-                            .parse::<i64>()
-                            .map(|n| json!(n))
-                            .unwrap_or_else(|_| json!(raw)),
-                        "float" | "double" => raw
-                            .parse::<f64>()
-                            .ok()
-                            .and_then(|n| serde_json::Number::from_f64(n))
-                            .map(Value::Number)
-                            .unwrap_or_else(|| json!(raw)),
-                        "boolean" => json!(raw == "true"),
-                        _ => json!(raw),
-                    };
-                    set_source_path(source, &f.name, val)?;
-                }
+                seen.push(name);
+                let typ = fields.iter().find(|f| f.group == *name).map(|f| f.typ.as_str()).unwrap_or("string");
+                let val = match typ {
+                    "int" | "long" => raw.parse::<i64>().map(|n| json!(n)).unwrap_or_else(|_| json!(raw)),
+                    "float" | "double" => raw
+                        .parse::<f64>()
+                        .ok()
+                        .and_then(serde_json::Number::from_f64)
+                        .map(Value::Number)
+                        .unwrap_or_else(|| json!(raw)),
+                    "boolean" => json!(raw == "true"),
+                    _ => json!(raw),
+                };
+                set_source_path(source, name, val)?;
             }
             if cfg_bool(cfg, "trace_match", false) {
                 let ing = meta
@@ -2922,13 +2949,7 @@ fn proc_kv(
     };
     let fsplit = cfg_str(cfg, "field_split").unwrap_or("&");
     let vsplit = cfg_str(cfg, "value_split").unwrap_or("=");
-    let fre = Regex::new(fsplit).map_err(|_| parse_exception("invalid field_split"))?;
-    let vre = Regex::new(vsplit).map_err(|_| parse_exception("invalid value_split"))?;
-    let tokens: Vec<String> = fre
-        .split(&msg)
-        .map(|s| s.to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
+    let tokens = javaregex::java_split(&msg, fsplit, 0)?;
     if tokens.is_empty() {
         return Err(ApiError::bad(&format!(
             "field [{}] does not contain value_split [{}]",
@@ -2948,17 +2969,14 @@ fn proc_kv(
     let strip_brackets = cfg_bool(cfg, "strip_brackets", false);
     let mut parsed: Vec<(String, Value)> = Vec::new();
     for tok in &tokens {
-        let m = match vre.find(tok) {
-            Some(m) => m,
-            None => {
-                return Err(ApiError::bad(&format!(
-                    "field [{}] does not contain value_split [{}]",
-                    field, vsplit
-                )))
-            }
-        };
-        let key = &tok[..m.start()];
-        let val = &tok[m.end()..];
+        let kv = javaregex::java_split(tok, vsplit, 2)?;
+        if kv.len() != 2 {
+            return Err(ApiError::bad(&format!(
+                "field [{}] does not contain value_split [{}]",
+                field, vsplit
+            )));
+        }
+        let (key, val) = (kv[0].as_str(), kv[1].as_str());
         if key.is_empty() {
             return Err(ApiError::bad("path cannot be null nor empty"));
         }
@@ -3158,13 +3176,7 @@ fn proc_split_to_fields(
     };
     let sep = cfg_str(cfg, "separator").unwrap_or(",");
     let preserve = cfg_bool(cfg, "preserve_trailing", false);
-    let re = Regex::new(sep).map_err(|_| parse_exception("invalid separator"))?;
-    let mut parts: Vec<String> = re.split(&msg).map(|s| s.to_string()).collect();
-    if !preserve {
-        while parts.len() > 1 && parts.last().map(|s| s.is_empty()).unwrap_or(false) {
-            parts.pop();
-        }
-    }
+    let parts = javaregex::java_split(&msg, sep, if preserve { -1 } else { 0 })?;
     let target_fields = cfg_strings(cfg, "target_fields");
     for (i, name) in target_fields.iter().enumerate() {
         if let Some(v) = parts.get(i) {
@@ -3799,7 +3811,7 @@ fn proc_fail(
     meta: &Map<String, Value>,
     source: &Map<String, Value>,
 ) -> Result<bool, ApiError> {
-    let msg = resolve_template(cfg_str(cfg, "message").unwrap_or(""), meta, source);
+    let msg = render_template(cfg_str(cfg, "message").unwrap_or(""), meta, source)?;
     Err(ApiError::new("fail_processor_exception", &msg, 500))
 }
 
