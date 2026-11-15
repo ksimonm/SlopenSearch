@@ -42,6 +42,51 @@ fn values_of(v: Option<&Value>) -> Vec<Value> {
     }
 }
 
+/// What [`doc_field_values`] derives from the mapping alone, prepared once per
+/// mapping generation, field and prefix instead of once per document.
+struct FieldReader {
+    gen: u64,
+    field: String,
+    prefix: String,
+    /// The field with the prefix stripped, and with aliases resolved.
+    base: String,
+    rf: String,
+    def: Option<Map<String, Value>>,
+    ftype: String,
+    /// Unmapped under `dynamic: false`: no values.
+    unmapped_off: bool,
+}
+
+thread_local! {
+    static READERS: std::cell::RefCell<Vec<std::rc::Rc<FieldReader>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn field_reader(idx: &Index, field: &str, prefix: &str) -> std::rc::Rc<FieldReader> {
+    let gen = idx.mappings.generation();
+    if let Some(r) = READERS.with(|c| c.borrow().iter().find(|r| r.gen == gen && r.field == field && r.prefix == prefix).cloned()) {
+        return r;
+    }
+    let base = resolve_field(field, prefix).to_string();
+    let rf = crate::mapping::resolve_alias_field(idx, &base);
+    let def = crate::mapping::mapping_field_def(idx, &rf).cloned();
+    let unmapped_off = def.is_none()
+        && match idx.mappings.get("dynamic") {
+            Some(Value::Bool(false)) => true,
+            Some(Value::String(s)) => s == "false" || s == "false_allow_templates",
+            _ => false,
+        };
+    let ftype = def.as_ref().and_then(|d| d.get("type")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let r = std::rc::Rc::new(FieldReader { gen, field: field.to_string(), prefix: prefix.to_string(), base, rf, def, ftype, unmapped_off });
+    READERS.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() >= 8 {
+            c.remove(0);
+        }
+        c.push(r.clone());
+    });
+    r
+}
+
 fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<Value> {
     if let Some(n) = doc.get("__nest").and_then(|v| v.as_object()) {
         let p0 = n.get("path").and_then(|v| v.as_str()).unwrap_or("");
@@ -55,23 +100,16 @@ fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<
         }
         return vec![];
     }
-    let base = resolve_field(field, prefix);
-    let rf = crate::mapping::resolve_alias_field(idx, &base);
-    if is_under_nested_path(&rf) {
+    let r = field_reader(idx, field, prefix);
+    let (base, rf) = (r.base.as_str(), r.rf.as_str());
+    if is_under_nested_path(rf) {
         return vec![];
     }
-    if crate::mapping::mapping_field_def(idx, &rf).is_none() {
-        let dyn_off = match idx.mappings.get("dynamic") {
-            Some(Value::Bool(false)) => true,
-            Some(Value::String(s)) => s == "false" || s == "false_allow_templates",
-            _ => false,
-        };
-        if dyn_off {
-            return vec![];
-        }
+    if r.unmapped_off {
+        return vec![];
     }
     let mut vals = if rf != base {
-        values_of(agg_field_value(doc, &rf, ""))
+        values_of(agg_field_value(doc, rf, ""))
     } else {
         values_of(agg_field_value(doc, field, prefix))
     };
@@ -100,13 +138,14 @@ fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<
                 .map(|(_, dv)| dv)
         });
         if let Some(dv) = found {
-            if let Some(raw) = dv.get(&rf) {
+            if let Some(raw) = dv.get(rf) {
                 vals = values_of(Some(raw));
             }
         }
     }
-    if let Some(def) = crate::mapping::mapping_field_def(idx, &rf) {
-        if def.get("type").and_then(|v| v.as_str()) == Some("join") {
+    if let Some(def) = &r.def {
+        let ftype = r.ftype.as_str();
+        if ftype == "join" {
             vals = vals
                 .into_iter()
                 .map(|v| match v {
@@ -121,7 +160,6 @@ fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<
                 })
                 .collect();
         }
-        let ftype = def.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if ftype == "boolean" {
             vals = vals
                 .into_iter()
@@ -146,7 +184,7 @@ fn doc_field_values(idx: &Index, doc: &Value, field: &str, prefix: &str) -> Vec<
                 .collect();
         }
         if let Some(ign) = doc.get("_ignored").and_then(|v| v.as_array()) {
-            if ign.iter().any(|x| x.as_str() == Some(rf.as_str())) {
+            if ign.iter().any(|x| x.as_str() == Some(rf)) {
                 vals.clear();
             }
         }
