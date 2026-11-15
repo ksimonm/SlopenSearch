@@ -133,6 +133,8 @@ enum Node {
 pub struct JRegex {
     root: Node,
     pub groups: usize,
+    /// Named groups and their numbers.
+    pub names: Vec<(String, usize)>,
     #[allow(dead_code)]
     pub pattern: String,
 }
@@ -294,7 +296,7 @@ impl<'a> Parser<'a> {
                     }
                     self.i += 1;
                     if max < min {
-                        return Err(self.err("Illegal repetition range", at));
+                        return Err(self.err("Illegal repetition range", self.i - 1));
                     }
                     (min, max)
                 }
@@ -391,7 +393,14 @@ impl<'a> Parser<'a> {
                                     look = Some((true, true));
                                 }
                                 _ => {
+                                    // Pattern.groupname: an ASCII letter, then ASCII letters/digits, then '>'
                                     let ns = self.i;
+                                    if !self.peek().is_some_and(|c| c.is_ascii_alphabetic()) {
+                                        return Err(self.err(
+                                            "capturing group name does not start with a Latin letter",
+                                            self.i,
+                                        ));
+                                    }
                                     while let Some(ch) = self.peek() {
                                         if ch.is_ascii_alphanumeric() {
                                             self.i += 1;
@@ -403,6 +412,12 @@ impl<'a> Parser<'a> {
                                         return Err(self.err("named capturing group is missing trailing '>'", self.i));
                                     }
                                     let name: String = self.p[ns..self.i].iter().collect();
+                                    if self.names.iter().any(|(n, _)| *n == name) {
+                                        return Err(self.err(
+                                            &format!("Named capturing group <{}> is already defined", name),
+                                            self.i,
+                                        ));
+                                    }
                                     self.i += 1;
                                     self.groups += 1;
                                     capture = Some(self.groups);
@@ -542,7 +557,7 @@ impl<'a> Parser<'a> {
                     None => {
                         return Err(self.err(
                             &format!("Unknown character property name {{{}}}", name),
-                            self.i,
+                            self.i - 1,
                         ))
                     }
                 }
@@ -784,6 +799,10 @@ impl<'a> Parser<'a> {
         match lo {
             Err((p, neg)) => Ok(ClassItem::Pred(p, neg)),
             Ok(lo) => {
+                if self.peek() == Some('-') && self.i + 1 == self.p.len() {
+                    // Pattern.range reads the terminating 0 as the upper bound
+                    return Err(self.err("Illegal character range", self.p.len()));
+                }
                 if self.peek() == Some('-')
                     && self.p.get(self.i + 1).map(|c| *c != ']').unwrap_or(false)
                     && self.p.get(self.i + 1) != Some(&'[')
@@ -1011,20 +1030,53 @@ fn is_word_char(c: char) -> bool {
     uchar::is_letter_or_digit(c) || c == '_' || uchar::is_mark(c)
 }
 
-type Caps = Vec<Option<(usize, usize)>>;
+pub type Caps = Vec<Option<(usize, usize)>>;
 
 struct Matcher<'a> {
     text: &'a [char],
     caps: Caps,
     steps: usize,
+    limit: usize,
+    /// Stack address at the start of the match: the backtracking recursion
+    /// gives up (like an exhausted step budget) before it overflows.
+    stack_base: usize,
 }
 
 const STEP_LIMIT: usize = 5_000_000;
 
+/// Stack the recursion of one match may use.
+const STACK_BUDGET: usize = 1 << 20;
+
+fn stack_addr() -> usize {
+    let x = 0u8;
+    std::hint::black_box(&x) as *const u8 as usize
+}
+
+impl<'a> Matcher<'a> {
+    fn new(text: &'a [char], groups: usize, limit: usize) -> Self {
+        Matcher { text, caps: vec![None; groups + 1], steps: 0, limit, stack_base: stack_addr() }
+    }
+
+    /// Matches one char with a single-char node (None: not such a node).
+    fn single(&self, n: &Node, i: usize) -> Option<bool> {
+        let t = self.text;
+        Some(match n {
+            Node::Char(c, ci) => i < t.len() && chars_eq(t[i], *c, *ci),
+            Node::Any(dotall) => i < t.len() && (*dotall || !is_line_term(t[i])),
+            Node::Class(cls, ci, uni) => i < t.len() && class_match(cls, t[i], *ci, *uni),
+            _ => return None,
+        })
+    }
+}
+
 impl<'a> Matcher<'a> {
     fn m(&mut self, n: &Node, i: usize, k: &mut dyn FnMut(&mut Matcher<'a>, usize) -> bool) -> bool {
         self.steps += 1;
-        if self.steps > STEP_LIMIT {
+        if self.steps > self.limit {
+            return false;
+        }
+        if stack_addr().abs_diff(self.stack_base) > STACK_BUDGET {
+            self.steps = self.limit + 1;
             return false;
         }
         let t = self.text;
@@ -1169,6 +1221,35 @@ impl<'a> Matcher<'a> {
         i: usize,
         k: &mut dyn FnMut(&mut Matcher<'a>, usize) -> bool,
     ) -> bool {
+        if count == 0 && self.single(node, i).is_some() {
+            // a repeated single char: count the run, then backtrack over it
+            // without recursing per char
+            let mut n = 0u32;
+            while n < max {
+                self.steps += 1;
+                if self.steps > self.limit || self.single(node, i + n as usize) != Some(true) {
+                    break;
+                }
+                n += 1;
+            }
+            if n < min || self.steps > self.limit {
+                return false;
+            }
+            if greedy {
+                for c in (min..=n).rev() {
+                    if k(self, i + c as usize) {
+                        return true;
+                    }
+                }
+            } else {
+                for c in min..=n {
+                    if k(self, i + c as usize) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
         if greedy {
             if count < max {
                 let ok = self.m(node, i, &mut |s: &mut Matcher<'a>, j| {
@@ -1203,7 +1284,7 @@ impl JRegex {
         if flags & LITERAL != 0 {
             let ci = flags & CASE_INSENSITIVE != 0;
             let items = chars.iter().map(|c| Node::Char(*c, ci)).collect();
-            return Ok(JRegex { root: Node::Concat(items), groups: 0, pattern: pattern.to_string() });
+            return Ok(JRegex { root: Node::Concat(items), groups: 0, names: Vec::new(), pattern: pattern.to_string() });
         }
         let mut p = Parser { p: &chars, i: 0, flags, groups: 0, names: Vec::new(), pattern: pattern.to_string() };
         let root = p.parse_alt()?;
@@ -1211,13 +1292,13 @@ impl JRegex {
             // A stray ')'.
             return Err(p.err("Unmatched closing ')'", p.i.saturating_sub(1)));
         }
-        Ok(JRegex { root, groups: p.groups, pattern: pattern.to_string() })
+        Ok(JRegex { root, groups: p.groups, names: p.names, pattern: pattern.to_string() })
     }
 
     /// Finds the first match starting at or after `start`. Returns the
     /// capture groups (group 0 is the whole match).
     pub fn find_at(&self, text: &[char], start: usize) -> Option<Caps> {
-        let mut m = Matcher { text, caps: vec![None; self.groups + 1], steps: 0 };
+        let mut m = Matcher::new(text, self.groups, STEP_LIMIT);
         for s in start..=text.len() {
             for c in m.caps.iter_mut() {
                 *c = None;
@@ -1239,7 +1320,7 @@ impl JRegex {
 
     /// Whole-input match (`Matcher.matches()`).
     pub fn matches(&self, text: &[char]) -> bool {
-        let mut m = Matcher { text, caps: vec![None; self.groups + 1], steps: 0 };
+        let mut m = Matcher::new(text, self.groups, STEP_LIMIT);
         let n = text.len();
         m.m(&self.root, 0, &mut |_, j| j == n)
     }
@@ -1324,5 +1405,290 @@ impl JRegex {
         }
         out.extend(&text[last..]);
         out
+    }
+}
+
+/// The step budget of a matcher call ran out (a pattern that would
+/// backtrack for too long).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Exceeded;
+
+/// An error of a replacement string: (exception type, message).
+pub type ReplError = (&'static str, String);
+
+// Matcher-style entry points (java.util.regex.Matcher find / matches /
+// lookingAt, Pattern.split, appendReplacement) used by Painless and ingest.
+impl JRegex {
+    /// The number of a named capturing group.
+    pub fn group_index(&self, name: &str) -> Option<usize> {
+        self.names.iter().find(|(n, _)| n == name).map(|(_, g)| *g)
+    }
+
+    /// The first match at or after `start` (`Matcher.find(int)`), with at
+    /// most `limit` matcher steps. Look-behind sees the text before `start`.
+    pub fn find_from(&self, text: &[char], start: usize, limit: usize) -> Result<Option<Caps>, Exceeded> {
+        let mut m = Matcher::new(text, self.groups, limit);
+        for s in start..=text.len() {
+            for c in m.caps.iter_mut() {
+                *c = None;
+            }
+            let mut end = None;
+            if m.m(&self.root, s, &mut |_, j| {
+                end = Some(j);
+                true
+            }) {
+                m.caps[0] = Some((s, end.unwrap()));
+                return Ok(Some(m.caps));
+            }
+            if m.steps > limit {
+                return Err(Exceeded);
+            }
+        }
+        Ok(None)
+    }
+
+    /// An anchored match at 0: the whole text (`matches`, `full`) or a
+    /// prefix (`lookingAt`).
+    pub fn match_start(&self, text: &[char], full: bool, limit: usize) -> Result<Option<Caps>, Exceeded> {
+        let mut m = Matcher::new(text, self.groups, limit);
+        let n = text.len();
+        let mut end = None;
+        let ok = m.m(&self.root, 0, &mut |_, j| {
+            if full && j != n {
+                return false;
+            }
+            end = Some(j);
+            true
+        });
+        if ok {
+            m.caps[0] = Some((0, end.unwrap()));
+            return Ok(Some(m.caps));
+        }
+        if m.steps > limit {
+            return Err(Exceeded);
+        }
+        Ok(None)
+    }
+
+    /// `Pattern.split(input, limit)` (and so `String.split`).
+    pub fn split(&self, s: &str, limit: i64) -> Vec<String> {
+        let input: Vec<char> = s.chars().collect();
+        let mut index = 0usize;
+        let limited = limit > 0;
+        let mut list: Vec<String> = Vec::new();
+        let mut matched = false;
+        let mut pos = 0usize;
+        while pos <= input.len() {
+            let caps = match self.find_at(&input, pos) {
+                Some(c) => c,
+                None => break,
+            };
+            let (ms, me) = caps[0].unwrap();
+            pos = if me == ms { me + 1 } else { me };
+            if !limited || (list.len() as i64) < limit - 1 {
+                if index == 0 && ms == 0 && ms == me {
+                    continue;
+                }
+                list.push(input[index..ms].iter().collect());
+                index = me;
+                matched = true;
+            } else if list.len() as i64 == limit - 1 {
+                list.push(input[index..].iter().collect());
+                index = me;
+                matched = true;
+            }
+        }
+        if !matched || index == 0 {
+            return vec![s.to_string()];
+        }
+        if !limited || (list.len() as i64) < limit {
+            list.push(input[index..].iter().collect());
+        }
+        if limit == 0 {
+            while list.last().is_some_and(|x| x.is_empty()) {
+                list.pop();
+            }
+        }
+        list
+    }
+
+    /// Expands a replacement string for one match like
+    /// `Matcher.appendExpandedReplacement`.
+    pub fn expand_java(&self, repl: &str, text: &[char], caps: &Caps) -> Result<String, ReplError> {
+        let iae = |m: &str| ("illegal_argument_exception", m.to_string());
+        let r: Vec<char> = repl.chars().collect();
+        let mut out = String::new();
+        let mut i = 0;
+        while i < r.len() {
+            let c = r[i];
+            if c == '\\' {
+                i += 1;
+                if i < r.len() {
+                    out.push(r[i]);
+                    i += 1;
+                    continue;
+                }
+                return Err(iae("character to be escaped is missing"));
+            }
+            if c != '$' {
+                out.push(c);
+                i += 1;
+                continue;
+            }
+            i += 1;
+            if i >= r.len() {
+                return Err(iae("Illegal group reference: group index is missing"));
+            }
+            let g;
+            if r[i] == '{' {
+                let mut e = i + 1;
+                while e < r.len() && r[e].is_ascii_alphanumeric() {
+                    e += 1;
+                }
+                if e == i + 1 {
+                    return Err(iae("named capturing group has 0 length name"));
+                }
+                if e == r.len() || r[e] != '}' {
+                    return Err(iae("named capturing group is missing trailing '}'"));
+                }
+                let name: String = r[i + 1..e].iter().collect();
+                if r[i + 1].is_ascii_digit() {
+                    return Err(iae(&format!("capturing group name {{{}}} starts with digit character", name)));
+                }
+                g = match self.group_index(&name) {
+                    Some(g) => g,
+                    None => return Err(iae(&format!("No group with name {{{}}}", name))),
+                };
+                i = e + 1;
+            } else if r[i].is_ascii_digit() {
+                let mut n = r[i].to_digit(10).unwrap() as usize;
+                if n > self.groups {
+                    return Err(("index_out_of_bounds_exception", format!("No group {}", n)));
+                }
+                i += 1;
+                while i < r.len() && r[i].is_ascii_digit() {
+                    let nn = n * 10 + r[i].to_digit(10).unwrap() as usize;
+                    if nn > self.groups {
+                        break;
+                    }
+                    n = nn;
+                    i += 1;
+                }
+                g = n;
+            } else {
+                return Err(iae("Illegal group reference"));
+            }
+            if let Some((s, e)) = caps[g] {
+                out.extend(&text[s..e]);
+            }
+        }
+        Ok(out)
+    }
+
+    /// `Matcher.replaceAll` / `replaceFirst` with Java replacement rules.
+    pub fn replace_java(
+        &self,
+        s: &str,
+        repl: &str,
+        all: bool,
+        limit: usize,
+    ) -> Result<Result<String, ReplError>, Exceeded> {
+        let text: Vec<char> = s.chars().collect();
+        let mut out = String::new();
+        let mut last = 0;
+        let mut pos = 0;
+        while pos <= text.len() {
+            let caps = match self.find_from(&text, pos, limit)? {
+                Some(c) => c,
+                None => break,
+            };
+            let (ms, me) = caps[0].unwrap();
+            let r = match self.expand_java(repl, &text, &caps) {
+                Ok(r) => r,
+                Err(e) => return Ok(Err(e)),
+            };
+            out.extend(&text[last..ms]);
+            out.push_str(&r);
+            last = me;
+            pos = if me == ms { me + 1 } else { me };
+            if !all {
+                break;
+            }
+        }
+        out.extend(&text[last..]);
+        Ok(Ok(out))
+    }
+
+    /// Whether a look-behind has a branch of variable length (Oniguruma
+    /// rejects those; java.util.regex accepts them).
+    pub fn variable_lookbehind(&self) -> bool {
+        variable_lookbehind(&self.root)
+    }
+}
+
+fn variable_lookbehind(n: &Node) -> bool {
+    match n {
+        Node::Look { behind, node, .. } => {
+            if *behind {
+                let branches: Vec<&Node> = match node.as_ref() {
+                    Node::Alt(alts) => alts.iter().collect(),
+                    other => vec![other],
+                };
+                if branches.iter().any(|b| {
+                    let (lo, hi) = node_width(b);
+                    Some(lo) != hi
+                }) {
+                    return true;
+                }
+            }
+            variable_lookbehind(node)
+        }
+        Node::Group(_, x) | Node::Atomic(x) | Node::Repeat { node: x, .. } => variable_lookbehind(x),
+        Node::Concat(xs) | Node::Alt(xs) => xs.iter().any(variable_lookbehind),
+        _ => false,
+    }
+}
+
+/// The minimum and maximum match length (None: unbounded).
+fn node_width(n: &Node) -> (usize, Option<usize>) {
+    match n {
+        Node::Char(..) | Node::Any(_) | Node::Class(..) => (1, Some(1)),
+        Node::Concat(xs) => {
+            let (mut lo, mut hi) = (0, Some(0));
+            for x in xs {
+                let (l, h) = node_width(x);
+                lo += l;
+                hi = match (hi, h) {
+                    (Some(a), Some(b)) => Some(a + b),
+                    _ => None,
+                };
+            }
+            (lo, hi)
+        }
+        Node::Alt(xs) => {
+            let mut lo: Option<usize> = None;
+            let mut hi = Some(0);
+            for x in xs {
+                let (l, h) = node_width(x);
+                lo = Some(lo.map_or(l, |v| v.min(l)));
+                hi = match (hi, h) {
+                    (Some(a), Some(b)) => Some(a.max(b)),
+                    _ => None,
+                };
+            }
+            (lo.unwrap_or(0), hi)
+        }
+        Node::Group(_, x) | Node::Atomic(x) => node_width(x),
+        Node::Repeat { node, min, max, .. } => {
+            let (l, h) = node_width(node);
+            let lo = l * *min as usize;
+            match h {
+                Some(0) => (lo, Some(0)),
+                Some(h) if *max != u32::MAX => (lo, Some(h * *max as usize)),
+                _ => (lo, None),
+            }
+        }
+        Node::Backref(..) => (0, None),
+        _ => (0, Some(0)),
     }
 }

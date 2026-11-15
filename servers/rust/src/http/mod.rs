@@ -30,6 +30,7 @@ pub(crate) mod search_templates;
 pub(crate) mod shared;
 pub(crate) mod tasks_async;
 pub(crate) mod templates;
+pub(crate) mod xcontent;
 
 use axum::extract::State;
 use axum::http::{header, HeaderMap, StatusCode, Uri};
@@ -248,6 +249,7 @@ async fn handle_plain(store: Shared, request: axum::extract::Request) -> axum::r
             ct.as_str(),
             "application/json"
                 | "application/x-ndjson"
+                | "application/cbor"
                 | "application/yaml"
                 | "application/x-yaml"
                 | "text/yaml"
@@ -273,6 +275,8 @@ async fn handle_plain(store: Shared, request: axum::extract::Request) -> axum::r
             return resp;
         }
     }
+
+    xcontent::transcode_request(&mut req);
 
     for flag in ["pretty", "human", "error_trace"] {
         if let Some(v) = req.param(flag) {
@@ -379,27 +383,23 @@ async fn handle_plain(store: Shared, request: axum::extract::Request) -> axum::r
         if status >= 400 {
             body = resp::upper_case_unicode_escapes(&body);
         }
-        let acc = req
-            .headers
-            .get("accept")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
-        if req.param("format") == Some("yaml") || acc.contains("yaml") {
-            if let Ok(v) = serde_json::from_slice::<Value>(&body) {
-                parts
-                    .headers
-                    .insert("content-type", "application/yaml".parse().unwrap());
-                body = resp::to_yaml(&v).into_bytes();
+        match xcontent::response_format(&req) {
+            "yaml" => {
+                if let Ok(v) = serde_json::from_slice::<Value>(&body) {
+                    parts.headers.insert("content-type", "application/yaml".parse().unwrap());
+                    body = resp::to_yaml(&v).into_bytes();
+                }
             }
-        } else if acc.contains("application/smile") {
-            parts
-                .headers
-                .insert("content-type", "application/smile".parse().unwrap());
-        } else if acc.contains("application/cbor") {
-            parts
-                .headers
-                .insert("content-type", "application/cbor".parse().unwrap());
+            "cbor" => {
+                if let Ok(v) = serde_json::from_slice::<Value>(&body) {
+                    parts.headers.insert("content-type", "application/cbor".parse().unwrap());
+                    body = xcontent::to_cbor(&v);
+                }
+            }
+            "smile" => {
+                parts.headers.insert("content-type", "application/smile".parse().unwrap());
+            }
+            _ => {}
         }
         resp = axum::response::Response::from_parts(parts, axum::body::Body::from(body));
     }

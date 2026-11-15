@@ -1,3 +1,4 @@
+mod javaregex;
 pub(crate) mod script;
 
 use crate::errors::{err_response, json_response, ApiError};
@@ -350,21 +351,11 @@ fn validate_processor(p: &Value, _top: bool) -> Result<(), ApiError> {
     }
     if typ == "gsub" {
         if let Some(pat) = cfg_str(c, "pattern") {
-            if let Err(e) = Regex::new(pat) {
-                let detail = e.to_string();
-                let detail = if let Some(idx) = detail.find("regex parse error") {
-                    detail[idx + "regex parse error".len()..].trim_start_matches(':').trim()
-                } else {
-                    detail.as_str()
-                };
-                let msg = if detail.contains("unclosed character class") {
-                    "[pattern] Invalid regex pattern. Unclosed character class".to_string()
-                } else {
-                    format!("[pattern] Invalid regex pattern. {}", detail)
-                };
-                let mut err = parse_exception(&msg);
-                err.fields.insert("processor_type".to_string(), json!(typ));
-                return Err(err);
+            if let Err(e) = javaregex::compile_java(pat) {
+                let msg = format!("[pattern] Invalid regex pattern. {}", e.message());
+                return Err(parse_exception(&msg)
+                    .field("processor_type", json!(typ))
+                    .field("property_name", json!("pattern")));
             }
         }
     }
@@ -388,6 +379,13 @@ fn validate_processor(p: &Value, _top: bool) -> Result<(), ApiError> {
                 ));
                 e.fields.insert("processor_type".to_string(), json!(typ));
                 return Err(e);
+            }
+            if let Ok(expanded) = expand_grok(p, &defs, &mut Vec::new()) {
+                if let Err(msg) = javaregex::grok_compile(&expanded) {
+                    return Err(parse_exception(&format!("[patterns] Invalid regex pattern found in: [{}]. {}", p, msg))
+                        .field("processor_type", json!(typ))
+                        .field("property_name", json!("patterns")));
+                }
             }
         }
     }
@@ -1777,21 +1775,7 @@ fn proc_split(
     };
     let sep = cfg_str(cfg, "separator").unwrap_or(",");
     let preserve = cfg_bool(cfg, "preserve_trailing", false);
-    let mut parts: Vec<String> = if sep == "|" {
-        s.chars().map(|c| c.to_string()).collect()
-    } else {
-        match Regex::new(sep) {
-            Ok(re) => re.split(&s).map(|x| x.to_string()).collect(),
-            Err(_) => s.split(sep).map(|x| x.to_string()).collect(),
-        }
-    };
-    if s.is_empty() {
-        parts = vec![String::new()];
-    } else if !preserve {
-        while parts.len() > 1 && parts.last().map(|x| x.is_empty()).unwrap_or(false) {
-            parts.pop();
-        }
-    }
+    let parts = javaregex::java_split(&s, sep, if preserve { -1 } else { 0 })?;
     set_source_path(
         source,
         &target,
@@ -1860,9 +1844,7 @@ fn proc_gsub(
         .and_then(|v| v.as_str())
         .map(|s| resolve_template(s, meta, source))
         .unwrap_or_else(|| field.clone());
-    let re = Regex::new(cfg_str(cfg, "pattern").unwrap_or("")).map_err(|_| {
-        parse_exception("[pattern] Invalid regex pattern. Unclosed character class")
-    })?;
+    let re = javaregex::java_pattern(cfg_str(cfg, "pattern").unwrap_or(""))?;
     let repl = cfg_str(cfg, "replacement").unwrap_or("");
     let val = match source_get(source, &field) {
         Some(v) => v,
@@ -1878,9 +1860,7 @@ fn proc_gsub(
     };
     let do_one = |v: &Value| -> Result<Value, ApiError> {
         match v {
-            Value::String(s) => Ok(Value::String(
-                re.replace_all(s, repl as &str).to_string(),
-            )),
+            Value::String(s) => Ok(Value::String(javaregex::java_replace_all(&re, s, repl)?)),
             other => Err(ApiError::bad(&format!(
                 "field [{}] of type [{}] cannot be cast to [java.lang.String]",
                 field,
@@ -2032,7 +2012,6 @@ pub fn grok_patterns_json() -> Value {
 }
 
 struct GrokField {
-    name: String,
     typ: String,
     group: String,
 }
@@ -2075,7 +2054,6 @@ fn expand_grok(
                 ("agent", "string"),
             ] {
                 fields.push(GrokField {
-                    name: f.to_string(),
                     typ: t.to_string(),
                     group: f.to_string(),
                 });
@@ -2098,21 +2076,15 @@ fn expand_grok(
             out.push(')');
             continue;
         }
-        let group = field.replace('.', "_");
-        let group = if group.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
-            format!("g{}", group)
-        } else {
-            group
-        };
+        let group = field.to_string();
         if used.contains(&field.to_string()) {
             out.push_str("(?:");
             out.push_str(&rx);
             out.push(')');
         } else {
             used.push(field.to_string());
-            out.push_str(&format!("(?P<{}>{})", group, rx));
+            out.push_str(&format!("(?<{}>{})", group, rx));
             fields.push(GrokField {
-                name: field.to_string(),
                 typ: typ.to_string(),
                 group,
             });
@@ -2162,37 +2134,34 @@ fn proc_grok(
             Ok(r) => r,
             Err(_) => continue,
         };
-        let re = match Regex::new(&rx) {
+        let re = match javaregex::grok_compile(&rx) {
             Ok(r) => r,
             Err(_) => continue,
         };
-        if let Some(caps) = re.captures(&msg) {
-            if fields.is_empty() {
-                for name in re.capture_names().flatten() {
-                    if let Some(m) = caps.name(name) {
-                        set_source_path(source, name, json!(m.as_str()))?;
-                    }
+        if let Some(caps) = re.find(&msg) {
+            let mut seen: Vec<&str> = Vec::new();
+            for (i, name) in re.names.iter().enumerate().skip(1) {
+                let raw = match &caps[i] {
+                    Some(v) if !v.is_empty() => v.as_str(),
+                    _ => continue,
+                };
+                if seen.contains(&name.as_str()) {
+                    continue;
                 }
-            }
-            for f in &fields {
-                if let Some(m) = caps.name(&f.group) {
-                    let raw = m.as_str();
-                    let val = match f.typ.as_str() {
-                        "int" | "long" => raw
-                            .parse::<i64>()
-                            .map(|n| json!(n))
-                            .unwrap_or_else(|_| json!(raw)),
-                        "float" | "double" => raw
-                            .parse::<f64>()
-                            .ok()
-                            .and_then(|n| serde_json::Number::from_f64(n))
-                            .map(Value::Number)
-                            .unwrap_or_else(|| json!(raw)),
-                        "boolean" => json!(raw == "true"),
-                        _ => json!(raw),
-                    };
-                    set_source_path(source, &f.name, val)?;
-                }
+                seen.push(name);
+                let typ = fields.iter().find(|f| f.group == *name).map(|f| f.typ.as_str()).unwrap_or("string");
+                let val = match typ {
+                    "int" | "long" => raw.parse::<i64>().map(|n| json!(n)).unwrap_or_else(|_| json!(raw)),
+                    "float" | "double" => raw
+                        .parse::<f64>()
+                        .ok()
+                        .and_then(serde_json::Number::from_f64)
+                        .map(Value::Number)
+                        .unwrap_or_else(|| json!(raw)),
+                    "boolean" => json!(raw == "true"),
+                    _ => json!(raw),
+                };
+                set_source_path(source, name, val)?;
             }
             if cfg_bool(cfg, "trace_match", false) {
                 let ing = meta
@@ -2980,13 +2949,7 @@ fn proc_kv(
     };
     let fsplit = cfg_str(cfg, "field_split").unwrap_or("&");
     let vsplit = cfg_str(cfg, "value_split").unwrap_or("=");
-    let fre = Regex::new(fsplit).map_err(|_| parse_exception("invalid field_split"))?;
-    let vre = Regex::new(vsplit).map_err(|_| parse_exception("invalid value_split"))?;
-    let tokens: Vec<String> = fre
-        .split(&msg)
-        .map(|s| s.to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
+    let tokens = javaregex::java_split(&msg, fsplit, 0)?;
     if tokens.is_empty() {
         return Err(ApiError::bad(&format!(
             "field [{}] does not contain value_split [{}]",
@@ -3006,17 +2969,14 @@ fn proc_kv(
     let strip_brackets = cfg_bool(cfg, "strip_brackets", false);
     let mut parsed: Vec<(String, Value)> = Vec::new();
     for tok in &tokens {
-        let m = match vre.find(tok) {
-            Some(m) => m,
-            None => {
-                return Err(ApiError::bad(&format!(
-                    "field [{}] does not contain value_split [{}]",
-                    field, vsplit
-                )))
-            }
-        };
-        let key = &tok[..m.start()];
-        let val = &tok[m.end()..];
+        let kv = javaregex::java_split(tok, vsplit, 2)?;
+        if kv.len() != 2 {
+            return Err(ApiError::bad(&format!(
+                "field [{}] does not contain value_split [{}]",
+                field, vsplit
+            )));
+        }
+        let (key, val) = (kv[0].as_str(), kv[1].as_str());
         if key.is_empty() {
             return Err(ApiError::bad("path cannot be null nor empty"));
         }
@@ -3216,13 +3176,7 @@ fn proc_split_to_fields(
     };
     let sep = cfg_str(cfg, "separator").unwrap_or(",");
     let preserve = cfg_bool(cfg, "preserve_trailing", false);
-    let re = Regex::new(sep).map_err(|_| parse_exception("invalid separator"))?;
-    let mut parts: Vec<String> = re.split(&msg).map(|s| s.to_string()).collect();
-    if !preserve {
-        while parts.len() > 1 && parts.last().map(|s| s.is_empty()).unwrap_or(false) {
-            parts.pop();
-        }
-    }
+    let parts = javaregex::java_split(&msg, sep, if preserve { -1 } else { 0 })?;
     let target_fields = cfg_strings(cfg, "target_fields");
     for (i, name) in target_fields.iter().enumerate() {
         if let Some(v) = parts.get(i) {

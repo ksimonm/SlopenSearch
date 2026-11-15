@@ -302,6 +302,9 @@ fn write_yaml_scalar(buf: &mut String, v: &Value) {
                 buf.push_str(&i.to_string());
             } else if let Some(u) = n.as_u64() {
                 buf.push_str(&u.to_string());
+            } else if n.to_string().contains(['.', 'e', 'E']) {
+                // a double keeps its Double.toString text ("0.0")
+                buf.push_str(&n.to_string());
             } else if let Some(f) = n.as_f64() {
                 buf.push_str(&format_number(f));
             } else {
@@ -311,42 +314,6 @@ fn write_yaml_scalar(buf: &mut String, v: &Value) {
         Value::Bool(b) => buf.push_str(if *b { "true" } else { "false" }),
         Value::Null => buf.push_str("null"),
     }
-}
-
-pub fn parse_simple_yaml(text: &str) -> Map<String, Value> {
-    let mut out = Map::new();
-    let mut nesting = false;
-    let mut prev_key = String::new();
-    let mut child = Map::new();
-    for line in text.split('\n') {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        if !line.starts_with(' ') && trimmed.ends_with(':') {
-            if nesting {
-                out.insert(prev_key.clone(), Value::Object(child.clone()));
-                child.clear();
-            }
-            prev_key = trimmed.trim_end_matches(':').to_string();
-            nesting = true;
-            continue;
-        }
-        let target = if nesting { &mut child } else { &mut out };
-        if let Some(i) = trimmed.find(':') {
-            let key = &trimmed[..i];
-            let val = trimmed[i + 1..].trim();
-            let value = match val {
-                "" | "null" | "~" => Value::Null,
-                v => Value::String(v.trim_matches(|c| c == '"' || c == '\'').to_string()),
-            };
-            target.insert(key.to_string(), value);
-        }
-    }
-    if nesting {
-        out.insert(prev_key, Value::Object(child));
-    }
-    out
 }
 
 // ---------------------------------------------------------------- filter_path

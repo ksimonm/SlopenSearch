@@ -134,6 +134,9 @@ fn mixed_array_path(v: &Value, prefix: &str) -> Option<String> {
 // ------------------------------------------------------------- write targets
 
 fn parse_index_body(req: &Req) -> Result<Map<String, Value>, ApiError> {
+    if let Some(e) = crate::http::xcontent::doc_error(req) {
+        return Err(e);
+    }
     if let Err(e) = std::str::from_utf8(&req.body) {
         return Err(crate::errors::invalid_utf8_error(&req.body, &e));
     }
