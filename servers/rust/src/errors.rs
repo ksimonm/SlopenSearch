@@ -2,7 +2,6 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde_json::{json, Map, Value};
 
-use crate::resp::pretty_json;
 
 #[derive(Debug, Clone)]
 pub struct ApiError {
@@ -162,16 +161,6 @@ pub fn json_value_response(status: u16, v: &Value) -> Response {
 
 pub fn json_response(status: u16, v: Value) -> Response {
     json_value_response(status, &v)
-}
-
-pub fn pretty_response(status: u16, v: &Value) -> Response {
-    let body = pretty_json(v);
-    (
-        StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-        [(header::CONTENT_TYPE, "application/json; charset=UTF-8")],
-        body,
-    )
-        .into_response()
 }
 
 pub fn text_response(status: u16, content_type: &str, body: String) -> Response {

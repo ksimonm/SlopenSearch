@@ -151,28 +151,6 @@ pub(crate) fn merge_path(out: &mut Map<String, Value>, src: &Value, segs: &[Stri
     }
 }
 
-pub(crate) fn remove_path(out: &mut Map<String, Value>, segs: &[String]) {
-    if segs.is_empty() {
-        return;
-    }
-    let seg = &segs[0];
-    if segs.len() == 1 {
-        out.remove(seg);
-        return;
-    }
-    match out.get_mut(seg) {
-        Some(Value::Object(m)) => remove_path(m, &segs[1..]),
-        Some(Value::Array(a)) => {
-            for e in a.iter_mut() {
-                if let Some(m) = e.as_object_mut() {
-                    remove_path(m, &segs[1..]);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
 pub(crate) fn mapping_source_spec(idx: &Index) -> Option<Value> {
     let src = idx.mappings.get("_source")?.as_object()?;
     let inc = src

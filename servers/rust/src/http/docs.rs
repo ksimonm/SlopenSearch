@@ -6,7 +6,6 @@ use crate::search::fetch::{eval_doc, precompute_doc_values};
 use crate::http::shared::{
     parse_resolve_params, resolve_read_target, resolve_write_target, ResolveOpts2,
 };
-use crate::analysis::basic::analyze_with;
 use crate::model::{Index, Store};
 use crate::http::Req;
 
@@ -129,20 +128,6 @@ fn mixed_array_path(v: &Value, prefix: &str) -> Option<String> {
             None
         }
         _ => None,
-    }
-}
-
-pub fn resolve_index_name(
-    store: &mut Store,
-    name: &str,
-    for_write: bool,
-) -> Result<String, ApiError> {
-    if for_write {
-        let idx = resolve_write_target(store, name)?;
-        Ok(idx.name.clone())
-    } else {
-        let idx = resolve_read_target(store, name)?;
-        Ok(idx.name.clone())
     }
 }
 
@@ -874,19 +859,6 @@ fn get_source_spec(req: &Req) -> Option<Value> {
     m.insert("includes".to_string(), json!(includes));
     m.insert("excludes".to_string(), json!(excludes));
     Some(Value::Object(m))
-}
-
-fn is_stored_field(idx: &Index, name: &str) -> bool {
-    let mut cur = idx.mappings.get("properties");
-    for seg in name.split('.') {
-        let Some(node) = cur.and_then(|c| c.get(seg)) else { return false; };
-        let last = seg == name.rsplit('.').next().unwrap_or("");
-        if last {
-            return node.get("store").and_then(|v| v.as_bool()).unwrap_or(false);
-        }
-        cur = node.get("properties");
-    }
-    false
 }
 
 fn stored_fields_json(idx: &Index, doc: &Value, spec: &str) -> Map<String, Value> {
@@ -3298,20 +3270,6 @@ fn tv_index_stats_for_field(idx: &Index, field: &str) -> (Map<String, Value>, st
     (stats, terms_df, terms_ttf)
 }
 
-fn idx_mapping_fields(idx: &Index) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    if let Some(props) = idx.mappings.get("properties").and_then(|v| v.as_object()) {
-        for (f, m) in props {
-            if let Some(o) = m.as_object() {
-                if let Some(t) = o.get("type").and_then(|v| v.as_str()) {
-                    out.push((f.clone(), t.to_string()));
-                }
-            }
-        }
-    }
-    out
-}
-
 fn tv_term_value(
     term: &str,
     tokens: &[TvToken],
@@ -3769,83 +3727,6 @@ fn normalize_filtered_numbers(v: &mut Value) {
 }
 
 // ----------------------------------------------------------------- analyze
-
-/// Tokens of a `custom` analyzer defined in the index settings, for the token
-/// filters this server knows; `None` when `analyzer` is not such an analyzer.
-fn custom_analyzer_tokens(idx: &Index, analyzer: &str, text: &str) -> Option<Vec<String>> {
-    let base = format!("analysis.analyzer.{}", analyzer);
-    let get = |k: &str| crate::settings::find_setting(&idx.settings, &format!("{}.{}", base, k));
-    let tokenizer = get("tokenizer").and_then(|v| v.as_str())?.to_string();
-    if let Some(t) = get("type").and_then(|v| v.as_str()) {
-        if t != "custom" {
-            return None;
-        }
-    }
-    let filters: Vec<String> = match get("filter") {
-        Some(Value::Array(a)) => a.iter().filter_map(|f| f.as_str().map(|s| s.to_string())).collect(),
-        // list settings are kept as their JSON text
-        Some(Value::String(s)) => match serde_json::from_str::<Vec<String>>(s) {
-            Ok(list) => list,
-            Err(_) => s.split(',').map(|x| x.trim().to_string()).collect(),
-        },
-        _ => Vec::new(),
-    };
-    let mut toks = match tokenizer.as_str() {
-        "keyword" => vec![text.to_string()],
-        "whitespace" => text.split_whitespace().map(|s| s.to_string()).collect(),
-        _ => return None,
-    };
-    for f in &filters {
-        toks = match f.as_str() {
-            "lowercase" => toks.iter().map(|t| t.to_lowercase()).collect(),
-            "uppercase" => toks.iter().map(|t| t.to_uppercase()).collect(),
-            "reverse" => toks.iter().map(|t| t.chars().rev().collect()).collect(),
-            "asciifolding" => toks.iter().map(|t| crate::analysis::basic::asciifold(t)).collect(),
-            "trim" => toks.iter().map(|t| t.trim().to_string()).collect(),
-            _ => return None,
-        };
-    }
-    Some(toks)
-}
-
-pub fn handle_analyze(store: &mut Store, req: &Req, name: &str) -> Response {
-    if req.method != "POST" && req.method != "GET" {
-        return crate::http::method_not_allowed(req, &["POST", "GET"]);
-    }
-    if !name.is_empty() && !store.indices.contains_key(name) {
-        return err_response(crate::http::shared::err_index_not_found_named(name));
-    }
-    let body = match req.json_body() {
-        Ok(b) => b,
-        Err(e) => return err_response(e),
-    };
-    let text = body
-        .get("text")
-        .and_then(|t| t.as_str())
-        .unwrap_or("")
-        .to_string();
-    let analyzer = body
-        .get("analyzer")
-        .and_then(|a| a.as_str())
-        .or_else(|| body.get("tokenizer").and_then(|t| t.as_str()))
-        .unwrap_or("")
-        .to_string();
-    let custom = if name.is_empty() {
-        None
-    } else {
-        store
-            .indices
-            .get(name)
-            .and_then(|idx| custom_analyzer_tokens(idx, &analyzer, &text))
-    };
-    let tokens = custom.unwrap_or_else(|| analyze_with(&analyzer, &text));
-    let out: Vec<Value> = tokens
-        .iter()
-        .enumerate()
-        .map(|(i, t)| json!({"token": t, "position": i, "type": "<ALPHANUM>"}))
-        .collect();
-    json_response(200, json!({"tokens": out}))
-}
 
 // ------------------------------------------------------------ data streams
 

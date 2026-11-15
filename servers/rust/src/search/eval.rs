@@ -3,7 +3,6 @@
 
 use crate::mapping::{mapping_field_def, resolve_alias_field};
 use crate::mapping::fields::{preview_value, value_scalar_string, IndexCtx};
-use crate::resp::format_number;
 use crate::analysis::basic::{analyze, analyze_with, asciifold, auto_fuzziness, english_stem, levenshtein, simple_lower};
 use crate::errors::ApiError;
 use crate::jsonv::{to_f64, value_to_string};
@@ -385,7 +384,7 @@ pub fn validate_query(idx: &Index, q: &Map<String, Value>) -> Result<(), ApiErro
                         }
                         "boolean" => {
                             let ctx = IndexCtx::query_ctx();
-                            if ctx.parseBooleanValue("_value", &val).is_err() {
+                            if ctx.parse_boolean_value("_value", &val).is_err() {
                                 return Err(typed_value_error(ftype, &val));
                             }
                         }
@@ -566,7 +565,7 @@ pub fn parse_term_value(
     match ftype {
         "integer" | "long" | "short" | "byte" | "unsigned_long" => {
             let ctx = IndexCtx::query_ctx();
-            match ctx.parseIntValue("_value", ftype, def, v) {
+            match ctx.parse_int_value("_value", ftype, def, v) {
                 Ok(parsed) => Ok(vec![parsed]),
                 Err(_) => Err(ApiError::new(
                     "illegal_argument_exception",
@@ -577,7 +576,7 @@ pub fn parse_term_value(
         }
         "float" | "double" | "half_float" | "scaled_float" => {
             let ctx = IndexCtx::query_ctx();
-            match ctx.parseFloatValue("_value", ftype, def, v) {
+            match ctx.parse_float_value("_value", ftype, def, v) {
                 Ok(parsed) => Ok(vec![parsed]),
                 Err(_) => Err(ApiError::new(
                     "illegal_argument_exception",
@@ -588,21 +587,21 @@ pub fn parse_term_value(
         }
         "boolean" => {
             let ctx = IndexCtx::query_ctx();
-            match ctx.parseBooleanValue("_value", v) {
+            match ctx.parse_boolean_value("_value", v) {
                 Ok(parsed) => Ok(vec![parsed]),
                 Err(e) => Err(e),
             }
         }
         "date" | "date_nanos" => {
             let ctx = IndexCtx::query_ctx();
-            match ctx.parseDateValue("_value", ftype, def, v) {
+            match ctx.parse_date_value("_value", ftype, def, v) {
                 Ok(parsed) => Ok(vec![parsed]),
                 Err(e) => Err(e),
             }
         }
         "ip" => {
             let ctx = IndexCtx::query_ctx();
-            match ctx.parseIPValue("_value", v) {
+            match ctx.parse_ip_value("_value", v) {
                 Ok(parsed) => Ok(vec![parsed]),
                 Err(e) => Err(e),
             }
@@ -612,10 +611,10 @@ pub fn parse_term_value(
             let ctx = IndexCtx::query_ctx();
             let base = ftype.trim_end_matches("_range");
             match base {
-                "date" => Ok(vec![ctx.parseDateValue("_value", "date", def, v)?]),
-                "ip" => Ok(vec![ctx.parseIPValue("_value", v)?]),
-                "integer" | "long" => Ok(vec![ctx.parseIntValue("_value", base, def, v)?]),
-                "float" | "double" => Ok(vec![ctx.parseFloatValue("_value", base, def, v)?]),
+                "date" => Ok(vec![ctx.parse_date_value("_value", "date", def, v)?]),
+                "ip" => Ok(vec![ctx.parse_ip_value("_value", v)?]),
+                "integer" | "long" => Ok(vec![ctx.parse_int_value("_value", base, def, v)?]),
+                "float" | "double" => Ok(vec![ctx.parse_float_value("_value", base, def, v)?]),
                 _ => Ok(vec![v.clone()]),
             }
         }
@@ -776,7 +775,7 @@ pub fn parse_query_date(
             }
         }
     }
-    match ctx.parseDateValue("_value", typ, def, &scalar) {
+    match ctx.parse_date_value("_value", typ, def, &scalar) {
         Ok(parsed) => Ok(parsed),
         Err(e) => Err(ApiError::new(
             "search_phase_execution_exception",
@@ -1705,7 +1704,7 @@ impl<'a> QueryCtx<'a> {
                         return Ok(v.clone());
                     }
                     let ctx = IndexCtx::query_ctx();
-                    ctx.parseIPValue(field, v)
+                    ctx.parse_ip_value(field, v)
                 }
                 "integer" | "long" | "short" | "byte" | "unsigned_long" | "integer_range"
                 | "long_range" | "float" | "double" | "half_float" | "scaled_float"
@@ -1716,7 +1715,7 @@ impl<'a> QueryCtx<'a> {
                         if v.is_number() {
                             Ok(v.clone())
                         } else {
-                            ctx.parseIntValue(field, base, &def, v)
+                            ctx.parse_int_value(field, base, &def, v)
                         }
                     } else if matches!(base, "float" | "double" | "half_float" | "scaled_float") {
                         let raw = match v {
@@ -1734,7 +1733,7 @@ impl<'a> QueryCtx<'a> {
                             None => Err(typed_value_error(&ftype, v)),
                         }
                     } else {
-                        ctx.parseFloatValue(field, base, &def, v)
+                        ctx.parse_float_value(field, base, &def, v)
                     }
                 }
                 "keyword" => Ok(crate::mapping::fields::normalize_query_value(self.idx, field, v)),
@@ -3824,10 +3823,6 @@ const STOP_WORDS: &[&str] = &[
     "their", "then", "there", "these", "they", "this", "to", "was", "will", "with",
 ];
 
-fn tokenize_positions(text: &str) -> Vec<String> {
-    analyze(text)
-}
-
 pub(crate) fn analyze_positions(analyzer: &str, text: &str) -> Vec<(String, usize)> {
     if analyzer == "keyword" {
         return vec![(text.to_string(), 0)];
@@ -4079,21 +4074,6 @@ pub fn minimum_should_match_checked(spec: &Value, clause_count: usize) -> Result
     Ok(required.max(1) as usize)
 }
 
-pub fn contains_subsequence(hay: &[String], needle: &[String]) -> bool {
-    if needle.is_empty() {
-        return false;
-    }
-    if needle.len() > hay.len() {
-        return false;
-    }
-    for i in 0..=(hay.len() - needle.len()) {
-        if hay[i..i + needle.len()] == *needle {
-            return true;
-        }
-    }
-    false
-}
-
 fn replace_unescaped_at(pattern: &str) -> String {
     let mut out = String::new();
     let mut esc = false;
@@ -4166,31 +4146,6 @@ pub fn wildcard_regex(pattern: &str) -> Regex {
     }
     b.push('$');
     Regex::new(&b).unwrap_or_else(|_| Regex::new("^$").unwrap())
-}
-
-pub fn valid_cidr(s: &str) -> bool {
-    let mut parts = s.splitn(2, '/');
-    let net = parts.next().unwrap_or("");
-    let len: u32 = match parts.next().and_then(|l| l.parse().ok()) {
-        Some(l) => l,
-        None => return false,
-    };
-    let bytes = match ip_to_bytes(net) {
-        Some(b) => b,
-        None => return false,
-    };
-    len <= (bytes.len() * 8) as u32
-}
-
-pub fn value_float(v: &Value) -> f64 {
-    to_f64(v).unwrap_or(0.0)
-}
-
-pub fn debug_number(v: &Value) -> String {
-    match v {
-        Value::Number(n) => format_number(n.as_f64().unwrap_or(0.0)),
-        other => preview_value(other),
-    }
 }
 
 pub fn is_integer_kind(t: &str) -> bool {

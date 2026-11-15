@@ -699,34 +699,6 @@ fn date_bucket_start(ms: i64, fixed: Option<i64>, cal: Option<&str>) -> i64 {
     }
 }
 
-fn date_next_key(k: i64, fixed: Option<i64>, cal: Option<&str>) -> i64 {
-    if let Some(step) = fixed {
-        return k + step;
-    }
-    match cal.unwrap_or("day") {
-        "year" => {
-            let (y, _m, _d) = civil_from_days(k.div_euclid(86_400_000));
-            month_start_ms(y + 1, 1)
-        }
-        "quarter" => add_months_ms(k, 3),
-        "month" => add_months_ms(k, 1),
-        "week" => k + 7 * 86_400_000,
-        "hour" => k + 3_600_000,
-        "minute" => k + 60_000,
-        "second" => k + 1000,
-        _ => k + 86_400_000,
-    }
-}
-
-pub fn eval_aggs(
-    aggs: &Map<String, Value>,
-    docs: &[&Value],
-    idx: &Index,
-    prefix: &str,
-) -> Result<Value, ApiError> {
-    eval_aggs_typed(aggs, docs, idx, prefix, false)
-}
-
 pub fn eval_aggs_root(
     aggs: &Map<String, Value>,
     docs: &[&Value],
@@ -7751,26 +7723,6 @@ fn filters_agg(
             400,
         )),
     }
-}
-
-fn nested_elements(doc: &Value, path: &str) -> Vec<Value> {
-    let mut elems: Vec<Value> = vec![];
-    for part in path.split('.') {
-        if elems.is_empty() {
-            if let Some(Value::Array(a)) = doc.get(part) {
-                elems.extend(a.iter().cloned());
-            }
-        } else {
-            let mut next = vec![];
-            for e in &elems {
-                if let Some(Value::Array(a)) = e.get(part) {
-                    next.extend(a.iter().cloned());
-                }
-            }
-            elems = next;
-        }
-    }
-    elems
 }
 
 fn nested_agg(

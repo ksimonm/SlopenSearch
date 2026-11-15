@@ -10,7 +10,7 @@ use crate::errors::ApiError;
 use crate::resp::{format_number, glob_match};
 use crate::jsonv::stringify_scalar;
 use crate::model::{DataStreamInfo, Index, Store, VERSION_CREATED};
-use crate::settings::{find_setting, settings_value_int, settings_value_string};
+use crate::settings::{settings_value_int, settings_value_string};
 use crate::http::Req;
 
 // ---------------------------------------------------------------- name rules
@@ -1102,22 +1102,6 @@ pub fn settings_view(
     Some(Value::Object(out))
 }
 
-pub fn merge_settings(dst: &mut Map<String, Value>, src: &Map<String, Value>) {
-    for (k, v) in src {
-        if let Value::Object(m) = v {
-            let entry = dst
-                .entry(k.clone())
-                .or_insert_with(|| Value::Object(Map::new()));
-            if !entry.is_object() {
-                *entry = Value::Object(Map::new());
-            }
-            merge_settings(entry.as_object_mut().unwrap(), m);
-        } else {
-            dst.insert(k.clone(), v.clone());
-        }
-    }
-}
-
 pub fn normalize_alias_def(def: &Map<String, Value>) -> Map<String, Value> {
     let mut out: Map<String, Value> = def.clone();
     if let Some(r) = out.get("routing").cloned() {
@@ -1901,15 +1885,6 @@ fn validate_props_shared(props: &Map<String, Value>) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-pub fn param_int(req: &Req, name: &str) -> Option<i64> {
-    req.param(name)
-        .and_then(|v| if v.is_empty() { None } else { v.parse::<i64>().ok() })
-}
-
-pub fn float_setting(idx: &Index, key: &str) -> Option<f64> {
-    find_setting(&idx.settings, key).and_then(|v| crate::jsonv::to_f64(v))
 }
 
 pub fn _unused(_: &dyn Fn() -> String, _: &str) -> String {

@@ -2,7 +2,7 @@
 
 use super::fetch::*;
 use crate::search::eval::{integer_of, QueryCtx};
-use crate::mapping::{mapping_field_def, resolve_alias_field};
+use crate::mapping::mapping_field_def;
 use crate::errors::ApiError;
 use crate::jsonv::{field_value, to_f64, value_to_string};
 use crate::model::{Index, Store};
@@ -48,23 +48,6 @@ pub(crate) fn compare_sort_values(a: &Value, b: &Value) -> Ordering {
     let as_ = value_to_string(a).unwrap_or_default();
     let bs = value_to_string(b).unwrap_or_default();
     as_.cmp(&bs)
-}
-
-pub(crate) fn parse_sort(spec: &Value) -> (String, bool) {
-    match spec {
-        Value::String(s) => (s.clone(), false),
-        Value::Object(m) => {
-            for (k, v) in m {
-                if k == "_score" {
-                    continue;
-                }
-                let dir = value_to_string(v).unwrap_or_default();
-                return (k.clone(), dir == "desc");
-            }
-            (String::new(), false)
-        }
-        _ => (String::new(), false),
-    }
 }
 
 #[derive(Clone)]
@@ -830,35 +813,4 @@ pub(crate) fn sort_after_valid(sp: &SortSpec, v: &Value, numeric: bool) -> bool 
         return true;
     }
     text.parse::<f64>().is_ok()
-}
-
-pub(crate) fn sort_value(store: &Store, h: &MultiHit, field: &str, desc: bool) -> Option<Value> {
-    match field {
-        "_score" => return Some(json!(h.score)),
-        "_id" => return Some(json!(h.id)),
-        _ => {}
-    }
-    let idx = &store.indices[&h.idx_name];
-    let mut field = field.to_string();
-    if let Some(def) = mapping_field_def(idx, &field) {
-        if def.get("type").and_then(|t| t.as_str()) == Some("alias") {
-            field = resolve_alias_field(idx, &field);
-        }
-    }
-    let vals = idx.doc_values.get(&h.id)?;
-    let list = vals.get(&field)?;
-    let list = crate::search::eval::array_values(list);
-    if list.is_empty() {
-        return None;
-    }
-    if list.len() == 1 {
-        return Some(list[0].clone());
-    }
-    let mut sorted = list;
-    sorted.sort_by(compare_sort_values);
-    if desc {
-        sorted.pop()
-    } else {
-        sorted.into_iter().next()
-    }
 }

@@ -83,32 +83,6 @@ pub(crate) fn search_phase_error(reason: &str) -> ApiError {
     e
 }
 
-pub fn check_doc_values_loadable(idx: &Index, field: &str) -> Option<ApiError> {
-    let def = mapping_field_def(idx, field)?;
-    let ftype = def.get("type").and_then(|t| t.as_str()).unwrap_or("");
-    if let Some(false) = def.get("doc_values").and_then(|d| d.as_bool()) {
-        let reason = format!(
-            "Can't load fielddata on [{}] because fielddata is unsupported on fields of type [{}]. Use doc values instead.",
-            field, ftype
-        );
-        return Some(search_phase_error(&reason));
-    }
-    if ftype == "text" {
-        let fd = def
-            .get("fielddata")
-            .and_then(|d| d.as_bool())
-            .unwrap_or(false);
-        if !fd {
-            let reason = format!(
-                "Fielddata is disabled on text fields by default. Set fielddata=true on [{}] in order to load field data by uninverting the inverted index. Note that this can use significant memory.",
-                field
-            );
-            return Some(search_phase_error(&reason));
-        }
-    }
-    None
-}
-
 pub(crate) struct FieldSpec {
     pub(crate) name: String,
     pub(crate) format: String,

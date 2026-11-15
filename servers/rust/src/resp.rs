@@ -1,4 +1,4 @@
-use serde_json::{Map, Number, Value};
+use serde_json::{Map, Value};
 
 pub fn format_number(f: f64) -> String {
     if f == (f.trunc()) && f < 1e15 && f > -1e15 {
@@ -326,16 +326,6 @@ pub fn parse_simple_yaml(text: &str) -> Map<String, Value> {
         out.insert(prev_key, Value::Object(child));
     }
     out
-}
-
-pub fn num(v: f64) -> Value {
-    if v == v.trunc() && v.abs() < 9e15 {
-        Value::Number(Number::from(v as i64))
-    } else {
-        Number::from_f64(v)
-            .map(Value::Number)
-            .unwrap_or(Value::Null)
-    }
 }
 
 // ---------------------------------------------------------------- filter_path

@@ -3084,23 +3084,6 @@ impl<'a> QueryCtx<'a> {
     }
 }
 
-fn span_field_term(body: &Value) -> Result<(String, String), ApiError> {
-    let bm = match body.as_object() {
-        Some(m) => m,
-        None => return Err(err_parsing("span query malformed")),
-    };
-    let (field, val) = match single_entry(bm) {
-        Some((k, v)) => (k.clone(), v.clone()),
-        None => return Err(err_parsing("span query malformed")),
-    };
-    let term = if let Some(m) = val.as_object() {
-        m.get("value").and_then(value_to_string).unwrap_or_default()
-    } else {
-        value_to_string(&val).unwrap_or_default()
-    };
-    Ok((field, term))
-}
-
 impl<'a> QueryCtx<'a> {
     fn span_match(&self, field: &str, term: &str) -> Result<bool, ApiError> {
         Ok(self.eval_term(field, &Value::String(term.to_string()), 1.0)?.0)
@@ -3337,42 +3320,6 @@ fn shape_contains_shape(container: &GeoShape, inner: &GeoShape) -> bool {
         }
     }
     true
-}
-
-fn shape_intersects(gs: &GeoShape, lat: f64, lon: f64) -> bool {
-    match gs.typ.as_str() {
-        "point" => lat == gs.lat && lon == gs.lon,
-        "envelope" => lat <= gs.top && lat >= gs.bot && lon >= gs.left && lon <= gs.right,
-        "circle" => haversine_meters(gs.lat, gs.lon, lat, lon) <= gs.radius_m,
-        "polygon" => {
-            let mut inside = false;
-            let n = gs.points.len();
-            if n == 0 {
-                return false;
-            }
-            let mut j = n - 1;
-            for i in 0..n {
-                let (yi, xi) = gs.points[i];
-                let (yj, xj) = gs.points[j];
-                if (yi > lat) != (yj > lat) && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi {
-                    inside = !inside;
-                }
-                j = i;
-            }
-            inside
-        }
-        _ => false,
-    }
-}
-
-fn shape_points(gs: &GeoShape) -> Vec<(f64, f64)> {
-    match gs.typ.as_str() {
-        "point" => vec![(gs.lat, gs.lon)],
-        "envelope" => vec![(gs.top, gs.left), (gs.bot, gs.right)],
-        "circle" => vec![(gs.lat, gs.lon)],
-        "polygon" => gs.points.clone(),
-        _ => Vec::new(),
-    }
 }
 
 fn numeric_int(v: &Value) -> usize {
@@ -4784,19 +4731,6 @@ fn rewrite_qs_fields(q: &Map<String, Value>, field: &str) -> Map<String, Value> 
         }
     }
     out
-}
-
-fn multi_field_query(kind: &str, fields: &[String], value: &str) -> Map<String, Value> {
-    let mut shoulds = Vec::new();
-    for f in fields {
-        let (name, _) = strip_field_boost(f);
-        let mut inner = Map::new();
-        inner.insert(name, Value::String(value.to_string()));
-        let mut q = Map::new();
-        q.insert(kind.to_string(), Value::Object(inner));
-        shoulds.push(Value::Object(q));
-    }
-    bool_query("should", shoulds, 0)
 }
 
 fn lint_value(v: &str) -> Value {

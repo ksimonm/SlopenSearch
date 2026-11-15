@@ -228,7 +228,7 @@ fn num_f64(f: f64) -> Value {
 }
 
 impl IndexCtx {
-    pub(crate) fn parseIntValue(
+    pub(crate) fn parse_int_value(
         &self,
         name: &str,
         typ: &str,
@@ -253,7 +253,7 @@ impl IndexCtx {
                         }
                     }
                     if let Some(i) = n.as_i64() {
-                        return self.checkIntRange(name, typ, i, &num_i64(i));
+                        return self.check_int_range(name, typ, i, &num_i64(i));
                     }
                     if let Some(f) = n.as_f64() {
                         if f.fract() != 0.0 {
@@ -268,7 +268,7 @@ impl IndexCtx {
                                 ),
                             ));
                         }
-                        return self.checkIntRange(name, typ, f as i64, &num_f64(f));
+                        return self.check_int_range(name, typ, f as i64, &num_f64(f));
                     }
                 }
                 let s = number_string(n);
@@ -285,7 +285,7 @@ impl IndexCtx {
                         }
                     }
                 }
-                let res = self.parseIntString(name, typ, def, &s, coerce, false);
+                let res = self.parse_int_string(name, typ, def, &s, coerce, false);
                 if typ != "byte" && typ != "unsigned_long" {
                     if let Err(mut e) = res {
                         if let Some(cb) = e.caused_by.as_mut() {
@@ -310,7 +310,7 @@ impl IndexCtx {
             )),
             Value::String(s) => {
                 let trim = !matches!(typ, "long" | "unsigned_long");
-                self.parseIntString(name, typ, def, s, coerce, trim)
+                self.parse_int_string(name, typ, def, s, coerce, trim)
             }
             _ => Err(self.field_value_error(
                 name,
@@ -322,7 +322,7 @@ impl IndexCtx {
         }
     }
 
-    fn parseIntFloat(
+    fn parse_int_float(
         &self,
         name: &str,
         typ: &str,
@@ -338,10 +338,10 @@ impl IndexCtx {
                 &format!("{} cannot be converted to Integer without data loss", format_number(f)),
             ));
         }
-        self.checkIntRange(name, typ, f as i64, &num_f64(f))
+        self.check_int_range(name, typ, f as i64, &num_f64(f))
     }
 
-    fn checkIntRange(
+    fn check_int_range(
         &self,
         name: &str,
         typ: &str,
@@ -399,7 +399,7 @@ impl IndexCtx {
         Ok(num_i64(iv))
     }
 
-    fn parseIntString(
+    fn parse_int_string(
         &self,
         name: &str,
         typ: &str,
@@ -460,7 +460,7 @@ impl IndexCtx {
             }
         }
         match st.parse::<i64>() {
-            Ok(iv) => self.checkIntRange(name, typ, iv, &num_i64(iv)),
+            Ok(iv) => self.check_int_range(name, typ, iv, &num_i64(iv)),
             Err(e) => {
                 if *e.kind() == std::num::IntErrorKind::PosOverflow
                     || *e.kind() == std::num::IntErrorKind::NegOverflow
@@ -480,7 +480,7 @@ impl IndexCtx {
                 if is_integer_kind(typ) {
                     if let Ok(f) = st.parse::<f64>() {
                         let iv = f as i64;
-                        return self.checkIntRange(name, typ, iv, &num_f64(f));
+                        return self.check_int_range(name, typ, iv, &num_f64(f));
                     }
                     let cause_type = if typ == "long" {
                         "illegal_argument_exception"
@@ -506,7 +506,7 @@ impl IndexCtx {
         }
     }
 
-    pub(crate) fn parseFloatValue(
+    pub(crate) fn parse_float_value(
         &self,
         name: &str,
         typ: &str,
@@ -639,7 +639,7 @@ impl IndexCtx {
         }
     }
 
-    pub(crate) fn parseBooleanValue(
+    pub(crate) fn parse_boolean_value(
         &self,
         name: &str,
         v: &Value,
@@ -693,7 +693,7 @@ impl IndexCtx {
         }
     }
 
-    pub(crate) fn parseDateValue(
+    pub(crate) fn parse_date_value(
         &self,
         name: &str,
         typ: &str,
@@ -818,7 +818,7 @@ impl IndexCtx {
         }
     }
 
-    pub(crate) fn parseIPValue(&self, name: &str, v: &Value) -> Result<Value, ApiError> {
+    pub(crate) fn parse_ip_value(&self, name: &str, v: &Value) -> Result<Value, ApiError> {
         let s = match value_to_string(v) {
             Some(s) => s,
             None => {
@@ -1292,7 +1292,7 @@ fn float32_from_half(h: u16) -> f32 {
 // ---------------------------------------------------------------------------
 
 impl IndexCtx {
-    fn indexRawField(
+    fn index_raw_field(
         &mut self,
         path: &str,
         def: &mut Map<String, Value>,
@@ -1308,7 +1308,7 @@ impl IndexCtx {
             .map(|p| p.is_object())
             .unwrap_or(false);
         if typ == "object" || typ == "nested" {
-            return self.indexObject(path, def, raw);
+            return self.index_object(path, def, raw);
         }
         if typ == "knn_vector" {
             return match crate::mapping::knn_index::parse_doc_vector(path, def, raw, self.knn_index) {
@@ -1438,7 +1438,7 @@ impl IndexCtx {
                 Err(e) => {
                     if ignore_malformed {
                         if !v.is_object() {
-                            self.addIgnored(path);
+                            self.add_ignored(path);
                         }
                         continue;
                     }
@@ -1581,13 +1581,13 @@ impl IndexCtx {
         Ok(())
     }
 
-    pub fn copyTo(&mut self, target: &str, vals: &[Value]) {
+    pub fn copy_to(&mut self, target: &str, vals: &[Value]) {
         self.copy_targets.insert(target.to_string());
         let entry = self.values.entry(target.to_string()).or_default();
         entry.extend(vals.iter().cloned());
     }
 
-    pub fn addIgnored(&mut self, path: &str) {
+    pub fn add_ignored(&mut self, path: &str) {
         if !self.ignored_set.contains(path) {
             self.ignored_set.insert(path.to_string());
             self.ignored.push(path.to_string());
@@ -1632,14 +1632,14 @@ impl IndexCtx {
                 )),
             },
             "integer" | "long" | "short" | "byte" | "unsigned_long" => {
-                self.parseIntValue(path, typ, def, v)
+                self.parse_int_value(path, typ, def, v)
             }
             "float" | "double" | "half_float" | "scaled_float" => {
-                self.parseFloatValue(path, typ, def, v)
+                self.parse_float_value(path, typ, def, v)
             }
-            "boolean" => self.parseBooleanValue(path, v),
-            "date" | "date_nanos" => self.parseDateValue(path, typ, def, v),
-            "ip" => self.parseIPValue(path, v),
+            "boolean" => self.parse_boolean_value(path, v),
+            "date" | "date_nanos" => self.parse_date_value(path, typ, def, v),
+            "ip" => self.parse_ip_value(path, v),
             "binary" => match value_scalar_string(v) {
                 Some(s) => {
                     let needs_check = def.get("store").and_then(|x| x.as_bool()) == Some(true)
@@ -1667,22 +1667,22 @@ impl IndexCtx {
                     "malformed",
                 )),
             },
-            "token_count" => self.parseTokenCount(path, def, v),
+            "token_count" => self.parse_token_count(path, def, v),
             "integer_range" | "float_range" | "long_range" | "double_range" | "date_range"
-            | "ip_range" => self.parseRangeValue(path, typ, def, v),
-            "geo_point" => self.parseGeoPoint(path, def, v),
-            "geo_shape" => self.parseGeoShape(path, v),
+            | "ip_range" => self.parse_range_value(path, typ, def, v),
+            "geo_point" => self.parse_geo_point(path, def, v),
+            "geo_shape" => self.parse_geo_shape(path, v),
             "completion" => crate::mapping::completion::parse_completion(path, def, v, &self.doc),
-            "rank_feature" => self.parseRankFeature(path, v),
-            "rank_features" => self.parseRankFeatures(path, v),
+            "rank_feature" => self.parse_rank_feature(path, v),
+            "rank_features" => self.parse_rank_features(path, v),
             "constant_keyword_default" => Ok(Value::Null),
             "alias" => Ok(Value::Null),
-            "join" => self.parseJoin(path, def, v),
+            "join" => self.parse_join(path, def, v),
             "percolator" => Ok(v.clone()),
             "derived" => Ok(Value::Null),
             _ => {
                 if is_numeric_type_name(typ) {
-                    return self.parseFloatValue(path, typ, def, v);
+                    return self.parse_float_value(path, typ, def, v);
                 }
                 match value_scalar_string(v) {
                     Some(s) => Ok(Value::String(s)),
@@ -1698,7 +1698,7 @@ impl IndexCtx {
         }
     }
 
-    fn indexObject(
+    fn index_object(
         &mut self,
         path: &str,
         def: &mut Map<String, Value>,
@@ -1713,12 +1713,12 @@ impl IndexCtx {
                 other => other.to_string(),
             };
         }
-        let result = self.indexObjectInner(path, def, raw);
+        let result = self.index_object_inner(path, def, raw);
         self.dyn_setting = saved;
         result
     }
 
-    fn indexObjectInner(
+    fn index_object_inner(
         &mut self,
         path: &str,
         def: &mut Map<String, Value>,
@@ -1734,7 +1734,7 @@ impl IndexCtx {
         match raw {
             Value::Array(a) => {
                 for e in a {
-                    self.indexObject(path, def, e)?;
+                    self.index_object(path, def, e)?;
                 }
                 Ok(())
             }
@@ -1749,7 +1749,7 @@ impl IndexCtx {
                     *props = Value::Object(Map::new());
                 }
                 let props = props.as_object_mut().unwrap();
-                self.indexObjectMap(path, props, m)
+                self.index_object_map(path, props, m)
             }
             _ => Err(ApiError::new(
                 "mapper_parsing_exception",
@@ -1762,7 +1762,7 @@ impl IndexCtx {
         }
     }
 
-    fn indexObjectMap(
+    fn index_object_map(
         &mut self,
         path: &str,
         props: &mut Map<String, Value>,
@@ -1775,7 +1775,7 @@ impl IndexCtx {
                 k,
                 "_id" | "_index" | "_source" | "_routing" | "_field_names" | "_ignored"
             ) {
-                self.rejectMetadataField(k)?;
+                self.reject_metadata_field(k)?;
                 continue;
             }
             let child_path = if path.is_empty() {
@@ -1835,7 +1835,7 @@ impl IndexCtx {
                 .get(&child_path)
                 .map(|v| v.len())
                 .unwrap_or(0);
-            self.indexRawField(&child_path, &mut def, v)?;
+            self.index_raw_field(&child_path, &mut def, v)?;
             let all_vals = self.values.get(&child_path).cloned().unwrap_or_default();
             let fresh: Vec<Value> = all_vals.iter().skip(pre_len).cloned().collect();
             if !k.contains('.') && def.get("properties").is_some() {
@@ -1867,7 +1867,7 @@ impl IndexCtx {
                     props.insert(t.clone(), json!({"type": "text"}));
                 }
                 if !fresh.is_empty() {
-                    self.copyTo(&t, &fresh);
+                    self.copy_to(&t, &fresh);
                 }
             }
         }
@@ -2122,7 +2122,7 @@ impl IndexCtx {
         None
     }
 
-    fn rejectMetadataField(&self, name: &str) -> Result<(), ApiError> {
+    fn reject_metadata_field(&self, name: &str) -> Result<(), ApiError> {
         let reason = format!(
             "Field [{}] is a metadata field and cannot be added inside a document. Use the index API request parameters.",
             name
@@ -2135,7 +2135,7 @@ impl IndexCtx {
         ))
     }
 
-    fn fillConstants(&mut self, props: &Map<String, Value>, src: &Map<String, Value>) {
+    fn fill_constants(&mut self, props: &Map<String, Value>, src: &Map<String, Value>) {
         for (name, raw) in props {
             let def = match raw.as_object() {
                 Some(d) => d,
@@ -2452,13 +2452,6 @@ pub fn flatten_scalars(raw: &Value) -> Vec<Value> {
     }
 }
 
-pub fn apply_normalizer(name: &str, s: &str) -> String {
-    match name {
-        "lowercase" => simple_lower(s),
-        _ => s.to_string(),
-    }
-}
-
 pub fn apply_normalizer_idx(idx: &Index, name: &str, s: &str) -> String {
     if name == "lowercase" {
         return simple_lower(s);
@@ -2543,7 +2536,7 @@ impl IndexCtx {
         out
     }
 
-    fn parseTokenCount(
+    fn parse_token_count(
         &self,
         path: &str,
         def: &Map<String, Value>,
@@ -2589,7 +2582,7 @@ impl IndexCtx {
         }
     }
 
-    fn parseGeoPoint(
+    fn parse_geo_point(
         &self,
         path: &str,
         def: &Map<String, Value>,
@@ -2762,7 +2755,7 @@ impl IndexCtx {
         }
     }
 
-    fn parseGeoShape(&self, path: &str, v: &Value) -> Result<Value, ApiError> {
+    fn parse_geo_shape(&self, path: &str, v: &Value) -> Result<Value, ApiError> {
         let err = |cause: &str, reason: &str| {
             mapper_err(
                 "mapper_parsing_exception",
@@ -2866,7 +2859,7 @@ impl IndexCtx {
         }
     }
 
-    fn parseRankFeature(&self, path: &str, v: &Value) -> Result<Value, ApiError> {
+    fn parse_rank_feature(&self, path: &str, v: &Value) -> Result<Value, ApiError> {
         let f = to_f64(v).or_else(|| {
             value_scalar_string(v).and_then(|s| s.parse::<f64>().ok())
         });
@@ -2898,7 +2891,7 @@ impl IndexCtx {
         Ok(num_f64(f))
     }
 
-    fn parseRankFeatures(&self, path: &str, v: &Value) -> Result<Value, ApiError> {
+    fn parse_rank_features(&self, path: &str, v: &Value) -> Result<Value, ApiError> {
         let m = match v.as_object() {
             Some(m) => m,
             None => {
@@ -2948,7 +2941,7 @@ impl IndexCtx {
         Ok(v.clone())
     }
 
-    fn parseJoin(
+    fn parse_join(
         &self,
         path: &str,
         def: &Map<String, Value>,
@@ -3040,7 +3033,7 @@ impl IndexCtx {
         }
     }
 
-    fn parseRangeValue(
+    fn parse_range_value(
         &self,
         path: &str,
         typ: &str,
@@ -3077,7 +3070,7 @@ impl IndexCtx {
                         }
                     }
                 }
-                let vals = self.parseIPValue(path, v)?;
+                let vals = self.parse_ip_value(path, v)?;
                 return Ok(json!({"gte": vals, "lte": vals}));
             }
             return Err(self.field_value_error(
@@ -3135,7 +3128,7 @@ impl IndexCtx {
                 None => continue,
             };
             let pv = match typ {
-                "date_range" => match self.parseDateValue(path, "date", def, raw) {
+                "date_range" => match self.parse_date_value(path, "date", def, raw) {
                     Ok(v) => v,
                     Err(_) => {
                         return Err(self.field_value_error(
@@ -3147,11 +3140,11 @@ impl IndexCtx {
                         ))
                     }
                 },
-                "ip_range" => self.parseIPValue(path, raw)?,
+                "ip_range" => self.parse_ip_value(path, raw)?,
                 "float_range" | "double_range" => {
-                    self.parseFloatValue(path, typ.trim_end_matches("_range"), def, raw)?
+                    self.parse_float_value(path, typ.trim_end_matches("_range"), def, raw)?
                 }
-                _ => self.parseIntValue(path, typ.trim_end_matches("_range"), def, raw)?,
+                _ => self.parse_int_value(path, typ.trim_end_matches("_range"), def, raw)?,
             };
             out.insert(key.to_string(), pv);
         }
@@ -3223,7 +3216,7 @@ fn compare_values_for_type(typ: &str, a: &Value, b: &Value) -> i32 {
 // ---------------------------------------------------------------------------
 
 impl IndexCtx {
-    pub fn buildDocValues(&mut self, idx: &mut Index) -> Result<(), ApiError> {
+    pub fn build_doc_values(&mut self, idx: &mut Index) -> Result<(), ApiError> {
         if !idx.mappings.is_object() {
             idx.mappings = Value::Object(Map::new());
         }
@@ -3236,7 +3229,7 @@ impl IndexCtx {
         }
         let doc = self.doc.clone();
         let props = obj.get_mut("properties").unwrap().as_object_mut().unwrap();
-        self.indexObjectMap("", props, &doc)?;
+        self.index_object_map("", props, &doc)?;
         let props_clone = props.clone();
         let targets: Vec<String> = self.copy_targets.iter().cloned().collect();
         for t in targets {
@@ -3253,7 +3246,7 @@ impl IndexCtx {
             }
             self.values.insert(t, out);
         }
-        self.fillConstants(&props_clone, &doc);
+        self.fill_constants(&props_clone, &doc);
         if !self.ignored.is_empty() {
             let list: Vec<Value> = self
                 .ignored
@@ -3265,7 +3258,7 @@ impl IndexCtx {
         Ok(())
     }
 
-    pub fn alreadyIgnored(&self) -> &[String] {
+    pub fn already_ignored(&self) -> &[String] {
         &self.ignored
     }
 }
@@ -3378,7 +3371,7 @@ pub fn compute_doc_values(
         .unwrap_or_default();
     let mut c = IndexCtx::new(idx, id);
     c.doc = doc.clone();
-    c.buildDocValues(idx)?;
+    c.build_doc_values(idx)?;
     if c.knn_index {
         crate::mapping::knn_index::derive_source(&idx.mappings, doc);
     }
@@ -3412,7 +3405,7 @@ pub fn doc_values_for(
         .unwrap_or_default();
     let mut c = IndexCtx::new(&tmp, id);
     c.doc = doc.clone();
-    c.buildDocValues(&mut tmp)?;
+    c.build_doc_values(&mut tmp)?;
     add_derived_values(&derived_defs, &Value::Object(c.doc.clone()), &mut c.values);
     Ok((c.values.clone(), c.ignored.clone()))
 }

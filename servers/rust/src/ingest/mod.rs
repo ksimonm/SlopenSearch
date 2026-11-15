@@ -115,32 +115,6 @@ fn required_key(typ: &str) -> Option<&'static str> {
     })
 }
 
-fn has_key_after(typ: &str, key: &str) -> bool {
-    matches!(
-        (typ, key),
-        ("rename", "target_field")
-            | ("copy", "target_field")
-            | ("append", "value")
-            | ("convert", "type")
-            | ("split", "separator")
-            | ("join", "separator")
-            | ("gsub", "pattern")
-            | ("gsub", "replacement")
-            | ("grok", "patterns")
-            | ("dissect", "pattern")
-            | ("date", "formats")
-            | ("date_index_name", "date_rounding")
-            | ("csv", "target_fields")
-            | ("split_to_fields", "separator")
-            | ("split_to_fields", "target_fields")
-            | ("dot_expander", "field")
-            | ("kv", "field_split")
-            | ("kv", "value_split")
-            | ("foreach", "processor")
-            | ("script", "source")
-    )
-}
-
 fn parse_exception(msg: &str) -> ApiError {
     ApiError::new("parse_exception", msg, 400)
 }

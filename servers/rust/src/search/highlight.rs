@@ -848,21 +848,6 @@ pub fn render(
     }
 }
 
-pub(crate) fn highlight_fields(body: &Value) -> Vec<String> {
-    let mut out = vec![];
-    if let Some(fields) = body
-        .get("highlight")
-        .and_then(|h| h.get("fields"))
-        .and_then(|f| f.as_object())
-    {
-        for f in fields.keys() {
-            out.push(f.clone());
-        }
-    }
-    out.sort();
-    out
-}
-
 pub(crate) fn highlight_fragment(text: &str, tokens: &HashSet<String>) -> String {
     let words: Vec<String> = text
         .split_whitespace()
