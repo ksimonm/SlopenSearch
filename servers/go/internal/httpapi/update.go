@@ -60,8 +60,11 @@ func (s *Server) handleUpdateDoc(w http.ResponseWriter, r *http.Request, name, i
 		writeError(w, routingMissing(idx, id))
 		return
 	}
-	body, _, berr := readDocBody(r)
+	body, rawBody, berr := readDocBody(r)
 	if berr != nil {
+		if t := mapping.FindNonStandardToken(rawBody); t != nil {
+			berr = t.ObjectParserError("UpdateRequest")
+		}
 		writeError(w, berr)
 		return
 	}

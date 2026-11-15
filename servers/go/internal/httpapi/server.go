@@ -8,6 +8,7 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -191,11 +192,14 @@ func readJSONRaw(r *http.Request) (map[string]any, []byte, *apierr.Error) {
 func checkDuplicateJSONKeys(body []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.UseNumber()
+	// A syntax error is left to the caller's parse; it must end the walk:
+	// dec.More() keeps reporting true in front of an invalid token.
+	errSyntax := errors.New("syntax")
 	var walk func() error
 	walk = func() error {
 		tok, err := dec.Token()
 		if err != nil {
-			return nil
+			return errSyntax
 		}
 		delim, ok := tok.(json.Delim)
 		if !ok {
@@ -207,7 +211,7 @@ func checkDuplicateJSONKeys(body []byte) error {
 			for dec.More() {
 				kt, err := dec.Token()
 				if err != nil {
-					return nil
+					return errSyntax
 				}
 				k, _ := kt.(string)
 				if seen[k] {
@@ -229,7 +233,10 @@ func checkDuplicateJSONKeys(body []byte) error {
 		}
 		return nil
 	}
-	return walk()
+	if err := walk(); err != errSyntax {
+		return err
+	}
+	return nil
 }
 
 func (s *Server) getIndex(name string) (*model.Index, *apierr.Error) {

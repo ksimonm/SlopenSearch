@@ -591,7 +591,7 @@ func (s *Server) handleIndexDoc(w http.ResponseWriter, r *http.Request, name, id
 	}
 	body, rawBody, berr := readDocBody(r)
 	if berr != nil {
-		if e := mapping.NonStandardTokenError(idx, id, rawBody); e != nil {
+		if e := nonStdDocError(idx, id, r.URL.Query().Get("pipeline"), rawBody); e != nil {
 			berr = e
 		}
 		writeError(w, berr)

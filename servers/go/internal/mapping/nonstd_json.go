@@ -21,18 +21,26 @@ var jacksonNonStandardTokens = []string{"NaN", "Infinity", "-Infinity", "+Infini
 
 // nonStdFrame is one open container in the valid JSON prefix before the token.
 type nonStdFrame struct {
-	array bool
-	key   string // object: the current key; array: the key the array is the value of
-	elems [][]byte
+	array    bool
+	key      string // object: the current key; array: the key the array is the value of
+	keyStart int    // object: byte offset of the current key
+	elems    [][]byte
 }
 
-// NonStandardTokenError reports the error OpenSearch returns when a document
-// body is valid JSON up to one of Jackson's non-standard number tokens (NaN,
-// Infinity, ...). Jackson fails while the document parser reads that token: a
-// knn_vector field reading its array elements wraps it in its field error with
-// the usual value preview; anywhere else the document parser wraps it in
-// "failed to parse". It returns nil when the body fails for any other reason.
-func NonStandardTokenError(idx *model.Index, docID string, raw []byte) *apierr.Error {
+// NonStdToken is one of Jackson's non-standard number tokens (NaN,
+// Infinity, ...) in a body that is valid JSON up to it.
+type NonStdToken struct {
+	Tok    string // the token as written
+	End    int    // byte offset just past the token (what Jackson reports)
+	start  int    // byte offset of the token
+	raw    []byte
+	frames []nonStdFrame
+}
+
+// FindNonStandardToken returns the non-standard number token Jackson fails on
+// when raw is valid JSON up to it; nil when raw parses or fails for any other
+// reason. Offsets are counted from the start of raw.
+func FindNonStandardToken(raw []byte) *NonStdToken {
 	var v any
 	var se *json.SyntaxError
 	if err := json.Unmarshal(raw, &v); !errors.As(err, &se) {
@@ -61,11 +69,61 @@ func NonStandardTokenError(idx *model.Index, docID string, raw []byte) *apierr.E
 	if !ok {
 		return nil
 	}
+	return &NonStdToken{Tok: tok, End: end, start: start, raw: raw, frames: frames}
+}
+
+// Cause is Jackson's json_parse_exception for the token, as OpenSearch
+// reports it when nothing wraps it.
+func (t *NonStdToken) Cause() *apierr.Error {
 	reason := fmt.Sprintf("Non-standard token '%s': enable `JsonReadFeature.ALLOW_NON_NUMERIC_NUMBERS` to allow\n"+
-		" at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); byte offset: #%d]", tok, end)
-	cause := &apierr.Error{Type: "json_parse_exception", Reason: reason,
+		" at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); byte offset: #%d]", t.Tok, t.End)
+	return &apierr.Error{Type: "json_parse_exception", Status: 400, Reason: reason,
 		CausedBy: &apierr.Error{Type: "stream_read_exception", Reason: reason}}
-	if e := knnNonStandardTokenError(idx, docID, frames, raw[end:]); e != nil {
+}
+
+// IngestError is the error of an ingest pipeline reading the document into a
+// map (indexing through a pipeline, ingest simulate).
+func (t *NonStdToken) IngestError() *apierr.Error {
+	return &apierr.Error{Type: "parse_exception", Status: 400, Reason: "Failed to parse content to map", CausedBy: t.Cause()}
+}
+
+// ObjectParserError is the error of the OpenSearch ObjectParser named parser
+// (e.g. "UpdateRequest") failing in the value of a top-level field: it names
+// that field and the location of the parser's current token (the field name
+// when the token is an object value, the token itself in an array). A token
+// that is the direct value of a top-level field fails before the field is
+// dispatched and is reported unwrapped.
+func (t *NonStdToken) ObjectParserError(parser string) *apierr.Error {
+	if len(t.frames) < 2 || t.frames[0].array {
+		return t.Cause()
+	}
+	pos := t.start
+	if f := t.frames[len(t.frames)-1]; !f.array {
+		pos = f.keyStart
+	}
+	line, col := 1, pos+1
+	if nl := bytes.LastIndexByte(t.raw[:pos], '\n'); nl >= 0 {
+		line, col = 1+bytes.Count(t.raw[:pos], []byte("\n")), pos-nl
+	}
+	return &apierr.Error{Type: "x_content_parse_exception", Status: 400,
+		Reason:   fmt.Sprintf("[%d:%d] [%s] failed to parse field [%s]", line, col, parser, t.frames[0].key),
+		CausedBy: t.Cause()}
+}
+
+// NonStandardTokenError reports the error OpenSearch returns when a document
+// body is valid JSON up to one of Jackson's non-standard number tokens (NaN,
+// Infinity, ...). Jackson fails while the document parser reads that token: a
+// knn_vector field reading its array elements wraps it in its field error with
+// the usual value preview; anywhere else the document parser wraps it in
+// "failed to parse". It returns nil when the body fails for any other reason.
+func NonStandardTokenError(idx *model.Index, docID string, raw []byte) *apierr.Error {
+	t := FindNonStandardToken(raw)
+	if t == nil {
+		return nil
+	}
+	cause := t.Cause()
+	cause.Status = 0
+	if e := knnNonStandardTokenError(idx, docID, t.frames, raw[t.End:]); e != nil {
 		e.CausedBy = cause
 		return e
 	}
@@ -163,6 +221,7 @@ func scanJSONPrefix(b []byte) ([]nonStdFrame, bool) {
 					return nil, false
 				}
 				frames[len(frames)-1].key = k
+				frames[len(frames)-1].keyStart = i
 				expectKey = false
 			} else {
 				markElem(frames, b[i:j])
