@@ -55,6 +55,25 @@ func TestMatcherEntryPoints(t *testing.T) {
 	}
 }
 
+func TestVariableLookbehind(t *testing.T) {
+	cases := map[string]bool{
+		"(?<=a)b":          false,
+		"(?<=ab|c)d":       false,
+		"(?<=a{2})b":       false,
+		"x(?<=a+)":         true,
+		"(?<=a?)b":         true,
+		"(?<=(?:ab|c))d":   true,
+		"(?=a+)b":          false,
+		"(a)(?<=\\1)":      true,
+		"(?:(?<=a|bc)x)+y": false,
+	}
+	for p, want := range cases {
+		if got := mustCompile(t, p, 0).VariableLookbehind(); got != want {
+			t.Errorf("VariableLookbehind(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
+
 func TestBudget(t *testing.T) {
 	re := mustCompile(t, "(a|aa)+b", 0)
 	b := &Budget{Steps: 1000}

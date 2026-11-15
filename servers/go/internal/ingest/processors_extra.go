@@ -101,14 +101,6 @@ func (s *Engine) procKV(cfg map[string]any, env *ingestEnv) *apierr.Error {
 		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] of type [" + javaTypeName(v) + "] cannot be cast to [java.lang.String]"}
 	}
-	fieldSplit, err := regexp.Compile(cfgString(cfg, "field_split"))
-	if err != nil {
-		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
-	}
-	valueSplit, err := regexp.Compile(cfgString(cfg, "value_split"))
-	if err != nil {
-		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
-	}
 	include := stringSet(cfg["include_keys"])
 	exclude := stringSet(cfg["exclude_keys"])
 	prefix := cfgString(cfg, "prefix")
@@ -127,17 +119,21 @@ func (s *Engine) procKV(cfg map[string]any, env *ingestEnv) *apierr.Error {
 		}
 	}
 	matched := false
-	for _, token := range fieldSplit.Split(str, -1) {
-		if token == "" {
-			continue
+	tokens, serr := javaStringSplit(str, cfgString(cfg, "field_split"), 0)
+	if serr != nil {
+		return serr
+	}
+	for _, token := range tokens {
+		kv, serr := javaStringSplit(token, cfgString(cfg, "value_split"), 2)
+		if serr != nil {
+			return serr
 		}
-		loc := valueSplit.FindStringIndex(token)
-		if loc == nil {
+		if len(kv) != 2 {
 			return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 				Reason: "field [" + field + "] does not contain value_split [" + cfgString(cfg, "value_split") + "]"}
 		}
-		key := token[:loc[0]]
-		val := token[loc[1]:]
+		key := kv[0]
+		val := kv[1]
 		if key == "" {
 			return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "path cannot be null nor empty"}
 		}
@@ -448,11 +444,10 @@ func (s *Engine) procSplitToFields(cfg map[string]any, env *ingestEnv) *apierr.E
 		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
 			Reason: "field [" + field + "] of type [" + javaTypeName(v) + "] cannot be cast to [java.lang.String]"}
 	}
-	re, err := regexp.Compile(cfgString(cfg, "separator"))
-	if err != nil {
-		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: err.Error()}
+	parts, serr := javaStringSplit(str, cfgString(cfg, "separator"), -1)
+	if serr != nil {
+		return serr
 	}
-	parts := re.Split(str, -1)
 	for i, f := range env.resolveFieldPath(cfg["target_fields"]) {
 		if i >= len(parts) {
 			break
@@ -1284,7 +1279,6 @@ func GrokPatterns() map[string]any {
 }
 
 var grokNameRE = regexp.MustCompile(`%\{([A-Za-z0-9_]+)(?::([A-Za-z0-9_.]+))?(?::([A-Za-z]+))?\}`)
-var namedGroupRE = regexp.MustCompile(`\(\?<([A-Za-z_][A-Za-z0-9_]*)>`)
 
 func grokExpand(pattern string, defs map[string]string) (string, string, bool) {
 	missing := ""
@@ -1306,7 +1300,7 @@ func grokExpand(pattern string, defs map[string]string) (string, string, bool) {
 				} else if typ == "float" || typ == "double" {
 					conv = "float"
 				}
-				return "(?P<" + grokFieldKey(field, conv) + ">" + d + ")"
+				return "(?<" + grokFieldKey(field, conv) + ">" + d + ")"
 			}
 			missing = name
 			return m
@@ -1330,19 +1324,18 @@ func grokFieldKey(field, conv string) string {
 	return key
 }
 
-func grokCompile(pattern string, defs map[string]string) (*regexp.Regexp, *apierr.Error) {
+func grokCompile(pattern string, defs map[string]string) (*grokRegex, *apierr.Error) {
 	expanded, missing, ok := grokExpand(pattern, defs)
 	if !ok {
 		return nil, &apierr.Error{Type: "parse_exception", Status: 400,
 			Reason: "[patterns] Invalid regex pattern found in: [" + pattern + "]. Unable to find pattern [" + missing + "] in Grok's pattern dictionary",
-			Fields: map[string]any{"processor_type": "grok"}}
+			Fields: map[string]any{"processor_type": "grok", "property_name": "patterns"}}
 	}
-	expanded = namedGroupRE.ReplaceAllString(expanded, `(?P<$1>`)
-	re, err := regexp.Compile(expanded)
-	if err != nil {
+	re, msg := grokRegexCompile(expanded)
+	if re == nil {
 		return nil, &apierr.Error{Type: "parse_exception", Status: 400,
-			Reason: "[patterns] Invalid regex pattern found in: [" + pattern + "]. " + err.Error(),
-			Fields: map[string]any{"processor_type": "grok"}}
+			Reason: "[patterns] Invalid regex pattern found in: [" + pattern + "]. " + msg,
+			Fields: map[string]any{"processor_type": "grok", "property_name": "patterns"}}
 	}
 	return re, nil
 }
@@ -1377,29 +1370,30 @@ func (s *Engine) procGrok(cfg map[string]any, env *ingestEnv) *apierr.Error {
 		if err != nil {
 			return err
 		}
-		m := re.FindStringSubmatch(str)
-		if m == nil {
+		caps, matched := re.find(str)
+		if !matched {
 			continue
 		}
 		seen := map[string]bool{}
-		for i, name := range re.SubexpNames() {
-			if name == "" || i >= len(m) || m[i] == "" {
+		for i, name := range re.names {
+			if i == 0 || caps[i] == nil || *caps[i] == "" {
 				continue
 			}
+			mi := *caps[i]
 			key, conv := name, ""
 			if at := strings.Index(name, "__conv_"); at >= 0 {
 				key, conv = name[:at], name[at+len("__conv_"):]
 			}
 			key = strings.ReplaceAll(key, "_DOT_", ".")
-			var val any = m[i]
+			var val any = mi
 			switch conv {
 			case "long":
-				iv, _ := strconv.ParseInt(m[i], 10, 64)
+				iv, _ := strconv.ParseInt(mi, 10, 64)
 				val = iv
 			case "boolean":
-				val = strings.EqualFold(m[i], "true")
+				val = strings.EqualFold(mi, "true")
 			case "float":
-				fv, _ := strconv.ParseFloat(m[i], 64)
+				fv, _ := strconv.ParseFloat(mi, 64)
 				val = fv
 			}
 			if seen[key] {

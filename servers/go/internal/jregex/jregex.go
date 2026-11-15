@@ -871,6 +871,10 @@ func (p *jParser) parseClass() (func(rune) bool, *PatternError) {
 			lo = c
 			p.pos++
 		}
+		if p.peek() == '-' && p.pos+1 == len(p.src) {
+			// Pattern.range reads the terminating 0 as the upper bound
+			return nil, p.errAt("Illegal character range", len(p.src))
+		}
 		if p.peek() == '-' && p.pos+1 < len(p.src) && p.src[p.pos+1] != ']' && p.src[p.pos+1] != '[' {
 			p.pos++
 			var hi rune
