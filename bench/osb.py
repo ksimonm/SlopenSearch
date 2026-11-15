@@ -50,7 +50,7 @@ OSB_HOME = Path(os.environ.get("BENCHMARK_HOME", Path.home() / ".cache" / "slopb
 # "full": the workload's own defaults (throttled to its target throughputs).
 PRESETS = {
     "test": {"test_mode": True, "params": {}},
-    "sample": {"test_mode": False, "params": {"ingest_percentage": 1, "warmup_iterations": 2, "iterations": 10,
+    "sample": {"test_mode": False, "params": {"ingest_percentage": 1, "warmup_iterations": 2, "iterations": 10, "warmup_time_period": 0,
                                                "target_throughput": 100000}},
     "full": {"test_mode": False, "params": {}},
 }
@@ -213,6 +213,10 @@ class OsbRun:
             for t in tasks:
                 self.tasks.setdefault(t, {"status": "not_run", "reason": "container not running"})
             return
+        if self.a.target_budget and time.time() - self.t_start > self.a.target_budget:
+            for t in tasks:
+                self.tasks.setdefault(t, {"status": "not_run", "reason": f"--target-budget {self.a.target_budget:.0f}s used up"})
+            return
         r = self.invoke(tasks, label, task_timeout)
         self.res["invocations"].append({k: v for k, v in r.items() if k not in ("metrics", "windows")})
         for name, (w0, w1) in r["windows"].items():
@@ -276,6 +280,7 @@ class OsbRun:
                     "procedure": self.a.procedure, "preset": self.a.preset, "params": self.params,
                     "invocations": [], "started": dt.datetime.now().isoformat(timespec="seconds")}
         self.proxy = None
+        self.t_start = time.time()
         print(f"== {t.name} ({t.image}) on :{t.port}", flush=True)
         try:
             self.res["startup_empty_s"] = round(self.box.create_and_start(), 2)
@@ -380,6 +385,9 @@ def main():
     ap.add_argument("--request-timeout", type=float, default=120, help="OSB client timeout per request (s)")
     ap.add_argument("--startup-timeout", type=float, default=3600,
                     help="limit until OSB starts the first task (includes downloading and decompressing the corpus)")
+    ap.add_argument("--target-budget", type=float, default=0,
+                    help="stop starting OSB invocations for a target after this many seconds; the remaining "
+                         "tasks are recorded as not_run (0 = no limit)")
     ap.add_argument("--drain-timeout", type=float, default=120,
                     help="after a killed task, wait this long for the server, then restart its container (s)")
     ap.add_argument("--chunk", type=int, default=6,
@@ -424,6 +432,17 @@ def main():
                                          "osb_version": subprocess.run([str(OSB_BIN), "--version"], capture_output=True,
                                                                        text=True).stdout.strip()})
     mf = out / f"osb-run-{a.workload}.json"
+    if mf.exists():
+        # another osb.py call with the same workload into this directory (e.g. one target
+        # re-run): keep one metadata file listing all targets
+        old = json.loads(mf.read_text())
+        meta["targets"] = list(dict.fromkeys(old.get("targets", []) + names))
+        meta["loadavg_start"] = old.get("loadavg_start", meta["loadavg_start"])
+        meta["date"] = old.get("date", meta["date"])
+        meta["images"] = {**old.get("images", {}), **meta["images"]}
+        meta["invocation_args"] = old.get("invocation_args", []) + [sys.argv[1:]]
+    else:
+        meta["invocation_args"] = [sys.argv[1:]]
     mf.write_text(json.dumps(meta, indent=1))
     for n in names:
         r.target(targets[n], setup, queries)
