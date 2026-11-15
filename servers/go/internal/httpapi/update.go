@@ -174,7 +174,7 @@ func (s *Server) handleUpdateDoc(w http.ResponseWriter, r *http.Request, name, i
 			writeError(w, derr)
 			return
 		}
-		idx.Order = append(idx.Order, id)
+		idx.AppendOrder(id)
 		idx.Docs[id] = src
 		delete(idx.RawDocs, id)
 		idx.Versions[id] = 1
@@ -186,7 +186,7 @@ func (s *Server) handleUpdateDoc(w http.ResponseWriter, r *http.Request, name, i
 			idx.Routing[id] = routing
 		}
 		if rv == "true" || rv == "wait_for" {
-			delete(idx.Pending, id)
+			idx.Refresh()
 		} else {
 			idx.Pending[id] = src
 		}
@@ -218,6 +218,10 @@ func (s *Server) handleUpdateDoc(w http.ResponseWriter, r *http.Request, name, i
 		deepMergeDoc(newDoc, docPatch)
 	}
 	if op == "delete" {
+		idx.NoteWrite(id)
+		if rv == "true" {
+			defer idx.Refresh()
+		}
 		ver := idx.Versions[id] + 1
 		seq := idx.AllocSeqNo()
 		delete(idx.Docs, id)
@@ -285,7 +289,7 @@ func (s *Server) handleUpdateDoc(w http.ResponseWriter, r *http.Request, name, i
 		idx.Routing[id] = routing
 	}
 	if rv == "true" || rv == "wait_for" {
-		delete(idx.Pending, id)
+		idx.Refresh()
 	} else {
 		idx.MarkPending(id, newDoc, true)
 	}

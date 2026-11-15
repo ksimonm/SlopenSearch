@@ -784,8 +784,10 @@ fn run(shared: Shared, id: u64, job: Job, q_param: Option<String>, max_docs: Opt
         return;
     }
     let docs = {
-        let st = lock_store(&shared);
-        list_docs(&st, &job, q_param.as_deref(), max_docs)
+        // the search reads the last refreshed versions; the batches find
+        // documents written since as version conflicts
+        let mut st = lock_store(&shared);
+        crate::model::visibility::with_view(&mut st, |st| list_docs(st, &job, q_param.as_deref(), max_docs))
     };
     let docs = match docs {
         Ok(d) => d,

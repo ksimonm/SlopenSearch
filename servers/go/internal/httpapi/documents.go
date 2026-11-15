@@ -699,7 +699,7 @@ func (s *Server) handleIndexDoc(w http.ResponseWriter, r *http.Request, name, id
 		return
 	}
 	if !existing {
-		idx.Order = append(idx.Order, id)
+		idx.AppendOrder(id)
 	}
 	idx.Docs[id] = body
 	if mapping.KnnDeriveSource(idx, body) {
@@ -717,7 +717,7 @@ func (s *Server) handleIndexDoc(w http.ResponseWriter, r *http.Request, name, id
 		delete(idx.Routing, id)
 	}
 	if rv == "true" || rv == "wait_for" {
-		delete(idx.Pending, id)
+		idx.Refresh()
 	} else {
 		idx.MarkPending(id, body, existing)
 	}
@@ -766,8 +766,7 @@ func randomID20(s *Server) string {
 }
 
 func (s *Server) handleGetDoc(w http.ResponseWriter, r *http.Request, name, id string) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	defer s.lockGetView(r)()
 	if err := unknownParams(r, getDocParams); err != nil {
 		writeError(w, err)
 		return
@@ -875,8 +874,7 @@ func (s *Server) handleGetDoc(w http.ResponseWriter, r *http.Request, name, id s
 }
 
 func (s *Server) handleGetSource(w http.ResponseWriter, r *http.Request, name, id string) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	defer s.lockGetView(r)()
 	if err := unknownParams(r, getDocParams); err != nil {
 		writeError(w, err)
 		return
@@ -971,6 +969,12 @@ func (s *Server) handleDeleteDoc(w http.ResponseWriter, r *http.Request, name, i
 	_, exists := idx.Docs[id]
 	if exists && !idx.RoutingMatches(id, routing) {
 		exists = false
+	}
+	if exists {
+		idx.NoteWrite(id)
+		if rv == "true" {
+			defer idx.Refresh()
+		}
 	}
 	seq := idx.AllocSeqNo()
 	idx.SeqNos[id] = seq

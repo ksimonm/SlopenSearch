@@ -17,8 +17,7 @@ var mgetParams = map[string]bool{
 }
 
 func (s *Server) handleMget(w http.ResponseWriter, r *http.Request, pathIndex string) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	defer s.lockGetView(r)()
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		methodNotAllowed(w, r, "GET", "POST")
 		return

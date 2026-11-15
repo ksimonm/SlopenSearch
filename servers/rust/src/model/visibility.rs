@@ -1,10 +1,10 @@
 //! What searches see between refreshes, and the shard request cache.
 //!
 //! A document written without a refresh is not searchable until the next
-//! refresh; when it replaces a document, searches keep seeing the replaced
-//! (last refreshed) version with its doc values. Writes record that version
-//! here ([`before_write`]); a search swaps it in for its duration
-//! ([`enter`]/[`leave`]).
+//! refresh; when it replaces or deletes a document, searches keep seeing the
+//! replaced (last refreshed) version with its doc values. Writes record that
+//! version here ([`before_write`]); a search swaps it in for its duration
+//! ([`enter`]/[`leave`]). Realtime reads (GET) see the current version.
 //!
 //! The request cache keeps the results of `size: 0` searches until the
 //! searched indices change (OpenSearch's IndicesRequestCache is keyed by the
@@ -30,6 +30,7 @@ struct Stale {
     raw: Option<Vec<u8>>,
     version: Option<i64>,
     seq: Option<i64>,
+    routing: Option<String>,
 }
 
 const CACHE_MAX: usize = 256;
@@ -73,7 +74,7 @@ fn refresh_interval_ms(idx: &Index) -> Option<u64> {
 pub fn scheduled_refresh(store: &mut Store) {
     let now = std::time::Instant::now();
     for idx in store.indices.values_mut() {
-        if idx.pending.is_empty() {
+        if idx.pending.is_empty() && idx.searcher.stale.is_empty() {
             idx.searcher.pending_since = None;
             continue;
         }
@@ -86,17 +87,30 @@ pub fn scheduled_refresh(store: &mut Store) {
         }
         if let Some(ms) = refresh_interval_ms(idx) {
             if now.duration_since(since).as_millis() as u64 >= ms {
-                idx.pending.clear();
+                refresh(idx);
                 idx.searcher.pending_since = None;
             }
         }
     }
 }
 
-/// Call before a write replaces the document `id` (before its doc values are
-/// recomputed): remembers the version searches see until the next refresh.
+/// A refresh: every write becomes searchable.
+pub fn refresh(idx: &mut Index) {
+    idx.pending.clear();
+    idx.searcher.stale.clear();
+}
+
+/// Whether searches see the remembered version of `id`: the document was
+/// rewritten (pending) or deleted since the last refresh.
+fn stale_visible(idx: &Index, id: &str) -> bool {
+    idx.searcher.stale.contains_key(id) && (idx.pending.contains_key(id) || !idx.docs.contains_key(id))
+}
+
+/// Call before a write replaces or deletes the document `id` (before its doc
+/// values, version and seqNo change): remembers the version searches see
+/// until the next refresh.
 pub fn before_write(idx: &mut Index, id: &str) {
-    if idx.pending.contains_key(id) {
+    if idx.pending.contains_key(id) || stale_visible(idx, id) {
         // Already unrefreshed: the remembered version (if any) stays.
         return;
     }
@@ -109,6 +123,7 @@ pub fn before_write(idx: &mut Index, id: &str) {
                 raw: idx.raw_sources.get(id).cloned(),
                 version: idx.versions.get(id).copied(),
                 seq: idx.seq_nos.get(id).copied(),
+                routing: idx.routing.get(id).cloned(),
             };
             idx.searcher.stale.insert(id.to_string(), st);
         }
@@ -133,11 +148,12 @@ fn swap_doc(idx: &mut Index, id: &str, st: &mut Stale) {
     swap_slot(&mut idx.raw_sources, id, &mut st.raw);
     swap_slot(&mut idx.versions, id, &mut st.version);
     swap_slot(&mut idx.seq_nos, id, &mut st.seq);
+    swap_slot(&mut idx.routing, id, &mut st.routing);
 }
 
 /// The swapped-in documents of a search, restored by [`leave`].
 pub struct View {
-    swapped: Vec<(String, String, Stale, Value)>,
+    swapped: Vec<(String, String, Stale, Option<Value>)>,
 }
 
 /// Makes the last refreshed versions of unrefreshed documents searchable.
@@ -145,20 +161,20 @@ pub fn enter(store: &mut Store, names: &[String]) -> View {
     let mut swapped = Vec::new();
     for n in names {
         let Some(idx) = store.indices.get_mut(n) else { continue };
-        if idx.pending.is_empty() || idx.searcher.stale.is_empty() {
+        if idx.searcher.stale.is_empty() {
             continue;
         }
         let ids: Vec<String> = idx
             .searcher
             .stale
             .keys()
-            .filter(|id| idx.pending.contains_key(*id) && idx.docs.contains_key(*id))
+            .filter(|id| idx.pending.contains_key(*id) || !idx.docs.contains_key(*id))
             .cloned()
             .collect();
         for id in ids {
             let mut st = idx.searcher.stale.remove(&id).unwrap_or_default();
             swap_doc(idx, &id, &mut st);
-            let p = idx.pending.remove(&id).unwrap_or(Value::Null);
+            let p = idx.pending.remove(&id);
             swapped.push((n.clone(), id, st, p));
         }
     }
@@ -170,9 +186,51 @@ pub fn leave(store: &mut Store, view: View) {
     for (n, id, mut st, p) in view.swapped {
         let Some(idx) = store.indices.get_mut(&n) else { continue };
         swap_doc(idx, &id, &mut st);
-        idx.pending.insert(id.clone(), p);
+        if let Some(p) = p {
+            idx.pending.insert(id.clone(), p);
+        }
         idx.searcher.stale.insert(id, st);
     }
+}
+
+/// Adds a new document at the end of the index order. A document created
+/// again after a delete moves to the end (it is in a new segment).
+pub fn push_order(idx: &mut Index, id: &str) {
+    if idx.versions.contains_key(id) {
+        if let Some(pos) = idx.order.iter().position(|o| o == id) {
+            idx.order.remove(pos);
+        }
+    }
+    idx.order.push(id.to_string());
+}
+
+/// Runs `f` on the last refreshed versions of every index (a search-like read).
+pub fn with_view<R>(store: &mut Store, f: impl FnOnce(&mut Store) -> R) -> R {
+    let names: Vec<String> = store.indices.keys().cloned().collect();
+    let view = enter(store, &names);
+    let r = f(store);
+    leave(store, view);
+    r
+}
+
+/// The `_seq_no` searches see of `id` and the current one (None: deleted):
+/// the version conflict of writing back a search hit of a by-query request.
+pub fn conflict(idx: &Index, id: &str, seen: i64) -> Option<Value> {
+    let reason = match (idx.docs.contains_key(id), idx.seq_nos.get(id)) {
+        (true, Some(have)) if *have == seen => return None,
+        (true, Some(have)) => format!(
+            "[{}]: version conflict, required seqNo [{}], primary term [1]. current document has seqNo [{}] and primary term [1]",
+            id, seen, have
+        ),
+        (true, None) => return None,
+        (false, _) => format!(
+            "[{}]: version conflict, required seqNo [{}], primary term [1]. but no document was found",
+            id, seen
+        ),
+    };
+    Some(serde_json::json!({"index": idx.name, "id": id, "cause": {
+        "type": "version_conflict_engine_exception", "reason": reason,
+        "index": idx.name, "shard": "0", "index_uuid": idx.uuid.clone()}, "status": 409}))
 }
 
 // ------------------------------------------------------------ request cache
@@ -192,6 +250,7 @@ fn fingerprint(idx: &Index) -> u64 {
         idx.delete_total,
         idx.docs.len(),
         idx.pending.len(),
+        idx.searcher.stale.len(),
         idx.mapping_version,
         idx.seg_gen,
         idx.closed,

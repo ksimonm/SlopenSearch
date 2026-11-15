@@ -18,6 +18,7 @@ type pitContext struct {
 	keepAlive int64
 	creation  int64
 	indexName string
+	snap      *model.Snapshot // the versions of the hits when it was opened
 }
 
 func (s *Server) openPit(w http.ResponseWriter, r *http.Request, name string) {
@@ -37,14 +38,15 @@ func (s *Server) openPit(w http.ResponseWriter, r *http.Request, name string) {
 		writeError(w, &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: reason})
 		return
 	}
-	s.mu.RLock()
+	unlock := s.lockSearchView()
 	idx, ok := s.Indices[name]
 	if !ok {
-		s.mu.RUnlock()
+		unlock()
 		writeError(w, apierr.IndexNotFound(name))
 		return
 	}
 	hits := make([]search.MultiHit, 0, len(idx.Order))
+	var ids []string
 	for _, id := range idx.Order {
 		doc, live := idx.Docs[id]
 		if !live {
@@ -54,16 +56,18 @@ func (s *Server) openPit(w http.ResponseWriter, r *http.Request, name string) {
 			continue
 		}
 		hits = append(hits, search.MultiHit{Idx: idx, Id: id, Doc: doc, Score: 1})
+		ids = append(ids, id)
 	}
+	snap := idx.Snapshot(ids)
 	shards := idx.NumShards()
 	creation := time.Now().UnixMilli()
-	s.mu.RUnlock()
+	unlock()
 
 	s.pitMu.Lock()
 	s.pitCounter++
 	pid := fmt.Sprintf("slopensearch-pit-%d", s.pitCounter)
 	s.pits[pid] = &pitContext{idx: idx, hits: hits, shards: shards,
-		keepAlive: int64(d / time.Millisecond), creation: creation, indexName: name}
+		keepAlive: int64(d / time.Millisecond), creation: creation, indexName: name, snap: snap}
 	s.pitMu.Unlock()
 
 	writeJSON(w, 200, map[string]any{

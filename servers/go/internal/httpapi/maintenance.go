@@ -29,7 +29,7 @@ func (s *Server) maintenanceOp(w http.ResponseWriter, r *http.Request, spec, op 
 		shards += idx.NumShards()
 		switch op {
 		case "refresh":
-			idx.Pending = nil
+			idx.Refresh()
 		case "forcemerge":
 			idx.ForceMerged = true
 		}
@@ -37,7 +37,7 @@ func (s *Server) maintenanceOp(w http.ResponseWriter, r *http.Request, spec, op 
 	if op == "forcemerge" {
 		// flush everything on forcemerge
 		for _, idx := range indices {
-			idx.Pending = nil
+			idx.Refresh()
 		}
 	}
 	s.bumpState()
