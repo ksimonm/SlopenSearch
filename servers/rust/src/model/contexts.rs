@@ -23,4 +23,10 @@ pub struct ScrollState {
     /// The searched indices as they were when the scroll started: later pages
     /// read this point-in-time view, not the live indices.
     pub snapshot: HashMap<String, Index>,
+    /// Query parameters of the starting request that apply to every page.
+    pub params: Vec<(String, String)>,
+    /// The body of the starting request (error locations).
+    pub raw_body: Vec<u8>,
+    /// The hits of the following pages, searched together (see `http::scroll_pages`).
+    pub window: Option<crate::http::scroll_pages::Window>,
 }

@@ -204,7 +204,8 @@ pub fn run_search(
                 window = n;
             }
         }
-        if from + size > window {
+        let scroll_page = crate::http::scroll_pages::in_scroll_page();
+        if from + size > window && !scroll_page {
             if req.param("scroll").is_some() && size > window {
                 let reason = format!(
                     "Batch size is too large, size must be less than or equal to: [{}] but was [{}]. Scroll batch sizes cost as much memory as result windows so they are controlled by the [index.max_result_window] index level setting.",
@@ -1049,17 +1050,20 @@ pub fn run_search(
 
     let any_score_spec = specs.iter().any(|sp| sp.kind == 1);
     let omit_scores = sorted_by_field && !any_score_spec && !track_scores;
-    let max_score = if !specs.is_empty() && specs[0].kind == 1 {
-        if specs[0].desc && !page.is_empty() {
-            Some(page.iter().map(|h| h.score).fold(f64::NEG_INFINITY, f64::max))
+    // the maximum over every hit (none without hits to return: size 0)
+    let max_score = if size <= 0 && !names.is_empty() {
+        None
+    } else if !specs.is_empty() && specs[0].kind == 1 {
+        if specs[0].desc && !matched.is_empty() {
+            Some(matched.iter().map(|h| h.score).fold(f64::NEG_INFINITY, f64::max))
         } else {
             None
         }
     } else if names.is_empty() {
         Some(0.0)
-    } else if !omit_scores && !page.is_empty() && (track_scores || specs.is_empty()) {
+    } else if !omit_scores && !matched.is_empty() && (track_scores || specs.is_empty()) {
         Some(
-            page.iter()
+            matched.iter()
                 .map(|h| h.score)
                 .fold(f64::NEG_INFINITY, f64::max),
         )
@@ -1350,7 +1354,7 @@ pub fn run_search(
                 entry.insert("inner_hits".to_string(), Value::Object(out));
             }
         }
-        hits.push(Value::Object(entry));
+        hits.push(Value::Object(canonical_hit_order(entry)));
     }
 
     let mut resp = Map::new();
@@ -1605,6 +1609,23 @@ fn profile_query(q: &Value) -> Value {
     })
 }
 
+/// The keys of a search hit in the order OpenSearch writes them
+/// (`SearchHit.toXContent`); other keys keep their order, at the end.
+pub(crate) fn canonical_hit_order(mut entry: Map<String, Value>) -> Map<String, Value> {
+    const ORDER: [&str; 18] = [
+        "_shard", "_node", "_index", "_id", "_nested", "_version", "_seq_no", "_primary_term", "_score", "_routing",
+        "_ignored", "_source", "fields", "highlight", "sort", "matched_queries", "_explanation", "inner_hits",
+    ];
+    let mut out = Map::with_capacity(entry.len());
+    for k in ORDER {
+        if let Some(v) = entry.shift_remove(k) {
+            out.insert(k.to_string(), v);
+        }
+    }
+    out.extend(entry);
+    out
+}
+
 fn apply_search_extras(
     v: &mut Value,
     req: &Req,
@@ -1817,6 +1838,7 @@ fn apply_search_extras(
                     let shard = store.indices.get(&idx_name).map(|i| i.doc_shard(&id)).unwrap_or(0);
                     o.insert("_shard".to_string(), json!(format!("[{}][{}]", idx_name, shard)));
                     o.insert("_node".to_string(), json!("node-1"));
+                    *o = canonical_hit_order(std::mem::take(o));
                 }
             }
         }
@@ -2259,6 +2281,62 @@ fn scroll_parse_id(id: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// Searches the scroll's view for the page at the scroll position: a window of
+/// several pages, kept in the state, when the page can be cut from it.
+fn scroll_search(store: &mut Store, state: &mut ScrollState, req: &Req) -> Result<Value, ApiError> {
+    use crate::http::scroll_pages;
+    // the starting request's parameters, then the page request's own
+    let mut query = state.params.clone();
+    query.extend(scroll_pages::carried_params(&req.query).into_iter().filter(|(k, _)| k != "scroll_id"));
+    let preq = Req { method: req.method.clone(), path: req.path.clone(), query, headers: req.headers.clone(), body: state.raw_body.clone() };
+    let windowed = state.body.get("profile").is_none();
+    if windowed {
+        let size = scroll_pages::window_size(state.page);
+        let resp = scroll_view_search(store, state, &preq, size)?;
+        let mut w = scroll_pages::Window { start: state.pos, size, resp };
+        let page = w.take_page(state.pos, state.page);
+        state.window = Some(w);
+        if let Some(p) = page {
+            return Ok(p);
+        }
+        // the page cannot be cut from the window (not expected): search it alone
+        state.window = None;
+    }
+    let page = state.page;
+    scroll_view_search(store, state, &preq, page)
+}
+
+/// The search of the scroll's view with `from` = the scroll position. The live
+/// index answers as long as it did not change since the scroll started; else
+/// the copy taken then is swapped in for the search.
+fn scroll_view_search(store: &mut Store, state: &mut ScrollState, preq: &Req, size: usize) -> Result<Value, ApiError> {
+    let mut body = state.body.clone();
+    if let Some(o) = body.as_object_mut() {
+        o.insert("from".to_string(), json!(state.pos));
+        o.insert("size".to_string(), json!(size));
+    }
+    let swap: Vec<String> = state
+        .snapshot
+        .iter()
+        .filter(|(n, snap)| store.indices.get(*n).is_some_and(|live| !live.same_content(snap)))
+        .map(|(n, _)| n.clone())
+        .collect();
+    let exchange = |store: &mut Store, state: &mut ScrollState| {
+        for n in &swap {
+            if let (Some(live), Some(snap)) = (store.indices.get_mut(n), state.snapshot.get_mut(n)) {
+                std::mem::swap(live, snap);
+            }
+        }
+    };
+    exchange(store, state);
+    let (url_name, names) = (state.url_name.clone(), state.names.clone());
+    let result = crate::http::scroll_pages::as_scroll_page(|| {
+        crate::model::visibility::with_view(store, |store| run_search(store, &url_name, &names, &body, preq))
+    });
+    exchange(store, state);
+    result
+}
+
 pub fn handle_scroll(store: &mut Store, req: &Req, rest: &[String]) -> Response {
     if req.method == "DELETE" {
         let mut ids: Vec<String> = Vec::new();
@@ -2340,23 +2418,11 @@ pub fn handle_scroll(store: &mut Store, req: &Req, rest: &[String]) -> Response 
     let Some(mut state) = store.scrolls.remove(&id) else {
         return err_response(scroll_not_found(&id));
     };
-    let mut body = state.body.clone();
-    if let Some(o) = body.as_object_mut() {
-        o.insert("from".to_string(), json!(state.pos));
-        o.insert("size".to_string(), json!(state.page));
-    }
-    let names = state.names.clone();
-    for (n, snap) in state.snapshot.iter_mut() {
-        if let Some(live) = store.indices.get_mut(n) {
-            std::mem::swap(live, snap);
-        }
-    }
-    let result = crate::model::visibility::with_view(store, |store| run_search(store, &state.url_name, &names, &body, req));
-    for (n, snap) in state.snapshot.iter_mut() {
-        if let Some(live) = store.indices.get_mut(n) {
-            std::mem::swap(live, snap);
-        }
-    }
+    let cached = state.window.as_mut().and_then(|w| w.take_page(state.pos, state.page));
+    let result = match cached {
+        Some(v) => Ok(v),
+        None => scroll_search(store, &mut state, req),
+    };
     match result {
         Ok(mut v) => {
             let mut raw_len = 0usize;
@@ -2918,9 +2984,10 @@ fn handle_search_in(st: &mut StoreRef, req: &Req, name: &str) -> Response {
                 }
             }
             if let Some(_keep) = scroll_keep {
-                let page = body_value
-                    .get("size")
-                    .and_then(|v| v.as_i64())
+                let page = req
+                    .param("size")
+                    .and_then(|v| v.parse::<i64>().ok())
+                    .or_else(|| body_value.get("size").and_then(|v| v.as_i64()))
                     .unwrap_or(10)
                     .max(1) as usize;
                 let slice = scroll_slice_of(&body_value);
@@ -2948,6 +3015,9 @@ fn handle_search_in(st: &mut StoreRef, req: &Req, name: &str) -> Response {
                             .iter()
                             .filter_map(|n| store.indices.get(n).map(|i| (n.clone(), i.clone())))
                             .collect(),
+                        params: crate::http::scroll_pages::carried_params(&req.query),
+                        raw_body: req.body.clone(),
+                        window: None,
                     },
                 );
                 let mut out = Map::new();

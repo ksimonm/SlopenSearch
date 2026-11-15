@@ -103,13 +103,18 @@ pub fn enable_write_log() {
 /// assigns a new seq_no, so the log names exactly the documents a request touched.
 #[derive(Clone, Default, Debug)]
 pub struct SeqNos {
-    map: HashMap<String, i64>,
+    map: crate::model::shared::Shared<HashMap<String, i64>>,
     log: Vec<(String, i64)>,
     /// Set when the map was changed other than through `insert`.
     untracked: bool,
 }
 
 impl SeqNos {
+    /// Whether both share the same table (see `model::shared`).
+    pub fn same(&self, other: &SeqNos) -> bool {
+        self.map.same(&other.map)
+    }
+
     pub fn insert(&mut self, id: String, seq: i64) -> Option<i64> {
         if LOG_WRITES.load(Ordering::Relaxed) {
             self.log.push((id.clone(), seq));

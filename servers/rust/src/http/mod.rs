@@ -27,6 +27,7 @@ pub(crate) mod resolve_index;
 pub(crate) mod rollover;
 pub(crate) mod script_meta;
 pub(crate) mod scripts;
+pub(crate) mod scroll_pages;
 pub(crate) mod search;
 pub(crate) mod search_templates;
 pub(crate) mod shared;

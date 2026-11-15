@@ -3437,7 +3437,7 @@ pub fn apply_request_derived(idx: &mut Index, defs: &Value) -> Result<(), ApiErr
 pub fn recompute_all_doc_values(idx: &mut Index) {
     idx.doc_values.clear();
     idx.doc_ignored.clear();
-    let order = idx.order.clone();
+    let order: Vec<String> = idx.order.to_vec();
     for id in order {
         let mut doc = match idx.docs.get(&id) {
             Some(d) => d.clone(),

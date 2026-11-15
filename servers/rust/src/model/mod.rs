@@ -6,6 +6,7 @@ use crate::settings::{find_setting, setting_int, settings_value_string};
 pub(crate) mod contexts;
 pub(crate) mod inverted;
 pub(crate) mod routing;
+pub(crate) mod shared;
 pub(crate) mod tracked;
 pub(crate) mod visibility;
 
@@ -28,13 +29,13 @@ pub struct Index {
     pub mappings: Tracked<Value>,
     pub settings: Tracked<Map<String, Value>>,
     pub docs: inverted::Docs,
-    pub order: Vec<String>,
+    pub order: shared::Shared<Vec<String>>,
     pub field_types: Tracked<HashMap<String, String>>,
     pub closed: bool,
     pub aliases: Tracked<Map<String, Value>>,
     pub mapping_version: i64,
-    pub pending: HashMap<String, Value>,
-    pub routing: HashMap<String, String>,
+    pub pending: shared::Shared<HashMap<String, Value>>,
+    pub routing: shared::Shared<HashMap<String, String>>,
     pub seg_gen: i64,
     pub deletes: i64,
     pub data_stream: String,
@@ -43,10 +44,10 @@ pub struct Index {
     pub delete_total: i64,
     pub force_merged: bool,
     pub doc_values: inverted::DocValues,
-    pub doc_ignored: HashMap<String, Vec<String>>,
-    pub versions: HashMap<String, i64>,
+    pub doc_ignored: shared::Shared<HashMap<String, Vec<String>>>,
+    pub versions: shared::Shared<HashMap<String, i64>>,
     pub seq_nos: SeqNos,
-    pub raw_sources: HashMap<String, Vec<u8>>,
+    pub raw_sources: shared::Shared<HashMap<String, Vec<u8>>>,
     /// Last refreshed versions of updated documents, request cache.
     pub searcher: visibility::SearcherState,
     /// Inverted index over `doc_values` (derived, never persisted).
@@ -54,6 +55,27 @@ pub struct Index {
 }
 
 impl Index {
+    /// Whether `other` is a copy of this index with no change since (the
+    /// copy-on-write tables are still shared, the generations equal): a
+    /// search of either gives the same answer.
+    pub fn same_content(&self, other: &Index) -> bool {
+        self.uuid == other.uuid
+            && self.closed == other.closed
+            && self.docs.same(&other.docs)
+            && self.doc_values.same(&other.doc_values)
+            && self.order.same(&other.order)
+            && self.pending.same(&other.pending)
+            && self.routing.same(&other.routing)
+            && self.doc_ignored.same(&other.doc_ignored)
+            && self.versions.same(&other.versions)
+            && self.raw_sources.same(&other.raw_sources)
+            && self.seq_nos.same(&other.seq_nos)
+            && self.mappings.generation() == other.mappings.generation()
+            && self.settings.generation() == other.settings.generation()
+            && self.field_types.generation() == other.field_types.generation()
+            && self.aliases.generation() == other.aliases.generation()
+    }
+
     /// Minimal index used where OpenSearch only needs the mapping machinery
     /// (for example validating an alias filter query).
     pub fn skeleton(name: &str) -> Self {
@@ -64,13 +86,13 @@ impl Index {
             mappings: Value::Object(Map::new()).into(),
             settings: Map::new().into(),
             docs: Default::default(),
-            order: Vec::new(),
+            order: Vec::new().into(),
             field_types: HashMap::new().into(),
             closed: false,
             aliases: Map::new().into(),
             mapping_version: 0,
-            pending: HashMap::new(),
-            routing: HashMap::new(),
+            pending: HashMap::new().into(),
+            routing: HashMap::new().into(),
             seg_gen: 0,
             deletes: 0,
             data_stream: String::new(),
@@ -79,10 +101,10 @@ impl Index {
             delete_total: 0,
             force_merged: false,
             doc_values: Default::default(),
-            doc_ignored: HashMap::new(),
-            versions: HashMap::new(),
+            doc_ignored: HashMap::new().into(),
+            versions: HashMap::new().into(),
             seq_nos: SeqNos::default(),
-            raw_sources: HashMap::new(),
+            raw_sources: HashMap::new().into(),
             searcher: Default::default(),
             inverted: Default::default(),
         }
