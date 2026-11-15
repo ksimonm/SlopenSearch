@@ -63,22 +63,33 @@ pub const STATS_METRIC_NAMES: &[&str] = &[
     "recovery",
 ];
 
-fn empty_metric(name: &str) -> Value {
+pub(crate) fn empty_metric(name: &str) -> Value {
     match name {
         "docs" => json!({"count": 0, "deleted": 0}),
-        "store" => json!({"size_in_bytes": 0, "total_data_set_size_in_bytes": 0, "reserved_in_bytes": 0}),
+        "store" => json!({"size_in_bytes": 0, "reserved_in_bytes": 0}),
         "indexing" => json!({"index_total": 0, "index_time_in_millis": 0, "index_current": 0,
             "index_failed": 0, "delete_total": 0, "delete_time_in_millis": 0, "delete_current": 0,
-            "noop_update_total": 0, "is_throttled": false, "throttle_time_in_millis": 0}),
-        "get" => json!({"total": 0, "time_in_millis": 0, "exists_total": 0, "exists_time_in_millis": 0,
-            "missing_total": 0, "missing_time_in_millis": 0, "current": 0}),
-        "search" => json!({"query_total": 0, "query_time_in_millis": 0, "query_current": 0,
+            "noop_update_total": 0, "is_throttled": false, "throttle_time_in_millis": 0,
+            "max_last_index_request_timestamp": 0}),
+        "get" => json!({"total": 0, "getTime": "0s", "time_in_millis": 0, "exists_total": 0,
+            "exists_time_in_millis": 0, "missing_total": 0, "missing_time_in_millis": 0, "current": 0}),
+        "search" => json!({"open_contexts": 0, "query_total": 0, "query_time_in_millis": 0, "query_current": 0,
+            "query_failed": 0, "concurrent_query_total": 0, "concurrent_query_time_in_millis": 0,
+            "concurrent_query_current": 0, "concurrent_avg_slice_count": 0.0,
+            "startree_query_total": 0, "startree_query_time_in_millis": 0, "startree_query_current": 0,
+            "startree_query_failed": 0,
             "fetch_total": 0, "fetch_time_in_millis": 0, "fetch_current": 0,
             "scroll_total": 0, "scroll_time_in_millis": 0, "scroll_current": 0,
-            "suggest_total": 0, "suggest_time_in_millis": 0, "suggest_current": 0}),
+            "point_in_time_total": 0, "point_in_time_time_in_millis": 0, "point_in_time_current": 0,
+            "suggest_total": 0, "suggest_time_in_millis": 0, "suggest_current": 0,
+            "search_idle_reactivate_count_total": 0}),
         "merges" => json!({"current": 0, "current_docs": 0, "current_size_in_bytes": 0,
             "total": 0, "total_time_in_millis": 0, "total_docs": 0, "total_size_in_bytes": 0,
-            "total_stopped_time_in_millis": 0, "total_throttled_time_in_millis": 0, "total_auto_throttle_in_bytes": 0}),
+            "total_stopped_time_in_millis": 0, "total_throttled_time_in_millis": 0,
+            "total_auto_throttle_in_bytes": 41943040, "unreferenced_file_cleanups_performed": 0,
+            "warmer": {"total_invocations_count": 0, "total_time_millis": 0, "total_failure_count": 0,
+                "total_bytes_sent": 0, "total_bytes_received": 0, "total_send_time_millis": 0,
+                "total_receive_time_millis": 0, "ongoing_count": 0}}),
         "refresh" => json!({"total": 0, "total_time_in_millis": 0, "external_total": 0,
             "external_total_time_in_millis": 0, "listeners": 0}),
         "flush" => json!({"total": 0, "periodic": 0, "total_time_in_millis": 0}),
@@ -92,16 +103,29 @@ fn empty_metric(name: &str) -> Value {
             "norms_memory_in_bytes": 0, "points_memory_in_bytes": 0, "doc_values_memory_in_bytes": 0,
             "index_writer_memory_in_bytes": 0, "version_map_memory_in_bytes": 0,
             "fixed_bit_set_memory_in_bytes": 0, "max_unsafe_auto_id_timestamp": -1,
+            "remote_store": {
+                "upload": {
+                    "total_upload_size": {"started_bytes": 0, "succeeded_bytes": 0, "failed_bytes": 0},
+                    "refresh_size_lag": {"total_bytes": 0, "max_bytes": 0},
+                    "max_refresh_time_lag_in_millis": 0, "total_time_spent_in_millis": 0,
+                    "pressure": {"total_rejections": 0}},
+                "download": {
+                    "total_download_size": {"started_bytes": 0, "succeeded_bytes": 0, "failed_bytes": 0},
+                    "total_time_spent_in_millis": 0}},
+            "segment_replication": {"max_bytes_behind": 0, "total_bytes_behind": 0, "max_replication_lag": 0},
             "file_sizes": {}}),
         "translog" => json!({"operations": 0, "size_in_bytes": 0, "uncommitted_operations": 0,
-            "uncommitted_size_in_bytes": 0, "earliest_last_modified_age": 0}),
+            "uncommitted_size_in_bytes": 0, "earliest_last_modified_age": 0,
+            "remote_store": {"upload": {
+                "total_uploads": {"started": 0, "failed": 0, "succeeded": 0},
+                "total_upload_size": {"started_bytes": 0, "failed_bytes": 0, "succeeded_bytes": 0}}}}),
         "request_cache" => json!({"memory_size_in_bytes": 0, "evictions": 0, "hit_count": 0, "miss_count": 0}),
         "recovery" => json!({"current_as_source": 0, "current_as_target": 0, "throttle_time_in_millis": 0}),
         _ => json!({}),
     }
 }
 
-fn index_metrics(idx: &crate::model::Index, requested: Option<&Vec<String>>) -> Value {
+pub(crate) fn index_metrics(idx: &crate::model::Index, requested: Option<&Vec<String>>) -> Value {
     let mut out = Map::new();
     for name in STATS_METRIC_NAMES {
         if let Some(req) = requested {
@@ -117,7 +141,6 @@ fn index_metrics(idx: &crate::model::Index, requested: Option<&Vec<String>>) -> 
             }
             "store" => {
                 m["size_in_bytes"] = json!(idx.store_bytes());
-                m["total_data_set_size_in_bytes"] = json!(idx.store_bytes());
             }
             "indexing" => {
                 m["index_total"] = json!(idx.index_total.saturating_sub(idx.delete_total));
@@ -134,7 +157,7 @@ fn index_metrics(idx: &crate::model::Index, requested: Option<&Vec<String>>) -> 
     Value::Object(out)
 }
 
-fn merge_metrics(dst: &mut Map<String, Value>, src: &Map<String, Value>) {
+pub(crate) fn merge_metrics(dst: &mut Map<String, Value>, src: &Map<String, Value>) {
     for (k, v) in src {
         let sv = match v.as_object() {
             Some(s) => s,
@@ -226,18 +249,17 @@ pub fn handle_stats_api(store: &mut Store, req: &Req, spec: &str, metrics: &str)
         entry.insert("primaries".to_string(), prim.clone());
         entry.insert("total".to_string(), total.clone());
         if level == "shards" {
-            let shard_arr = json!([{
-                "id": 0,
-                "routing": {"state": "STARTED", "primary": true, "node": NODE_ID},
-                "docs": prim.get("docs"),
-                "store": prim.get("store"),
-                "indexing": prim.get("indexing"),
-                "search": prim.get("search"),
-                "merges": prim.get("merges"),
-                "refresh": prim.get("refresh"),
-                "flush": prim.get("flush"),
-                "segments": {"count": 1},
-            }]);
+            let mut shard = Map::new();
+            shard.insert(
+                "routing".to_string(),
+                json!({"state": "STARTED", "primary": true, "node": NODE_ID, "relocating_node": null}),
+            );
+            if let Some(p) = prim.as_object() {
+                for (k, v) in p {
+                    shard.insert(k.clone(), v.clone());
+                }
+            }
+            let shard_arr = json!([Value::Object(shard)]);
             entry.insert("shards".to_string(), json!({"0": shard_arr}));
         }
         indices_out.insert(idx.name.clone(), Value::Object(entry));

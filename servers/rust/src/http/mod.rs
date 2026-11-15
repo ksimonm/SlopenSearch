@@ -18,6 +18,7 @@ pub(crate) mod knn_api;
 pub(crate) mod maintenance;
 pub(crate) mod meta;
 pub(crate) mod net_io;
+pub(crate) mod node_stats;
 pub(crate) mod nodes;
 pub(crate) mod painless_exec;
 pub(crate) mod reindex;

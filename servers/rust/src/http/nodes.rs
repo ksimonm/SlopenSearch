@@ -14,7 +14,6 @@ fn bare_no_handler(req: &Req) -> Response {
     )
 }
 use crate::resp::glob_match;
-use crate::http::shared::resolve_indices;
 use crate::model::{CLUSTER_NAME, NODE_ID, NODE_NAME, NODE_VERSION, Store, now_millis};
 use crate::http::Req;
 use axum::response::Response;
@@ -443,26 +442,13 @@ fn handle_node_stats(
     if !selector.is_empty() && !nodes_selector_matches(selector) {
         return json_response(200, empty_nodes_response());
     }
-    let all_default = [
-        "indices",
-        "os",
-        "process",
-        "jvm",
-        "thread_pool",
-        "fs",
-        "transport",
-        "http",
-        "breakers",
-        "script",
-        "discovery",
-        "ingest",
-    ];
+    let all_default = crate::http::node_stats::NODE_STATS_SECTIONS;
     let mut metrics: Vec<String> = vec![];
     let explicit_metrics = !metric.is_empty();
     let mut index_metric = index_metric.to_string();
     if explicit_metrics {
         for m in metric.split(',') {
-            if !NODE_STATS_METRICS.contains(&m) {
+            if !NODE_STATS_METRICS.contains(&m) && !crate::http::node_stats::NODE_STATS_SECTIONS.contains(&m) {
                 if m == "breakers" {
                     return err_response(ApiError::new(
                         "illegal_argument_exception",
@@ -548,7 +534,7 @@ fn handle_node_stats(
             }),
         );
     }
-    let stats = build_node_stats(store, &metrics, &index_metric, &level);
+    let stats = crate::http::node_stats::build_node_stats(store, &metrics, &index_metric, &level);
     json_response(
         200,
         json!({
@@ -557,198 +543,6 @@ fn handle_node_stats(
             "nodes": {NODE_ID: Value::Object(stats)},
         }),
     )
-}
-
-fn build_node_stats(
-    store: &mut Store,
-    metrics: &[String],
-    index_metric: &str,
-    level: &str,
-) -> Map<String, Value> {
-    let mut stats = Map::new();
-    stats.insert("timestamp".into(), json!(now_millis()));
-    stats.insert("name".into(), json!(NODE_NAME));
-    stats.insert("transport_address".into(), json!(NODE_TRANSPORT));
-    stats.insert("host".into(), json!(NODE_HOST));
-    stats.insert("ip".into(), json!(NODE_HOST));
-    stats.insert("roles".into(), node_roles());
-    stats.insert("attributes".into(), node_attributes());
-
-    let mut want: Vec<&str> = metrics.iter().map(|s| s.as_str()).collect();
-    if want.contains(&"breaker") {
-        want.push("breakers");
-    }
-    let has = |m: &str| want.contains(&m);
-
-    if has("indices") {
-        let names: Vec<String> = resolve_indices(store, "*", false, true, false)
-            .map(|v| v.iter().map(|i| i.name.clone()).collect())
-            .unwrap_or_default();
-        let mut docs_total: i64 = 0;
-        let deleted_total: i64 = 0;
-        let mut per_index = Map::new();
-        for name in &names {
-            let idx = match store.indices.get(name) {
-                Some(i) => i,
-                None => continue,
-            };
-            if idx.closed {
-                continue;
-            }
-            docs_total += idx.docs.len() as i64;
-            per_index.insert(
-                name.clone(),
-                json!({"docs": {"count": idx.docs.len() as i64, "deleted": 0}}),
-            );
-        }
-        let mut idx_stats = Map::new();
-        idx_stats.insert(
-            "docs".into(),
-            json!({"count": docs_total, "deleted": deleted_total}),
-        );
-        idx_stats.insert(
-            "store".into(),
-            json!({"size_in_bytes": docs_total * 64, "reserved_in_bytes": 0}),
-        );
-        idx_stats.insert(
-            "status_counter".into(),
-            json!({"total": 0, "successful": 0, "failed": 0}),
-        );
-        if !index_metric.is_empty() && !index_metric.contains("_all") {
-            let mut only = Map::new();
-            for m in index_metric.split(',') {
-                if let Some(v) = idx_stats.get(m) {
-                    only.insert(m.to_string(), v.clone());
-                }
-            }
-            only.insert(
-                "status_counter".into(),
-                idx_stats.get("status_counter").cloned().unwrap_or(json!({})),
-            );
-            idx_stats = only;
-        }
-        if level == "indices" {
-            idx_stats.insert("indices".into(), Value::Object(per_index));
-        }
-        stats.insert("indices".into(), Value::Object(idx_stats));
-    }
-    if has("os") {
-        stats.insert(
-            "os".into(),
-            json!({
-                "timestamp": now_millis(),
-                "cpu": {"percent": 0, "load_average": {"1m": 0.0, "5m": 0.0, "15m": 0.0}},
-                "mem": {"total_in_bytes": 1, "free_in_bytes": 1, "used_in_bytes": 0, "free_percent": 100, "used_percent": 0},
-                "swap": {"total_in_bytes": 1, "free_in_bytes": 1, "used_in_bytes": 0},
-            }),
-        );
-    }
-    if has("process") {
-        stats.insert(
-            "process".into(),
-            json!({
-                "timestamp": now_millis(),
-                "open_file_descriptors": 100,
-                "max_file_descriptors": 65535,
-                "cpu": {"percent": 0, "total_in_millis": 0},
-                "mem": {"total_virtual_in_bytes": 1},
-            }),
-        );
-    }
-    if has("jvm") {
-        stats.insert(
-            "jvm".into(),
-            json!({
-                "timestamp": now_millis(),
-                "uptime_in_millis": 1000,
-                "mem": {"heap_used_in_bytes": 0, "heap_used_percent": 0, "heap_max_in_bytes": 1073741824},
-                "threads": {"count": 50, "peak_count": 60},
-                "gc": {"collectors": {"young": {"collection_count": 0}, "old": {"collection_count": 0}}},
-                "buffer_pools": {},
-                "classes": {"current_loaded_count": 1000, "total_loaded_count": 1000, "total_unloaded_count": 0},
-            }),
-        );
-    }
-    if has("thread_pool") {
-        stats.insert("thread_pool".into(), node_thread_pools());
-    }
-    if has("fs") {
-        stats.insert(
-            "fs".into(),
-            json!({
-                "timestamp": now_millis(),
-                "total": {"total_in_bytes": 1, "free_in_bytes": 1, "available_in_bytes": 1},
-                "data": [{"path": "/tmp/os", "mount": "/", "type": "ext4", "total_in_bytes": 1, "free_in_bytes": 1, "available_in_bytes": 1}],
-                "io_stats": {"devices": [], "total": {"operations": 0, "read_operations": 0, "write_operations": 0, "read_kilobytes": 0, "write_kilobytes": 0}},
-            }),
-        );
-    }
-    if has("transport") {
-        stats.insert(
-            "transport".into(),
-            json!({
-                "server_open": 1, "total_outbound_connections": 0, "rx_count": 0,
-                "rx_size_in_bytes": 0, "tx_count": 0, "tx_size_in_bytes": 0,
-            }),
-        );
-    }
-    if has("http") {
-        stats.insert("http".into(), json!({"current_open": 0, "total_opened": 1}));
-    }
-    if has("breakers") {
-        let breaker = |limit: i64| {
-            json!({
-                "limit_size_in_bytes": limit, "limit_size": "1gb", "estimated_size_in_bytes": 0,
-                "estimated_size": "0b", "overhead": 1.0, "tripped": 0,
-            })
-        };
-        stats.insert(
-            "breakers".into(),
-            json!({
-                "request": breaker(536870912),
-                "fielddata": breaker(214748364),
-                "in_flight_requests": breaker(1073741824),
-                "parent": breaker(1000000000),
-                "accounting": breaker(1073741824),
-            }),
-        );
-    }
-    if has("script") {
-        stats.insert(
-            "script".into(),
-            json!({"compilations": 0, "cache_evictions": 0, "compilation_limit_triggered": 0}),
-        );
-    }
-    if has("discovery") {
-        stats.insert(
-            "discovery".into(),
-            json!({
-                "cluster_state_queue": {"total": 0, "pending": 0, "committed": 0},
-                "published_cluster_states": {"full_states": 0, "incompatible_diffs": 0, "compatible_diffs": 0},
-            }),
-        );
-    }
-    if has("ingest") {
-        stats.insert(
-            "ingest".into(),
-            json!({"total": {"count": 0, "time_in_millis": 0, "current": 0, "failed": 0}}),
-        );
-    }
-    if has("adaptive_selection") {
-        stats.insert("adaptive_selection".into(), json!({}));
-    }
-    if has("indexing_pressure") {
-        stats.insert(
-            "indexing_pressure".into(),
-            json!({
-                "memory": {
-                    "current": {"all_in_bytes": 0},
-                    "total": {"all_in_bytes": 0},
-                }
-            }),
-        );
-    }
-    stats
 }
 
 fn handle_node_usage(req: &Req) -> Response {
