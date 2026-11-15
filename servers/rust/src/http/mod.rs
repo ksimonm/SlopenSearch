@@ -167,6 +167,14 @@ fn parse_query(uri: &Uri) -> Vec<(String, String)> {
 }
 
 
+/// Parses a response body for re-encoding, keeping the text of its numbers.
+fn reparse_body(body: &[u8]) -> Option<Value> {
+    let text = std::str::from_utf8(body).ok()?;
+    let mut v = serde_json::from_str::<Value>(text).ok()?;
+    fix_exponent_literals(text, &mut v);
+    Some(v)
+}
+
 async fn handle(State(store): State<Shared>, request: axum::extract::Request) -> axum::response::Response {
     let head = request.method() == axum::http::Method::HEAD;
     let accept = request
@@ -344,7 +352,7 @@ async fn handle_plain(store: Shared, request: axum::extract::Request) -> axum::r
         let mut body: Vec<u8> = body_bytes.to_vec();
         let mut reencoded = false;
         if !fp.is_empty() && status < 400 {
-            if let Ok(v) = serde_json::from_slice::<Value>(&body) {
+            if let Some(v) = reparse_body(&body) {
                 body = serde_json::to_vec(&filter_path_value(&v, &fp)).unwrap_or_default();
                 reencoded = true;
             }
@@ -354,7 +362,7 @@ async fn handle_plain(store: Shared, request: axum::extract::Request) -> axum::r
                 match raw_source_at.filter(|_| !reencoded) {
                     Some(at) => body = resp::pretty_with_raw_source(&body, at),
                     None => {
-                        if let Ok(v) = serde_json::from_slice::<Value>(&body) {
+                        if let Some(v) = reparse_body(&body) {
                             body = pretty_json(&v).into_bytes();
                         }
                     }
@@ -366,7 +374,7 @@ async fn handle_plain(store: Shared, request: axum::extract::Request) -> axum::r
             }
         }
         if status >= 400 && error_trace {
-            if let Ok(mut v) = serde_json::from_slice::<Value>(&body) {
+            if let Some(mut v) = reparse_body(&body) {
                 if let Some(err_obj) = v.get_mut("error").and_then(|e| e.as_object_mut()) {
                     let stk = Value::String(errors::stack_trace(err_obj));
                     if let Some(rc) = err_obj.get_mut("root_cause").and_then(|r| r.as_array_mut()) {
