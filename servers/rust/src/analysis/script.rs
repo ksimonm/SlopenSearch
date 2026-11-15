@@ -321,7 +321,7 @@ impl<'a> Ev<'a> {
                         "getPositionLength" => V::Int(t.pos_len as i64),
                         "getStartOffset" => V::Int(t.start as i64),
                         "getEndOffset" => V::Int(t.end as i64),
-                        "getType" => V::Str(t.typ.clone()),
+                        "getType" => V::Str(t.typ.to_string()),
                         "isKeyword" => V::Bool(t.keyword),
                         _ => return Err(format!("unknown token method [{}]", name)),
                     })

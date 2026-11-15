@@ -721,16 +721,10 @@ pub(crate) fn compute_sort_cell(store: &Store, h: &MultiHit, sp: &SortSpec) -> R
         }
         return Ok((false, if best.is_finite() { json!(best) } else { json!("Infinity") }));
     }
-    let nested_missing = sp.nested.is_none()
-        && sp.field.contains('.')
-        && nested_parent_of(idx, &sp.field).is_some();
-    let def = sort_mapping_def(idx, &sp.field);
-    let ftype = def
-        .as_ref()
-        .and_then(|d| d.get("type"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let prep = sort_field_prep(idx, sp);
+    let nested_missing = sp.nested.is_none() && prep.nested_missing;
+    let def = &prep.def;
+    let ftype = &prep.ftype;
     if def.is_none() {
         if let Some(ut) = &sp.unmapped_type {
             let sentinel = match ut.as_str() {
@@ -775,15 +769,11 @@ pub(crate) fn compute_sort_cell(store: &Store, h: &MultiHit, sp: &SortSpec) -> R
         vals = nested_sort_values(idx, &h.id, sp, path);
     } else if nested_missing {
         vals = vec![];
-    } else {
-        let sf = crate::mapping::resolve_alias_field(idx, &sp.field);
-        if let Some(dv) = idx.doc_values.get(&h.id).and_then(|m| m.get(&sf)) {
-            vals = crate::search::eval::array_values(dv);
-        }
+    } else if let Some(dv) = idx.doc_values.get(&h.id).and_then(|m| m.get(&prep.sf)) {
+        vals = crate::search::eval::array_values(dv);
     }
     if vals.is_empty() && sp.nested.is_none() && !nested_missing {
-        let sf = crate::mapping::resolve_alias_field(idx, &sp.field);
-        vals = source_sort_list(idx, &h.id, &sf);
+        vals = source_sort_list(idx, &h.id, &prep.sf);
     }
     if text_fielddata {
         vals = vals
@@ -831,6 +821,42 @@ pub(crate) fn compute_sort_cell(store: &Store, h: &MultiHit, sp: &SortSpec) -> R
         })),
         None => Ok((true, sort_missing_sentinel(sp, &ftype, sp.desc))),
     }
+}
+
+/// What [`compute_sort_cell`] derives from the mapping for a field sort,
+/// once per mapping generation and field instead of once per hit.
+struct SortPrep {
+    gen: u64,
+    field: String,
+    nested_missing: bool,
+    def: Option<Map<String, Value>>,
+    ftype: String,
+    /// The field with aliases resolved (the doc values key).
+    sf: String,
+}
+
+thread_local! {
+    static SORT_PREPS: std::cell::RefCell<Vec<std::rc::Rc<SortPrep>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn sort_field_prep(idx: &Index, sp: &SortSpec) -> std::rc::Rc<SortPrep> {
+    let gen = idx.mappings.generation();
+    if let Some(p) = SORT_PREPS.with(|c| c.borrow().iter().find(|p| p.gen == gen && p.field == sp.field).cloned()) {
+        return p;
+    }
+    let nested_missing = sp.field.contains('.') && nested_parent_of(idx, &sp.field).is_some();
+    let def = sort_mapping_def(idx, &sp.field);
+    let ftype = def.as_ref().and_then(|d| d.get("type")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let sf = crate::mapping::resolve_alias_field(idx, &sp.field);
+    let p = std::rc::Rc::new(SortPrep { gen, field: sp.field.clone(), nested_missing, def, ftype, sf });
+    SORT_PREPS.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() >= 8 {
+            c.remove(0);
+        }
+        c.push(p.clone());
+    });
+    p
 }
 
 pub(crate) fn cmp_sort_cells(a: &(bool, Value), b: &(bool, Value)) -> Ordering {

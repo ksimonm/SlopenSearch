@@ -303,7 +303,7 @@ fn language_analyzer(name: &str, params: &Map<String, Value>, text: &str) -> Str
     for t in toks {
         pos += t.pos_inc as isize;
         let p = pos.max(0) as usize;
-        let mut tok = Token::new(t.term, t.start, t.end, &t.typ, p);
+        let mut tok = Token::new(t.term, t.start, t.end, t.typ, p);
         tok.pos_len = t.pos_len;
         tok.keyword = t.keyword;
         end_pos = end_pos.max(p + t.pos_len);
@@ -373,6 +373,15 @@ enum Wb {
 }
 
 fn wb(c: char) -> Wb {
+    // ASCII from a table filled by the general classification below.
+    static ASCII: std::sync::OnceLock<[Wb; 128]> = std::sync::OnceLock::new();
+    if c.is_ascii() {
+        return ASCII.get_or_init(|| std::array::from_fn(|i| wb_general(i as u8 as char)))[c as usize];
+    }
+    wb_general(c)
+}
+
+fn wb_general(c: char) -> Wb {
     let v = c as u32;
     if v == 0x200D {
         return Wb::Zwj;
@@ -578,7 +587,7 @@ fn standard(t: &Text, max_len: usize, urls: bool) -> Stream {
     let mut pos = 0usize;
     let width = |a: usize, b: usize| t.off[b] - t.off[a];
     let mut i = 0;
-    let emit = |out: &mut Vec<Token>, a: usize, b: usize, typ: &str, pos: &mut usize| {
+    let emit = |out: &mut Vec<Token>, a: usize, b: usize, typ: &'static str, pos: &mut usize| {
         out.push(Token::new(t.slice(a, b), t.off[a], t.off[b], typ, *pos));
         *pos += 1;
     };
@@ -878,7 +887,7 @@ fn classic(t: &Text, max_len: usize) -> Stream {
                     end = t.off[i + l];
                 }
                 if utf16_len(&term) <= max_len {
-                    out.push(Token::new(term, t.off[i], end, &typ, pos));
+                    out.push(Token::new(term, t.off[i], end, typ, pos));
                 }
                 pos += 1;
                 i += l;

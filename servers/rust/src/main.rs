@@ -47,6 +47,19 @@ async fn run() {
     let port = std::env::var("PORT").unwrap_or_else(|_| "9200".to_string());
     let addr = format!("{}:{}", host, port);
     let store: http::Shared = Arc::new(RwLock::new(storage::open()));
+    // Index every recovered document in the background (several indices and
+    // fields at once) under a shared lock: the server answers meanwhile, a
+    // search that needs an index still being built waits for it.
+    {
+        let store = store.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let guard = store.read().unwrap_or_else(|e| e.into_inner());
+            let _ = tx.send(());
+            search::index::index_all(&guard);
+        });
+        let _ = rx.recv();
+    }
     let listener = match http::listen(&addr).await {
         Ok(l) => l,
         Err(e) => {

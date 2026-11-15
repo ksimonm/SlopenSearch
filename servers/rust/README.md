@@ -1,7 +1,7 @@
 # SlopenSearch — Rust implementation
 
 `axum` + `tokio` + `serde_json` (plus `regex`, `base64`, `jiff` for the tz database and the
-RustCrypto `md-5`/`sha1`/`sha2`/`sha3` hashes, `yaml-rust2` for YAML request bodies); the server keeps all data
+RustCrypto `md-5`/`sha1`/`sha2`/`sha3` hashes, `yaml-rust2` for YAML request bodies, `rayon` and `hashbrown` for the inverted index, see [docs/engine-design.md](../../docs/engine-design.md)); the server keeps all data
 in memory behind one `Arc<Mutex<Store>>` and, by default, persists it to a data
 directory (see [Persistence](#persistence)). Much of the query and aggregation code is a port
 of the Go server, which remains a useful second reading of the expected behaviour.

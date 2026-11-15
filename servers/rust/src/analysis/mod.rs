@@ -54,15 +54,15 @@ pub struct Token {
     pub term: String,
     pub start: usize,
     pub end: usize,
-    pub typ: String,
+    pub typ: std::borrow::Cow<'static, str>,
     pub pos: usize,
     pub pos_len: usize,
     pub keyword: bool,
 }
 
 impl Token {
-    pub fn new(term: String, start: usize, end: usize, typ: &str, pos: usize) -> Token {
-        Token { term, start, end, typ: typ.to_string(), pos, pos_len: 1, keyword: false }
+    pub fn new(term: String, start: usize, end: usize, typ: impl Into<std::borrow::Cow<'static, str>>, pos: usize) -> Token {
+        Token { term, start, end, typ: typ.into(), pos, pos_len: 1, keyword: false }
     }
 }
 
