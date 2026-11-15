@@ -1,6 +1,7 @@
 # SlopenSearch — Rust implementation
 
-`axum` + `tokio` + `serde_json` (plus `regex` and `base64`); the server keeps all data
+`axum` + `tokio` + `serde_json` (plus `regex`, `base64`, `jiff` for the tz database and the
+RustCrypto `md-5`/`sha1`/`sha2`/`sha3` hashes); the server keeps all data
 in memory behind one `Arc<Mutex<Store>>` and, by default, persists it to a data
 directory (see [Persistence](#persistence)). Much of the query and aggregation code is a port
 of the Go server, which remains a useful second reading of the expected behaviour.
@@ -99,8 +100,8 @@ main ─► http ─► suggest ─► search ─► mapping ─► model ─►
 
 Checked with `grep -rhoE 'crate::[a-z_]+' src/<module>`: no module outside `src/http`
 names `crate::http`; `search` does not name `aggs`, `suggest`, `ingest` or `storage`;
-`mapping` does not name `search`; `model` only names `settings`; `painless` and
-`mustache` name nothing in the crate.
+`mapping` does not name `search`; `model` only names `settings`; `painless` only names
+`calendar`; `mustache` names nothing in the crate.
 
 Domain and engine modules:
 
@@ -112,7 +113,7 @@ Domain and engine modules:
 | `search/` | `eval.rs`/`eval_extra.rs`: query evaluation and scoring (`QueryCtx`); `analyzed.rs`: query-time analysis; `highlight.rs`/`hl_analyzed.rs`; `knn_query.rs`; `fetch.rs` (doc values, `fields`, script fields), `sort.rs` (sort specs, `search_after`), `source.rs` (`_source` filtering), `inner_hits.rs` (inner hits, collapse), `request.rs` (named queries, rescore, terms lookup), `validate.rs` (shard-level query validation); script glue: `script_ctx.rs` (prepared scripts, shard failures), `script_env.rs`, `painless_doc.rs` (the `doc` variable, score functions), `expressions.rs` (Lucene expressions, bound to `QueryCtx`) | analysis, dates, errors, jsonv, mapping, model, painless, resp, scripting, settings |
 | `aggs/` | bucket, metric and pipeline aggregations; `hdr.rs`: HDR histogram for percentiles | search, mapping, model, ... |
 | `suggest/` | term (`mod.rs`), phrase with collate (`phrase.rs`) and completion (`completion.rs`) suggesters | search, mapping, model, mustache, ... |
-| `ingest/` | ingest pipelines: validation, processors, `on_failure`, `_simulate`, search pipelines; `script.rs`: the script subset of ingest processors | errors, hashes, model, resp, scripting, settings |
+| `ingest/` | ingest pipelines: validation, processors, `on_failure`, `_simulate`, search pipelines; `script.rs`: the script subset of ingest processors | calendar, errors, model, resp, scripting, settings |
 | `storage/` | durable state: snapshot + synced journal of the `Store` (`storage::open`, `after_request`) | mapping, model, scripting |
 | `http/` | the HTTP adapter (see below) | everything above |
 
@@ -124,14 +125,14 @@ Leaf libraries (no server state):
 | `resp.rs` | response rendering: pretty JSON, `filter_path`, YAML, number formatting, `glob_match` |
 | `jsonv.rs` | JSON value helpers (`to_f64`, `value_to_string`, dotted paths), exponent literal preservation, duplicate key detection |
 | `settings.rs` | index settings lookup (`find_setting`, `setting_int`, ...) |
-| `dates.rs` | date parsing, civil calendar arithmetic, Java date format patterns |
+| `dates.rs` | date parsing, Java date format patterns |
+| `calendar.rs` | the civil calendar (`days_from_civil`, `civil_from_days`) and `java.time` zones: `ZoneId.of` IDs and error texts, offsets, local-time resolution and transitions from `jiff`'s bundled tz database |
 | `analysis/` | tokenizers, token/char filters, analyzers and analysis chains from index settings; `basic.rs`: the simple built-in analysis (lowercasing, CJK bigrams, fuzziness) |
 | `lucene/` | Lucene analysis algorithm ports: stemmers, normalizers, case mapping, UAX#29 tokenizer, Thai, generated tables |
 | `snowball/` | the Snowball runtime and the generated stemmers |
 | `jregex.rs`, `uchar.rs` | backtracking `java.util.regex` subset; Java `Character` classification |
 | `painless/` | Painless: lexer, parser, static checks with Painless-exact compile errors, interpreter, Java value semantics, class library, java.time, regex with the limit-factor circuit breaker; `api.rs`: script contexts, compilation, error rendering, `run_with_stack` |
 | `mustache.rs` | mustache templates (mustache.java semantics) |
-| `hashes.rs` | md5/sha1/sha256/sha3 for the fingerprint processor |
 
 Files of `http/`:
 
