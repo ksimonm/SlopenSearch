@@ -20,6 +20,7 @@ import (
 	"slopensearch/internal/apierr"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/painless"
+	"slopensearch/internal/zone"
 )
 
 func parseIP(s string) (net.IP, bool) {
@@ -789,11 +790,12 @@ func (s *Engine) procDate(cfg map[string]any, env *ingestEnv) *apierr.Error {
 			Reason: "field [" + field + "] not present as part of path [" + field + "]"}
 	}
 	formats := env.resolveFieldPath(cfg["formats"])
-	loc, zoneName, zerr := ingestLocation(cfgString(cfg, "timezone"))
+	z, zerr := ingestLocation(cfgString(cfg, "timezone"))
 	if zerr != nil {
-		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "failed to parse date", CausedBy: zerr}
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
+			Reason: "unable to parse date [" + ingestString(v) + "]", CausedBy: zerr}
 	}
-	t, err := parseIngestDate(v, formats, loc, cfgString(cfg, "locale"))
+	t, err := parseIngestDate(v, formats, z, cfgString(cfg, "locale"))
 	if err != nil {
 		return err
 	}
@@ -808,41 +810,28 @@ func (s *Engine) procDate(cfg map[string]any, env *ingestEnv) *apierr.Error {
 	} else {
 		formatted = formatISOMillis(t)
 	}
-	_ = zoneName
 	return env.setField(target, formatted, true)
 }
 
-func ingestLocation(name string) (*time.Location, string, *apierr.Error) {
-	if name == "" || name == "UTC" {
-		return time.UTC, "UTC", nil
+// ingestLocation resolves the timezone option with ZoneId.of.
+func ingestLocation(name string) (*zone.Zone, *apierr.Error) {
+	if name == "" {
+		return zone.UTC, nil
 	}
-	if strings.HasPrefix(name, "+") || strings.HasPrefix(name, "-") {
-		sign := 1
-		if name[0] == '-' {
-			sign = -1
-		}
-		parts := strings.Split(name[1:], ":")
-		h, _ := strconv.Atoi(parts[0])
-		m := 0
-		if len(parts) > 1 {
-			m, _ = strconv.Atoi(parts[1])
-		}
-		off := sign * (h*3600 + m*60)
-		return time.FixedZone(name, off), name, nil
-	}
-	loc, err := time.LoadLocation(name)
+	z, err := zone.Cached(name)
 	if err != nil {
-		return nil, name, &apierr.Error{Type: "zone_rules_exception", Status: 400, Reason: "Unknown time-zone ID: " + name}
+		return nil, err.API()
 	}
-	return loc, name, nil
+	return z, nil
 }
 
-func parseIngestDate(v any, formats []string, loc *time.Location, locale string) (time.Time, *apierr.Error) {
+func parseIngestDate(v any, formats []string, z *zone.Zone, locale string) (time.Time, *apierr.Error) {
+	loc := z.Location()
 	raw := ingestString(v)
 	for _, f := range formats {
 		switch f {
 		case "ISO8601", "strict_date_optional_time", "date_optional_time":
-			if t, ok := parseISODate(raw, loc); ok {
+			if t, ok := parseISODate(raw, z); ok {
 				return t, nil
 			}
 		case "UNIX":
@@ -863,7 +852,7 @@ func parseIngestDate(v any, formats []string, loc *time.Location, locale string)
 				return t, nil
 			}
 		default:
-			if t, ok := parseJavaDate(raw, f, loc, locale); ok {
+			if t, ok := parseJavaDate(raw, f, z, locale); ok {
 				return t, nil
 			}
 		}
@@ -896,7 +885,8 @@ func parseTAI64N(s string, loc *time.Location) (time.Time, bool) {
 	return time.Unix(unix, ns).In(loc), true
 }
 
-func parseISODate(raw string, loc *time.Location) (time.Time, bool) {
+func parseISODate(raw string, z *zone.Zone) (time.Time, bool) {
+	loc := z.Location()
 	layouts := []string{
 		time.RFC3339Nano,
 		"2006-01-02T15:04:05.999999999Z07:00",
@@ -909,8 +899,9 @@ func parseISODate(raw string, loc *time.Location) (time.Time, bool) {
 		var err error
 		if strings.Contains(l, "Z07:00") {
 			t, err = time.Parse(l, raw)
-		} else {
-			t, err = time.ParseInLocation(l, raw, loc)
+		} else if t, err = time.Parse(l, raw); err == nil {
+			// a local time in a gap moves forward, an overlap takes the earlier offset
+			t = z.LocalToTime(t)
 		}
 		if err == nil {
 			return t.In(loc), true
@@ -919,7 +910,8 @@ func parseISODate(raw string, loc *time.Location) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-func parseJavaDate(raw, format string, loc *time.Location, locale string) (time.Time, bool) {
+func parseJavaDate(raw, format string, z *zone.Zone, locale string) (time.Time, bool) {
+	loc := z.Location()
 	goFmt := javaDateToGo(format)
 	if strings.Contains(format, "MMM") {
 		raw = localizeMonth(raw, locale)
@@ -927,6 +919,15 @@ func parseJavaDate(raw, format string, loc *time.Location, locale string) (time.
 	if strings.Contains(format, "MM/dd") && !strings.Contains(format, "yyyy") && !strings.Contains(format, "yy") {
 		goFmt = "2006/" + goFmt
 		raw = strconv.Itoa(time.Now().Year()) + "/" + raw
+	}
+	if !strings.Contains(goFmt, "07") && !strings.Contains(goFmt, "MST") {
+		// a local time: in a gap it moves forward, in an overlap it takes the
+		// earlier offset
+		t, err := time.Parse(goFmt, raw)
+		if err != nil {
+			return time.Time{}, false
+		}
+		return z.LocalToTime(t), true
 	}
 	t, err := time.ParseInLocation(goFmt, raw, loc)
 	if err != nil {
@@ -971,7 +972,7 @@ func formatISOMillis(t time.Time) string {
 	if t.Location() == time.UTC || t.Location().String() == "UTC" {
 		return t.UTC().Format("2006-01-02T15:04:05.000Z")
 	}
-	return t.Format("2006-01-02T15:04:05.000-07:00")
+	return t.Format("2006-01-02T15:04:05.000Z07:00")
 }
 
 func (s *Engine) procDateIndexName(cfg map[string]any, env *ingestEnv) *apierr.Error {
@@ -985,11 +986,12 @@ func (s *Engine) procDateIndexName(cfg map[string]any, env *ingestEnv) *apierr.E
 	if len(formats) == 0 {
 		formats = []string{"yyyy-MM-dd'T'HH:mm:ss.SSSXX"}
 	}
-	loc, zoneName, zerr := ingestLocation(cfgString(cfg, "timezone"))
+	z, zerr := ingestLocation(cfgString(cfg, "timezone"))
 	if zerr != nil {
-		return &apierr.Error{Type: "illegal_argument_exception", Status: 400, Reason: "failed to parse date", CausedBy: zerr}
+		return &apierr.Error{Type: "illegal_argument_exception", Status: 400,
+			Reason: "unable to parse date [" + ingestString(v) + "]", CausedBy: zerr}
 	}
-	t, err := parseIngestDate(v, formats, loc, cfgString(cfg, "locale"))
+	t, err := parseIngestDate(v, formats, z, cfgString(cfg, "locale"))
 	if err != nil {
 		return err
 	}
@@ -1002,6 +1004,10 @@ func (s *Engine) procDateIndexName(cfg map[string]any, env *ingestEnv) *apierr.E
 	idxFormat := cfgString(cfg, "index_name_format")
 	if idxFormat == "" {
 		idxFormat = "yyyy-MM-dd"
+	}
+	zoneName := z.ID
+	if cfgString(cfg, "timezone") == "" {
+		zoneName = "UTC"
 	}
 	name := "<" + prefix + "{" + dateStr + "||/" + rounding + "{" + idxFormat + "|" + zoneName + "}}>"
 	env.meta["_index"] = name

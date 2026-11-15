@@ -1271,28 +1271,6 @@ func termsScriptKey(r any, valueScript bool, valueType string, expression bool) 
 	return painless.ToString(r)
 }
 
-func loadAggLocation(tz string) (*time.Location, *apierr.Error) {
-	if tz == "" || tz == "UTC" || tz == "utc" || tz == "Z" {
-		return time.UTC, nil
-	}
-	if strings.HasPrefix(tz, "+") || strings.HasPrefix(tz, "-") {
-		off, err := search.ParseTZOffset(tz)
-		if err != nil {
-			return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
-				Reason:   "Failed to parse aggregation [x]",
-				CausedBy: &apierr.Error{Type: "zone_rules_exception", Reason: "Unknown time-zone ID: " + tz}}
-		}
-		return time.FixedZone(tz, int(off/1000)), nil
-	}
-	loc, err := time.LoadLocation(tz)
-	if err != nil {
-		return nil, &apierr.Error{Type: "x_content_parse_exception", Status: 400,
-			Reason:   "Failed to parse aggregation [x]",
-			CausedBy: &apierr.Error{Type: "zone_rules_exception", Reason: "Unknown time-zone ID: " + tz}}
-	}
-	return loc, nil
-}
-
 func sameWall(ms int64, loc *time.Location, y int, mo time.Month, d, hh, mm int) bool {
 	t := time.UnixMilli(ms).In(loc)
 	ty, tmo, td := t.Date()
@@ -1432,7 +1410,7 @@ func formatDateHistKey(ms int64, format string, loc *time.Location, withZone boo
 		if loc == time.UTC {
 			return t.UTC().Format("2006-01-02T15:04:05.000Z")
 		}
-		return t.Format("2006-01-02T15:04:05.000-07:00")
+		return t.Format("2006-01-02T15:04:05.000Z07:00")
 	}
 	return t.Format("2006-01-02T15:04:05.000Z")
 }
@@ -1497,10 +1475,11 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 			Reason: "Invalid interval specified, must be non-null and non-empty"}
 	}
 	tz, _ := jsonv.ToString(spec["time_zone"])
-	loc, terr := loadAggLocation(tz)
+	z, terr := aggZone(spec, "date_histogram")
 	if terr != nil {
 		return nil, terr
 	}
+	loc := z.Location()
 	offsetMs := int64(0)
 	if offRaw, ok := spec["offset"]; ok {
 		if s, ok := jsonv.ToString(offRaw); ok {
@@ -1527,15 +1506,10 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 	}
 	startFor := func(ms int64) int64 {
 		shifted := ms - offsetMs
-		var base int64
-		if isFixed && !(fixedMs%86400000 == 0 && loc != time.UTC) {
-			base = int64(math.Floor(float64(shifted)/float64(fixedMs))) * fixedMs
-		} else if isFixed {
-			base = calendarBucketStart(shifted, "day", loc)
-		} else {
-			base = calendarBucketStart(shifted, unit, loc)
+		if !isFixed {
+			return tzBucketStart(shifted, 0, unit, z) + offsetMs
 		}
-		return base + offsetMs
+		return tzBucketStart(shifted, fixedMs, "", z) + offsetMs
 	}
 	counts := map[int64]int{}
 	group := map[int64][]map[string]any{}
@@ -1625,13 +1599,10 @@ func dateHistogramAgg(field string, spec map[string]any, docs []map[string]any, 
 					break
 				}
 				var next int64
-				if isFixed && !(fixedMs%86400000 == 0 && loc != time.UTC) {
-					next = k + fixedMs
+				if isFixed {
+					next = tzNextKey(k-offsetMs, fixedMs, "", z) + offsetMs
 				} else {
-					next = addCalendarUnit(k, "day", loc)
-				}
-				if !isFixed {
-					next = addCalendarUnit(k, unit, loc)
+					next = tzNextKey(k-offsetMs, 0, unit, z) + offsetMs
 				}
 				if next <= k {
 					break

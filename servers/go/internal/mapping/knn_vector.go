@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"math"
 	"slopensearch/internal/javafmt"
-	"slopensearch/internal/jbase64"
 	"strconv"
 	"strings"
 
 	"slopensearch/internal/apierr"
+	"slopensearch/internal/jbase64"
 	"slopensearch/internal/jsonv"
 	"slopensearch/internal/model"
 	"slopensearch/internal/settings"

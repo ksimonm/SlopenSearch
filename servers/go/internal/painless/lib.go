@@ -4,12 +4,13 @@ import (
 	"encoding/base64"
 	"math"
 	"math/rand"
-	"slopensearch/internal/jbase64"
 	"sort"
 	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf16"
+
+	"slopensearch/internal/jbase64"
 )
 
 // Painless engine: the class library (whitelisted methods and fields).
