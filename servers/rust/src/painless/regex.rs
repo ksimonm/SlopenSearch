@@ -1,80 +1,177 @@
 // Painless engine: java.util.regex Pattern / Matcher and the regex circuit
 // breaker.
 //
+// Patterns run on `crate::jregex`, a java.util.regex emulation: lookaround,
+// backreferences, possessive quantifiers, named groups, the replacement
+// syntax and PatternSyntaxException texts behave like Java. Positions are
+// char indices internally and UTF-16 offsets in scripts.
+//
 // In "limited" mode Painless wraps the input of every matcher and fails once
-// the (backtracking) java.util.regex engine has read more than
-// limit-factor * length characters. The regex crate never backtracks, so a
-// small backtracking matcher replays the match only to count character
-// reads; the match result itself still comes from the regex crate.
+// the backtracking java.util.regex engine has read more than
+// limit-factor * length characters. A small backtracking matcher replays the
+// match only to count character reads; on top of that a step cap stops
+// patterns the replay cannot model (lookaround, backreferences).
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
-use regex::{Regex, RegexBuilder};
-
-use crate::painless::value::{RtErr, PV, R};
+use crate::jregex::{self, Caps, Exceeded, JRegex, SyntaxError};
+use crate::painless::interp::Interp;
+use crate::painless::lex::CompileErr;
+use crate::painless::value::{i64_of, jstr, RtErr, PV, R};
 
 pub const LIMIT_FACTOR: usize = 6;
+
+/// Matcher steps one call may take before the circuit breaker trips.
+const STEP_CAP: usize = 5_000_000;
 
 pub struct PPattern {
     pub src: String,
     pub flags: String,
-    pub re: Regex,
-    /// The pattern anchored at both ends, for Matcher.matches().
-    pub full: Regex,
+    pub re: Rc<JRegex>,
 }
 
 pub struct PMatcher {
     pub p: Rc<PPattern>,
     pub input: String,
-    /// Byte spans of the groups of the last match.
-    pub loc: Option<Vec<Option<(usize, usize)>>>,
-    pub pos: usize,
+    chars: Vec<char>,
+    /// Char spans of the groups of the last match.
+    pub loc: Option<Caps>,
+    /// Char index where the next find() starts.
+    pos: usize,
+    /// No search yet (or reset).
+    first: bool,
 }
 
-fn build(expr: &str, flags: &str) -> Result<Regex, regex::Error> {
-    let mut b = RegexBuilder::new(expr);
-    b.case_insensitive(flags.contains('i'))
-        .multi_line(flags.contains('m'))
-        .dot_matches_new_line(flags.contains('s'))
-        .ignore_whitespace(flags.contains('x'));
-    b.build()
+/// The Pattern flags of the regex literal flags (ERegex); the bits are
+/// `Pattern.flags()`.
+pub fn java_flags(flags: &str) -> u32 {
+    let mut f = 0;
+    for c in flags.chars() {
+        f |= match c {
+            'c' => jregex::CANON_EQ,
+            'i' => jregex::CASE_INSENSITIVE,
+            'l' => jregex::LITERAL,
+            'm' => jregex::MULTILINE,
+            's' => jregex::DOTALL,
+            'U' => jregex::UNICODE_CHARACTER_CLASS,
+            'u' => jregex::UNICODE_CASE,
+            'x' => jregex::COMMENTS,
+            _ => 0,
+        };
+    }
+    f
 }
 
-/// Compiles a regex literal or Pattern.compile argument.
+type Compiled = Result<Rc<JRegex>, SyntaxError>;
+
+thread_local! {
+    static CACHE: RefCell<HashMap<(String, String), Compiled>> = RefCell::new(HashMap::new());
+}
+
+fn compile_java(src: &str, flags: &str) -> Compiled {
+    let key = (flags.to_string(), src.to_string());
+    if let Some(c) = CACHE.with(|c| c.borrow().get(&key).cloned()) {
+        return c;
+    }
+    let c = JRegex::new(src, java_flags(flags)).map(Rc::new);
+    CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() > 1000 {
+            cache.clear();
+        }
+        cache.insert(key, c.clone());
+    });
+    c
+}
+
+/// The compile error of an invalid regex constant (`/a(/`) at `off`.
+pub fn constant_error(src: &str, flags: &str, off: usize) -> Option<CompileErr> {
+    let e = compile_java(src, flags).err()?;
+    let at = if e.index >= 0 { off + 1 + e.index as usize } else { off };
+    let mut ce = CompileErr::new(
+        "illegal_argument_exception",
+        &format!("invalid regular expression: could not compile regex constant [{}] with flags [{}]", src, flags),
+        at,
+    );
+    ce.cause = Some(Box::new(CompileErr::new("pattern_syntax_exception", &e.message(), at)));
+    Some(ce)
+}
+
+/// Compiles a regex literal.
 pub fn compile_pattern(src: &str, flags: &str, off: usize) -> R<PV> {
-    let expr = if flags.contains('l') { regex::escape(src) } else { src.to_string() };
-    let re = build(&expr, flags);
-    let full = build(&format!(r"\A(?:{})\z", expr), flags);
-    match (re, full) {
-        (Ok(re), Ok(full)) => Ok(PV::Pattern(Rc::new(PPattern {
-            src: src.to_string(),
-            flags: flags.to_string(),
-            re,
-            full,
-        }))),
-        (Err(e), _) | (_, Err(e)) => Err(RtErr::new("pattern_syntax_exception", &e.to_string(), off)),
+    match compile_java(src, flags) {
+        Ok(re) => Ok(PV::Pattern(Rc::new(PPattern { src: src.to_string(), flags: flags.to_string(), re }))),
+        Err(e) => Err(RtErr::new("pattern_syntax_exception", &e.message(), off)),
     }
 }
 
-fn spans(re: &Regex, input: &str, at: usize) -> Option<Vec<Option<(usize, usize)>>> {
-    let caps = re.captures_at(input, at)?;
-    Some((0..caps.len()).map(|i| caps.get(i).map(|m| (m.start(), m.end()))).collect())
+fn utf16_len(cs: &[char]) -> usize {
+    cs.iter().map(|c| c.len_utf16()).sum()
+}
+
+/// The char index of a UTF-16 offset (None when out of range).
+fn char_index(cs: &[char], u: usize) -> Option<usize> {
+    let mut n = 0;
+    for (i, c) in cs.iter().enumerate() {
+        if n >= u {
+            return Some(i);
+        }
+        n += c.len_utf16();
+    }
+    if n == u {
+        Some(cs.len())
+    } else {
+        None
+    }
+}
+
+fn matcher_err(typ: &str, reason: &str, off: usize, frames: &[&str]) -> RtErr {
+    let mut e = RtErr::new(typ, reason, off);
+    e.frames = frames.iter().map(|f| format!("java.base/java.util.regex.Matcher.{}", f)).collect();
+    e
+}
+
+/// The Matcher frames of a replacement string error.
+fn replacement_frames(reason: &str) -> &'static [&'static str] {
+    if reason.starts_with("No group with name") {
+        &["appendExpandedReplacement(Matcher.java:1103)"]
+    } else if reason.starts_with("No group ") {
+        &["checkGroup(Matcher.java:1845)", "start(Matcher.java:523)", "appendExpandedReplacement(Matcher.java:1134)"]
+    } else if reason == "character to be escaped is missing" {
+        &["appendExpandedReplacement(Matcher.java:1063)"]
+    } else if reason == "Illegal group reference: group index is missing" {
+        &["appendExpandedReplacement(Matcher.java:1073)"]
+    } else if reason == "Illegal group reference" {
+        &["appendExpandedReplacement(Matcher.java:1111)"]
+    } else if reason == "named capturing group is missing trailing '}'" {
+        &["appendExpandedReplacement(Matcher.java:1094)"]
+    } else if reason.ends_with("starts with digit character") {
+        &["appendExpandedReplacement(Matcher.java:1098)"]
+    } else {
+        &[]
+    }
+}
+
+/// Calling an int-taking Matcher method with a String through def (the
+/// whitelist has no String overloads).
+fn wrong_method_type(ret: &str, off: usize) -> RtErr {
+    RtErr::new(
+        "wrong_method_type_exception",
+        &format!("cannot convert MethodHandle(Matcher,int){} to (Object,String)Object", ret),
+        off,
+    )
 }
 
 impl PMatcher {
     pub fn new(p: Rc<PPattern>, input: &str) -> Self {
-        PMatcher { p, input: input.to_string(), loc: None, pos: 0 }
+        PMatcher { p, input: input.to_string(), chars: input.chars().collect(), loc: None, pos: 0, first: true }
     }
 
-    /// Enforces Painless' regex circuit breaker.
-    fn check_budget(&self, off: usize, full: bool) -> R<()> {
-        let chars: Vec<char> = self.input.chars().collect();
-        let limit = LIMIT_FACTOR * chars.len();
-        let pos = self.input[..self.pos.min(self.input.len())].chars().count();
-        if !regex_exceeds(&self.p.src, &self.p.flags, &chars, full, pos, limit) {
-            return Ok(());
-        }
-        Err(RtErr::new(
+    fn breaker_error(&self, off: usize) -> RtErr {
+        let limit = LIMIT_FACTOR * self.chars.len();
+        RtErr::new(
             "circuit_breaking_exception",
             &format!(
                 "[scripting] Regular expression considered too many characters, pattern: [{}], limit factor: [{}], char limit: [{}], count: [{}], wrapped: [{}], this limit can be changed by changed by the [script.painless.regex.limit-factor] setting",
@@ -85,107 +182,262 @@ impl PMatcher {
                 self.input
             ),
             off,
-        ))
+        )
+    }
+
+    /// Enforces Painless' regex circuit breaker.
+    fn check_budget(&self, off: usize, full: bool, pos: usize) -> R<()> {
+        let limit = LIMIT_FACTOR * self.chars.len();
+        if !regex_exceeds(&self.p.src, &self.p.flags, &self.chars, full, pos, limit) {
+            return Ok(());
+        }
+        Err(self.breaker_error(off))
+    }
+
+    fn set_match(&mut self, loc: Option<Caps>) -> bool {
+        self.first = false;
+        if let Some(l) = &loc {
+            let (s, e) = l[0].unwrap();
+            self.pos = if s == e { e + 1 } else { e };
+        }
+        self.loc = loc;
+        self.loc.is_some()
+    }
+
+    fn exceeded<T>(&self, r: Result<T, Exceeded>, off: usize) -> R<T> {
+        r.map_err(|_| self.breaker_error(off))
+    }
+
+    fn search(&mut self, from: usize, off: usize) -> R<bool> {
+        self.check_budget(off, false, from)?;
+        if from > self.chars.len() {
+            self.loc = None;
+            self.first = false;
+            return Ok(false);
+        }
+        let loc = self.exceeded(self.p.re.find_from(&self.chars, from, STEP_CAP), off)?;
+        Ok(self.set_match(loc))
     }
 
     pub fn find(&mut self, off: usize) -> R<bool> {
-        self.check_budget(off, false)?;
-        if self.pos > self.input.len() {
-            self.loc = None;
-            return Ok(false);
-        }
-        match spans(&self.p.re, &self.input, self.pos) {
-            None => {
-                self.loc = None;
-                Ok(false)
-            }
-            Some(loc) => {
-                let (s, e) = loc[0].unwrap();
-                self.pos = if s == e {
-                    e + self.input[e..].chars().next().map(|c| c.len_utf8()).unwrap_or(1)
-                } else {
-                    e
-                };
-                self.loc = Some(loc);
-                Ok(true)
-            }
-        }
+        let from = if self.first { 0 } else { self.pos };
+        self.search(from, off)
     }
 
     pub fn matches(&mut self, off: usize) -> R<bool> {
-        self.check_budget(off, true)?;
-        self.loc = spans(&self.p.full, &self.input, 0);
-        Ok(self.loc.is_some())
+        self.check_budget(off, true, 0)?;
+        let loc = self.exceeded(self.p.re.match_start(&self.chars, true, STEP_CAP), off)?;
+        Ok(self.set_match(loc))
     }
 
-    pub fn looking_at(&mut self) -> bool {
-        match spans(&self.p.re, &self.input, 0) {
-            Some(loc) if loc[0].map(|(s, _)| s) == Some(0) => {
-                self.loc = Some(loc);
-                true
+    fn looking_at(&mut self, off: usize) -> R<bool> {
+        let loc = self.exceeded(self.p.re.match_start(&self.chars, false, STEP_CAP), off)?;
+        Ok(self.set_match(loc))
+    }
+
+    /// Matcher.checkMatch / checkGroup; `site` are the frames of the public
+    /// method.
+    fn check_group(&self, g: i64, off: usize, site: &[&str]) -> R<()> {
+        if self.loc.is_none() {
+            let mut fs = vec!["checkMatch(Matcher.java:1850)"];
+            fs.extend_from_slice(site);
+            return Err(matcher_err("illegal_state_exception", "No match found", off, &fs));
+        }
+        if g < 0 || g as usize > self.p.re.groups {
+            let mut fs = vec!["checkGroup(Matcher.java:1845)"];
+            fs.extend_from_slice(site);
+            return Err(matcher_err("index_out_of_bounds_exception", &format!("No group {}", g), off, &fs));
+        }
+        Ok(())
+    }
+
+    fn group(&self, g: i64, off: usize, site: &[&str]) -> R<PV> {
+        self.check_group(g, off, site)?;
+        Ok(match self.loc.as_ref().unwrap()[g as usize] {
+            None => PV::Null,
+            Some((s, e)) => PV::str(&self.chars[s..e].iter().collect::<String>()),
+        })
+    }
+
+    fn offset(&self, g: i64, end: bool, off: usize, site: &str) -> R<PV> {
+        self.check_group(g, off, &[site])?;
+        Ok(match self.loc.as_ref().unwrap()[g as usize] {
+            None => PV::Int(-1),
+            Some((s, e)) => PV::Int(utf16_len(&self.chars[..if end { e } else { s }]) as i32),
+        })
+    }
+
+    /// Matcher.replaceAll / replaceFirst(String).
+    fn replace(&mut self, repl: &str, all: bool, off: usize) -> R<PV> {
+        self.check_budget(off, false, 0)?;
+        let r = self.exceeded(self.p.re.replace_java(&self.input, repl, all, STEP_CAP), off)?;
+        self.loc = None;
+        self.first = true;
+        self.pos = 0;
+        match r {
+            Ok(s) => Ok(PV::str(&s)),
+            Err((typ, reason)) => {
+                let mut fs: Vec<&str> = replacement_frames(&reason).to_vec();
+                fs.push("appendReplacement(Matcher.java:1041)");
+                fs.push(if all { "replaceAll(Matcher.java:1227)" } else { "replaceFirst(Matcher.java:1444)" });
+                Err(matcher_err(typ, &reason, off, &fs))
             }
-            _ => false,
         }
-    }
-
-    pub fn group(&self, i: usize, off: usize) -> R<PV> {
-        let loc = match &self.loc {
-            None => return Err(RtErr::new("illegal_state_exception", "No match found", off)),
-            Some(l) => l,
-        };
-        match loc.get(i) {
-            None => Err(RtErr::new("index_out_of_bounds_exception", &format!("No group {}", i), off)),
-            Some(None) => Ok(PV::Null),
-            Some(Some((s, e))) => Ok(PV::str(&self.input[*s..*e])),
-        }
-    }
-
-    pub fn group_index(&self, name: &str) -> Option<usize> {
-        self.p.re.capture_names().position(|n| n == Some(name))
     }
 }
 
-/// Converts a java.util.regex replacement string to the regex crate syntax.
-pub fn java_replacement(r: &str) -> String {
-    let b = r.as_bytes();
-    let mut out = String::new();
-    let mut i = 0;
-    while i < b.len() {
-        let c = b[i];
-        if c == b'\\' && i + 1 < b.len() {
-            if b[i + 1] == b'$' {
-                out.push_str("$$");
-            } else {
-                let ch = r[i + 1..].chars().next().unwrap();
-                out.push(ch);
-                i += ch.len_utf8() - 1;
-            }
-            i += 2;
-            continue;
+/// The java.util.regex.Matcher methods.
+pub fn matcher_method(m: &Rc<RefCell<PMatcher>>, name: &str, args: &[PV], off: usize) -> Option<R<PV>> {
+    let n = args.len();
+    let int_arg = |i: usize| -> Option<i64> {
+        match &args[i] {
+            PV::Str(_) => None,
+            v => Some(i64_of(v)),
         }
-        if c == b'$' {
-            let mut j = i + 1;
-            while j < b.len() && b[j].is_ascii_digit() {
-                j += 1;
-            }
-            if j > i + 1 {
-                out.push_str(&format!("${{{}}}", &r[i + 1..j]));
-                i = j;
-                continue;
-            }
-            if j < b.len() && b[j] == b'{' {
-                if let Some(k) = r[j..].find('}') {
-                    out.push_str(&format!("${{{}}}", &r[j + 1..j + k]));
-                    i = j + k + 1;
-                    continue;
+    };
+    Some(match (name, n) {
+        ("find", 0) => m.borrow_mut().find(off).map(PV::Bool),
+        ("find", 1) => {
+            let mut mm = m.borrow_mut();
+            let u = int_arg(0).unwrap_or(0);
+            let idx = if u < 0 { None } else { char_index(&mm.chars, u as usize) };
+            let idx = match idx {
+                Some(i) => i,
+                None => {
+                    return Some(Err(matcher_err(
+                        "index_out_of_bounds_exception",
+                        "Illegal start index",
+                        off,
+                        &["find(Matcher.java:810)"],
+                    )))
                 }
+            };
+            mm.loc = None;
+            mm.first = false;
+            mm.search(idx, off).map(PV::Bool)
+        }
+        ("matches", 0) => m.borrow_mut().matches(off).map(PV::Bool),
+        ("lookingAt", 0) => m.borrow_mut().looking_at(off).map(PV::Bool),
+        ("group", 0) => m.borrow().group(0, off, &["group(Matcher.java:685)", "group(Matcher.java:643)"]),
+        ("group", 1) => {
+            let g = match int_arg(0) {
+                Some(g) => g,
+                None => return Some(Err(wrong_method_type("String", off))),
+            };
+            let mm = m.borrow();
+            let site = if mm.loc.is_none() { "group(Matcher.java:685)" } else { "group(Matcher.java:686)" };
+            mm.group(g, off, &[site])
+        }
+        ("namedGroup", 1) => {
+            let mm = m.borrow();
+            let name = jstr(&args[0]);
+            match mm.p.re.group_index(&name) {
+                Some(g) => mm.group(g as i64, off, &["group(Matcher.java:720)"]),
+                None => Err(matcher_err(
+                    "illegal_argument_exception",
+                    &format!("No group with name <{}>", name),
+                    off,
+                    &["getMatchedGroupIndex(Matcher.java:1839)", "group(Matcher.java:720)"],
+                )),
             }
         }
-        let ch = r[i..].chars().next().unwrap();
-        out.push(ch);
-        i += ch.len_utf8();
+        ("groupCount", 0) => Ok(PV::Int(m.borrow().p.re.groups as i32)),
+        ("start", _) | ("end", _) if n <= 1 => {
+            let g = if n == 1 {
+                match int_arg(0) {
+                    Some(g) => g,
+                    None => return Some(Err(wrong_method_type("int", off))),
+                }
+            } else {
+                0
+            };
+            let site = match (name, n) {
+                ("end", 0) => "end(Matcher.java:557)",
+                ("end", _) => "end(Matcher.java:591)",
+                (_, 0) => "start(Matcher.java:493)",
+                _ => "start(Matcher.java:523)",
+            };
+            m.borrow().offset(g, name == "end", off, site)
+        }
+        ("replaceAll", 1) | ("replaceFirst", 1) => {
+            let repl = jstr(&args[0]);
+            m.borrow_mut().replace(&repl, name == "replaceAll", off)
+        }
+        ("reset", 0) => {
+            let mut mm = m.borrow_mut();
+            mm.pos = 0;
+            mm.loc = None;
+            mm.first = true;
+            drop(mm);
+            Ok(PV::Matcher(m.clone()))
+        }
+        ("pattern", 0) => Ok(PV::Pattern(m.borrow().p.clone())),
+        ("hitEnd", 0) => {
+            let mm = m.borrow();
+            Ok(PV::Bool(mm.pos >= mm.chars.len()))
+        }
+        ("regionStart", 0) => Ok(PV::Int(0)),
+        ("regionEnd", 0) => Ok(PV::Int(utf16_len(&m.borrow().chars) as i32)),
+        ("hasAnchoringBounds", 0) => Ok(PV::Bool(true)),
+        ("hasTransparentBounds", 0) => Ok(PV::Bool(false)),
+        _ => return None,
+    })
+}
+
+/// The java.util.regex.Pattern methods.
+pub fn pattern_method(p: &Rc<PPattern>, name: &str, args: &[PV], off: usize) -> Option<R<PV>> {
+    let _ = off;
+    let n = args.len();
+    Some(match (name, n) {
+        ("matcher", 1) => Ok(PV::Matcher(Rc::new(RefCell::new(PMatcher::new(p.clone(), &jstr(&args[0])))))),
+        ("pattern", 0) | ("toString", 0) => Ok(PV::str(&p.src)),
+        ("flags", 0) => Ok(PV::Int(java_flags(&p.flags) as i32)),
+        ("split", 1) | ("split", 2) => {
+            let limit = if n == 2 { i64_of(&args[1]) } else { 0 };
+            let parts = p.re.split(&jstr(&args[0]), limit);
+            Ok(PV::array("String", parts.iter().map(|s| PV::str(s)).collect()))
+        }
+        ("splitAsStream", 1) => {
+            let input = jstr(&args[0]);
+            let mut parts = p.re.split(&input, 0);
+            if parts.len() == 1 && parts[0].is_empty() {
+                parts.clear();
+            }
+            Ok(PV::stream("obj", parts.iter().map(|s| PV::str(s)).collect()))
+        }
+        _ => return None,
+    })
+}
+
+/// `String.replaceAll/replaceFirst(Pattern, Function)`: the function
+/// receives the live matcher.
+pub fn replace_with(inp: &Interp<'_>, p: &Rc<PPattern>, s: &str, f: &PV, first: bool, off: usize) -> R<PV> {
+    let m = Rc::new(RefCell::new(PMatcher::new(p.clone(), s)));
+    let mut out = String::new();
+    let mut last = 0;
+    loop {
+        if !m.borrow_mut().find(off)? {
+            break;
+        }
+        let (ms, me) = m.borrow().loc.as_ref().unwrap()[0].unwrap();
+        let r = inp.call_fn(f, vec![PV::Matcher(m.clone())], off)?;
+        let mm = m.borrow();
+        out.extend(&mm.chars[last..ms]);
+        out.push_str(&jstr(&r));
+        last = me;
+        if first {
+            break;
+        }
     }
-    out
+    let mm = m.borrow();
+    out.extend(&mm.chars[last..]);
+    Ok(PV::str(&out))
+}
+
+/// `Pattern.asPredicate()`: whether the pattern occurs in the string.
+pub fn find_in(p: &PPattern, s: &str) -> bool {
+    let chars: Vec<char> = s.chars().collect();
+    matches!(p.re.find_from(&chars, 0, STEP_CAP), Ok(Some(_)))
 }
 
 // ---- circuit breaker: a counting backtracking matcher ----
