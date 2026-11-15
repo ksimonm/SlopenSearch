@@ -2,7 +2,7 @@ package painless
 
 import (
 	"math"
-	"regexp"
+
 	"strings"
 )
 
@@ -1391,111 +1391,4 @@ func plMakeArray(elem string, rank int, dims []int) *Array {
 		}
 	}
 	return a
-}
-
-// ---- regex ----
-
-type plPattern struct {
-	src   string
-	flags string
-	re    *regexp.Regexp
-}
-
-type plMatcher struct {
-	p     *plPattern
-	input string
-	in    *plInterp
-	loc   []int
-	pos   int
-}
-
-func plCompilePattern(src, flags string, off int) (any, *RuntimeError) {
-	prefix := ""
-	for _, f := range flags {
-		switch f {
-		case 'i':
-			prefix += "i"
-		case 'm':
-			prefix += "m"
-		case 's':
-			prefix += "s"
-		}
-	}
-	expr := src
-	if prefix != "" {
-		expr = "(?" + prefix + ")" + expr
-	}
-	re, err := regexp.Compile(expr)
-	if err != nil {
-		return nil, &RuntimeError{Type: "pattern_syntax_exception", Offset: off, Reason: err.Error()}
-	}
-	return &plPattern{src: src, flags: flags, re: re}, nil
-}
-
-func (p *plPattern) matcher(s string, in *plInterp) *plMatcher {
-	return &plMatcher{p: p, input: s, in: in}
-}
-
-// checkBudget enforces Painless' regex circuit breaker (limit factor 6).
-func (m *plMatcher) checkBudget(off int, full bool) *RuntimeError {
-	n := len([]rune(m.input))
-	limit := 6 * n
-	pos := len([]rune(m.input[:m.pos]))
-	if !plRegexExceeds(m.p.src, m.p.flags, m.input, full, pos, limit) {
-		return nil
-	}
-	return &RuntimeError{Type: "circuit_breaking_exception", Offset: off,
-		Reason: "[scripting] Regular expression considered too many characters, pattern: [" + m.p.src +
-			"], limit factor: [6], char limit: [" + itoa(limit) + "], count: [" + itoa(limit+1) +
-			"], wrapped: [" + m.input + "], this limit can be changed by changed by the [script.painless.regex.limit-factor] setting"}
-}
-
-func (m *plMatcher) find(off int) (bool, *RuntimeError) {
-	if err := m.checkBudget(off, false); err != nil {
-		return false, err
-	}
-	if m.pos > len(m.input) {
-		m.loc = nil
-		return false, nil
-	}
-	loc := m.p.re.FindStringSubmatchIndex(m.input[m.pos:])
-	if loc == nil {
-		m.loc = nil
-		return false, nil
-	}
-	for i := range loc {
-		if loc[i] >= 0 {
-			loc[i] += m.pos
-		}
-	}
-	m.loc = loc
-	if loc[1] == loc[0] {
-		m.pos = loc[1] + 1
-	} else {
-		m.pos = loc[1]
-	}
-	return true, nil
-}
-
-func (m *plMatcher) matches(off int) (bool, *RuntimeError) {
-	if err := m.checkBudget(off, true); err != nil {
-		return false, err
-	}
-	re := regexp.MustCompile("^(?:" + m.p.re.String() + ")$")
-	loc := re.FindStringSubmatchIndex(m.input)
-	m.loc = loc
-	return loc != nil, nil
-}
-
-func (m *plMatcher) group(i int, off int) (any, *RuntimeError) {
-	if m.loc == nil {
-		return nil, &RuntimeError{Type: "illegal_state_exception", Offset: off, Reason: "No match found"}
-	}
-	if 2*i+1 >= len(m.loc) {
-		return nil, &RuntimeError{Type: "index_out_of_bounds_exception", Offset: off, Reason: "No group " + itoa(i)}
-	}
-	if m.loc[2*i] < 0 {
-		return nil, nil
-	}
-	return m.input[m.loc[2*i]:m.loc[2*i+1]], nil
 }
