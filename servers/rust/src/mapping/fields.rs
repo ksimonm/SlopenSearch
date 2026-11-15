@@ -179,9 +179,9 @@ impl IndexCtx {
     }
 }
 
-/// Center (lon, lat) of a geohash of a document value (at most 12 characters).
+/// The (lon, lat) of a geohash document value; document values are case-sensitive.
 fn geohash_decode(s: &str) -> Option<(f64, f64)> {
-    if s.len() > 12 || !s.is_ascii() {
+    if s.bytes().any(|b| b.is_ascii_uppercase()) {
         return None;
     }
     crate::geohash::decode(s).map(|(lat, lon)| (lon, lat))
@@ -2671,9 +2671,10 @@ impl IndexCtx {
                 if let Some((lon, lat)) = geohash_decode(t) {
                     return check(lat, lon, false);
                 }
-                let bad = t
-                    .chars()
-                    .find(|c| !"0123456789bcdefghjkmnpqrstuvwxyzBCDEFGHJKMNPQRSTUVWXYZ".contains(*c));
+                if t.is_empty() {
+                    return Err(err("parse_exception", "empty geohash"));
+                }
+                let bad = t.chars().find(|c| !"0123456789bcdefghjkmnpqrstuvwxyz".contains(*c));
                 let ch = bad.unwrap_or(' ');
                 Err(err(
                     "parse_exception",

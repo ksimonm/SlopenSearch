@@ -68,13 +68,28 @@ pub fn bounds(s: &str) -> Option<(f64, f64, f64, f64)> {
     Some((lat_lo, lat_hi, lon_lo, lon_hi))
 }
 
-/// Center (lat, lon) of a non-empty geohash cell.
+/// The point a geohash stands for where OpenSearch reads a geo point
+/// (`GeoPoint#resetFromGeoHash`): the bottom-left corner (lat, lon) of its cell, of at
+/// most 12 characters. Empty or invalid hashes give `None`.
 pub fn decode(s: &str) -> Option<(f64, f64)> {
     if s.is_empty() {
         return None;
     }
-    let (a, b, c, d) = bounds(s)?;
-    Some(((a + b) / 2.0, (c + d) / 2.0))
+    let cell = s.char_indices().nth(12).map(|(i, _)| &s[..i]).unwrap_or(s);
+    let (lat_lo, _, lon_lo, _) = bounds(cell)?;
+    bounds(s)?;
+    Some((lat_lo, lon_lo))
+}
+
+/// Lucene's `Geohash#longEncode`: the hash bits followed by 4 bits of length, as a
+/// signed long (12 characters use all 64 bits).
+pub fn long_encode(hash: &str) -> i64 {
+    let mut l: u64 = 0;
+    for c in hash.bytes().take(12) {
+        let b = CHARS.iter().position(|x| *x == c).unwrap_or(0) as u64;
+        l = (l << 5) | b;
+    }
+    ((l << 4) | hash.len().min(12) as u64) as i64
 }
 
 /// The (up to eight) cells of the same precision around a geohash cell.

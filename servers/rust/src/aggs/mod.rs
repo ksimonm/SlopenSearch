@@ -8277,7 +8277,7 @@ fn geo_point_of(v: &Value) -> Option<(f64, f64)> {
                     return Some((nums[1], nums[0]));
                 }
             }
-            None
+            crate::geohash::decode(s.trim())
         }
         Value::Object(m) => {
             let lat = m.get("lat").and_then(to_f64)?;
@@ -8369,10 +8369,11 @@ fn geohash_grid_agg(
         }
     }
     let mut keys = order;
+    // ties: the larger cell hash (Geohash#longEncode) first
     keys.sort_by(|a, b| {
         let ca = buckets[a].len();
         let cb = buckets[b].len();
-        cb.cmp(&ca)
+        cb.cmp(&ca).then_with(|| crate::geohash::long_encode(b).cmp(&crate::geohash::long_encode(a)))
     });
     let mut out = vec![];
     for k in keys.into_iter().take(size) {
@@ -8444,10 +8445,12 @@ fn geotile_grid_agg(
         }
     }
     let mut keys = order;
+    // ties: the larger cell hash ((zoom, x, y) packed into a long) first
+    let tile = |k: &String| -> Vec<u64> { k.split('/').map(|p| p.parse().unwrap_or(0)).collect() };
     keys.sort_by(|a, b| {
         let ca = buckets[a].len();
         let cb = buckets[b].len();
-        cb.cmp(&ca)
+        cb.cmp(&ca).then_with(|| tile(b).cmp(&tile(a)))
     });
     let mut out = vec![];
     for k in keys.into_iter().take(size) {
