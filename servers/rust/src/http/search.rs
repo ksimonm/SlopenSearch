@@ -361,7 +361,7 @@ pub fn run_search(
                     let id = &idx.order[i];
                     let Some(doc) = idx.docs.get(id) else { continue };
                     let score = crate::mapping::knn::f32r(results[k].1);
-                    matched.push(MultiHit { idx_name: n.clone(), id: id.clone(), doc, score, pos: i as i64, named: Vec::new() });
+                    matched.push(MultiHit { idx_name: n, id, doc, score, pos: i as i64, named: Vec::new() });
                 }
                 topk_total = Some(sel.count);
                 continue;
@@ -399,7 +399,7 @@ pub fn run_search(
                 for (score, i) in best {
                     let id = &idx.order[i];
                     let Some(doc) = idx.docs.get(id) else { continue };
-                    matched.push(MultiHit { idx_name: n.clone(), id: id.clone(), doc, score, pos: i as i64, named: Vec::new() });
+                    matched.push(MultiHit { idx_name: n, id, doc, score, pos: i as i64, named: Vec::new() });
                 }
                 topk_total = Some(count);
                 continue;
@@ -428,8 +428,8 @@ pub fn run_search(
                                     return None;
                                 }
                                 Some(MultiHit {
-                                    idx_name: n.clone(),
-                                    id: id.clone(),
+                                    idx_name: n,
+                                    id,
                                     doc,
                                     score: crate::mapping::knn::f32r(score),
                                     pos: i as i64,
@@ -504,8 +504,8 @@ pub fn run_search(
                     walk_named_queries(&mut named, idx, id, doc, &extra, &qv)?;
                 }
                 matched.push(MultiHit {
-                    idx_name: n.clone(),
-                    id: id.clone(),
+                    idx_name: n,
+                    id,
                     doc,
                     score: crate::mapping::knn::f32r(score),
                     pos,
@@ -571,11 +571,14 @@ pub fn run_search(
     // the hits aggregations run over (before post_filter): copied only when
     // there are aggregations
     let has_aggs = bodym.contains_key("aggs") || bodym.contains_key("aggregations");
-    let agg_matched = if has_aggs { matched.clone() } else { Vec::new() };
+    // (the hit list itself when nothing reorders or filters it before the
+    // aggregations: no hits to return, no sort, post_filter or collapse)
+    let agg_shared = has_aggs && size <= 0 && !bodym.contains_key("sort") && !bodym.contains_key("post_filter") && !bodym.contains_key("collapse") && !bodym.contains_key("search_after");
+    let agg_matched = if has_aggs && !agg_shared { matched.clone() } else { Vec::new() };
     if let Some(pf) = bodym.get("post_filter") {
         let mut kept = Vec::new();
         for mut h in matched.drain(..) {
-            let idx = &store.indices[&h.idx_name];
+            let idx = &store.indices[h.idx_name];
             let extra = precompute_doc_values(idx);
             let pm = pf.as_object().cloned().unwrap_or_default();
             let (ok, _) = eval_doc(idx, &h.id, &h.doc, &extra, &pm)?;
@@ -766,7 +769,7 @@ pub fn run_search(
         }
     }
     if !failed_sort.is_empty() {
-        matched.retain(|h| !failed_sort.contains(&h.idx_name));
+        matched.retain(|h| !failed_sort.iter().any(|f| f == h.idx_name));
         total = matched.len();
     }
     if !specs.is_empty() {
@@ -877,7 +880,8 @@ pub fn run_search(
             sort_after_gt(&hit_vals, after, &specs)
         });
     }
-    if specs.is_empty() {
+    // without hits to return (size 0) the order is not read
+    if specs.is_empty() && !(size <= 0 && collapse_cfg.is_none()) {
         matched.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
@@ -1130,7 +1134,7 @@ pub fn run_search(
 
     let mut hits = vec![];
     for h in page {
-        let idx = &store.indices[&h.idx_name];
+        let idx = &store.indices[h.idx_name];
         let src = match &source_filter {
             Some(spec) => filter_source(&h.doc, spec),
             None => h.doc.clone(),
@@ -1147,7 +1151,7 @@ pub fn run_search(
         if !omit_id {
             entry.insert("_id".to_string(), json!(h.id));
         }
-        if let Some(r) = idx.routing.get(&h.id) {
+        if let Some(r) = idx.routing.get(h.id) {
             if !r.is_empty() {
                 entry.insert("_routing".to_string(), json!(r));
             }
@@ -1187,7 +1191,7 @@ pub fn run_search(
         if !omit_source && source_enabled_search(idx) {
             entry.insert("_source".to_string(), src);
         }
-        if let Some(ign) = idx.doc_ignored.get(&h.id) {
+        if let Some(ign) = idx.doc_ignored.get(h.id) {
             entry.insert(
                 "_ignored".to_string(),
                 json!(ign.iter().map(|f| json!(f)).collect::<Vec<_>>()),
@@ -1200,7 +1204,7 @@ pub fn run_search(
         if want_version {
             entry.insert(
                 "_version".to_string(),
-                json!(idx.versions.get(&h.id).copied().unwrap_or(1)),
+                json!(idx.versions.get(h.id).copied().unwrap_or(1)),
             );
         }
         let want_seq = bodym
@@ -1212,7 +1216,7 @@ pub fn run_search(
             let seq = if req.param("seq_no_primary_term") == Some("true") {
                 1
             } else {
-                idx.seq_nos.get(&h.id).copied().unwrap_or(0)
+                idx.seq_nos.get(h.id).copied().unwrap_or(0)
             };
             entry.insert("_seq_no".to_string(), json!(seq));
             entry.insert("_primary_term".to_string(), json!(1));
@@ -1316,7 +1320,7 @@ pub fn run_search(
                     if spec.name.contains('*') || spec.name.contains('?') {
                         fnames.clear();
                         let re = wildcard_regex(&spec.name);
-                        if let Some(dv) = idx.doc_values.get(&h.id) {
+                        if let Some(dv) = idx.doc_values.get(h.id) {
                             for f in dv.keys() {
                                 if re.is_match(f) {
                                     fnames.push(f.clone());
@@ -1469,12 +1473,13 @@ pub fn run_search(
             .and_then(|a| a.as_object());
         if let Some(aggs) = agg_section {
             {
-                let mut order: Vec<usize> = (0..agg_matched.len()).collect();
+                let agg_hits: &[MultiHit] = if agg_shared { &matched } else { &agg_matched };
+                let mut order: Vec<usize> = (0..agg_hits.len()).collect();
                 if crate::aggs::contains_sampler(&Value::Object(aggs.clone())) {
                     order.sort_by(|&a, &b| {
-                        agg_matched[b]
+                        agg_hits[b]
                             .score
-                            .partial_cmp(&agg_matched[a].score)
+                            .partial_cmp(&agg_hits[a].score)
                             .unwrap_or(std::cmp::Ordering::Equal)
                     });
                 }
@@ -1487,11 +1492,11 @@ pub fn run_search(
                     order
                         .iter()
                         .map(|&i| {
-                            let h = &agg_matched[i];
+                            let h = &agg_hits[i];
                             let mut d = h.doc.clone();
                             if let Value::Object(ref mut m) = d {
                                 if !m.contains_key("_id") {
-                                    m.insert("_id".to_string(), json!(h.id.clone()));
+                                    m.insert("_id".to_string(), json!(h.id));
                                 }
                             }
                             d
@@ -1499,7 +1504,7 @@ pub fn run_search(
                         .collect()
                 };
                 let docs: Vec<&Value> = if simple {
-                    order.iter().map(|&i| agg_matched[i].doc).collect()
+                    order.iter().map(|&i| agg_hits[i].doc).collect()
                 } else {
                     with_ids.iter().collect()
                 };
@@ -1509,19 +1514,21 @@ pub fn run_search(
                     .unwrap_or(false);
                 let mut agg_scores: HashMap<(String, String), f64> = HashMap::new();
                 if simple {
-                    let ids: Vec<(&Value, &str)> = agg_matched.iter().map(|h| (h.doc, h.id.as_str())).collect();
-                    crate::aggs::set_doc_ids(&ids);
-                    let ids: Vec<&str> = order.iter().map(|&i| agg_matched[i].id.as_str()).collect();
-                    crate::aggs::set_root_docs(crate::search::index::doc_numbers(idx, &ids).map(|(v, nums)| (docs.as_slice(), v, nums)));
+                    let ids: Vec<(&Value, &str)> = agg_hits.iter().map(|h| (h.doc, h.id)).collect();
+                    // SAFETY: the ids belong to the hits (borrowed from the
+                    // index), which outlive the aggregation; cleared below
+                    unsafe { crate::aggs::set_doc_ids(&ids) };
+                    let positions: Vec<usize> = order.iter().map(|&i| agg_hits[i].pos as usize).collect();
+                    crate::aggs::set_root_docs(crate::search::index::doc_numbers_at(idx, &positions).map(|(v, nums)| (docs.as_slice(), v, nums)));
                 } else {
                     for h in &matched {
-                        agg_scores.insert((h.idx_name.clone(), h.id.clone()), h.score);
+                        agg_scores.insert((h.idx_name.to_string(), h.id.to_string()), h.score);
                     }
                 }
                 crate::aggs::set_agg_search_context(agg_scores, tokens.clone());
                 let out = eval_aggs_root(aggs, &docs, idx, typed);
                 if simple {
-                    crate::aggs::set_doc_ids(&[]);
+                    unsafe { crate::aggs::set_doc_ids(&[]) };
                     crate::aggs::set_root_docs(None);
                 }
                 let out = out?;
@@ -3625,8 +3632,8 @@ pub fn handle_rank_eval(store: &mut Store, req: &Req, name: &str) -> Response {
                         .position(|x| x == doc_id)
                         .unwrap_or(0) as i64;
                     hits.push(MultiHit {
-                        idx_name: n.clone(),
-                        id: doc_id.clone(),
+                        idx_name: n,
+                        id: doc_id,
                         doc,
                         score,
                         pos,
@@ -3670,7 +3677,7 @@ pub fn handle_rank_eval(store: &mut Store, req: &Req, name: &str) -> Response {
         let mut unrated = Vec::new();
         let mut hit_list = Vec::new();
         for (i, h) in hits.iter().enumerate() {
-            let rating = ratings.get(&(h.idx_name.clone(), h.id.clone())).copied();
+            let rating = ratings.get(&(h.idx_name.to_string(), h.id.to_string())).copied();
             if rating.is_none() {
                 unrated.push(json!({"_index": h.idx_name, "_id": h.id}));
             }

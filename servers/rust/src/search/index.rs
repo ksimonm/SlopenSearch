@@ -1628,14 +1628,15 @@ pub fn metric_column(idx: &Index, field: &str) -> Option<(u64, std::sync::Arc<Ve
     Some(with_index(idx, std::slice::from_ref(&key), |inv| (inv.version, inv.fields[&key].fwd.clone())))
 }
 
-/// The doc numbers of `ids` and the index content version they belong to
-/// (None when some id is not indexed).
-pub fn doc_numbers(idx: &Index, ids: &[&str]) -> Option<(u64, Vec<u32>)> {
+/// The doc numbers of the documents at index-order `positions` and the index
+/// content version they belong to (None when some position is not indexed).
+pub fn doc_numbers_at(idx: &Index, positions: &[usize]) -> Option<(u64, Vec<u32>)> {
     if disabled() || idx.uuid.is_empty() {
         return None;
     }
     with_index(idx, &[], |inv| {
-        let nums: Option<Vec<u32>> = ids.iter().map(|id| inv.doc_of(id)).collect();
+        let (order, _) = order_docs(idx, inv);
+        let nums: Option<Vec<u32>> = positions.iter().map(|&i| order.get(i).copied().filter(|d| *d != NO_DOC)).collect();
         nums.map(|n| (inv.version, n))
     })
 }

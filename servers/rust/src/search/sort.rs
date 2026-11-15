@@ -52,8 +52,8 @@ pub(crate) fn compare_sort_values(a: &Value, b: &Value) -> Ordering {
 
 #[derive(Clone)]
 pub(crate) struct MultiHit<'a> {
-    pub(crate) idx_name: String,
-    pub(crate) id: String,
+    pub(crate) idx_name: &'a str,
+    pub(crate) id: &'a str,
     pub(crate) doc: &'a Value,
     pub(crate) score: f64,
     pub(crate) pos: i64,
@@ -580,7 +580,7 @@ pub(crate) fn nested_sort_values(idx: &Index, id: &str, sp: &SortSpec, path: &st
 
 pub(crate) fn eval_sort_script(store: &Store, sp: &SortSpec, h: &MultiHit) -> Result<Value, ApiError> {
     use crate::search::script_ctx as sc;
-    let idx = match store.indices.get(&h.idx_name) {
+    let idx = match store.indices.get(h.idx_name) {
         Some(i) => i,
         None => return Ok(Value::Null),
     };
@@ -677,7 +677,7 @@ pub(crate) fn compute_sort_cell(store: &Store, h: &MultiHit, sp: &SortSpec) -> R
     if sp.kind == 5 {
         return Ok((false, eval_sort_script(store, sp, h)?));
     }
-    let idx = &store.indices[&h.idx_name];
+    let idx = &store.indices[h.idx_name];
     if sp.kind == 6 {
         let origins: Vec<(f64, f64)> = match &sp.geo {
             Value::Array(a)
@@ -769,7 +769,7 @@ pub(crate) fn compute_sort_cell(store: &Store, h: &MultiHit, sp: &SortSpec) -> R
         vals = nested_sort_values(idx, &h.id, sp, path);
     } else if nested_missing {
         vals = vec![];
-    } else if let Some(dv) = idx.doc_values.get(&h.id).and_then(|m| m.get(&prep.sf)) {
+    } else if let Some(dv) = idx.doc_values.get(h.id).and_then(|m| m.get(&prep.sf)) {
         vals = crate::search::eval::array_values(dv);
     }
     if vals.is_empty() && sp.nested.is_none() && !nested_missing {

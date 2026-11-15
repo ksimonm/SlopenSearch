@@ -140,9 +140,9 @@ pub(crate) fn apply_rescore(
         let rw = qm.get("rescore_query_weight").and_then(to_f64).unwrap_or(1.0);
         let mut extras: HashMap<String, HashMap<String, Map<String, Value>>> = HashMap::new();
         for h in matched.iter_mut().take(window) {
-            let idx = &store.indices[&h.idx_name];
+            let idx = &store.indices[h.idx_name];
             let extra = extras
-                .entry(h.idx_name.clone())
+                .entry(h.idx_name.to_string())
                 .or_insert_with(|| precompute_doc_values(idx));
             let (ok, rs) = eval_doc(idx, &h.id, &h.doc, extra, rq)?;
             let base = h.score;

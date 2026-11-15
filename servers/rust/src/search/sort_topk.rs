@@ -69,7 +69,7 @@ fn column(store: &Store, idx_name: &str, idx: &Index, sp: &SortSpec) -> Option<(
             .map(|id| {
                 let Some(id) = id else { return Ok(None) };
                 let Some(doc) = idx.docs.get(id) else { return Ok(None) };
-                let h = MultiHit { idx_name: idx_name.to_string(), id: id.clone(), doc, score: 0.0, pos: 0, named: Vec::new() };
+                let h = MultiHit { idx_name, id, doc, score: 0.0, pos: 0, named: Vec::new() };
                 match compute_sort_cell(store, &h, sp) {
                     Ok(cell) => {
                         let int = int_key(&cell.1);
