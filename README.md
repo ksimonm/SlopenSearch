@@ -68,42 +68,45 @@ reference (`> 1` = better than OpenSearch), so each commit can be compared with 
 Rust on the opensearch-benchmark **geonames** workload, `sample` preset (1% of the corpus,
 113k documents, 10 iterations per operation, 1 client), 4 CPUs and 8 GB per container,
 median service time in ms (OpenSearch: reference run of 2026-11-15, same configuration).
-`401b8ff` is main before the 2026-11-19 scripting work; bold = at least as fast as OpenSearch.
+`401b8ff` is main before the 2026-11-19 scripting work, "now" is `f5aef2e`; bold = at least as fast as OpenSearch.
 Single runs on a desktop host: differences under ~30% on the millisecond operations are noise.
 
 | Operation | OpenSearch | Rust, 401b8ff | Rust, now | now vs OpenSearch |
 |---|---:|---:|---:|---:|
-| `index-append` | 1,681 | 6,226 | 4,255 | 0.40× |
-| `index-stats` | 11.6 | 1.4 | 3.7 | **3.09×** |
-| `node-stats` | 6.8 | 3.1 | 5.4 | **1.24×** |
-| `match-all` | 6.6 | 4.1 | 3.0 | **2.15×** |
-| `term` | 6.0 | 0.4 | 0.7 | **8.74×** |
-| `phrase` | 5.1 | 0.7 | 1.5 | **3.42×** |
-| `country_agg_uncached` | 9.3 | 19.3 | 18.9 | 0.49× |
-| `country_agg_cached` | 5.5 | 0.5 | 1.8 | **3.13×** |
-| `scroll` | 280 | 1,265 | 1,109 | 0.25× |
-| `expression` | 10.1 | 1,129 | 135 | 0.07× |
-| `painless_static` | 19.7 | 4,068 | 196 | 0.10× |
-| `painless_dynamic` | 10.1 | 4,096 | 200 | 0.05× |
-| `decay_geo_gauss_function_score` | 26.9 | 576 | 67.3 | 0.40× |
-| `decay_geo_gauss_script_score` | 10.4 | 3,617 | 224 | 0.05× |
-| `field_value_function_score` | 6.4 | 383 | 46.4 | 0.14× |
-| `field_value_script_score` | 6.9 | 2,715 | 119 | 0.06× |
-| `large_terms` | 53.6 | 89.5 | 83.9 | 0.64× |
-| `large_filtered_terms` | 57.4 | 104 | 96.2 | 0.60× |
-| `large_prohibited_terms` | 51.5 | 82.8 | 94.9 | 0.54× |
-| `desc_sort_population` | 7.1 | 8.0 | 6.8 | **1.05×** |
-| `asc_sort_population` | 4.8 | 6.9 | 6.0 | 0.80× |
-| `asc_sort_with_after_population` | 4.8 | 5.9 | 6.2 | 0.77× |
-| `desc_sort_geonameid` | 11.1 | 6.6 | 6.5 | **1.72×** |
-| `desc_sort_with_after_geonameid` | 6.7 | 5.9 | 6.7 | **1.00×** |
-| `asc_sort_geonameid` | 5.0 | 6.7 | 6.2 | 0.81× |
-| `asc_sort_with_after_geonameid` | 7.4 | 6.3 | 6.3 | **1.19×** |
-| `numeric-term-cardinality-agg-high` | 268 | 762 | 623 | 0.43× |
+| `index-append` | 1,681 | 6,226 | 4,145 | 0.41× |
+| `index-stats` | 11.6 | 1.4 | 1.9 | **6.16×** |
+| `node-stats` | 6.8 | 3.1 | 3.2 | **2.12×** |
+| `match-all` | 6.6 | 4.1 | 2.9 | **2.28×** |
+| `term` | 6.0 | 0.4 | 1.8 | **3.37×** |
+| `phrase` | 5.1 | 0.7 | 1.7 | **2.95×** |
+| `country_agg_uncached` | 9.3 | 19.3 | 19.5 | 0.48× |
+| `country_agg_cached` | 5.5 | 0.5 | 0.7 | **7.62×** |
+| `scroll` | 280 | 1,265 | 1,118 | 0.25× |
+| `expression` | 10.1 | 1,129 | 7.4 | **1.36×** |
+| `painless_static` | 19.7 | 4,068 | 14.9 | **1.32×** |
+| `painless_dynamic` | 10.1 | 4,096 | 12.5 | 0.81× |
+| `decay_geo_gauss_function_score` | 26.9 | 576 | 57.4 | 0.47× |
+| `decay_geo_gauss_script_score` | 10.4 | 3,617 | 14.0 | 0.74× |
+| `field_value_function_score` | 6.4 | 383 | 36.8 | 0.17× |
+| `field_value_script_score` | 6.9 | 2,715 | 11.2 | 0.61× |
+| `large_terms` | 53.6 | 89.5 | 92.5 | 0.58× |
+| `large_filtered_terms` | 57.4 | 104 | 98.7 | 0.58× |
+| `large_prohibited_terms` | 51.5 | 82.8 | 87.5 | 0.59× |
+| `desc_sort_population` | 7.1 | 8.0 | 7.7 | 0.92× |
+| `asc_sort_population` | 4.8 | 6.9 | 5.5 | 0.86× |
+| `asc_sort_with_after_population` | 4.8 | 5.9 | 9.6 | 0.50× |
+| `desc_sort_geonameid` | 11.1 | 6.6 | 6.3 | **1.75×** |
+| `desc_sort_with_after_geonameid` | 6.7 | 5.9 | 6.3 | **1.07×** |
+| `asc_sort_geonameid` | 5.0 | 6.7 | 6.1 | 0.83× |
+| `asc_sort_with_after_geonameid` | 7.4 | 6.3 | 6.0 | **1.24×** |
+| `numeric-term-cardinality-agg-high` | 268 | 762 | 587 | 0.46× |
 
-Where Rust is still behind: Painless and expression scores (an interpreter per document), the
-indexing path, scroll, size-0 aggregations over every document and cardinality. The Go server
-does not have the index-backed engine yet and is slower across the board.
+Where Rust is still behind: the indexing path, scroll, size-0 aggregations over every document,
+cardinality, the large `terms` queries and the non-script `function_score` functions
+(field_value_factor, decay), which still read each document's values from the JSON doc values.
+Painless and expression scores run in a compiled tier over columns (`servers/rust/src/painless/fast.rs`)
+and are within ~1.6× of OpenSearch or faster. The Go server does not have the index-backed engine
+yet and is slower across the board.
 
 ```bash
 make bench-osb-setup                                   # once: opensearch-benchmark venv
