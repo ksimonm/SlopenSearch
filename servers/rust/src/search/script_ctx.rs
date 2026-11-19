@@ -484,7 +484,8 @@ pub fn run_planned_score_script(
         None => {
             let cs = prepare_score(raw).map_err(|e| err_for_shard(doc.idx(), e, true))?;
             let fast = at.as_ref().and_then(|at| fast_script(doc.idx(), &cs, at));
-            let e = Rc::new(Planned { cs, fast });
+            let expr = at.as_ref().and_then(|at| fast_expr(doc.idx(), &cs, at));
+            let e = Rc::new(Planned { cs, fast, expr });
             PLANNED.with(|c| {
                 let mut c = c.borrow_mut();
                 if c.len() >= 16 {
@@ -495,6 +496,13 @@ pub fn run_planned_score_script(
             e
         }
     };
+    if let (Some(f), Some(at)) = (&entry.expr, &at) {
+        let d = at.doc as usize;
+        let s = f.linked.eval_with(score, &|i| f.cols[i].as_ref().and_then(|c| c.get(d).copied()).unwrap_or(0.0));
+        if if fs { s >= 0.0 } else { !s.is_nan() && s >= 0.0 } {
+            return Ok(s);
+        }
+    }
     if let (Some(f), Some(at), Engine::Painless(script)) = (&entry.fast, &at, &entry.cs.engine) {
         let cols = FastCols { cols: &f.cols, doc: at.doc as usize };
         let r = FAST_SLOTS.with(|s| f.fast.run(script, &f.funcs, &cols, score, &mut s.borrow_mut()));
@@ -511,6 +519,61 @@ pub fn run_planned_score_script(
 struct Planned {
     cs: Rc<Compiled>,
     fast: Option<FastScript>,
+    expr: Option<FastExpr>,
+}
+
+/// An expression linked once, with the values of its document bindings by document number.
+struct FastExpr {
+    linked: Rc<expressions::Linked>,
+    cols: Vec<Option<std::sync::Arc<Vec<f64>>>>,
+}
+
+type ExprColumnKey = (String, i64, u64, String);
+
+static EXPR_COLUMNS: std::sync::Mutex<Option<HashMap<ExprColumnKey, std::sync::Arc<Vec<f64>>>>> = std::sync::Mutex::new(None);
+
+fn fast_expr(idx: &Index, cs: &Compiled, at: &crate::search::painless_doc::DocAt) -> Option<FastExpr> {
+    if fast_disabled() || cs.ctx != "score" || !matches!(cs.engine, Engine::Expr(_)) {
+        return None;
+    }
+    let linked = Rc::new(cs.link(Some(idx), &Map::new()).ok()??);
+    let mut cols = Vec::new();
+    for (i, key) in linked.doc_keys().into_iter().enumerate() {
+        let Some(key) = key else {
+            cols.push(None);
+            continue;
+        };
+        let ck = (idx.uuid.clone(), idx.mapping_version, at.version, key);
+        let mut g = EXPR_COLUMNS.lock().unwrap_or_else(|e| e.into_inner());
+        let m = g.get_or_insert_with(HashMap::new);
+        let col = match m.get(&ck) {
+            Some(c) => c.clone(),
+            None => {
+                m.retain(|k, _| !(k.0 == ck.0 && (k.2 != ck.2 || k.1 != ck.1)));
+                if m.len() > 256 {
+                    m.clear();
+                }
+                // the binding's value per document, as the evaluator reads it
+                let null = Value::Null;
+                let c: Vec<f64> = at
+                    .ids
+                    .iter()
+                    .map(|id| match id {
+                        Some(id) => linked.doc_value(i, &QueryCtx::new(idx, id, idx.docs.get(id).unwrap_or(&null))),
+                        None => 0.0,
+                    })
+                    .collect();
+                let c = std::sync::Arc::new(c);
+                m.insert(ck, c.clone());
+                c
+            }
+        };
+        cols.push(Some(col));
+    }
+    if crate::search::index::trace_on() {
+        eprintln!("[trace] compiled tier yes (expression): {}", cs.spec.src);
+    }
+    Some(FastExpr { linked, cols })
 }
 
 struct FastScript {

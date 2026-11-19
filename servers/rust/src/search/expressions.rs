@@ -703,15 +703,33 @@ fn call(f: &str, a: &[f64]) -> f64 {
 impl Linked {
     /// Computes the expression for one document.
     pub fn eval(&self, qc: Option<&QueryCtx>, score: f64, value: &Value) -> f64 {
-        self.ev(&self.expr.root, qc, score, value)
+        self.ev(&self.expr.root, &|i| bind_value(&self.binds[i], qc, score, value))
     }
 
-    fn ev(&self, n: &Node, qc: Option<&QueryCtx>, score: f64, value: &Value) -> f64 {
+    /// Column keys of the document bindings (None: not a document value).
+    pub fn doc_keys(&self) -> Vec<Option<String>> {
+        self.binds.iter().map(|b| matches!(b, Binding::Doc { .. }).then(|| format!("{:?}", b))).collect()
+    }
+
+    /// The value of binding `i` for the document of `qc` (a document binding).
+    pub fn doc_value(&self, i: usize, qc: &QueryCtx) -> f64 {
+        bind_value(&self.binds[i], Some(qc), 0.0, &Value::Null)
+    }
+
+    /// `eval` with the document bindings' values from `doc(i)`.
+    pub fn eval_with(&self, score: f64, doc: &dyn Fn(usize) -> f64) -> f64 {
+        self.ev(&self.expr.root, &|i| match &self.binds[i] {
+            Binding::Doc { .. } => doc(i),
+            b => bind_value(b, None, score, &Value::Null),
+        })
+    }
+
+    fn ev(&self, n: &Node, var: &dyn Fn(usize) -> f64) -> f64 {
         match n {
             Node::Num(v) => *v,
-            Node::Var(i) => bind_value(&self.binds[*i], qc, score, value),
+            Node::Var(i) => var(*i),
             Node::Unary(op, x) => {
-                let x = self.ev(x, qc, score, value);
+                let x = self.ev(x, var);
                 match op {
                     '-' => -x,
                     '!' => b2f(x == 0.0),
@@ -720,21 +738,21 @@ impl Linked {
                 }
             }
             Node::Cond(c, a, b) => {
-                if self.ev(c, qc, score, value) != 0.0 {
-                    self.ev(a, qc, score, value)
+                if self.ev(c, var) != 0.0 {
+                    self.ev(a, var)
                 } else {
-                    self.ev(b, qc, score, value)
+                    self.ev(b, var)
                 }
             }
             Node::Binary(op, l, r) => {
                 if *op == "&&" {
-                    return b2f(self.ev(l, qc, score, value) != 0.0 && self.ev(r, qc, score, value) != 0.0);
+                    return b2f(self.ev(l, var) != 0.0 && self.ev(r, var) != 0.0);
                 }
                 if *op == "||" {
-                    return b2f(self.ev(l, qc, score, value) != 0.0 || self.ev(r, qc, score, value) != 0.0);
+                    return b2f(self.ev(l, var) != 0.0 || self.ev(r, var) != 0.0);
                 }
-                let a = self.ev(l, qc, score, value);
-                let b = self.ev(r, qc, score, value);
+                let a = self.ev(l, var);
+                let b = self.ev(r, var);
                 let sh = (b as i64 & 63) as u32;
                 match *op {
                     "+" => a + b,
@@ -758,7 +776,7 @@ impl Linked {
                 }
             }
             Node::Call(f, args, _) => {
-                let vals: Vec<f64> = args.iter().map(|a| self.ev(a, qc, score, value)).collect();
+                let vals: Vec<f64> = args.iter().map(|a| self.ev(a, var)).collect();
                 call(f, &vals)
             }
         }
