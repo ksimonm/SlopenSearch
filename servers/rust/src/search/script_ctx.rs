@@ -472,7 +472,7 @@ pub fn plan_key() -> u64 {
 /// `run_score_script` for a script of a request plan: compiled once per thread, found by
 /// the plan's `key` instead of by comparing the script.
 pub fn run_planned_score_script(
-    qc: &QueryCtx,
+    doc: &crate::search::eval::LazyDoc,
     key: u64,
     raw: &Value,
     score: f64,
@@ -482,8 +482,8 @@ pub fn run_planned_score_script(
     let entry = match PLANNED.with(|c| c.borrow().iter().rev().find(|e| e.0 == key).map(|e| e.1.clone())) {
         Some(e) => e,
         None => {
-            let cs = prepare_score(raw).map_err(|e| err_for_shard(qc.idx, e, true))?;
-            let fast = at.as_ref().and_then(|at| fast_script(qc.idx, &cs, at));
+            let cs = prepare_score(raw).map_err(|e| err_for_shard(doc.idx(), e, true))?;
+            let fast = at.as_ref().and_then(|at| fast_script(doc.idx(), &cs, at));
             let e = Rc::new(Planned { cs, fast });
             PLANNED.with(|c| {
                 let mut c = c.borrow_mut();
@@ -503,7 +503,7 @@ pub fn run_planned_score_script(
             return Ok(s);
         }
     }
-    run_score_compiled(qc, &entry.cs, score, fs)
+    run_score_compiled(doc.ctx(), &entry.cs, score, fs)
 }
 
 /// A plan's score script: compiled, and its compiled tier (painless::fast) when the
@@ -636,12 +636,12 @@ pub fn script_score_query(qc: &QueryCtx, body: &Value) -> Result<(bool, f64), Ap
 
 /// `script_score` on a document its query matched with score `base`.
 pub fn script_score_on(qc: &QueryCtx, bm: &Map<String, Value>, base: f64) -> Result<(bool, f64), ApiError> {
-    script_score_keyed(qc, bm, base, None)
+    script_score_keyed(&crate::search::eval::LazyDoc::Ready(qc), bm, base, None)
 }
 
 /// `script_score_on` with the script compiled once per plan `key` (see `plan_key`).
 pub fn script_score_keyed(
-    qc: &QueryCtx,
+    doc: &crate::search::eval::LazyDoc,
     bm: &Map<String, Value>,
     base: f64,
     key: Option<(u64, crate::search::painless_doc::DocAt)>,
@@ -651,11 +651,11 @@ pub fn script_score_keyed(
         None => return Ok((true, 1.0)),
     };
     let s = if raw.get("lang").and_then(|l| l.as_str()) == Some("knn") {
-        crate::search::knn_query::knn_score_script(qc, raw)?
+        crate::search::knn_query::knn_score_script(doc.ctx(), raw)?
     } else if let Some((key, at)) = key {
-        run_planned_score_script(qc, key, raw, base, false, Some(at))?
+        run_planned_score_script(doc, key, raw, base, false, Some(at))?
     } else {
-        run_score_script(qc, raw, base, false)?
+        run_score_script(doc.ctx(), raw, base, false)?
     };
     if let Some(min) = bm.get("min_score").and_then(|v| v.as_f64()) {
         if s < min {

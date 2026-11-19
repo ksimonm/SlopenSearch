@@ -44,6 +44,33 @@ fn score_of(curve: &str, scaling: f64, distance: f64) -> f64 {
 }
 
 fn params_for(geo: bool, curve: &str, a: &[PV]) -> Rc<DecayParams> {
+    // a script calls with the same arguments for every document
+    if let Some(p) = LAST.with(|l| {
+        l.borrow().as_ref().filter(|(g, c, args, _)| *g == geo && c == curve && args.iter().zip(a).all(|(x, y)| same_arg(x, y))).map(|e| e.3.clone())
+    }) {
+        return p;
+    }
+    let p = params_for_new(geo, curve, a);
+    LAST.with(|l| *l.borrow_mut() = Some((geo, curve.to_string(), a[..4].to_vec(), p.clone())));
+    p
+}
+
+thread_local! {
+    static LAST: std::cell::RefCell<Option<(bool, String, Vec<PV>, Rc<DecayParams>)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The same argument value (strings by content, numbers by type and bits).
+fn same_arg(x: &PV, y: &PV) -> bool {
+    match (x, y) {
+        (PV::Str(a), PV::Str(b)) => a == b,
+        (PV::Double(a), PV::Double(b)) => a.to_bits() == b.to_bits(),
+        (PV::Long(a), PV::Long(b)) => a == b,
+        (PV::Int(a), PV::Int(b)) => a == b,
+        _ => false,
+    }
+}
+
+fn params_for_new(geo: bool, curve: &str, a: &[PV]) -> Rc<DecayParams> {
     let (origin_s, scale_s, offset_s) = (jstr(&a[0]), jstr(&a[1]), jstr(&a[2]));
     let decay = f64_of(&a[3]);
     let key = format!("{}{}\0{}\0{}\0{}\0{}", geo, curve, origin_s, scale_s, offset_s, decay);

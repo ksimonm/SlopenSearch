@@ -536,6 +536,37 @@ fn char_pv(c: char) -> PV {
     PV::Char(u[0])
 }
 
+/// The one-argument `Math` functions (a double in, a double out).
+pub fn math_fn1(name: &str) -> Option<fn(f64) -> f64> {
+    Some(match name {
+        "abs" => f64::abs,
+        "acos" => f64::acos,
+        "asin" => f64::asin,
+        "atan" => f64::atan,
+        "cbrt" => f64::cbrt,
+        "ceil" => f64::ceil,
+        "cos" => f64::cos,
+        "cosh" => f64::cosh,
+        "exp" => f64::exp,
+        "expm1" => f64::exp_m1,
+        "floor" => f64::floor,
+        "log" => f64::ln,
+        "log10" => f64::log10,
+        "log1p" => f64::ln_1p,
+        "rint" => round_half_even,
+        "signum" => |x| if x == 0.0 || x.is_nan() { x } else { 1f64.copysign(x) },
+        "sin" => f64::sin,
+        "sinh" => f64::sinh,
+        "sqrt" => f64::sqrt,
+        "tan" => f64::tan,
+        "tanh" => f64::tanh,
+        "toDegrees" => |x| x * 180.0 / std::f64::consts::PI,
+        "toRadians" => |x| x / 180.0 * std::f64::consts::PI,
+        "ulp" => ulp,
+        _ => return None,
+    })
+}
+
 pub fn call_static(
     inp: &Interp<'_>,
     class: &str,
@@ -548,41 +579,13 @@ pub fn call_static(
     let a = |i: usize| args[i].clone();
     let f = |i: usize| f64_of(&args[i]);
     let s = |i: usize| str_arg(&args[i]);
-    let key = format!("{}/{}", name, n);
+    let key = || format!("{}/{}", name, n);
     match class {
         "Math" | "StrictMath" => {
+            if let Some(g) = math_fn1(name) {
+                return Ok(PV::Double(g(f(0))));
+            }
             let r = match name {
-                "abs" => f(0).abs(),
-                "acos" => f(0).acos(),
-                "asin" => f(0).asin(),
-                "atan" => f(0).atan(),
-                "cbrt" => f(0).cbrt(),
-                "ceil" => f(0).ceil(),
-                "cos" => f(0).cos(),
-                "cosh" => f(0).cosh(),
-                "exp" => f(0).exp(),
-                "expm1" => f(0).exp_m1(),
-                "floor" => f(0).floor(),
-                "log" => f(0).ln(),
-                "log10" => f(0).log10(),
-                "log1p" => f(0).ln_1p(),
-                "rint" => round_half_even(f(0)),
-                "signum" => {
-                    let x = f(0);
-                    if x == 0.0 || x.is_nan() {
-                        x
-                    } else {
-                        1f64.copysign(x)
-                    }
-                }
-                "sin" => f(0).sin(),
-                "sinh" => f(0).sinh(),
-                "sqrt" => f(0).sqrt(),
-                "tan" => f(0).tan(),
-                "tanh" => f(0).tanh(),
-                "toDegrees" => f(0) * 180.0 / std::f64::consts::PI,
-                "toRadians" => f(0) / 180.0 * std::f64::consts::PI,
-                "ulp" => ulp(f(0)),
                 "atan2" => f(0).atan2(f(1)),
                 "hypot" => f(0).hypot(f(1)),
                 "IEEEremainder" => f(0) - f(1) * round_half_even(f(0) / f(1)),
@@ -609,7 +612,7 @@ pub fn call_static(
                 "pow" => f(0).powf(f(1)),
                 "round" => return Ok(PV::Long(java_round(f(0)))),
                 "random" => random_f64(),
-                _ => return Err(iae(off, &format!("static method [{}, {}] not found", canon(class), key))),
+                _ => return Err(iae(off, &format!("static method [{}, {}] not found", canon(class), key()))),
             };
             return Ok(PV::Double(r));
         }
@@ -1065,7 +1068,7 @@ pub fn call_static(
     if let Some(r) = call_static_time(class, name, &args, off) {
         return r;
     }
-    Err(iae(off, &format!("static method [{}, {}] not found", canon(class), key)))
+    Err(iae(off, &format!("static method [{}, {}] not found", canon(class), key())))
 }
 
 // ---- instance methods ----

@@ -381,7 +381,9 @@ pub fn run_search(
                 if !ok || (!docs_match && !idx.docs.contains_key(&idx.order[i])) || (!idx.pending.is_empty() && idx.pending.contains_key(&idx.order[i])) {
                     continue;
                 }
-                let score = crate::mapping::knn::f32r(score);
+                // hits rank by their float score; `f32r` (the float's shortest decimal) keeps
+                // that order and its ties, so only the kept hits are rounded
+                let score = score as f32 as f64;
                 nan |= score.is_nan();
                 count += 1;
                 if want == 0 {
@@ -395,7 +397,7 @@ pub fn run_search(
                 }
             }
             if !nan {
-                let best: Vec<(f64, usize)> = heap.into_sorted_vec().into_iter().map(|w| (w.0, w.1)).collect();
+                let best: Vec<(f64, usize)> = heap.into_sorted_vec().into_iter().map(|w| (crate::mapping::knn::f32r(w.0), w.1)).collect();
                 for (score, i) in best {
                     let id = &idx.order[i];
                     let Some(doc) = idx.docs.get(id) else { continue };

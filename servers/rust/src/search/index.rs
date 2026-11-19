@@ -1509,14 +1509,13 @@ fn direct_result(idx: &Index, inv: &InvertedIndex, ctx: &QueryCtx, preps: &[&cra
             }
             // a script error makes the whole result undecidable here: the evaluator reports it
             let id = inv.ids.get(doc as usize)?.as_deref()?;
-            let source = idx.docs.get(id).unwrap_or(&NULL);
-            let dc = QueryCtx::new(idx, id, source);
+            let dc = crate::search::eval::LazyDoc::new(idx, id);
             let at = crate::search::painless_doc::DocAt { version: inv.version, ids: &inv.ids, doc };
             if let Some(plan) = plan {
-                return plan.score(&dc, idx.doc_values.get(id), base, Some(at));
+                return plan.score(&dc, id, base, Some(at));
             }
             match *kind {
-                "function_score" => dc.function_score_on(body, base).ok()?,
+                "function_score" => dc.ctx().function_score_on(body, base).ok()?,
                 _ => crate::search::script_ctx::script_score_keyed(&dc, body, base, Some((*key, at))).ok()?,
             }
         }

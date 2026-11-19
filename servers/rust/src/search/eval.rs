@@ -161,6 +161,35 @@ impl<'a> QueryCtx<'a> {
     }
 }
 
+/// A document's evaluation context, made on first use (index-backed paths that may not
+/// need one), or an existing one.
+pub enum LazyDoc<'a, 'c> {
+    Ready(&'c QueryCtx<'a>),
+    Lazy { idx: &'a Index, id: &'a str, cell: std::cell::OnceCell<QueryCtx<'a>> },
+}
+
+static NULL_DOC: Value = Value::Null;
+
+impl<'a> LazyDoc<'a, '_> {
+    pub fn new(idx: &'a Index, id: &'a str) -> Self {
+        LazyDoc::Lazy { idx, id, cell: std::cell::OnceCell::new() }
+    }
+
+    pub fn ctx(&self) -> &QueryCtx<'a> {
+        match self {
+            LazyDoc::Ready(q) => q,
+            LazyDoc::Lazy { idx, id, cell } => cell.get_or_init(|| QueryCtx::new(idx, id, idx.docs.get(*id).unwrap_or(&NULL_DOC))),
+        }
+    }
+
+    pub fn idx(&self) -> &'a Index {
+        match self {
+            LazyDoc::Ready(q) => q.idx,
+            LazyDoc::Lazy { idx, .. } => idx,
+        }
+    }
+}
+
 pub fn array_values(v: &Value) -> Vec<Value> {
     match v {
         Value::Array(a) => a.clone(),

@@ -15,7 +15,7 @@ use std::rc::Rc;
 use crate::painless::api::Script;
 use crate::painless::check::{static_field, Info};
 use crate::painless::interp::{explicit_cast, store, unary, zero, Interp, NativeFn};
-use crate::painless::lib::{call_static, get_field, index_get};
+use crate::painless::lib::{call_static, get_field, index_get, math_fn1};
 use crate::painless::parse::{Expr, Program, Stmt, EK, SK};
 use crate::painless::value::*;
 
@@ -75,6 +75,8 @@ enum N {
     Cond(Box<N>, Box<N>, Box<N>, String),
     Elvis(Box<N>, Box<N>),
     Static { class: String, name: String, args: Vec<N>, casts: Vec<String>, pos: usize, arg_pos: Option<usize> },
+    /// A one-argument `Math` function (`lib::math_fn1`) and the parameter conversion.
+    Math1(fn(f64) -> f64, Box<N>, Option<String>),
     Native { f: NativeFn, args: Vec<N>, casts: Vec<String>, pos: usize },
     Assign(usize, String, Box<N>, usize),
 }
@@ -276,6 +278,11 @@ impl Compiler<'_, '_> {
                     }
                     Some(o) => {
                         if let EK::Type(class) = &o.kind {
+                            if matches!(class.as_str(), "Math" | "StrictMath") && args.len() == 1 {
+                                if let Some(g) = math_fn1(name) {
+                                    return Some(N::Math1(g, Box::new(self.expr(&args[0])?), casts.into_iter().next()));
+                                }
+                            }
                             return Some(N::Static {
                                 class: class.clone(),
                                 name: name.clone(),
@@ -550,6 +557,15 @@ impl Run<'_, '_> {
             N::Static { class, name, args, casts, pos, arg_pos } => {
                 let a = self.eval_args(args, casts)?;
                 ok(call_static(self.inp, class, name, a, *pos, *arg_pos))?
+            }
+            N::Math1(g, x, cast) => {
+                let mut v = self.eval(x)?;
+                if let Some(p) = cast {
+                    if is_primitive(p) && is_number(&v) {
+                        v = cast_num(&v, p);
+                    }
+                }
+                PV::Double(g(f64_of(&v)))
             }
             N::Native { f, args, casts, pos } => {
                 let a = self.eval_args(args, casts)?;
