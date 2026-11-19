@@ -262,6 +262,11 @@ pub struct Bindings {
 }
 
 impl Script {
+    /// The program, its type information and the context's return type (for painless::fast).
+    pub(crate) fn parts(&self) -> (&Program, &Info, &'static str) {
+        (&self.prog, &self.info, self.ctx.ret)
+    }
+
     /// Runs the script and applies the context's return conversion.
     pub fn exec(&self, b: &Bindings, name: &str) -> Result<PV, ScriptErr> {
         let inp = Interp::new(&self.prog, &self.info, &b.funcs);

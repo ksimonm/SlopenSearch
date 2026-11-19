@@ -5,6 +5,7 @@
 pub(crate) mod api;
 pub(crate) mod check;
 pub(crate) mod decay;
+pub(crate) mod fast;
 pub(crate) mod interp;
 pub(crate) mod lex;
 pub(crate) mod lib;

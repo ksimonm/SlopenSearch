@@ -4961,13 +4961,13 @@ fn plan_values(dv: Option<&Map<String, Value>>, key: &Option<String>, field: &st
 
 impl FsPlan {
     /// The result for a document with doc values `dv` that the query matched with `base`.
-    pub fn score(&self, qc: &QueryCtx, dv: Option<&Map<String, Value>>, base: f64) -> Option<(bool, f64)> {
+    pub fn score(&self, qc: &QueryCtx, dv: Option<&Map<String, Value>>, base: f64, at: Option<crate::search::painless_doc::DocAt>) -> Option<(bool, f64)> {
         let base = base * self.outer_boost;
         let (mut weighted_sum, mut weight_sum, mut final_score, mut first) = (0.0f64, 0.0f64, 0.0f64, true);
         for (func, weight) in &self.funcs {
             let raw = match func {
                 FsFunc::One => 1.0,
-                FsFunc::Script { raw, key } => crate::search::script_ctx::run_planned_score_script(qc, *key, raw, base, true).ok()?,
+                FsFunc::Script { raw, key } => crate::search::script_ctx::run_planned_score_script(qc, *key, raw, base, true, at).ok()?,
                 FsFunc::Fvf { field, key, factor, modifier, missing } => {
                     let vals = plan_values(dv, key, field);
                     let mut val = if !vals.is_empty() {

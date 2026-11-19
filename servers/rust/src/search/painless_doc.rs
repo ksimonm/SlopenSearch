@@ -366,3 +366,105 @@ fn vector_function(name: &str, a: &[PV], off: usize) -> R<PV> {
     };
     Ok(PV::Double(crate::mapping::knn::raw(space, &query, &doc) as f32 as f64))
 }
+
+/// A document by number in an index content version, for compiled scripts.
+#[derive(Clone, Copy)]
+pub struct DocAt<'a> {
+    pub version: u64,
+    pub ids: &'a [Option<String>],
+    pub doc: u32,
+}
+
+/// The doc values of one field for every document number, as `doc['field']` gives them
+/// (built with `doc_values_for`), for the compiled tier of painless (painless::fast).
+pub struct DocColumn {
+    pub kind: &'static str,
+    offs: Vec<u32>,
+    vals: Vec<crate::painless::fast::CV>,
+}
+
+impl DocColumn {
+    pub fn vals(&self, doc: usize) -> &[crate::painless::fast::CV] {
+        match (self.offs.get(doc), self.offs.get(doc + 1)) {
+            (Some(&a), Some(&b)) => &self.vals[a as usize..b as usize],
+            _ => &[],
+        }
+    }
+}
+
+fn build_column(skel: &Index, idx: &Index, ids: &[Option<String>], field: &str) -> Option<DocColumn> {
+    use crate::painless::fast::CV;
+    if field.starts_with('_') {
+        return None;
+    }
+    let empty = Map::new();
+    let mut kind: Option<&'static str> = None;
+    let mut offs = Vec::with_capacity(ids.len() + 1);
+    let mut vals = Vec::with_capacity(ids.len());
+    offs.push(0u32);
+    for id in ids {
+        if let Some(id) = id {
+            let dv = idx.doc_values.get(id).unwrap_or(&empty);
+            let PV::DocValues(d) = doc_values_for(skel, id, dv, field, 0).ok()? else { return None };
+            let k = match d.kind.as_str() {
+                "Longs" => "Longs",
+                "Doubles" => "Doubles",
+                "GeoPoints" => "GeoPoints",
+                "Booleans" => "Booleans",
+                _ => return None,
+            };
+            if kind.is_some_and(|x| x != k) {
+                return None;
+            }
+            kind = Some(k);
+            for v in &d.vals {
+                vals.push(match v {
+                    PV::Long(x) => CV::L(*x),
+                    PV::Double(x) => CV::D(*x),
+                    PV::GeoPoint(a, o) => CV::G(*a, *o),
+                    PV::Bool(b) => CV::B(*b),
+                    _ => return None,
+                });
+            }
+        }
+        offs.push(u32::try_from(vals.len()).ok()?);
+    }
+    // no live document has the field: its kind from the mapping (an empty lookup)
+    let kind = match kind {
+        Some(k) => k,
+        None => {
+            let PV::DocValues(d) = doc_values_for(skel, "", &empty, field, 0).ok()? else { return None };
+            match d.kind.as_str() {
+                "Longs" => "Longs",
+                "Doubles" => "Doubles",
+                "GeoPoints" => "GeoPoints",
+                "Booleans" => "Booleans",
+                _ => return None,
+            }
+        }
+    };
+    Some(DocColumn { kind, offs, vals })
+}
+
+type ColumnKey = (String, i64, u64, String);
+
+static DOC_COLUMNS: std::sync::Mutex<Option<HashMap<ColumnKey, Option<std::sync::Arc<DocColumn>>>>> = std::sync::Mutex::new(None);
+
+/// The doc values column of `field` for index content `version` with document numbers
+/// `ids` (None: not servable from a column). Built once per content version and mapping.
+pub fn doc_column(skel: &Index, idx: &Index, version: u64, ids: &[Option<String>], field: &str) -> Option<std::sync::Arc<DocColumn>> {
+    let key = (idx.uuid.clone(), idx.mapping_version, version, field.to_string());
+    let mut g = DOC_COLUMNS.lock().unwrap_or_else(|e| e.into_inner());
+    let m = g.get_or_insert_with(HashMap::new);
+    if let Some(c) = m.get(&key) {
+        return c.clone();
+    }
+    // columns of older versions of this index are not used again
+    m.retain(|k, _| !(k.0 == key.0 && (k.2 != version || k.1 != key.1)));
+    if m.len() > 256 {
+        m.clear();
+    }
+    let c = build_column(skel, idx, ids, field).map(std::sync::Arc::new);
+    m.insert(key, c.clone());
+    c
+}

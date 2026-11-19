@@ -460,7 +460,7 @@ pub fn run_score_script(qc: &QueryCtx, raw: &Value, score: f64, fs: bool) -> Res
 
 thread_local! {
     /// Score scripts of request plans by plan key (`plan_key`).
-    static PLANNED: RefCell<Vec<(u64, Rc<Compiled>)>> = const { RefCell::new(Vec::new()) };
+    static PLANNED: RefCell<Vec<(u64, Rc<Planned>)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// A key no other plan has, for `run_planned_score_script`.
@@ -471,22 +471,98 @@ pub fn plan_key() -> u64 {
 
 /// `run_score_script` for a script of a request plan: compiled once per thread, found by
 /// the plan's `key` instead of by comparing the script.
-pub fn run_planned_score_script(qc: &QueryCtx, key: u64, raw: &Value, score: f64, fs: bool) -> Result<f64, ApiError> {
-    let cs = match PLANNED.with(|c| c.borrow().iter().rev().find(|e| e.0 == key).map(|e| e.1.clone())) {
-        Some(cs) => cs,
+pub fn run_planned_score_script(
+    qc: &QueryCtx,
+    key: u64,
+    raw: &Value,
+    score: f64,
+    fs: bool,
+    at: Option<crate::search::painless_doc::DocAt>,
+) -> Result<f64, ApiError> {
+    let entry = match PLANNED.with(|c| c.borrow().iter().rev().find(|e| e.0 == key).map(|e| e.1.clone())) {
+        Some(e) => e,
         None => {
             let cs = prepare_score(raw).map_err(|e| err_for_shard(qc.idx, e, true))?;
+            let fast = at.as_ref().and_then(|at| fast_script(qc.idx, &cs, at));
+            let e = Rc::new(Planned { cs, fast });
             PLANNED.with(|c| {
                 let mut c = c.borrow_mut();
                 if c.len() >= 16 {
                     c.remove(0);
                 }
-                c.push((key, cs.clone()));
+                c.push((key, e.clone()));
             });
-            cs
+            e
         }
     };
-    run_score_compiled(qc, &cs, score, fs)
+    if let (Some(f), Some(at), Engine::Painless(script)) = (&entry.fast, &at, &entry.cs.engine) {
+        let cols = FastCols { cols: &f.cols, doc: at.doc as usize };
+        let r = FAST_SLOTS.with(|s| f.fast.run(script, &f.funcs, &cols, score, &mut s.borrow_mut()));
+        // invalid scores: the interpreter's path reports them
+        if let Some(s) = r.filter(|s| if fs { *s >= 0.0 } else { !s.is_nan() && *s >= 0.0 }) {
+            return Ok(s);
+        }
+    }
+    run_score_compiled(qc, &entry.cs, score, fs)
+}
+
+/// A plan's score script: compiled, and its compiled tier (painless::fast) when the
+/// script and the fields it reads allow one.
+struct Planned {
+    cs: Rc<Compiled>,
+    fast: Option<FastScript>,
+}
+
+struct FastScript {
+    fast: crate::painless::fast::Fast,
+    cols: Vec<std::sync::Arc<crate::search::painless_doc::DocColumn>>,
+    funcs: Rc<HashMap<String, crate::painless::interp::NativeFn>>,
+}
+
+struct FastCols<'a> {
+    cols: &'a [std::sync::Arc<crate::search::painless_doc::DocColumn>],
+    doc: usize,
+}
+
+impl crate::painless::fast::Cols for FastCols<'_> {
+    fn vals(&self, col: usize) -> &[crate::painless::fast::CV] {
+        self.cols[col].vals(self.doc)
+    }
+}
+
+thread_local! {
+    static FAST_SLOTS: RefCell<Vec<PV>> = const { RefCell::new(Vec::new()) };
+}
+
+fn fast_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("SLOP_NO_FAST_SCRIPTS").map(|v| v == "true" || v == "1").unwrap_or(false))
+}
+
+fn fast_script(idx: &Index, cs: &Compiled, at: &crate::search::painless_doc::DocAt) -> Option<FastScript> {
+    let Engine::Painless(script) = &cs.engine else { return None };
+    if fast_disabled() || cs.ctx != "score" {
+        return None;
+    }
+    let skel = skeleton(idx);
+    let funcs = crate::search::painless_doc::score_bindings("");
+    let params = from_json(&Value::Object(cs.spec.params.clone()), MapKind::Hash);
+    let mut cols: Vec<std::sync::Arc<crate::search::painless_doc::DocColumn>> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    let mut field = |name: &str| -> Option<(usize, &'static str)> {
+        if let Some(i) = names.iter().position(|n| n == name) {
+            return Some((i, cols[i].kind));
+        }
+        let c = crate::search::painless_doc::doc_column(&skel, idx, at.version, at.ids, name)?;
+        names.push(name.to_string());
+        cols.push(c);
+        Some((cols.len() - 1, cols[cols.len() - 1].kind))
+    };
+    let fast = crate::painless::fast::compile(script, &funcs, &params, &mut field);
+    if crate::search::index::trace_on() {
+        eprintln!("[trace] compiled tier {}: {}", if fast.is_some() { "yes" } else { "no" }, cs.spec.src);
+    }
+    Some(FastScript { fast: fast?, cols, funcs })
 }
 
 fn run_score_compiled(qc: &QueryCtx, cs: &Compiled, score: f64, fs: bool) -> Result<f64, ApiError> {
@@ -564,15 +640,20 @@ pub fn script_score_on(qc: &QueryCtx, bm: &Map<String, Value>, base: f64) -> Res
 }
 
 /// `script_score_on` with the script compiled once per plan `key` (see `plan_key`).
-pub fn script_score_keyed(qc: &QueryCtx, bm: &Map<String, Value>, base: f64, key: Option<u64>) -> Result<(bool, f64), ApiError> {
+pub fn script_score_keyed(
+    qc: &QueryCtx,
+    bm: &Map<String, Value>,
+    base: f64,
+    key: Option<(u64, crate::search::painless_doc::DocAt)>,
+) -> Result<(bool, f64), ApiError> {
     let raw = match bm.get("script") {
         Some(r) => r,
         None => return Ok((true, 1.0)),
     };
     let s = if raw.get("lang").and_then(|l| l.as_str()) == Some("knn") {
         crate::search::knn_query::knn_score_script(qc, raw)?
-    } else if let Some(key) = key {
-        run_planned_score_script(qc, key, raw, base, false)?
+    } else if let Some((key, at)) = key {
+        run_planned_score_script(qc, key, raw, base, false, Some(at))?
     } else {
         run_score_script(qc, raw, base, false)?
     };

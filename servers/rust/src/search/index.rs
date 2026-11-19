@@ -1511,12 +1511,13 @@ fn direct_result(idx: &Index, inv: &InvertedIndex, ctx: &QueryCtx, preps: &[&cra
             let id = inv.ids.get(doc as usize)?.as_deref()?;
             let source = idx.docs.get(id).unwrap_or(&NULL);
             let dc = QueryCtx::new(idx, id, source);
+            let at = crate::search::painless_doc::DocAt { version: inv.version, ids: &inv.ids, doc };
             if let Some(plan) = plan {
-                return plan.score(&dc, idx.doc_values.get(id), base);
+                return plan.score(&dc, idx.doc_values.get(id), base, Some(at));
             }
             match *kind {
                 "function_score" => dc.function_score_on(body, base).ok()?,
-                _ => crate::search::script_ctx::script_score_keyed(&dc, body, base, Some(*key)).ok()?,
+                _ => crate::search::script_ctx::script_score_keyed(&dc, body, base, Some((*key, at))).ok()?,
             }
         }
         Prepared::Terms { bits, boost } => {
@@ -1756,7 +1757,7 @@ thread_local! {
 }
 
 /// `SLOP_TRACE=true`: prints the time since the last `trace("start")` of this thread.
-fn trace_on() -> bool {
+pub fn trace_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("SLOP_TRACE").map(|v| v == "true" || v == "1").unwrap_or(false))
 }
