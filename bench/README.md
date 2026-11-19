@@ -161,8 +161,23 @@ Native targets run under `systemd-run --user --scope -p CPUQuota=<cpus×100>% -p
 MemoryMax=<memory> -p MemorySwapMax=0`, i.e. the same limits as the containers, and the
 cgroup sampler reads that scope; data goes to `~/.cache/slopbench/native/<target>`.
 
+perf needs `kernel.perf_event_paranoid` <= 1 (-1 for Docker targets, whose processes run
+under another uid); Ubuntu defaults to 4. `make profiling-setup` (root, once) sets it for
+good and installs valgrind and heaptrack; `make profiling-tools` installs inferno.
+
+Without perf, `--profile` falls back to the Rust server's built-in sampling profiler
+(pprof-rs on a SIGPROF timer, `/_slop/profile/start|stop`, servers/rust/src/profiler.rs):
+same `stacks.folded` and `flamegraph.svg`, plus `top.txt`. It costs nothing until started,
+so every Rust build (Docker images included) can be profiled. For a running server:
+
 ```bash
-sudo sysctl kernel.perf_event_paranoid=1        # Ubuntu defaults to 4 = no perf for users
+make profile PORT=9292 SECS=20                       # whatever runs meanwhile
+make profile PORT=9292 CMD="python3 my_queries.py"   # while a command runs
+python3 bench/proftop.py <dir>/stacks.folded --callers doc_values_for   # who calls it
+```
+
+```bash
+make profiling-setup                            # once: perf for users and containers
 .venv/bin/python bench/osb.py --targets go-native --preset sample --profile
 .venv/bin/python bench/run.py --targets rust-native --size small --workloads index,search --profile
 ```

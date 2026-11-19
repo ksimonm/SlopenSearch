@@ -380,7 +380,7 @@ class Run:
             prof = None
             if self.a.profile and t.kind != "ref":
                 from native import Profiler
-                prof = Profiler(self.box.server_pid(), self.out / f"profile-{t.name}").start()
+                prof = Profiler(self.box.server_pid(), self.out / f"profile-{t.name}", port=t.port).start()
             steps = [("index", self.w_index), ("sweep", self.w_sweep), ("verify", self.w_verify),
                      ("search", self.w_search), ("knn", self.w_knn), ("mixed", self.w_mixed),
                      ("update", self.w_update), ("restart", self.w_restart)]

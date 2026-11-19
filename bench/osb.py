@@ -290,7 +290,7 @@ class OsbRun:
             prof = None
             if self.a.profile and t.kind != "ref":
                 from native import Profiler
-                prof = Profiler(self.box.server_pid(), self.out / f"profile-{self.a.workload}-{t.name}").start()
+                prof = Profiler(self.box.server_pid(), self.out / f"profile-{self.a.workload}-{t.name}", port=t.port).start()
             self.res["version"] = info.get("version", {}).get("number")
             if self.a.proxy:
                 self.proxy = Proxy(t.port, timeout=self.a.request_timeout + 30).start()

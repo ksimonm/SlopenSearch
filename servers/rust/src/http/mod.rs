@@ -230,6 +230,9 @@ async fn handle_plain(store: Shared, request: axum::extract::Request) -> axum::r
         headers,
         body: body.to_vec(),
     };
+    if req.path.starts_with("/_slop/profile") {
+        return crate::profiler::handle(&req);
+    }
 
     // Content-Type gate (mirrors Go ServeHTTP)
     if !req.body.is_empty() {

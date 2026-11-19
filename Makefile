@@ -21,7 +21,8 @@ PYTEST := pytest -n $(JOBS) --dist loadfile --tb=$(TB)
 .PHONY: help go-up rust-up ref-up go-test rust-test ref-test go-score rust-score ref-score \
         ref-show ref-record \
         go-dev rust-dev go-unit test go-logs rust-logs down bench bench-report \
-        bench-osb-setup bench-quick bench-full bench-osb bench-history bench-scorecard
+        bench-osb-setup bench-quick bench-full bench-osb bench-history bench-scorecard \
+        profile profiling-tools profiling-setup
 
 help: ## list targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -116,3 +117,13 @@ rust-logs: ## follow Rust server logs
 
 down: ## stop everything
 	$(COMPOSE) --profile tools down
+
+# profiling: the Rust server samples itself (no perf/root needed), see scripts/profile.sh
+profile: ## CPU profile of a running Rust server: make profile [PORT=9292] [SECS=10 | CMD="..."]
+	sh scripts/profile.sh -p $(or $(PORT),9292) $(if $(CMD),-- $(CMD),-s $(or $(SECS),10))
+
+profiling-tools: ## user-level profiling tools (inferno flamegraphs)
+	cargo install inferno
+
+profiling-setup: ## one-time root setup: perf for users and Docker targets, valgrind, heaptrack
+	sudo sh scripts/setup-profiling.sh

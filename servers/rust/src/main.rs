@@ -20,6 +20,7 @@ mod model;
 mod murmur3;
 mod mustache;
 mod painless;
+mod profiler;
 mod resp;
 mod scripting;
 mod search;

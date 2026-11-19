@@ -9,9 +9,13 @@ Profiling (`--profile` in bench/run.py and bench/osb.py) attaches `perf record -
 server process for the whole run (native targets, and Docker targets via the container's
 host PID) and writes perf.data, perf.script, stacks.folded and, when `inferno-flamegraph`
 (cargo install inferno) or `flamegraph.pl` (FlameGraph) is on PATH, flamegraph.svg.
-perf needs `kernel.perf_event_paranoid` <= 1 (Ubuntu defaults to 4):
-    sudo sysctl kernel.perf_event_paranoid=1
+perf needs `kernel.perf_event_paranoid` <= 1, -1 for Docker targets (Ubuntu defaults to 4):
+`sudo sh scripts/setup-profiling.sh` sets it for good.
 perf.script can also be opened directly in https://www.speedscope.app.
+
+Without perf, the Rust server profiles itself: its built-in sampling profiler
+(`/_slop/profile/start|stop`, servers/rust/src/profiler.rs) writes the same stacks.folded and
+flamegraph.svg, plus top.txt (bench/proftop.py). Go has no fallback yet.
 """
 
 from __future__ import annotations
@@ -156,20 +160,29 @@ class NativeProcess:
 class Profiler:
     """perf record -g on one PID; stop() writes perf.script, stacks.folded, flamegraph.svg."""
 
-    def __init__(self, pid: int, out: Path, freq: int = 99):
-        self.pid, self.out, self.freq = pid, out, freq
+    def __init__(self, pid: int, out: Path, freq: int = 99, port: int | None = None):
+        self.pid, self.out, self.freq, self.port = pid, out, freq, port
         self.p: subprocess.Popen | None = None
         self.error: str | None = None
+        self.builtin = False
+
+    def _builtin(self, why: str):
+        """The server's own profiler (Rust) when perf cannot run."""
+        if self.port is not None:
+            st, body = _http(self.port, "POST", "/_slop/profile/start?frequency=499")
+            if st == 200:
+                self.builtin = True
+                return self
+            why += f"; built-in profiler: {st} {body[:80]!r}"
+        self.error = why
+        return self
 
     def start(self):
         if not shutil.which("perf"):
-            self.error = "perf not installed"
-            return self
+            return self._builtin("perf not installed")
         par = int(Path("/proc/sys/kernel/perf_event_paranoid").read_text())
         if par > 1 and os.geteuid() != 0:
-            self.error = (f"kernel.perf_event_paranoid={par}: run `sudo sysctl kernel.perf_event_paranoid=1` "
-                          "to profile")
-            return self
+            return self._builtin(f"kernel.perf_event_paranoid={par}: run `sudo sh scripts/setup-profiling.sh` to profile")
         self.out.mkdir(parents=True, exist_ok=True)
         self.p = subprocess.Popen(["perf", "record", "-F", str(self.freq), "-g", "-p", str(self.pid),
                                    "-o", str(self.out / "perf.data")],
@@ -177,6 +190,8 @@ class Profiler:
         return self
 
     def stop(self) -> dict:
+        if self.builtin:
+            return self._stop_builtin()
         if self.error or not self.p:
             return {"error": self.error}
         self.p.send_signal(signal.SIGINT)
@@ -197,6 +212,37 @@ class Profiler:
                 subprocess.run([tool, str(folded)], stdout=f)
             res["svg"] = str(self.out / "flamegraph.svg")
         return res
+
+
+    def _stop_builtin(self) -> dict:
+        st, body = _http(self.port, "POST", "/_slop/profile/stop?format=folded", timeout=300)
+        if st != 200:
+            return {"error": f"built-in profiler: {st} {body[:200]!r}"}
+        self.out.mkdir(parents=True, exist_ok=True)
+        folded = self.out / "stacks.folded"
+        folded.write_bytes(body)
+        n = sum(int(line.rsplit(b" ", 1)[1]) for line in body.splitlines() if line.strip())
+        res = {"dir": str(self.out), "samples": n, "folded": str(folded), "profiler": "builtin"}
+        tool = shutil.which("inferno-flamegraph") or shutil.which("flamegraph.pl")
+        if tool and n:
+            with (self.out / "flamegraph.svg").open("w") as f:
+                subprocess.run([tool, str(folded)], stdout=f)
+            res["svg"] = str(self.out / "flamegraph.svg")
+        if n:
+            import proftop
+            (self.out / "top.txt").write_text(proftop.report(folded))
+            res["top"] = str(self.out / "top.txt")
+        return res
+
+
+def _http(port: int, method: str, path: str, timeout: float = 30) -> tuple[int, bytes]:
+    try:
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+        c.request(method, path)
+        r = c.getresponse()
+        return r.status, r.read()
+    except OSError as e:
+        return 0, str(e).encode()
 
 
 def fold(script: Path, out: Path) -> int:
