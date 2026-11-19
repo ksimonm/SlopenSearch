@@ -1403,7 +1403,8 @@ enum Prepared<'a> {
     All { boost: f64 },
     Bool { b: &'a DirectBool, must: Vec<Prepared<'a>>, filter: Vec<Prepared<'a>>, should: Vec<Prepared<'a>>, must_not: Vec<Prepared<'a>> },
     /// `plan`: the function_score parsed once (None: the evaluator's `function_score_on`).
-    Scored { kind: &'static str, body: &'a Map<String, Value>, inner: Box<Prepared<'a>>, plan: Option<crate::search::eval_extra::FsPlan> },
+    /// `key`: the plan key of a script_score's script (`script_ctx::plan_key`).
+    Scored { kind: &'static str, body: &'a Map<String, Value>, inner: Box<Prepared<'a>>, plan: Option<crate::search::eval_extra::FsPlan>, key: u64 },
 }
 
 fn prepare<'a>(ctx: &QueryCtx, inv: &'a InvertedIndex, d: &'a Direct, preps: &mut Vec<std::rc::Rc<crate::search::eval::RangePrep>>) -> Option<Prepared<'a>> {
@@ -1449,6 +1450,7 @@ fn prepare<'a>(ctx: &QueryCtx, inv: &'a InvertedIndex, d: &'a Direct, preps: &mu
             body,
             inner: Box::new(prepare(ctx, inv, inner, preps)?),
             plan: if *kind == "function_score" { crate::search::eval_extra::fs_plan(ctx, body) } else { None },
+            key: crate::search::script_ctx::plan_key(),
         },
         Direct::Bool(b) => {
             let mut all = |v: &'a [Direct]| -> Option<Vec<Prepared<'a>>> { v.iter().map(|d| prepare(ctx, inv, d, preps)).collect() };
@@ -1500,21 +1502,21 @@ fn direct_result(idx: &Index, inv: &InvertedIndex, ctx: &QueryCtx, preps: &[&cra
             }
         }
         Prepared::All { boost } => (true, *boost),
-        Prepared::Scored { kind, body, inner, plan } => {
+        Prepared::Scored { kind, body, inner, plan, key } => {
             let (m, base) = direct_result(idx, inv, ctx, preps, inner, doc)?;
             if !m {
                 return Some((false, 0.0));
             }
             // a script error makes the whole result undecidable here: the evaluator reports it
             let id = inv.ids.get(doc as usize)?.as_deref()?;
-            if let Some(plan) = plan {
-                return plan.score(idx.doc_values.get(id), base);
-            }
             let source = idx.docs.get(id).unwrap_or(&NULL);
             let dc = QueryCtx::new(idx, id, source);
+            if let Some(plan) = plan {
+                return plan.score(&dc, idx.doc_values.get(id), base);
+            }
             match *kind {
                 "function_score" => dc.function_score_on(body, base).ok()?,
-                _ => crate::search::script_ctx::script_score_on(&dc, body, base).ok()?,
+                _ => crate::search::script_ctx::script_score_keyed(&dc, body, base, Some(*key)).ok()?,
             }
         }
         Prepared::Terms { bits, boost } => {

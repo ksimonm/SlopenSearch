@@ -4831,6 +4831,8 @@ enum FsFunc {
     /// field, doc values key (None: never readable), factor, modifier, missing
     Fvf { field: String, key: Option<String>, factor: f64, modifier: String, missing: Option<f64> },
     Decay { name: &'static str, field: String, key: Option<String>, kind: DecayKind, decay: f64, offset: f64, scale: f64 },
+    /// A score script and its plan key (`script_ctx::plan_key`).
+    Script { raw: Value, key: u64 },
     One,
 }
 
@@ -4885,8 +4887,10 @@ pub fn fs_plan(ctx: &QueryCtx, bm: &Map<String, Value>) -> Option<FsPlan> {
                 missing: fvf.get("missing").and_then(to_f64),
                 field,
             }
-        } else if fno.contains_key("random_score") || fno.contains_key("script_score") {
+        } else if fno.contains_key("random_score") {
             return None;
+        } else if let Some(ss) = fno.get("script_score").and_then(|s| s.as_object()) {
+            FsFunc::Script { raw: ss.get("script").cloned().unwrap_or(Value::Null), key: crate::search::script_ctx::plan_key() }
         } else if let Some((name, dec)) = ["gauss", "linear", "exp"]
             .iter()
             .find_map(|n| fno.get(*n).and_then(|d| d.as_object()).map(|d| (*n, d)))
@@ -4957,12 +4961,13 @@ fn plan_values(dv: Option<&Map<String, Value>>, key: &Option<String>, field: &st
 
 impl FsPlan {
     /// The result for a document with doc values `dv` that the query matched with `base`.
-    pub fn score(&self, dv: Option<&Map<String, Value>>, base: f64) -> Option<(bool, f64)> {
+    pub fn score(&self, qc: &QueryCtx, dv: Option<&Map<String, Value>>, base: f64) -> Option<(bool, f64)> {
         let base = base * self.outer_boost;
         let (mut weighted_sum, mut weight_sum, mut final_score, mut first) = (0.0f64, 0.0f64, 0.0f64, true);
         for (func, weight) in &self.funcs {
             let raw = match func {
                 FsFunc::One => 1.0,
+                FsFunc::Script { raw, key } => crate::search::script_ctx::run_planned_score_script(qc, *key, raw, base, true).ok()?,
                 FsFunc::Fvf { field, key, factor, modifier, missing } => {
                     let vals = plan_values(dv, key, field);
                     let mut val = if !vals.is_empty() {

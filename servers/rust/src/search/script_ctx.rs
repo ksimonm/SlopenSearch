@@ -455,6 +455,41 @@ pub fn script_query(qc: &QueryCtx, body: &Value) -> Result<(bool, f64), ApiError
 /// function_score error message for negative scores.
 pub fn run_score_script(qc: &QueryCtx, raw: &Value, score: f64, fs: bool) -> Result<f64, ApiError> {
     let cs = prepare_score(raw).map_err(|e| err_for_shard(qc.idx, e, true))?;
+    run_score_compiled(qc, &cs, score, fs)
+}
+
+thread_local! {
+    /// Score scripts of request plans by plan key (`plan_key`).
+    static PLANNED: RefCell<Vec<(u64, Rc<Compiled>)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A key no other plan has, for `run_planned_score_script`.
+pub fn plan_key() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// `run_score_script` for a script of a request plan: compiled once per thread, found by
+/// the plan's `key` instead of by comparing the script.
+pub fn run_planned_score_script(qc: &QueryCtx, key: u64, raw: &Value, score: f64, fs: bool) -> Result<f64, ApiError> {
+    let cs = match PLANNED.with(|c| c.borrow().iter().rev().find(|e| e.0 == key).map(|e| e.1.clone())) {
+        Some(cs) => cs,
+        None => {
+            let cs = prepare_score(raw).map_err(|e| err_for_shard(qc.idx, e, true))?;
+            PLANNED.with(|c| {
+                let mut c = c.borrow_mut();
+                if c.len() >= 16 {
+                    c.remove(0);
+                }
+                c.push((key, cs.clone()));
+            });
+            cs
+        }
+    };
+    run_score_compiled(qc, &cs, score, fs)
+}
+
+fn run_score_compiled(qc: &QueryCtx, cs: &Compiled, score: f64, fs: bool) -> Result<f64, ApiError> {
     let mut opts = RunOpts { score, want_double: true, ..Default::default() };
     let v = cs.run(Some(qc), &mut opts).map_err(|se| script_shard_error(qc.idx, &se))?;
     let s = opts.double.unwrap_or_else(|| score_value(&v));
@@ -525,12 +560,19 @@ pub fn script_score_query(qc: &QueryCtx, body: &Value) -> Result<(bool, f64), Ap
 
 /// `script_score` on a document its query matched with score `base`.
 pub fn script_score_on(qc: &QueryCtx, bm: &Map<String, Value>, base: f64) -> Result<(bool, f64), ApiError> {
+    script_score_keyed(qc, bm, base, None)
+}
+
+/// `script_score_on` with the script compiled once per plan `key` (see `plan_key`).
+pub fn script_score_keyed(qc: &QueryCtx, bm: &Map<String, Value>, base: f64, key: Option<u64>) -> Result<(bool, f64), ApiError> {
     let raw = match bm.get("script") {
         Some(r) => r,
         None => return Ok((true, 1.0)),
     };
     let s = if raw.get("lang").and_then(|l| l.as_str()) == Some("knn") {
         crate::search::knn_query::knn_score_script(qc, raw)?
+    } else if let Some(key) = key {
+        run_planned_score_script(qc, key, raw, base, false)?
     } else {
         run_score_script(qc, raw, base, false)?
     };
