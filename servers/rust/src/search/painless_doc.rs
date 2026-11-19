@@ -22,8 +22,44 @@ fn json_f64(v: &Value) -> Option<f64> {
     }
 }
 
+/// What a doc lookup needs of a mapped field.
+struct FieldInfo {
+    def: Map<String, Value>,
+    ft: String,
+    /// The target of an alias (when it is another field).
+    alias_of: Option<String>,
+    /// The doc values key (`QueryCtx::values_in`); None: not readable here (nested).
+    values_key: Option<String>,
+}
+
+thread_local! {
+    /// Field infos by skeleton index (kept for the process, see `script_ctx::skeleton`) and field.
+    static FIELD_INFOS: RefCell<HashMap<(usize, String), Option<Rc<FieldInfo>>>> = RefCell::new(HashMap::new());
+}
+
+fn field_info(idx: &Index, field: &str) -> Option<Rc<FieldInfo>> {
+    let key = (idx as *const Index as usize, field.to_string());
+    if let Some(i) = FIELD_INFOS.with(|c| c.borrow().get(&key).cloned()) {
+        return i;
+    }
+    let info = mapping_field_def(idx, field).map(|d| {
+        let ft = d.get("type").and_then(|v| v.as_str()).unwrap_or("object").to_string();
+        let target = resolve_alias_field(idx, field);
+        let qc = QueryCtx::new(idx, "", &Value::Null);
+        let values_key = qc.values_key(field);
+        Rc::new(FieldInfo { def: d.clone(), alias_of: (ft == "alias" && target != field).then_some(target), ft, values_key })
+    });
+    FIELD_INFOS.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() > 4096 {
+            c.clear();
+        }
+        c.insert(key, info.clone());
+    });
+    info
+}
+
 fn doc_values_for(idx: &Index, id: &str, vals: &Map<String, Value>, field: &str, off: usize) -> R<PV> {
-    let qc = QueryCtx::with_values(idx, id, &Value::Null, vals.clone());
     let dv = |kind: &str, vals: Vec<PV>| Ok(PV::DocValues(Rc::new(PDocValues { kind: kind.into(), vals })));
     match field {
         "_id" => return dv("Strings", vec![PV::str(id)]),
@@ -31,8 +67,8 @@ fn doc_values_for(idx: &Index, id: &str, vals: &Map<String, Value>, field: &str,
         "_seq_no" => return dv("Longs", vec![PV::Long(idx.seq_nos.get(id).copied().unwrap_or(0))]),
         _ => {}
     }
-    let def = match mapping_field_def(idx, field) {
-        Some(d) => d.clone(),
+    let info = match field_info(idx, field) {
+        Some(i) => i,
         None => {
             return Err(iae(off, &format!("No field found for [{}] in mapping", field)).frames(&[
                 "org.opensearch.search.lookup.LeafDocLookup.get(LeafDocLookup.java:89)",
@@ -40,15 +76,23 @@ fn doc_values_for(idx: &Index, id: &str, vals: &Map<String, Value>, field: &str,
             ]))
         }
     };
-    let ft = def.get("type").and_then(|v| v.as_str()).unwrap_or("object").to_string();
+    let (def, ft) = (&info.def, info.ft.as_str());
     if ft == "alias" {
-        let target = resolve_alias_field(idx, field);
-        if target != field {
-            return doc_values_for(idx, id, vals, &target, off);
+        if let Some(target) = &info.alias_of {
+            return doc_values_for(idx, id, vals, target, off);
         }
     }
-    let (raw, _) = qc.values(field);
-    match ft.as_str() {
+    let raw = match &info.values_key {
+        None => Vec::new(),
+        Some(key) => match vals.get(key) {
+            Some(v) => crate::search::eval::array_values(v),
+            None => match (key != field).then(|| vals.get(field)).flatten() {
+                Some(v) => crate::search::eval::array_values(v),
+                None => Vec::new(),
+            },
+        },
+    };
+    match ft {
         "text" | "match_only_text" | "search_as_you_type" => {
             if def.get("fielddata").and_then(|v| v.as_bool()) != Some(true) {
                 return Err(iae(off, &TEXT_FIELDDATA_REASON.replace("%s", field)).frames(&[
@@ -68,7 +112,7 @@ fn doc_values_for(idx: &Index, id: &str, vals: &Map<String, Value>, field: &str,
                     Value::String(s) => s.clone(),
                     other => other.to_string(),
                 };
-                for t in qc.analyze_field(field, None, &s) {
+                for t in QueryCtx::new(idx, id, &Value::Null).analyze_field(field, None, &s) {
                     if !terms.contains(&t) {
                         terms.push(t);
                     }
@@ -150,7 +194,33 @@ fn doc_values_for(idx: &Index, id: &str, vals: &Map<String, Value>, field: &str,
 /// index's stored doc values of `id`.
 pub fn doc_lookup(idx: Rc<Index>, id: &str, values: Option<Map<String, Value>>) -> PV {
     let vals = values.unwrap_or_else(|| idx.doc_values.get(id).cloned().unwrap_or_default());
-    let vals = Rc::new(vals);
+    lookup_over(idx, id, Some(Rc::new(vals)))
+}
+
+thread_local! {
+    /// The doc values `doc_lookup_borrowed` lookups read (set by `with_doc_values`).
+    static CUR_VALUES: std::cell::Cell<*const Map<String, Value>> = const { std::cell::Cell::new(std::ptr::null()) };
+}
+
+/// Runs `f` with `vals` as the doc values of the lookups made by `doc_lookup_borrowed`.
+pub fn with_doc_values<T>(vals: &Map<String, Value>, f: impl FnOnce() -> T) -> T {
+    struct Restore(*const Map<String, Value>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CUR_VALUES.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(CUR_VALUES.with(|c| c.replace(vals as *const _)));
+    f()
+}
+
+/// `doc_lookup` over the doc values of the enclosing `with_doc_values` (no copy of them);
+/// outside of it the document has no values.
+pub fn doc_lookup_borrowed(idx: Rc<Index>, id: &str) -> PV {
+    lookup_over(idx, id, None)
+}
+
+fn lookup_over(idx: Rc<Index>, id: &str, owned: Option<Rc<Map<String, Value>>>) -> PV {
     let id = id.to_string();
     let cache: Rc<RefCell<HashMap<String, PV>>> = Rc::new(RefCell::new(HashMap::new()));
     let idx2 = idx.clone();
@@ -158,7 +228,16 @@ pub fn doc_lookup(idx: Rc<Index>, id: &str, values: Option<Map<String, Value>>) 
         if let Some(v) = cache.borrow().get(field) {
             return Ok(v.clone());
         }
-        let v = doc_values_for(&idx, &id, &vals, field, off)?;
+        let v = match &owned {
+            Some(vals) => doc_values_for(&idx, &id, vals, field, off)?,
+            None => {
+                let p = CUR_VALUES.with(|c| c.get());
+                // SAFETY: set only while `with_doc_values` borrows the map
+                let empty = Map::new();
+                let vals = if p.is_null() { &empty } else { unsafe { &*p } };
+                doc_values_for(&idx, &id, vals, field, off)?
+            }
+        };
         cache.borrow_mut().insert(field.to_string(), v.clone());
         Ok(v)
     };
@@ -168,7 +247,23 @@ pub fn doc_lookup(idx: Rc<Index>, id: &str, values: Option<Map<String, Value>>) 
     PV::DocMap(Rc::new(PDocMap { get: Box::new(get), has: Box::new(has) }))
 }
 
-pub fn score_bindings(id: String) -> HashMap<String, NativeFn> {
+thread_local! {
+    /// The score functions (built once per thread) and the id of the document they run for.
+    static SCORE_FUNCS: RefCell<Option<Rc<HashMap<String, NativeFn>>>> = const { RefCell::new(None) };
+    static SCORE_ID: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+/// The score context's functions for document `id`.
+pub fn score_bindings(id: &str) -> Rc<HashMap<String, NativeFn>> {
+    SCORE_ID.with(|c| {
+        let mut c = c.borrow_mut();
+        c.clear();
+        c.push_str(id);
+    });
+    SCORE_FUNCS.with(|c| c.borrow_mut().get_or_insert_with(|| Rc::new(build_score_bindings())).clone())
+}
+
+fn build_score_bindings() -> HashMap<String, NativeFn> {
     fn f(a: &[PV], i: usize) -> f64 {
         f64_of(&a[i])
     }
@@ -211,8 +306,8 @@ pub fn score_bindings(id: String) -> HashMap<String, NativeFn> {
     }
     m.insert(
         "randomScore".into(),
-        Rc::new(move |_, a, _| {
-            let key = format!("{}\x00{}", i64_of(&a[0]), id);
+        Rc::new(|_, a, _| {
+            let key = SCORE_ID.with(|id| format!("{}\x00{}", i64_of(&a[0]), id.borrow()));
             let mut h: u32 = 0x811c9dc5;
             for b in key.bytes() {
                 h ^= b as u32;

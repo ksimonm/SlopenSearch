@@ -258,7 +258,7 @@ pub fn compile_script(src: &str, ctx_name: &str, name: &str) -> Result<Script, S
 #[derive(Default)]
 pub struct Bindings {
     pub vars: HashMap<String, PV>,
-    pub funcs: HashMap<String, NativeFn>,
+    pub funcs: std::rc::Rc<HashMap<String, NativeFn>>,
 }
 
 impl Script {

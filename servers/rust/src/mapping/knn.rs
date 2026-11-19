@@ -377,7 +377,8 @@ pub fn f32r(x: f64) -> f64 {
         return r;
     }
     let f = x as f32;
-    let r = format!("{}", f).parse::<f64>().unwrap_or(x);
+    // the shortest decimal of the float, read as a double (ryu: the same digits as `{}`)
+    let r = ryu::Buffer::new().format_finite(f).parse::<f64>().unwrap_or(x);
     LAST.with(|c| c.set((bits, r)));
     r
 }

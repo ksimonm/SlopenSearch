@@ -2494,6 +2494,11 @@ impl<'a> QueryCtx<'a> {
         if !matched {
             return Ok((false, 0.0));
         }
+        self.function_score_on(bm, base)
+    }
+
+    /// `function_score` on a document its query matched with score `base`.
+    pub fn function_score_on(&self, bm: &Map<String, Value>, base: f64) -> Result<(bool, f64), ApiError> {
         let mut functions = as_query_list(bm.get("functions"));
         if functions.is_empty() {
             if let Some(f) = bm.get("function").and_then(|f| f.as_object()) {

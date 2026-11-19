@@ -118,7 +118,7 @@ fn execute(store: &mut Store, req: &Req) -> Response {
                 }
             }
             b.vars.insert("_score".into(), PV::Double(score));
-            b.funcs = score_bindings(id.to_string());
+            b.funcs = score_bindings(id);
         }
         let tmp = Rc::new(tmp);
         b.vars.insert("doc".into(), doc_lookup(tmp, id, Some(values)));

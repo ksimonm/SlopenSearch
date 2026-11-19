@@ -89,16 +89,44 @@ impl<'a> QueryCtx<'a> {
         if !self.nested_allowed(&resolved) {
             return (Vec::new(), false);
         }
-        if let Some(dv) = self.raw_values() {
-            if let Some(vals) = dv.get(&resolved) {
+        match self.raw_values() {
+            Some(dv) => Self::lookup(dv, &resolved, field),
+            None => (Vec::new(), false),
+        }
+    }
+
+    /// `values` over the doc values `dv` instead of this document's.
+    pub fn values_in(&self, dv: &Map<String, Value>, field: &str) -> (Vec<Value>, bool) {
+        let resolved = resolve_alias_field(self.idx, field);
+        if resolved == "_id" {
+            return (vec![Value::String(self.id.clone())], true);
+        }
+        if !self.nested_allowed(&resolved) {
+            return (Vec::new(), false);
+        }
+        Self::lookup(dv, &resolved, field)
+    }
+
+    /// The doc values key `values_in` reads `field` from (None: not readable in this scope).
+    pub fn values_key(&self, field: &str) -> Option<String> {
+        let resolved = resolve_alias_field(self.idx, field);
+        if resolved == "_id" || !self.nested_allowed(&resolved) {
+            return None;
+        }
+        Some(resolved)
+    }
+
+    fn lookup(dv: &Map<String, Value>, resolved: &str, field: &str) -> (Vec<Value>, bool) {
+        if let Some(vals) = dv.get(resolved) {
+            let vals = array_values(vals);
+            let found = !vals.is_empty();
+            return (vals, found);
+        }
+        if resolved != field {
+            if let Some(vals) = dv.get(field) {
                 let vals = array_values(vals);
-                return (vals.clone(), !vals.is_empty());
-            }
-            if resolved != field {
-                if let Some(vals) = dv.get(field) {
-                    let vals = array_values(vals);
-                    return (vals.clone(), !vals.is_empty());
-                }
+                let found = !vals.is_empty();
+                return (vals, found);
             }
         }
         (Vec::new(), false)

@@ -246,6 +246,9 @@ pub struct Compiled {
     pub spec: ScriptSpec,
     pub ctx: String,
     engine: Engine,
+    /// An expression linked without extra params, and the index (name, uuid, mapping
+    /// version) it was linked against.
+    linked: RefCell<Option<(String, Rc<expressions::Linked>)>>,
 }
 
 /// Per-execution bindings of a script.
@@ -260,6 +263,9 @@ pub struct RunOpts {
     pub vars: Map<String, Value>,
     /// Extra params (bucket paths, ...).
     pub params: Map<String, Value>,
+    /// Set by `want_double` runs whose result is a double: the result (then not converted to JSON).
+    pub want_double: bool,
+    pub double: Option<f64>,
 }
 
 /// Parses, resolves and compiles a script for a context.
@@ -272,11 +278,11 @@ pub fn prepare_spec(spec: ScriptSpec, ctx_name: &str) -> Result<Compiled, PrepEr
     if spec.lang == "expression" {
         let ex = expressions::compile(&spec.src).map_err(|e| PrepErr::Script(e.script_err(&spec.src, &spec.err_name())))?;
         check_lang(&spec, ctx_name)?;
-        return Ok(Compiled { spec, ctx: ctx_name.to_string(), engine: Engine::Expr(ex) });
+        return Ok(Compiled { spec, ctx: ctx_name.to_string(), engine: Engine::Expr(ex), linked: RefCell::new(None) });
     }
     check_lang(&spec, ctx_name)?;
     let script = painless_compile(&spec, ctx_name).map_err(PrepErr::Script)?;
-    Ok(Compiled { spec, ctx: ctx_name.to_string(), engine: Engine::Painless(script) })
+    Ok(Compiled { spec, ctx: ctx_name.to_string(), engine: Engine::Painless(script), linked: RefCell::new(None) })
 }
 
 impl Compiled {
@@ -300,10 +306,29 @@ impl Compiled {
     /// document access).
     pub fn run(&self, qc: Option<&QueryCtx>, o: &mut RunOpts) -> Result<Value, ScriptErr> {
         if let Engine::Expr(_) = &self.engine {
-            let linked = self.link(qc.map(|q| q.idx), &o.params)?.expect("expression");
+            let idx = qc.map(|q| q.idx);
+            let key = idx.map(|i| format!("{}\u{0}{}\u{0}{}", i.name, i.uuid, i.mapping_version)).unwrap_or_default();
+            let cached = match self.linked.borrow().as_ref() {
+                Some((k, l)) if o.params.is_empty() && *k == key => Some(l.clone()),
+                _ => None,
+            };
+            let linked = match cached {
+                Some(l) => l,
+                None => {
+                    let l = Rc::new(self.link(idx, &o.params)?.expect("expression"));
+                    if o.params.is_empty() {
+                        *self.linked.borrow_mut() = Some((key, l.clone()));
+                    }
+                    l
+                }
+            };
             let v = linked.eval(qc, o.score, o.value.as_ref().unwrap_or(&Value::Null));
             if matches!(self.ctx.as_str(), "filter" | "aggregation_selector") {
                 return Ok(Value::Bool(v != 0.0));
+            }
+            if o.want_double {
+                o.double = Some(v);
+                return Ok(Value::Null);
             }
             return Ok(f64_value(v));
         }
@@ -429,10 +454,10 @@ pub fn script_query(qc: &QueryCtx, body: &Value) -> Result<(bool, f64), ApiError
 /// Runs a score-context script for a document; `fs` selects the
 /// function_score error message for negative scores.
 pub fn run_score_script(qc: &QueryCtx, raw: &Value, score: f64, fs: bool) -> Result<f64, ApiError> {
-    let cs = prepare(raw, "score").map_err(|e| err_for_shard(qc.idx, e, true))?;
-    let mut opts = RunOpts { score, ..Default::default() };
+    let cs = prepare_score(raw).map_err(|e| err_for_shard(qc.idx, e, true))?;
+    let mut opts = RunOpts { score, want_double: true, ..Default::default() };
     let v = cs.run(Some(qc), &mut opts).map_err(|se| script_shard_error(qc.idx, &se))?;
-    let s = score_value(&v);
+    let s = opts.double.unwrap_or_else(|| score_value(&v));
     if fs {
         if s < 0.0 {
             return Err(plain_shard_error(
@@ -456,6 +481,32 @@ pub fn run_score_script(qc: &QueryCtx, raw: &Value, score: f64, fs: bool) -> Res
     Ok(s)
 }
 
+thread_local! {
+    /// Inline score scripts of recent requests (a request runs its script per document).
+    static SCORE_SCRIPTS: RefCell<Vec<(Value, Rc<Compiled>)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// `prepare(raw, "score")`, memoized for inline scripts (stored scripts can change).
+fn prepare_score(raw: &Value) -> Result<Rc<Compiled>, PrepErr> {
+    let inline = raw.get("id").is_none();
+    if inline {
+        if let Some(c) = SCORE_SCRIPTS.with(|c| c.borrow().iter().find(|e| e.0 == *raw).map(|e| e.1.clone())) {
+            return Ok(c);
+        }
+    }
+    let c = Rc::new(prepare(raw, "score")?);
+    if inline {
+        SCORE_SCRIPTS.with(|m| {
+            let mut m = m.borrow_mut();
+            if m.len() >= 32 {
+                m.remove(0);
+            }
+            m.push((raw.clone(), c.clone()));
+        });
+    }
+    Ok(c)
+}
+
 /// The `script_score` query.
 pub fn script_score_query(qc: &QueryCtx, body: &Value) -> Result<(bool, f64), ApiError> {
     let bm = body
@@ -469,14 +520,19 @@ pub fn script_score_query(qc: &QueryCtx, body: &Value) -> Result<(bool, f64), Ap
     if !matched {
         return Ok((false, 0.0));
     }
+    script_score_on(qc, bm, base)
+}
+
+/// `script_score` on a document its query matched with score `base`.
+pub fn script_score_on(qc: &QueryCtx, bm: &Map<String, Value>, base: f64) -> Result<(bool, f64), ApiError> {
     let raw = match bm.get("script") {
-        Some(r) => r.clone(),
+        Some(r) => r,
         None => return Ok((true, 1.0)),
     };
     let s = if raw.get("lang").and_then(|l| l.as_str()) == Some("knn") {
-        crate::search::knn_query::knn_score_script(qc, &raw)?
+        crate::search::knn_query::knn_score_script(qc, raw)?
     } else {
-        run_score_script(qc, &raw, base, false)?
+        run_score_script(qc, raw, base, false)?
     };
     if let Some(min) = bm.get("min_score").and_then(|v| v.as_f64()) {
         if s < min {
@@ -779,6 +835,8 @@ fn now_millis() -> i64 {
 thread_local! {
     static COMPILED: RefCell<HashMap<(String, String), Rc<crate::painless::api::Script>>> = RefCell::new(HashMap::new());
     static SKELETONS: RefCell<HashMap<String, Rc<Index>>> = RefCell::new(HashMap::new());
+    /// The skeleton of the last lookup (one per document of a request) and its mapping version.
+    static LAST_SKELETON: RefCell<Option<(i64, Rc<Index>)>> = const { RefCell::new(None) };
 }
 
 fn from_pl_err(e: crate::painless::api::ScriptErr) -> ScriptErr {
@@ -808,8 +866,14 @@ fn painless_compile(spec: &ScriptSpec, ctx_name: &str) -> Result<Rc<crate::painl
 
 /// The mapping-only copy of an index that the engine's doc lookup needs.
 fn skeleton(idx: &Index) -> Rc<Index> {
+    if let Some(s) = LAST_SKELETON.with(|c| {
+        c.borrow().as_ref().filter(|(v, s)| *v == idx.mapping_version && s.name == idx.name && s.uuid == idx.uuid).map(|e| e.1.clone())
+    }) {
+        return s;
+    }
     let key = format!("{}\u{0}{}\u{0}{}", idx.name, idx.uuid, idx.mapping_version);
     if let Some(s) = SKELETONS.with(|c| c.borrow().get(&key).cloned()) {
+        LAST_SKELETON.with(|c| *c.borrow_mut() = Some((idx.mapping_version, s.clone())));
         return s;
     }
     let mut tmp = Index::skeleton(&idx.name);
@@ -855,14 +919,17 @@ fn painless_backend(
         b.vars.insert(k.clone(), pv.clone());
         var_pvs.push((k.clone(), pv));
     }
+    let mut values = None;
     if let Some(q) = qc {
-        let values = q.values_map().cloned();
-        b.vars.insert("doc".into(), crate::search::painless_doc::doc_lookup(skeleton(q.idx), &q.id, values));
+        values = q.values_map();
+        b.vars.insert("doc".into(), crate::search::painless_doc::doc_lookup_borrowed(skeleton(q.idx), &q.id));
         if cs.ctx == "score" {
-            b.funcs = crate::search::painless_doc::score_bindings(q.id.clone());
+            b.funcs = crate::search::painless_doc::score_bindings(&q.id);
         }
     }
-    let r = script.exec(&b, &cs.spec.err_name()).map_err(from_pl_err)?;
+    let empty = Map::new();
+    let r = crate::search::painless_doc::with_doc_values(values.unwrap_or(&empty), || script.exec(&b, &cs.spec.err_name()))
+        .map_err(from_pl_err)?;
     for (k, pv) in var_pvs {
         o.vars.insert(k, to_json(&pv));
     }
@@ -870,6 +937,10 @@ fn painless_backend(
         if let Some(src) = map_get(&params, "_source") {
             o.source = Some(to_json(&src));
         }
+    }
+    if let (true, PV::Double(d)) = (o.want_double, &r) {
+        o.double = Some(*d);
+        return Ok(Value::Null);
     }
     Ok(to_json(&r))
 }

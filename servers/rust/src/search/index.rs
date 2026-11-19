@@ -943,6 +943,13 @@ fn plan_node(ctx: &QueryCtx, q: &Map<String, Value>) -> Option<Plan> {
             Some(Plan::And(and))
         }
         "constant_score" => plan(ctx, bm?.get("filter")?.as_object()?),
+        // the scores come from functions of each document; the matches are the inner query's
+        // (min_score only removes documents)
+        "function_score" => match bm?.get("query") {
+            Some(q) => plan(ctx, q.as_object()?),
+            None => Some(Plan::AllDocs),
+        },
+        "script_score" => plan(ctx, bm?.get("query")?.as_object()?),
         "boosting" => plan(ctx, bm?.get("positive")?.as_object()?),
         "dis_max" => {
             let qs = bm?.get("queries")?.as_array()?;
@@ -1279,6 +1286,9 @@ enum Direct {
     /// Every document (constant score `boost`).
     All { boost: f64 },
     Bool(Box<DirectBool>),
+    /// `function_score` / `script_score` (`kind`) over a direct inner query: the functions
+    /// run per document on the inner result (`QueryCtx::function_score_on`, `script_score_on`).
+    Scored { kind: &'static str, body: Map<String, Value>, inner: Box<Direct> },
 }
 
 struct DirectBool {
@@ -1303,6 +1313,7 @@ impl Direct {
             Direct::Range(r) => add(field_key(Kind::Numeric, &r.field)),
             Direct::Term { key, .. } | Direct::Terms { key, .. } => add(key.clone()),
             Direct::All { .. } => {}
+            Direct::Scored { inner, .. } => inner.keys(out),
             Direct::Bool(b) => {
                 for d in b.must.iter().chain(&b.filter).chain(&b.should).chain(&b.must_not) {
                     d.keys(out);
@@ -1343,6 +1354,16 @@ fn direct_query(ctx: &QueryCtx, q: &Map<String, Value>) -> Option<Direct> {
             Some(Direct::Terms { key, terms, boost })
         }
         "range" => direct_range(q, &p).map(Direct::Range),
+        "function_score" | "script_score" => {
+            let bm = body.as_object()?;
+            let inner = match bm.get("query") {
+                Some(q) => direct_query(ctx, q.as_object()?)?,
+                None if kind == "function_score" => Direct::All { boost: 1.0 },
+                None => return None,
+            };
+            let kind = if kind == "function_score" { "function_score" } else { "script_score" };
+            Some(Direct::Scored { kind, body: bm.clone(), inner: Box::new(inner) })
+        }
         "term" => {
             let (key, mut terms) = match p {
                 Plan::Any(k, t) if t.len() == 1 => (k, t),
@@ -1381,6 +1402,7 @@ enum Prepared<'a> {
     Terms { bits: Vec<u64>, boost: f64 },
     All { boost: f64 },
     Bool { b: &'a DirectBool, must: Vec<Prepared<'a>>, filter: Vec<Prepared<'a>>, should: Vec<Prepared<'a>>, must_not: Vec<Prepared<'a>> },
+    Scored { kind: &'static str, body: &'a Map<String, Value>, inner: Box<Prepared<'a>> },
 }
 
 fn prepare<'a>(ctx: &QueryCtx, inv: &'a InvertedIndex, d: &'a Direct, preps: &mut Vec<std::rc::Rc<crate::search::eval::RangePrep>>) -> Option<Prepared<'a>> {
@@ -1421,6 +1443,7 @@ fn prepare<'a>(ctx: &QueryCtx, inv: &'a InvertedIndex, d: &'a Direct, preps: &mu
             Prepared::Terms { bits, boost: *boost }
         }
         Direct::All { boost } => Prepared::All { boost: *boost },
+        Direct::Scored { kind, body, inner } => Prepared::Scored { kind, body, inner: Box::new(prepare(ctx, inv, inner, preps)?) },
         Direct::Bool(b) => {
             let mut all = |v: &'a [Direct]| -> Option<Vec<Prepared<'a>>> { v.iter().map(|d| prepare(ctx, inv, d, preps)).collect() };
             let must = all(&b.must)?;
@@ -1471,6 +1494,20 @@ fn direct_result(idx: &Index, inv: &InvertedIndex, ctx: &QueryCtx, preps: &[&cra
             }
         }
         Prepared::All { boost } => (true, *boost),
+        Prepared::Scored { kind, body, inner } => {
+            let (m, base) = direct_result(idx, inv, ctx, preps, inner, doc)?;
+            if !m {
+                return Some((false, 0.0));
+            }
+            // a script error makes the whole result undecidable here: the evaluator reports it
+            let id = inv.ids.get(doc as usize)?.as_deref()?;
+            let source = idx.docs.get(id).unwrap_or(&NULL);
+            let dc = QueryCtx::new(idx, id, source);
+            match *kind {
+                "function_score" => dc.function_score_on(body, base).ok()?,
+                _ => crate::search::script_ctx::script_score_on(&dc, body, base).ok()?,
+            }
+        }
         Prepared::Terms { bits, boost } => {
             if bits.get(doc as usize / 64).is_some_and(|w| w & (1 << (doc % 64)) != 0) {
                 (true, *boost)
