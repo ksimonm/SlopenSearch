@@ -4809,3 +4809,272 @@ fn expand_multifield(q: &Map<String, Value>, c: &QueryCtx) -> Map<String, Value>
     }
     q
 }
+
+// ---------------------------------------------------------------------------
+// function_score plans
+// ---------------------------------------------------------------------------
+
+/// A `function_score` whose functions are all field_value_factor or decay functions without
+/// filters, parsed once per request: `score` is `QueryCtx::function_score_on` for one
+/// document with the parsing, mapping and alias lookups done up front. None from `fs_plan`
+/// or `score` (an error, an unsupported shape) leaves the document to the evaluator.
+pub struct FsPlan {
+    funcs: Vec<(FsFunc, f64)>,
+    score_mode: String,
+    boost_mode: String,
+    outer_boost: f64,
+    max_boost: Option<f64>,
+    min_score: Option<f64>,
+}
+
+enum FsFunc {
+    /// field, doc values key (None: never readable), factor, modifier, missing
+    Fvf { field: String, key: Option<String>, factor: f64, modifier: String, missing: Option<f64> },
+    Decay { name: &'static str, field: String, key: Option<String>, kind: DecayKind, decay: f64, offset: f64, scale: f64 },
+    One,
+}
+
+enum DecayKind {
+    Geo { olat: f64, olon: f64 },
+    Date { def: Map<String, Value>, origin: f64 },
+    Num { origin: f64 },
+}
+
+pub fn fs_plan(ctx: &QueryCtx, bm: &Map<String, Value>) -> Option<FsPlan> {
+    let mut functions = as_query_list(bm.get("functions"));
+    if functions.is_empty() {
+        if let Some(f) = bm.get("function").and_then(|f| f.as_object()) {
+            functions = vec![Value::Object(f.clone())];
+        }
+    }
+    if functions.is_empty() {
+        let mut f = Map::new();
+        for k in ["script_score", "field_value_factor", "random_score", "gauss", "linear", "exp"] {
+            if let Some(v) = bm.get(k) {
+                f.insert(k.to_string(), v.clone());
+            }
+        }
+        if !f.is_empty() {
+            functions = vec![Value::Object(f)];
+        }
+    }
+    let score_mode = match bm.get("score_mode").and_then(|s| s.as_str()).unwrap_or("") {
+        "" => "multiply".to_string(),
+        m @ ("multiply" | "sum" | "avg" | "max" | "min" | "first") => m.to_string(),
+        _ => return None,
+    };
+    if bm.get("weight").and_then(to_f64).is_some_and(|w| w < 0.0) || functions.is_empty() {
+        return None;
+    }
+    let mut funcs = Vec::new();
+    for f in &functions {
+        let fno = f.as_object()?;
+        let weight = fno.get("weight").and_then(to_f64).unwrap_or(1.0);
+        if weight < 0.0 || fno.contains_key("filter") {
+            return None;
+        }
+        let func = if let Some(fvf) = fno.get("field_value_factor").and_then(|f| f.as_object()) {
+            let field = fvf.get("field").and_then(|f| f.as_str()).unwrap_or("").to_string();
+            if crate::mapping::resolve_alias_field(ctx.idx, &field) == "_id" {
+                return None;
+            }
+            FsFunc::Fvf {
+                key: ctx.values_key(&field),
+                factor: fvf.get("factor").and_then(to_f64).unwrap_or(1.0),
+                modifier: fvf.get("modifier").and_then(|m| m.as_str()).unwrap_or("").to_string(),
+                missing: fvf.get("missing").and_then(to_f64),
+                field,
+            }
+        } else if fno.contains_key("random_score") || fno.contains_key("script_score") {
+            return None;
+        } else if let Some((name, dec)) = ["gauss", "linear", "exp"]
+            .iter()
+            .find_map(|n| fno.get(*n).and_then(|d| d.as_object()).map(|d| (*n, d)))
+        {
+            let field = dec
+                .get("field")
+                .and_then(|f| f.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| dec.keys().find(|k| !matches!(k.as_str(), "origin" | "scale" | "offset" | "decay" | "field")).cloned())
+                .unwrap_or_default();
+            if field.is_empty() {
+                FsFunc::One
+            } else {
+                if crate::mapping::resolve_alias_field(ctx.idx, &field) == "_id" {
+                    return None;
+                }
+                let key = ctx.values_key(&field);
+                let def = crate::mapping::mapping_field_def(ctx.idx, &field).cloned().unwrap_or_default();
+                let ftype = def.get("type").and_then(|t| t.as_str()).unwrap_or("").to_string();
+                let opts = dec.get(&field).and_then(|v| v.as_object()).cloned().unwrap_or_else(|| dec.clone());
+                let origin_raw = opts.get("origin").cloned().unwrap_or(Value::Null);
+                let (kind, scale) = if ftype == "geo_point" {
+                    let (olat, olon) = geo_pair(&origin_raw).unwrap_or((0.0, 0.0));
+                    let scale = parse_distance_km(&opts.get("scale").map(preview).unwrap_or_default()).unwrap_or(1.0);
+                    (DecayKind::Geo { olat, olon }, scale)
+                } else if ftype == "date" || ftype == "date_nanos" {
+                    let origin = if let Value::String(s) = &origin_raw {
+                        crate::mapping::fields::parse_date_any(&def, s).unwrap_or(0) as f64
+                    } else {
+                        origin_raw.as_f64().unwrap_or(0.0)
+                    };
+                    let scale = parse_duration_ms(&opts.get("scale").map(preview).unwrap_or_default()).unwrap_or(1) as f64;
+                    (DecayKind::Date { def, origin }, scale)
+                } else {
+                    (DecayKind::Num { origin: origin_raw.as_f64().unwrap_or(0.0) }, opts.get("scale").and_then(to_f64).unwrap_or(1.0))
+                };
+                FsFunc::Decay {
+                    name,
+                    field,
+                    key,
+                    kind,
+                    decay: opts.get("decay").and_then(to_f64).unwrap_or(0.5),
+                    offset: opts.get("offset").and_then(to_f64).unwrap_or(0.0),
+                    scale,
+                }
+            }
+        } else {
+            FsFunc::One
+        };
+        funcs.push((func, weight));
+    }
+    Some(FsPlan {
+        funcs,
+        score_mode,
+        boost_mode: bm.get("boost_mode").and_then(|b| b.as_str()).unwrap_or("").to_string(),
+        outer_boost: bm.get("boost").and_then(to_f64).unwrap_or(1.0),
+        max_boost: bm.get("max_boost").and_then(to_f64),
+        min_score: bm.get("min_score").and_then(to_f64),
+    })
+}
+
+fn plan_values(dv: Option<&Map<String, Value>>, key: &Option<String>, field: &str) -> Vec<Value> {
+    match (dv, key) {
+        (Some(dv), Some(k)) => QueryCtx::lookup(dv, k, field).0,
+        _ => Vec::new(),
+    }
+}
+
+impl FsPlan {
+    /// The result for a document with doc values `dv` that the query matched with `base`.
+    pub fn score(&self, dv: Option<&Map<String, Value>>, base: f64) -> Option<(bool, f64)> {
+        let base = base * self.outer_boost;
+        let (mut weighted_sum, mut weight_sum, mut final_score, mut first) = (0.0f64, 0.0f64, 0.0f64, true);
+        for (func, weight) in &self.funcs {
+            let raw = match func {
+                FsFunc::One => 1.0,
+                FsFunc::Fvf { field, key, factor, modifier, missing } => {
+                    let vals = plan_values(dv, key, field);
+                    let mut val = if !vals.is_empty() {
+                        vals.first().and_then(to_f64).unwrap_or(0.0)
+                    } else if let Some(mv) = missing {
+                        *mv
+                    } else {
+                        // the evaluator's missing-value errors
+                        return None;
+                    };
+                    val *= factor;
+                    match modifier.as_str() {
+                        "log" => {
+                            if val <= 0.0 {
+                                return None;
+                            }
+                            val = val.log10();
+                        }
+                        "log1p" => val = (1.0 + val).log10(),
+                        "log2p" => val = (2.0 + val).log10(),
+                        "ln" => val = val.ln(),
+                        "ln1p" => val = val.ln_1p(),
+                        "ln2p" => val = (2.0 + val).ln(),
+                        "square" => val = val * val,
+                        "sqrt" => val = val.sqrt(),
+                        "reciprocal" => val = 1.0 / val,
+                        _ => {}
+                    }
+                    val
+                }
+                FsFunc::Decay { name, field, key, kind, decay, offset, scale } => {
+                    let vals = plan_values(dv, key, field);
+                    if vals.is_empty() {
+                        1.0
+                    } else {
+                        let dist = match kind {
+                            DecayKind::Geo { olat, olon } => {
+                                let (lat, lon) = geo_pair(&vals[0]).unwrap_or((0.0, 0.0));
+                                haversine_km(*olat, *olon, lat, lon)
+                            }
+                            DecayKind::Date { def, origin } => {
+                                let val = crate::mapping::fields::parse_date_any(def, &value_to_string(&vals[0]).unwrap_or_default()).unwrap_or(0) as f64;
+                                (val - origin).abs()
+                            }
+                            DecayKind::Num { origin } => (vals.first().and_then(to_f64).unwrap_or(0.0) - origin).abs(),
+                        };
+                        if dist <= *offset || *scale <= 0.0 {
+                            1.0
+                        } else {
+                            let x = (dist - offset) / scale;
+                            match *name {
+                                "gauss" => decay.powf(x * x),
+                                "exp" => decay.powf(x),
+                                _ => (1.0 - (1.0 - decay) * x).max(0.0),
+                            }
+                        }
+                    }
+                }
+            };
+            let weighted = raw * weight;
+            match self.score_mode.as_str() {
+                "first" => {
+                    if first {
+                        final_score = weighted;
+                    }
+                }
+                "max" => {
+                    if first || weighted > final_score {
+                        final_score = weighted;
+                    }
+                }
+                "min" => {
+                    if first || weighted < final_score {
+                        final_score = weighted;
+                    }
+                }
+                "sum" => final_score += weighted,
+                "avg" => {
+                    weighted_sum += weighted;
+                    weight_sum += weight;
+                }
+                _ => {
+                    if first {
+                        final_score = weighted;
+                    } else {
+                        final_score *= weighted;
+                    }
+                }
+            }
+            first = false;
+        }
+        if self.score_mode == "avg" && weight_sum > 0.0 {
+            final_score = weighted_sum / weight_sum;
+        }
+        let mut combined = match self.boost_mode.as_str() {
+            "replace" => final_score,
+            "sum" => base + final_score,
+            "avg" => (base + final_score) / 2.0,
+            "max" => base.max(final_score),
+            "min" => base.min(final_score),
+            _ => base * final_score,
+        };
+        if let Some(mb) = self.max_boost {
+            if combined > mb {
+                combined = mb;
+            }
+        }
+        if let Some(ms) = self.min_score {
+            if combined < ms {
+                return Some((false, 0.0));
+            }
+        }
+        Some((true, combined))
+    }
+}

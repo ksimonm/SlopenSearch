@@ -116,7 +116,7 @@ impl<'a> QueryCtx<'a> {
         Some(resolved)
     }
 
-    fn lookup(dv: &Map<String, Value>, resolved: &str, field: &str) -> (Vec<Value>, bool) {
+    pub fn lookup(dv: &Map<String, Value>, resolved: &str, field: &str) -> (Vec<Value>, bool) {
         if let Some(vals) = dv.get(resolved) {
             let vals = array_values(vals);
             let found = !vals.is_empty();
